@@ -108,6 +108,20 @@ func TestBypassedReadsTheWindowsExceptionList(t *testing.T) {
 		{"https://build.example.com/", "*.example.com:8443", false},
 		{"https://build.example.com/", "*.example.com:443", true},
 		{"https://build.example.com:8443/", "*.example.com:*", true},
+		// An address matches the same address however it is written.
+		{"https://10.0.0.5/", "10.0.0.5", true},
+		{"https://[2001:db8::1]/", "2001:db8::1", true},
+		{"https://[2001:db8::1]/", "[2001:db8::1]", true},
+		{"https://[2001:db8::1]/", "2001:0db8:0:0:0:0:0:1", true},
+		{"https://[2001:db8::1]/", "[2001:0DB8::0:1]", true},
+		{"https://[2001:db8::1]/", "[2001:db8::2]", false},
+		{"https://[2001:db8::1]/", "https://[2001:db8::1]", true},
+		{"http://[2001:db8::1]/", "https://[2001:db8::1]", false},
+		{"https://[2001:db8::1]:8443/", "[2001:db8::1]:8443", true},
+		{"https://[2001:db8::1]/", "[2001:db8::1]:8443", false},
+		{"https://[2001:db8::1]/", "[2001:db8::*]", true},
+		{"https://[2001:db8::1]/", "2001:db8::/32", true},
+		{"https://api.github.com/", "[2001:db8::1]", false},
 	} {
 		u, err := url.Parse(tt.target)
 		if err != nil {

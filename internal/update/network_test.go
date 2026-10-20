@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"localcode/internal/egress"
 	"localcode/internal/sysproxy"
@@ -36,7 +38,8 @@ func TestAResetCheckSaysItWentDirectAndWhatToDo(t *testing.T) {
 		"ask GitHub for the latest release",
 		"Tried with no proxy",
 		"did not let a direct connection to " + host + " through",
-		sysproxy.Sources,
+		// The test's API is http, and an http request reads HTTP_PROXY.
+		sysproxy.Sources("http"),
 		"update_url",
 	} {
 		if !strings.Contains(msg, want) {
@@ -137,6 +140,135 @@ func TestACancelledCheckIsNotAdvisedOnOrRetried(t *testing.T) {
 	}
 	if n := g.hits.Load(); n != 0 {
 		t.Errorf("github.com was asked %d times after the check was cancelled", n)
+	}
+}
+
+// The message names the route the request took, not the one a lookup
+// gives afterwards. A request that went direct because the lookup was
+// slow is said to have gone direct, even when the lookup has answered
+// with a proxy by the time the error is written.
+func TestTheMessageNamesTheRouteTheRequestTook(t *testing.T) {
+	late := sysproxy.Choice{Note: "the system proxy lookup did not answer within 5s"}
+	answered := sysproxy.Choice{Proxy: &url.URL{Scheme: "http", Host: "proxy.example.com:8080"}, From: "the Windows proxy script"}
+	var calls atomic.Int32
+	old := proxyFor
+	proxyFor = func(context.Context, *url.URL) (sysproxy.Choice, error) {
+		if calls.Add(1) == 1 {
+			return late, nil
+		}
+		return answered, nil
+	}
+	t.Cleanup(func() { proxyFor = old })
+
+	_, err := Checker{Repo: "o/r", API: resetServer(t).URL}.Latest(context.Background())
+	if err == nil {
+		t.Fatal("a reset connection was reported as an answer")
+	}
+	if !strings.Contains(err.Error(), "Tried "+late.String()+".") {
+		t.Errorf("the message does not name the route the request took, %s: %v", late, err)
+	}
+	if strings.Contains(err.Error(), "proxy.example.com") {
+		t.Errorf("the message names a proxy the request never went through: %v", err)
+	}
+}
+
+// A proxy setting that was refused is reported as it is: the request was
+// never sent, so there is nothing to advise on, and github.com would be
+// refused the same way.
+func TestARefusedProxySettingIsNotAdvisedOnOrRetried(t *testing.T) {
+	old := proxyFor
+	proxyFor = func(context.Context, *url.URL) (sysproxy.Choice, error) {
+		return sysproxy.Choice{From: "HTTPS_PROXY"}, errors.New("HTTPS_PROXY is not a proxy address localcode can read")
+	}
+	t.Cleanup(func() { proxyFor = old })
+
+	g := newFakeGitHub(t, "o/r", "v0.46.0", nil, nil)
+	_, err := Checker{Repo: "o/r", API: "http://api.example.com", Web: g.srv.URL}.Latest(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "HTTPS_PROXY is not a proxy address") {
+		t.Fatalf("err = %v, want the refused setting", err)
+	}
+	if strings.Contains(err.Error(), "Tried") {
+		t.Errorf("a request that was never sent was advised on: %v", err)
+	}
+	if n := g.hits.Load(); n != 0 {
+		t.Errorf("github.com was asked %d times after the proxy setting was refused", n)
+	}
+}
+
+// hangingServer takes each request and never answers it, which is what a
+// network that drops packets looks like from here.
+func hangingServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// A check that ran out of its caller's time, as the startup check can, was
+// not refused by the network: it says so and nothing else, and github.com
+// is not asked.
+func TestACheckPastItsDeadlineIsNotAdvisedOnOrRetried(t *testing.T) {
+	g := newFakeGitHub(t, "o/r", "v0.46.0", nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := Checker{Repo: "o/r", API: hangingServer(t).URL, Web: g.srv.URL}.Latest(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the deadline", err)
+	}
+	if strings.Contains(err.Error(), "Tried") {
+		t.Errorf("a check past its deadline was advised on: %v", err)
+	}
+	if n := g.hits.Load(); n != 0 {
+		t.Errorf("github.com was asked %d times after the check ran out of time", n)
+	}
+}
+
+// The client's own timeout is not the caller's deadline: the context is
+// still live, no answer in that time is a network that dropped the
+// request, and github.com is asked instead.
+func TestAClientTimeoutIsANetworkThatDidNotAnswer(t *testing.T) {
+	msi := append([]byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}, []byte("an installer")...)
+	g := newFakeGitHub(t, "o/r", "v0.46.0", []pageFile{
+		{name: "localcode-0.46.0-windows-amd64.msi", digest: sha256Of(msi)},
+	}, nil)
+	// The same timeout covers the fallback's own requests, so it is long
+	// enough for those to finish on a loaded machine.
+	client := &http.Client{Timeout: 2 * time.Second, Transport: transport()}
+	rel, err := Checker{Repo: "o/r", API: hangingServer(t).URL, Web: g.srv.URL, Client: client}.Latest(context.Background())
+	if err != nil {
+		t.Fatalf("latest: %v", err)
+	}
+	if !rel.FromPage {
+		t.Errorf("release = %+v, want it read from the pages", rel)
+	}
+}
+
+// An egress refusal of the github.com fallback is still an egress refusal
+// to anybody who asks the error: the policy's words are not lost behind
+// the first failure.
+func TestAnEgressRefusalOfTheFallbackCanBeFound(t *testing.T) {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Skip("the default transport is not an *http.Transport here")
+	}
+	// Loopback is always allowed, so the API is reached and reset, and the
+	// fallback's host is the one refused.
+	http.DefaultTransport = egress.Wrap(base, egress.Policy{Enforced: true})
+	t.Cleanup(func() { http.DefaultTransport = base })
+	withProxy(t, sysproxy.Choice{})
+
+	_, err := Checker{Repo: "o/r", API: resetServer(t).URL, Web: "http://web.example.com"}.Latest(context.Background())
+	var blocked *egress.BlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("err = %v, want the egress refusal of the fallback", err)
+	}
+	if blocked.Host != "web.example.com" {
+		t.Errorf("refused host = %q, want web.example.com", blocked.Host)
+	}
+	if !strings.Contains(err.Error(), "github.com instead failed too") {
+		t.Errorf("the message does not say the fallback failed: %v", err)
 	}
 }
 

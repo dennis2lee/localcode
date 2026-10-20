@@ -168,7 +168,7 @@ func TestDecideFollowsTheWindowsOrder(t *testing.T) {
 	}{
 		{
 			name:     "nothing set",
-			wantNote: "none set in " + Sources,
+			wantNote: "none set in " + Sources("https"),
 		},
 		{
 			name:      "a fixed proxy",
@@ -227,10 +227,35 @@ func TestDecideFollowsTheWindowsOrder(t *testing.T) {
 			wantAsked: true,
 		},
 		{
-			name:      "a script that names only a proxy Go cannot speak",
-			s:         settings{AutoDetect: true},
+			// WinHTTP's access type is not the only way to say DIRECT: the
+			// answer can say it too.
+			name:      "a script whose answer is DIRECT, over a fixed proxy",
+			s:         settings{ScriptURL: "http://wpad.example.com/proxy.pac", Proxy: "proxy.example.com:8080"},
+			script:    fakeScript{answer: autoAnswer{Proxy: "DIRECT"}},
+			wantNote:  "the Windows proxy script answers DIRECT for api.github.com",
+			wantAsked: true,
+		},
+		{
+			// Direct, and not the fixed proxy: a browser with a script
+			// ignores the fixed proxy too.
+			name:      "a script that names only a SOCKS version 4 proxy, over a fixed proxy",
+			s:         settings{AutoDetect: true, Proxy: "proxy.example.com:8080"},
 			script:    fakeScript{answer: autoAnswer{Proxy: "SOCKS socks.example.com:1080"}},
-			wantNote:  "names no HTTP proxy",
+			wantNote:  "names only a SOCKS version 4 proxy for api.github.com, which localcode does not use",
+			wantAsked: true,
+		},
+		{
+			name:      "a script that names only SOCKS version 4 in WinHTTP's own form",
+			s:         settings{AutoDetect: true},
+			script:    fakeScript{answer: autoAnswer{Proxy: "socks=socks.example.com:1080"}},
+			wantNote:  "names only a SOCKS version 4 proxy",
+			wantAsked: true,
+		},
+		{
+			name:      "a script whose answer names nothing that is a proxy",
+			s:         settings{AutoDetect: true},
+			script:    fakeScript{answer: autoAnswer{Proxy: "ftp=ftp.example.com:21"}},
+			wantNote:  `answered "ftp=ftp.example.com:21", which names no HTTP proxy for https`,
 			wantAsked: true,
 		},
 	} {
@@ -266,6 +291,108 @@ func TestDecideFollowsTheWindowsOrder(t *testing.T) {
 	}
 }
 
+// An http request is told about HTTP_PROXY, which is the variable it
+// reads, and never about HTTPS_PROXY, which it does not.
+func TestTheNoteNamesTheRequestsOwnVariable(t *testing.T) {
+	for _, tt := range []struct {
+		target, want, not string
+	}{
+		{"http://mirror.example.com/dl/", "HTTP_PROXY", "HTTPS_PROXY"},
+		{"https://api.github.com/", "HTTPS_PROXY", "HTTP_PROXY"},
+	} {
+		got := decide(mustURL(t, tt.target), settings{}, nil)
+		if !strings.Contains(got.Note, "none set in "+tt.want) || strings.Contains(got.Note, tt.not) {
+			t.Errorf("%s: note = %q, want it to name %s and not %s", tt.target, got.Note, tt.want, tt.not)
+		}
+		if scheme := mustURL(t, tt.target).Scheme; !strings.HasPrefix(Sources(scheme), tt.want) || strings.Contains(Sources(scheme), tt.not) {
+			t.Errorf("Sources(%s) = %q, want it to name %s and not %s", scheme, Sources(scheme), tt.want, tt.not)
+		}
+	}
+}
+
+// A proxy variable that is not an address is reported by name, never by
+// value: the value can carry a password, and Go's own message about it
+// quotes it whole. The same holds for a refusal Go makes of a value it
+// can read.
+func TestAProxyVariableIsNeverQuoted(t *testing.T) {
+	const raw = "http://alice:s3cret@proxy.example.com:badport"
+	// What Go makes of raw: it does not parse, so Go parses it again with
+	// "http://" in front, and that does, as a proxy named "http:".
+	asGoReadsIt := func(*http.Request) (*url.URL, error) { return url.Parse("http://" + raw) }
+	quoted := func(*http.Request) (*url.URL, error) {
+		_, err := url.Parse(raw)
+		return nil, err
+	}
+	for name, tt := range map[string]struct {
+		value   string
+		fromEnv func(*http.Request) (*url.URL, error)
+	}{
+		"a value that is not an address":  {raw, asGoReadsIt},
+		"a refusal that quotes the value": {"http://alice:s3cret@proxy.example.com:8080", quoted},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := resolver{
+				getenv:  func(k string) string { return map[string]string{"HTTPS_PROXY": tt.value}[k] },
+				fromEnv: tt.fromEnv,
+				system:  newCache(func(*url.URL) Choice { return Choice{} }),
+			}
+			got, err := r.choose(context.Background(), mustURL(t, "https://api.github.com/"))
+			if err == nil {
+				t.Fatalf("choice = %+v, want the variable refused", got)
+			}
+			if got.Proxy != nil {
+				t.Errorf("a refused variable named proxy %s", got.Proxy.Host)
+			}
+			for _, s := range []string{err.Error(), got.String()} {
+				if strings.Contains(s, "alice") || strings.Contains(s, "s3cret") {
+					t.Errorf("%q carries the proxy's credentials", s)
+				}
+			}
+			if !strings.Contains(err.Error(), "HTTPS_PROXY") {
+				t.Errorf("err = %v, want it to name HTTPS_PROXY", err)
+			}
+		})
+	}
+
+	// Every way Go reads a variable well still reads.
+	for _, v := range []string{
+		"http://proxy.example.com:8080",
+		"http://alice:s3cret@proxy.example.com:8080",
+		"proxy.example.com:8080",
+		"10.0.0.5:3128",
+		"[2001:db8::1]:8080",
+		"socks5://proxy.example.com:1080",
+	} {
+		if !readable(v) {
+			t.Errorf("readable(%q) = false", v)
+		}
+	}
+}
+
+// A script's answer quoted in a note is quoted without the user name and
+// password an entry in it may carry.
+func TestAQuotedScriptAnswerCarriesNoCredentials(t *testing.T) {
+	for _, answer := range []string{
+		"http://alice:s3cret@proxy.example.com:8080/badpath",
+		"PROXY ftp://alice:s3cret@proxy.example.com:21; PROXY ftp://bob:hunter2@other.example.com:21",
+		"ftp=alice:p@ss@ftp.example.com:21",
+	} {
+		script := fakeScript{answer: autoAnswer{Proxy: answer}}
+		got := decide(mustURL(t, "https://api.github.com/"), settings{AutoDetect: true}, script.run)
+		if got.Proxy != nil {
+			t.Fatalf("%q: choice = %+v, want direct", answer, got)
+		}
+		for _, secret := range []string{"alice", "s3cret", "bob", "hunter2", "p@ss"} {
+			if strings.Contains(got.String(), secret) {
+				t.Errorf("%q: String() = %q, which carries %q", answer, got.String(), secret)
+			}
+		}
+		if !strings.Contains(got.Note, "example.com") {
+			t.Errorf("%q: note = %q, want the answer quoted, less its credentials", answer, got.Note)
+		}
+	}
+}
+
 // A lookup that outlives the wait is not waited out: the request goes
 // direct and says why. The lookup still finishes, and its answer is kept
 // for the next request.
@@ -298,6 +425,55 @@ func TestASlowLookupIsNotWaitedOut(t *testing.T) {
 	}
 }
 
+// A lookup that never finishes is waited on for one wait, and no longer.
+// A request after that goes direct at once, past the answer's lifetime
+// too, and no second lookup is started beside the first: a WinHTTP call
+// that hangs would otherwise be one goroutine more for every lifetime.
+func TestAStuckLookupIsWaitedOnOnce(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	var calls atomic.Int32
+	c := newCache(func(*url.URL) Choice {
+		calls.Add(1)
+		<-release
+		return Choice{}
+	})
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	var nowMu sync.Mutex
+	c.now = func() time.Time {
+		nowMu.Lock()
+		defer nowMu.Unlock()
+		return now
+	}
+	// Longer than this test would ever run, so a request that waits at
+	// all is a failure below, and not a slow pass.
+	c.wait = time.Minute
+	u := mustURL(t, "https://api.github.com/")
+
+	// The first request starts the lookup and is cancelled, so the test
+	// need not sit out the wait the lookup is given.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c.get(ctx, u)
+
+	nowMu.Lock()
+	now = now.Add(lookupTTL + time.Second)
+	nowMu.Unlock()
+	got := make(chan Choice, 1)
+	go func() { got <- c.get(context.Background(), u) }()
+	select {
+	case got := <-got:
+		if got.Proxy != nil || !strings.Contains(got.Note, "did not answer within") {
+			t.Errorf("choice = %+v, want direct because the lookup did not answer", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a request waited again on a lookup that had already had its wait")
+	}
+	if calls.Load() != 1 {
+		t.Errorf("the system was asked %d times, want once: a running lookup is never replaced", calls.Load())
+	}
+}
+
 // Requests to one host at once share one lookup, and an answer is reused
 // until it is older than the cache's lifetime.
 func TestLookupsAreSharedAndExpire(t *testing.T) {
@@ -326,6 +502,12 @@ func TestLookupsAreSharedAndExpire(t *testing.T) {
 	wg.Wait()
 	if calls.Load() != 1 {
 		t.Fatalf("eight requests at once made %d lookups, want one", calls.Load())
+	}
+
+	// The same host in capitals is the same question.
+	c.get(context.Background(), mustURL(t, "HTTPS://API.GitHub.com/"))
+	if calls.Load() != 1 {
+		t.Fatalf("the host in capitals made %d lookups in all, want one", calls.Load())
 	}
 
 	// Another host is another question.

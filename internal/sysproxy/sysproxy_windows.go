@@ -11,9 +11,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Sources names where a proxy can be set on this platform, for a message
-// that tells somebody where to set one.
-const Sources = "HTTPS_PROXY or the Windows proxy settings"
+// systemSources is where Sources says a proxy can be set past the
+// environment.
+const systemSources = " or the Windows proxy settings"
 
 // WinHTTP, not WinINet. WinHTTP is the one meant for programs that are
 // not a browser, it can run a proxy script without a window, and its

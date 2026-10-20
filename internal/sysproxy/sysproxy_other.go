@@ -4,9 +4,9 @@ package sysproxy
 
 import "errors"
 
-// Sources names where a proxy can be set on this platform, for a message
-// that tells somebody where to set one.
-const Sources = "HTTPS_PROXY"
+// systemSources is where Sources says a proxy can be set past the
+// environment: nowhere, off Windows. See readSettings.
+const systemSources = ""
 
 // readSettings has nothing to read off Windows. macOS keeps its proxy
 // settings behind a framework only CGo reaches, which the default build

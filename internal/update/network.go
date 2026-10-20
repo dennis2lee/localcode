@@ -51,10 +51,48 @@ func transport() http.RoundTripper {
 	t := base.Clone()
 	t.Proxy = func(req *http.Request) (*url.URL, error) {
 		c, err := proxyFor(req.Context(), req.URL)
+		if r, ok := req.Context().Value(routeKey{}).(*route); ok {
+			r.set(c, err)
+		}
 		return c.Proxy, err
 	}
 	shared.base, shared.t = http.DefaultTransport, t
 	return t
+}
+
+// route is how the transport sent a request, kept for the error that
+// says so. Asking proxyFor again afterwards is not the same thing: a
+// lookup that had not answered when the request went direct may have
+// answered since, and the error would name a proxy that was never used.
+//
+// A redirect is another request with the same context, so what is kept
+// is the last one sent, which is the one that failed. A client of the
+// caller's own never fills it in, and its request reads as direct.
+type route struct {
+	mu     sync.Mutex
+	choice sysproxy.Choice
+	err    error
+}
+
+type routeKey struct{}
+
+// withRoute returns ctx carrying a route, which the transport fills in
+// for each request made with it.
+func withRoute(ctx context.Context) (context.Context, *route) {
+	r := &route{}
+	return context.WithValue(ctx, routeKey{}, r), r
+}
+
+func (r *route) set(c sysproxy.Choice, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.choice, r.err = c, err
+}
+
+func (r *route) get() (sysproxy.Choice, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.choice, r.err
 }
 
 // noAnswer reports whether err, from a client's Do, is a request that got
@@ -64,12 +102,15 @@ func transport() http.RoundTripper {
 // only ones the github.com fallback is tried for. An HTTP status is an
 // answer, and is never one of these.
 //
-// Two are left out. A request its caller abandoned was not refused by
-// anything. And an egress refusal is this machine's own policy, which
-// says what it is in its own words and is not for a fallback to route
-// around.
-func noAnswer(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) {
+// Two are left out. A request whose caller's context ended, cancelled
+// or past its deadline, was not refused by anything: the startup check's
+// four seconds running out says nothing about the network. A client's own
+// Timeout is not that, since the context is still live, and no answer in
+// that time is a network that dropped the request. And an egress refusal
+// is this machine's own policy, which says what it is in its own words
+// and is not for a fallback to route around.
+func noAnswer(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
 		return false
 	}
 	var blocked *egress.BlockedError
@@ -79,10 +120,10 @@ func noAnswer(err error) bool {
 // unreachableError is a request to GitHub that got no answer, said with
 // how it was tried and what usually fixes it.
 type unreachableError struct {
-	// host is the address that did not answer: api.github.com.
-	host string
-	// via is how the request was sent, by the same rule the transport
-	// followed for it.
+	// host is the address that did not answer: api.github.com. scheme is
+	// the request's, which decides the variable a proxy is set in.
+	host, scheme string
+	// via is how the transport sent the request. See route.
 	via sysproxy.Choice
 	err error
 	// fallback is how reading the release from github.com failed, when
@@ -90,7 +131,14 @@ type unreachableError struct {
 	fallback error
 }
 
-func (e *unreachableError) Unwrap() error { return e.err }
+// Unwrap is both failures, so errors.As finds an egress refusal of the
+// fallback as well as anything in the first.
+func (e *unreachableError) Unwrap() []error {
+	if e.fallback == nil {
+		return []error{e.err}
+	}
+	return []error{e.err, e.fallback}
+}
 
 func (e *unreachableError) Error() string {
 	var b strings.Builder
@@ -100,7 +148,7 @@ func (e *unreachableError) Error() string {
 		fmt.Fprintf(&b, " Reading the release from github.com instead failed too: %s", sentence(e.fallback))
 	}
 	b.WriteString(" ")
-	b.WriteString(unreachableHint(e.host, e.via, e.err))
+	b.WriteString(unreachableHint(e.host, e.scheme, e.via, e.err))
 	return b.String()
 }
 
@@ -119,7 +167,7 @@ const updateURLHint = "update_url in config.json points the check at another pla
 // proxy that wants a sign-in, and a connection refused with or without a
 // proxy, which is told apart because "no proxy was found" and "the proxy
 // refused it" have different fixes.
-func unreachableHint(host string, via sysproxy.Choice, err error) string {
+func unreachableHint(host, scheme string, via sysproxy.Choice, err error) string {
 	var unknown x509.UnknownAuthorityError
 	switch {
 	case errors.As(err, &unknown):
@@ -132,5 +180,5 @@ func unreachableHint(host string, via sysproxy.Choice, err error) string {
 	case via.Proxy != nil:
 		return fmt.Sprintf("The proxy did not carry the connection to %s. If a browser here uses another proxy, set HTTPS_PROXY to that one; %s", host, updateURLHint)
 	}
-	return fmt.Sprintf("The network did not let a direct connection to %s through. If a browser here reaches GitHub through a proxy, set it in %s, which localcode follows; %s", host, sysproxy.Sources, updateURLHint)
+	return fmt.Sprintf("The network did not let a direct connection to %s through. If a browser here reaches GitHub through a proxy, set it in %s, which localcode follows; %s", host, sysproxy.Sources(scheme), updateURLHint)
 }

@@ -148,7 +148,8 @@ func (c Checker) latestFromGitHub(ctx context.Context) (Release, error) {
 
 func (c Checker) latestFromAPI(ctx context.Context) (Release, error) {
 	url := fmt.Sprintf("%s/repos/%s/releases/latest", c.api(), c.repo())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	reqCtx, sent := withRoute(ctx)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 	if err != nil {
 		return Release{}, err
 	}
@@ -156,14 +157,17 @@ func (c Checker) latestFromAPI(ctx context.Context) (Release, error) {
 	resp, err := c.client().Do(req)
 	if err != nil {
 		err = fmt.Errorf("ask GitHub for the latest release: %w", err)
-		if !noAnswer(err) {
+		if !noAnswer(ctx, err) {
 			return Release{}, err
 		}
-		// Asked again rather than remembered: the transport asked the
-		// same function a moment ago, and the answer is cached there or
-		// read straight from the environment.
-		via, _ := proxyFor(ctx, req.URL)
-		return Release{}, &unreachableError{host: req.URL.Host, via: via, err: err}
+		via, refused := sent.get()
+		if refused != nil {
+			// Never sent: the proxy setting itself was refused, and the
+			// error says which one. github.com would be refused the same
+			// way.
+			return Release{}, err
+		}
+		return Release{}, &unreachableError{host: req.URL.Host, scheme: req.URL.Scheme, via: via, err: err}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -460,7 +464,24 @@ func refuseSignature(name string, label string, sig, head []byte, n int64, conte
 // either way. Beside that, the first bytes must be the container the name
 // promises, so a page served as an installer is refused here instead of
 // reaching Windows Installer.
+//
+// A download is read to one byte past the size the release gives, or past
+// maxDownload when it gives none, and refused there, so a server that
+// never ends its answer cannot fill the disk.
 func Download(ctx context.Context, client *http.Client, a Asset, dir string) (string, error) {
+	return download(ctx, client, a, dir, maxDownload)
+}
+
+// maxDownload is the most a download whose size the release does not give
+// is allowed to be: a file read from github.com's pages, or from an
+// update_url. The largest file a release ships, the Windows MSI, was
+// 17 MB in v0.163.0, so a gigabyte is far past any real one and still a
+// bound.
+const maxDownload = 1 << 30
+
+// download is Download with the bound for a file of unknown size as a
+// parameter, so a test can reach it without writing a gigabyte.
+func download(ctx context.Context, client *http.Client, a Asset, dir string, ceiling int64) (string, error) {
 	if client == nil {
 		// No overall timeout: this is tens of megabytes over whatever
 		// connection the machine has, and a deadline that fits a fast one
@@ -495,15 +516,26 @@ func Download(ctx context.Context, client *http.Client, a Asset, dir string) (st
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // a no-op once the rename below has happened
 
+	// One byte past the most the file can be, which is how a server that
+	// sends more is told apart from one that sends exactly that.
+	limit := ceiling
+	if a.Size > 0 {
+		limit = a.Size
+	}
 	sum := sha256.New()
-	n, err := io.Copy(io.MultiWriter(tmp, sum), resp.Body)
+	n, err := io.Copy(io.MultiWriter(tmp, sum), io.LimitReader(resp.Body, limit+1))
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
 		return "", fmt.Errorf("download %s: %w", a.Name, err)
 	}
-	if a.Size > 0 && n != a.Size {
+	switch {
+	case n > limit && a.Size > 0:
+		return "", fmt.Errorf("download %s: got more than the %d bytes the release says, and stopped reading", a.Name, a.Size)
+	case n > limit:
+		return "", fmt.Errorf("download %s: got more than %d bytes, far more than any localcode release file, and stopped reading", a.Name, limit)
+	case a.Size > 0 && n != a.Size:
 		return "", fmt.Errorf("download %s: got %d bytes, the release says %d", a.Name, n, a.Size)
 	}
 	// The bytes must be the container the name promises: a page served as

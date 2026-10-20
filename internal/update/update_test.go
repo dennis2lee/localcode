@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -206,6 +207,72 @@ func TestDownloadRefusesAFileThatDoesNotMatch(t *testing.T) {
 		if strings.HasSuffix(e.Name(), ".msi") {
 			t.Errorf("a rejected download was left at %s", e.Name())
 		}
+	}
+}
+
+// countingBody is a response body of left zero bytes that counts how many
+// were read from it, which is how much of it a download took in.
+type countingBody struct{ left, read int64 }
+
+func (b *countingBody) Read(p []byte) (int, error) {
+	if b.left == 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > b.left {
+		p = p[:b.left]
+	}
+	clear(p)
+	b.left -= int64(len(p))
+	b.read += int64(len(p))
+	return len(p), nil
+}
+
+func (b *countingBody) Close() error { return nil }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// bodyClient answers every request with body, and no network between.
+func bodyClient(body io.ReadCloser) *http.Client {
+	return &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{}, Body: body, Request: r}, nil
+	})}
+}
+
+// A server that sends more than the file can be is refused once it has
+// sent one byte too many, and not after the rest has reached the disk:
+// past the size the release gives, and past the ceiling for a file whose
+// size it does not give.
+func TestDownloadStopsReadingPastTheFilesSize(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		size    int64
+		ceiling int64
+		want    string
+	}{
+		{"a known size", 16, maxDownload, "more than the 16 bytes the release says"},
+		{"an unknown size", 0, 1 << 10, "more than 1024 bytes"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := &countingBody{left: 8 << 20}
+			dir := t.TempDir()
+			a := Asset{Name: "localcode-0.46.0-windows-amd64.msi", URL: "https://github.com/o/r/releases/download/v0.46.0/localcode-0.46.0-windows-amd64.msi", Size: tt.size}
+			_, err := download(context.Background(), bodyClient(body), a, dir, tt.ceiling)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want it to say %q", err, tt.want)
+			}
+			limit := tt.ceiling
+			if tt.size > 0 {
+				limit = tt.size
+			}
+			if body.read > limit+1 {
+				t.Errorf("read %d bytes of a file that can be at most %d", body.read, limit)
+			}
+			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+				t.Errorf("a refused download left %d files behind", len(entries))
+			}
+		})
 	}
 }
 

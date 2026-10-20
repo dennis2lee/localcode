@@ -3178,7 +3178,9 @@ The update check and the download use the proxy a browser on the same Windows ma
 | 4 | A direct connection | |
 
 * Loopback addresses never go through a proxy.
-* A Windows lookup is given 5 seconds. A request that waits longer goes direct and says so. Each answer is kept for 5 minutes per host.
+* A Windows lookup is given 5 seconds. A request that waits longer goes direct and says so. Until that lookup answers, later requests to the same host go direct at once, and no second lookup is started. Each answer is kept for 5 minutes per host.
+* A proxy script's answer is final, as in a browser. An answer of `DIRECT`, or one that names only a SOCKS version 4 proxy, sends the request direct, and the fixed proxy is not used.
+* A bypass list entry that is an IP address matches that address in any written form. `[2001:db8::1]`, `2001:db8::1` and `2001:0db8:0:0:0:0:0:1` all match `https://[2001:db8::1]/`.
 * macOS and Linux read the environment only. The macOS system proxy settings are not read.
 * SOCKS version 4 entries are skipped, because Go supports SOCKS5 only. A script's `SOCKS5` answer is used.
 * A proxy that answers 407 is signed in to only with a user name and password in `HTTPS_PROXY`, as in `http://user:password@proxy.example.com:8080`. Windows integrated sign-in (NTLM, Kerberos) is not supported.
@@ -3189,16 +3191,17 @@ The update check and the download use the proxy a browser on the same Windows ma
 
 **Certificates.** A proxy that inspects TLS presents its own certificate. On Windows and macOS, localcode verifies certificates with the operating system's store, so a root certificate installed there for the browser is trusted. On Linux, Go reads the system bundle, and `SSL_CERT_FILE` or `SSL_CERT_DIR` when set.
 
-**The github.com fallback.** Tried only when the request to api.github.com gets no HTTP answer: refused, reset, timed out, a name that did not resolve, a failed TLS handshake, or a proxy that did not carry it. An HTTP status, a rate limit included, is reported as it is. A request refused by `network.egress` is not retried.
+**The github.com fallback.** Tried only when the request to api.github.com gets no HTTP answer: refused, reset, no answer within 30 seconds, a name that did not resolve, a failed TLS handshake, or a proxy that did not carry it. An HTTP status, a rate limit included, is reported as it is. A request refused by `network.egress` is not retried. A check that runs out of its caller's time is reported as that, with no network advice, and github.com is not asked.
 
 | Step | Request | What is read |
 |---|---|---|
-| 1 | `GET https://github.com/<repo>/releases/latest` | The redirect's `Location`, which ends in `/releases/tag/<tag>`. The redirect is not followed. |
-| 2 | `GET https://github.com/<repo>/releases/expanded_assets/<tag>` | Each `/releases/download/<tag>/<name>` link, and the `sha256:` digest printed in the same row |
+| 1 | `GET https://github.com/<repo>/releases/latest` | The redirect's `Location`, which must be `/<repo>/releases/tag/<tag>` on github.com itself. Any other `Location` is refused. The redirect is not followed. |
+| 2 | `GET https://github.com/<repo>/releases/expanded_assets/<tag>` | Each `https://github.com/<repo>/releases/download/<tag>/<name>` link, and the `sha256:` digest printed after it and before the next link |
 
 * A download from the fallback is checked as one from the API is: the SHA-256 must match, and the first bytes must be the container the name promises. The page gives no exact size. The SHA-256 already fixes it.
 * A file the page shows no SHA-256 for is not installed. The check still reports the newer version and its release page, and says why it will not install it. At startup the same sentence is printed.
 * The API path is unchanged: a release published before GitHub recorded digests is still installed, checked by size, and reported as unverified.
+* A download stops reading one byte past the size the API gives, and is refused there. A file with no size, from the page or from `update_url`, is refused past 1 GiB. The largest release file, the Windows MSI, was 17 MB in v0.163.0.
 * Release notes are not read from the page.
 * The startup check's four seconds cover the Windows proxy lookup, the API request and the fallback together.
 
@@ -3211,8 +3214,9 @@ The update check and the download use the proxy a browser on the same Windows ma
 | `The proxy asked for a sign-in` | The proxy answered 407 | Put a user name and password in `HTTPS_PROXY`, or set `update_url` |
 | `is not one this machine trusts` | `x509: certificate signed by unknown authority`, usually a proxy that inspects TLS | Install the proxy's root certificate in the system store |
 | `Reading the release from github.com instead failed too` | github.com could not be read either | As for the first failure |
+| `HTTPS_PROXY is not a proxy address localcode can read` | The variable is set to something that is not a URL with a host. The request is not sent, and github.com is not asked. | Write it as `http://host:port`, or unset it |
 
-The proxy is named by host and port only. Credentials in a proxy URL are never printed.
+The proxy is named by host and port only. A proxy variable is named, and its value is never printed. Credentials in a proxy URL or in a proxy script's answer are never printed.
 
 **Finding the case on Windows.** In `cmd.exe`:
 

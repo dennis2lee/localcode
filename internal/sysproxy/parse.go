@@ -3,6 +3,7 @@ package sysproxy
 import (
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -27,6 +28,25 @@ import (
 // proxy, not a list to fail over along, and the first is the one the
 // script or the person preferred.
 func pickProxy(list, scheme string) *url.URL {
+	return readProxy(list, scheme).proxy
+}
+
+// reading is what a Windows proxy string says for one scheme.
+type reading struct {
+	// proxy is the first entry that applies, and nil when none does.
+	proxy *url.URL
+	// direct is a string that reached DIRECT before any entry that
+	// applies: a script choosing a direct connection.
+	direct bool
+	// socks4 is a string that named a SOCKS version 4 proxy, which Go's
+	// transport does not speak. Skipped, so a later entry can still apply.
+	socks4 bool
+}
+
+// readProxy is pickProxy with the reason there is no proxy, for a message
+// that says why a script's answer sent a request direct.
+func readProxy(list, scheme string) reading {
+	var r reading
 	for _, part := range strings.Split(list, ";") {
 		fields := strings.Fields(part)
 		if len(fields) == 0 {
@@ -34,25 +54,37 @@ func pickProxy(list, scheme string) *url.URL {
 		}
 		if kind := strings.ToUpper(fields[0]); isKeyword(kind) {
 			if kind == "DIRECT" {
-				return nil
+				r.direct = true
+				return r
 			}
 			if len(fields) < 2 {
 				continue
 			}
+			if kind == "SOCKS" || kind == "SOCKS4" {
+				r.socks4 = true
+				continue
+			}
 			if u := keywordProxy(kind, fields[1]); u != nil {
-				return u
+				r.proxy = u
+				return r
 			}
 			continue
 		}
 		// No keyword: each field is an address of its own, which is how
 		// WinHTTP separates a list with spaces.
 		for _, f := range fields {
+			// "socks=" is SOCKS version 4 here too.
+			if proto, _, ok := strings.Cut(f, "="); ok && strings.EqualFold(proto, "socks") {
+				r.socks4 = true
+				continue
+			}
 			if u := plainProxy(f, scheme); u != nil {
-				return u
+				r.proxy = u
+				return r
 			}
 		}
 	}
-	return nil
+	return r
 }
 
 func isKeyword(s string) bool {
@@ -63,7 +95,8 @@ func isKeyword(s string) bool {
 	return false
 }
 
-// keywordProxy reads one entry of a proxy script's answer.
+// keywordProxy reads one entry of a proxy script's answer. SOCKS and
+// SOCKS4, which are SOCKS version 4, never get here: see readProxy.
 func keywordProxy(kind, addr string) *url.URL {
 	switch kind {
 	case "PROXY", "HTTP":
@@ -73,8 +106,6 @@ func keywordProxy(kind, addr string) *url.URL {
 	case "SOCKS5":
 		return proxyURL("socks5", addr)
 	}
-	// SOCKS and SOCKS4 are SOCKS version 4, which Go's transport does not
-	// speak. Skipped, so a later entry can still apply.
 	return nil
 }
 
@@ -82,8 +113,7 @@ func keywordProxy(kind, addr string) *url.URL {
 // for every protocol, or "scheme=address" for one.
 func plainProxy(entry, scheme string) *url.URL {
 	if proto, addr, ok := strings.Cut(entry, "="); ok {
-		// "socks=" is SOCKS version 4 here too, and an "ftp=" entry is
-		// for nothing localcode asks for.
+		// An "ftp=" entry is for nothing localcode asks for.
 		if !strings.EqualFold(proto, scheme) {
 			return nil
 		}
@@ -128,10 +158,13 @@ func proxyURL(def, addr string) *url.URL {
 // "<local>" for a name with no dot in it, which is what "Bypass proxy
 // server for local addresses" adds. An entry may name a scheme
 // ("https://*.example.com") or a port ("*.example.com:8443"), and then
-// only matches requests with that scheme or port. A CIDR range is
-// accepted as well, which Windows ignores and people write anyway.
+// only matches requests with that scheme or port. An address matches the
+// same address however it is written, an IPv6 one in brackets or not. A
+// CIDR range is accepted as well, which Windows ignores and people write
+// anyway.
 func bypassed(u *url.URL, list string) bool {
 	host := strings.ToLower(u.Hostname())
+	hostIP := net.ParseIP(host)
 	port := u.Port()
 	if port == "" {
 		switch u.Scheme {
@@ -159,7 +192,7 @@ func bypassed(u *url.URL, list string) bool {
 			e = rest
 		}
 		if _, cidr, err := net.ParseCIDR(e); err == nil {
-			if ip := net.ParseIP(host); ip != nil && cidr.Contains(ip) {
+			if hostIP != nil && cidr.Contains(hostIP) {
 				return true
 			}
 			continue
@@ -170,6 +203,19 @@ func bypassed(u *url.URL, list string) bool {
 				continue
 			}
 			e = h
+		}
+		// An IPv6 address with no port is still in its brackets, and the
+		// host never is.
+		if strings.HasPrefix(e, "[") && strings.HasSuffix(e, "]") {
+			e = e[1 : len(e)-1]
+		}
+		// Two addresses are compared as addresses: 2001:0db8:0:0:0:0:0:1
+		// is 2001:db8::1. A pattern or a name is matched as text.
+		if ip := net.ParseIP(e); ip != nil && hostIP != nil {
+			if ip.Equal(hostIP) {
+				return true
+			}
+			continue
 		}
 		// ".example.com" is how some tools write "every name under it".
 		if strings.HasPrefix(e, ".") {
@@ -209,4 +255,15 @@ func wildcard(pattern, s string) bool {
 		p++
 	}
 	return p == len(pattern)
+}
+
+// userinfoRe is the "user:password@" in an entry of a proxy string, with
+// the scheme in front of it, if any, kept. It runs to the entry's last
+// "@", since a password typed into a script is not always escaped.
+var userinfoRe = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)?[^\s;]*@`)
+
+// withoutUserinfo is a proxy string with every user name and password
+// taken out, for a message that quotes it.
+func withoutUserinfo(list string) string {
+	return userinfoRe.ReplaceAllString(list, "$1")
 }

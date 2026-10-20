@@ -304,6 +304,49 @@ func TestThePagesMustRedirectToATag(t *testing.T) {
 	}
 }
 
+// The latest tag is read only from a redirect to this repository's own
+// release on the host that was asked. One anywhere else names a release
+// that is not this program's, and is reported without any user name or
+// password its address carries.
+func TestTheLatestTagMustBeThisRepositorysOwn(t *testing.T) {
+	var location atomic.Value
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", location.Load().(string))
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(web.Close)
+	host := strings.TrimPrefix(web.URL, "http://")
+
+	for _, tt := range []struct {
+		location string
+		want     string // "" means refused
+	}{
+		{"/o/r/releases/tag/v1.2.3", "v1.2.3"},
+		{"/O/R/releases/tag/v1.2.3", "v1.2.3"},
+		{web.URL + "/o/r/releases/tag/v1.2.3", "v1.2.3"},
+		{"https://example.com/o/r/releases/tag/v9.9.9", ""},
+		{"//example.com/o/r/releases/tag/v9.9.9", ""},
+		{"https://" + host + "/o/r/releases/tag/v9.9.9", ""},
+		{"/other/repo/releases/tag/v9.9.9", ""},
+		{"/o/r/other/releases/tag/v9.9.9", ""},
+		{"/x/o/r/releases/tag/v9.9.9", ""},
+		{"/o/r/releases/tag/", ""},
+		{"/o/r/releases/tag/v9.9.9/assets", ""},
+		{"http://alice:s3cret@example.com/o/r/releases/tag/v9.9.9", ""},
+	} {
+		location.Store(tt.location)
+		tag, err := Checker{Repo: "o/r"}.latestTag(context.Background(), web.URL)
+		switch {
+		case tt.want != "" && (err != nil || tag != tt.want):
+			t.Errorf("%s: tag = %q, %v; want %s", tt.location, tag, err, tt.want)
+		case tt.want == "" && err == nil:
+			t.Errorf("%s: tag = %q, want the redirect refused", tt.location, tag)
+		case tt.want == "" && (strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), "s3cret")):
+			t.Errorf("%s: the refusal carries the credentials: %v", tt.location, err)
+		}
+	}
+}
+
 // The asset list read row by row: each file gets the checksum on its own
 // row, and nothing the page links that is not one of this release's
 // files becomes an asset.
@@ -360,5 +403,39 @@ func TestARowWithTwoChecksumsGivesNone(t *testing.T) {
 		`<a href="/o/r/releases/download/v1.2.3/f.msi">x</a> ` + a
 	if got := assetsFromPage(base, "o/r", "v1.2.3", disagree); len(got) != 1 || got[0].Digest != "" {
 		t.Errorf("assets = %+v, want one with no digest once two rows disagree", got)
+	}
+}
+
+// A row ends at the next link of any kind, as on github.com, where each
+// file's SHA-256 follows its link and the source archives come last with
+// none. A checksum past the next link, the asset pattern's or not, is
+// never this file's.
+func TestARowEndsAtTheNextLink(t *testing.T) {
+	a := "sha256:" + strings.Repeat("a1", 32)
+	b := "sha256:" + strings.Repeat("b2", 32)
+	base, _ := url.Parse("https://github.com/o/r/releases/expanded_assets/v1.2.3")
+
+	// A checksum after the source archives' links is not the last file's.
+	trailing := expandedAssets("o/r", "v1.2.3", pageFile{name: "localcode-1.2.3-windows-amd64.msi", digest: a}) + " " + b
+	if got := assetsFromPage(base, "o/r", "v1.2.3", trailing); len(got) != 1 || got[0].Digest != a {
+		t.Errorf("assets = %+v, want the one file with its own digest", got)
+	}
+
+	// A link the asset pattern does not read still ends the row before it.
+	unread := `<a href="/o/r/releases/download/v1.2.3/first.msi">first.msi</a>` +
+		`<a href='/o/r/releases/download/v1.2.3/second.msi'>second.msi</a> ` + b
+	if got := assetsFromPage(base, "o/r", "v1.2.3", unread); len(got) != 1 || got[0].Digest != "" {
+		t.Errorf("assets = %+v, want first.msi with no digest", got)
+	}
+}
+
+// A file linked over plain http from an https page is not one of the
+// page's files: the download would leave the TLS the page came over.
+func TestAssetsFromPageKeepsThePagesScheme(t *testing.T) {
+	a := "sha256:" + strings.Repeat("a1", 32)
+	base, _ := url.Parse("https://github.com/o/r/releases/expanded_assets/v1.2.3")
+	body := `<a href="http://github.com/o/r/releases/download/v1.2.3/localcode-1.2.3-windows-amd64.msi">x</a> ` + a
+	if got := assetsFromPage(base, "o/r", "v1.2.3", body); len(got) != 0 {
+		t.Errorf("assets = %+v, want none from a plain http link", got)
 	}
 }
