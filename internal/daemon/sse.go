@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"localcode/internal/events"
@@ -38,12 +39,20 @@ var heartbeatInterval = 20 * time.Second
 // the model is mid-sentence show the sentence so far rather than nothing.
 //
 // A finished reply that asked for a tool keeps one delta, in the place of
-// its first, carrying the whole reply. The message's tool.start events
-// are logged before its message.part.end, so with every delta gone the
-// first sign of the reply was its end, below the tool lines: a
-// conversation re-opened showed each tool call above the sentence that
-// introduced it. The one delta opens the reply where it began, and the
-// end then writes the same text into it.
+// its first, carrying every fragment of it in evs joined. The message's
+// tool.start events are logged before its message.part.end, so with every
+// delta gone the first sign of the reply was its end, below the tool
+// lines: a conversation re-opened showed each tool call above the
+// sentence that introduced it. The one delta opens the reply where it
+// began, and the end then writes the whole text into it.
+//
+// The fragments joined, not the end's text: a client resuming from a
+// ?since= or a Last-Event-ID in the middle of the reply already drew the
+// fragments before it, and a delta carrying the whole reply would be
+// appended to them. And a prompt or the end of a turn starts over: a
+// reply whose end never came (a log from before the daemon always wrote
+// one, or a daemon that stopped mid-stream) is not the start of the next
+// reply, and the next reply's text written into it drew that reply twice.
 func collapseFinishedDeltas(evs []events.Event) []events.Event {
 	lastEnd := -1
 	for i, ev := range evs {
@@ -55,21 +64,27 @@ func collapseFinishedDeltas(evs []events.Event) []events.Event {
 		return evs
 	}
 	// The first delta of each finished reply a tool.start interrupts,
-	// and the whole text its end carries.
+	// and the text of its fragments joined.
 	opens := map[int]string{}
 	first, tool := -1, false
+	var text strings.Builder
 	for i := 0; i <= lastEnd; i++ {
 		switch evs[i].Type {
 		case events.TypeMessagePartDelta:
 			if first < 0 {
 				first = i
+				text.Reset()
 			}
+			s, _ := evs[i].Data["text"].(string)
+			text.WriteString(s)
 		case events.TypeToolStart:
 			tool = first >= 0
 		case events.TypeMessagePartEnd:
-			if text, _ := evs[i].Data["text"].(string); first >= 0 && tool && text != "" {
-				opens[first] = text
+			if first >= 0 && tool && text.Len() > 0 {
+				opens[first] = text.String()
 			}
+			first, tool = -1, false
+		case events.TypeUserMessage, events.TypeTurnDone, events.TypeTurnCancelled:
 			first, tool = -1, false
 		}
 	}

@@ -200,17 +200,28 @@ func TestReasoningAfterAToolLineGoesInFrontOfTheReply(t *testing.T) {
 
 // A reply whose end never came (a log written before the daemon always
 // closed one, or a daemon that died mid-stream) is closed by the turn's
-// end, and the next turn's reply is a reply of its own.
+// end or by the next message to the model, and the next reply is a reply
+// of its own.
 func TestATurnsEndClosesAReplyLeftOpen(t *testing.T) {
-	m := newTestModel()
-	m.applyEvent(delta("cut off"))
-	m.applyEvent(events.Event{Type: events.TypeTurnDone})
-	m.applyEvent(delta("next answer"))
-	m.applyEvent(partEnd("next answer"))
-	wantTranscript(t, m,
-		"model:cut off",
-		"model:next answer",
-	)
+	for _, tc := range []struct {
+		name string
+		ev   events.Event
+		want []string
+	}{
+		{"turn.done", events.Event{Type: events.TypeTurnDone}, nil},
+		{"a prompt", events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "next"}}, []string{"user:next"}},
+		{"an auto message", events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "carry on", "auto": true}}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModel()
+			m.applyEvent(delta("cut off"))
+			m.applyEvent(tc.ev)
+			m.applyEvent(delta("next answer"))
+			m.applyEvent(partEnd("next answer"))
+			want := append(append([]string{"model:cut off"}, tc.want...), "model:next answer")
+			wantTranscript(t, m, want...)
+		})
+	}
 }
 
 // The reply is found by its index, so a line taken out above it moves it
@@ -228,4 +239,27 @@ func TestALineRemovedAboveAnOpenReplyMovesItUp(t *testing.T) {
 		"model:Working.",
 		"tool:▸ glob",
 	)
+
+	// And one taken out below it leaves it where it is.
+	m = newTestModel()
+	m.applyEvent(delta("Work"))
+	m.appendPendingUser("second")
+	m.resolvePendingUser("second")
+	m.applyEvent(delta("ing."))
+	m.applyEvent(partEnd("Working."))
+	wantTranscript(t, m, "model:Working.")
+}
+
+// The end corrects what missed deltas drew, and the screen shows the
+// correction when it arrives, not at the next event after it.
+func TestAnEndThatCorrectsAReplyRedrawsIt(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	m.applyEvent(delta("Let me"))
+	m.applyEvent(toolStart("t1", "glob", `{"pattern":"*.go"}`))
+	m.applyEvent(partEnd("Let me look at both."))
+	if view := stripTestANSI(m.viewport.View()); !strings.Contains(view, "Let me look at both.") {
+		t.Errorf("the screen still shows the reply as the deltas left it:\n%s", view)
+	}
 }

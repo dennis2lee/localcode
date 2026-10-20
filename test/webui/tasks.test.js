@@ -260,3 +260,29 @@ test('a stop refused while the task runs says so', async () => {
   assert.match(app.el('task-modal-note').textContent, /could not stop this task/);
   assert.equal(app.el('task-cancel').disabled, false);
 });
+
+// A task's reply that asked for a tool was drawn twice, as the TUI drew
+// it: tool.start closed the reply, and the message.part.end that the
+// daemon logs after every tool.start of the message found nothing open
+// and drew the whole reply again below the call. The end now writes the
+// reply where it is, and a re-open, which replays such a reply as one
+// fragment in its place, draws it once too.
+test('a task reply that asked for a tool is drawn once, above the call', async () => {
+  const app = await load();
+  spawnTask(app);
+  const s = await openWatching(app);
+
+  s.emit({ type: 'message.part.delta', data: { text: 'Let me ' } });
+  s.emit({ type: 'message.part.delta', data: { text: 'run' } });
+  s.emit({ type: 'tool.start', data: { tool_use_id: 't1', name: 'bash', input: '{"command":"go test ./..."}' } });
+  s.emit({ type: 'message.part.end', data: { text: 'Let me run the tests.' } });
+  s.emit({ type: 'tool.end', data: { tool_use_id: 't1', content: 'ok', is_error: false } });
+  s.emit({ type: 'message.part.delta', data: { text: 'All pass.' } });
+  s.emit({ type: 'message.part.end', data: { text: 'All pass.' } });
+
+  const text = app.el('task-modal-body').textContent;
+  assert.equal(text.split('Let me run the tests.').length - 1, 1, text);
+  assert.equal(text.split('All pass.').length - 1, 1, text);
+  assert.ok(text.indexOf('Let me run the tests.') < text.indexOf('bash'), text);
+  assert.ok(text.indexOf('bash') < text.indexOf('All pass.'), text);
+});

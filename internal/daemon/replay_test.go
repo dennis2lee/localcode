@@ -107,3 +107,53 @@ func TestReplayKeepsAReplyAboveTheToolCallsItAskedFor(t *testing.T) {
 		t.Errorf("the logged fragment was rewritten to %q", text)
 	}
 }
+
+// The kept fragment carries the fragments joined, not the end's text: a
+// client resuming in the middle of the reply drew the ones before its
+// resume point, and the whole reply would be appended to them. A reply
+// whose text follows its call is drawn below the call live too, and keeps
+// nothing. And a prompt or a turn's end starts over: a reply whose end
+// never came is not the start of the next reply.
+func TestReplayKeepsOnlyTheFragmentsItHas(t *testing.T) {
+	t.Run("resumed mid-reply", func(t *testing.T) {
+		in := []events.Event{
+			ev(events.TypeMessagePartDelta, 3, "look "),
+			ev(events.TypeMessagePartDelta, 4, "around."),
+			{Type: events.TypeToolStart, Seq: 5, Data: map[string]any{"name": "glob"}},
+			ev(events.TypeMessagePartEnd, 6, "Let me look around."),
+		}
+		out := collapseFinishedDeltas(in)
+		if len(out) != 3 || out[0].Seq != 3 || out[0].Data["text"] != "look around." {
+			t.Errorf("replayed %+v, want one fragment carrying %q", out, "look around.")
+		}
+	})
+	t.Run("text after the call", func(t *testing.T) {
+		in := []events.Event{
+			{Type: events.TypeToolStart, Seq: 1, Data: map[string]any{"name": "glob"}},
+			ev(events.TypeMessagePartDelta, 2, "Found it."),
+			ev(events.TypeMessagePartEnd, 3, "Found it."),
+		}
+		if out := collapseFinishedDeltas(in); len(out) != 2 {
+			t.Errorf("replayed %+v, want the call and the end", out)
+		}
+	})
+	for _, boundary := range []events.Type{events.TypeUserMessage, events.TypeTurnDone, events.TypeTurnCancelled} {
+		t.Run("a reply left open, then "+string(boundary), func(t *testing.T) {
+			in := []events.Event{
+				ev(events.TypeMessagePartDelta, 1, "cut off"),
+				ev(boundary, 2, ""),
+				ev(events.TypeMessagePartDelta, 3, "Let me look."),
+				{Type: events.TypeToolStart, Seq: 4, Data: map[string]any{"name": "glob"}},
+				ev(events.TypeMessagePartEnd, 5, "Let me look."),
+			}
+			out := collapseFinishedDeltas(in)
+			var seqs []uint64
+			for _, e := range out {
+				seqs = append(seqs, e.Seq)
+			}
+			if !reflect.DeepEqual(seqs, []uint64{2, 3, 4, 5}) || out[1].Data["text"] != "Let me look." {
+				t.Errorf("replayed %+v, want the second reply's fragment kept in its own place", out)
+			}
+		})
+	}
+}

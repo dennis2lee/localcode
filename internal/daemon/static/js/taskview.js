@@ -129,13 +129,24 @@ function applyTaskEvent(ev) {
       follower.keeping(() => { currentEl.textContent += d.text; });
       break;
     case 'message.part.end':
-      // On replay this carries the whole reply and the fragments are not
-      // sent at all — see collapseFinishedDeltas in the daemon.
-      if (!currentEl && typeof d.text === 'string' && d.text) line('msg-model', d.text);
+      // The whole reply, written over what the fragments drew: a
+      // reconnect can lose fragments. On replay the fragments of a
+      // finished reply are not sent at all, and this draws it — see
+      // collapseFinishedDeltas in the daemon.
+      if (typeof d.text === 'string' && d.text) {
+        if (currentEl) {
+          const el = currentEl;
+          follower.keeping(() => { el.textContent = d.text; });
+        } else {
+          line('msg-model', d.text);
+        }
+      }
       currentEl = null;
       break;
     case 'tool.start':
-      currentEl = null;
+      // The reply stays open: the daemon logs a message's tool.start
+      // before its message.part.end, and the end belongs to the reply
+      // above this row. Closing it here drew the reply a second time.
       toolRow(d.tool_use_id, d.name || '', d.input || '');
       break;
     case 'tool.end':

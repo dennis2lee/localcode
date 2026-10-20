@@ -94,6 +94,10 @@ const handlers = {
   },
   'message.user': (d) => {
     if (typeof d.text !== 'string') return;
+    // A prompt, typed or sent on the user's behalf, starts the next reply.
+    // One still open is one whose end never came, and the next reply is
+    // not written into it.
+    endModelText('');
     // A message localcode sent on the user's behalf — keep_going telling a
     // stalled model to carry on. It is in the log so the model's history
     // survives a restart, and it is announced by its own note; painting it
@@ -173,6 +177,8 @@ const handlers = {
     app.turnMoves++;
     session.runningTool = '';
     setWaiting(false);
+    // Every reply of the turn has ended; one still open never got its end.
+    endModelText('');
     // A reasoning block still open is one whose end never came.
     foldThinking(0);
     // A row still running at the turn's end is a call that never ran:
@@ -588,6 +594,7 @@ const handlers = {
     app.turnMoves++;
     session.promptQueue = [];
     session.runningTool = '';
+    endModelText('');
     // A cancelled turn is not waiting on an answer. The daemon does send
     // permission.resolved for the question it was holding, and that is
     // the event that clears this; saying it here too costs nothing and

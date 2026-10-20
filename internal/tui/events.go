@@ -109,6 +109,9 @@ func (m *Model) applyEvent(ev events.Event) {
 		// and not something to paint as a line the person typed or to put
 		// in Up/Down recall.
 		if auto, _ := ev.Data["auto"].(bool); auto {
+			// Not drawn, but still a new message to the model: the
+			// reply before it is over, whether or not its end came.
+			m.streamOpen = false
 			break
 		}
 		// A new turn's prompt: any reasoning block still open belongs to

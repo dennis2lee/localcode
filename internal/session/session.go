@@ -1808,12 +1808,27 @@ func (s *Store) TailSince(sessionID string, n int) (uint64, error) {
 			break
 		}
 	}
+	// A cut that found no prompt within 2n can land inside a model
+	// message, on one of its tool.start events or its end. The message's
+	// fragments and earlier calls lie just before it, and are taken too:
+	// cut off, the reply arrived as its end alone, drawn below the calls
+	// it asked for. Every message ends with its message.part.end, so this
+	// stops at the end of the one before.
+	for start > 0 && isInsideMessage(st.log[start-1].Type) {
+		start--
+	}
 	if start == 0 {
 		return 0, nil
 	}
 	// The seq *before* the first event to send: Events(since) is
 	// exclusive, and this is fed straight to it.
 	return st.log[start-1].Seq, nil
+}
+
+// isInsideMessage reports whether an event of this type comes between a
+// model message's first fragment and its end.
+func isInsideMessage(t events.Type) bool {
+	return t == events.TypeMessagePartDelta || t == events.TypeToolStart
 }
 
 // Archiving.

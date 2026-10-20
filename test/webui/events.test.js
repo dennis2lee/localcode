@@ -631,7 +631,32 @@ test('a reply that asked for a tool is drawn once, above the call', async () => 
   app.applyEvent({ type: 'tool.start', data: { tool_use_id: 't1', name: 'glob', input: '{"pattern":"*.go"}' } });
   app.applyEvent({ type: 'message.part.end', data: { text: 'Let me look.' } });
 
+  app.applyEvent({ type: 'tool.end', data: { tool_use_id: 't1', content: 'a.go', is_error: false } });
+  app.applyEvent({ type: 'message.part.delta', data: { text: 'Found it.' } });
+  app.applyEvent({ type: 'message.part.end', data: { text: 'Found it.' } });
+
   const html = app.transcript();
   assert.equal(html.split('Let me look.').length - 1, 1, html);
   assert.ok(html.indexOf('Let me look.') < html.indexOf('msg-toolcall'), html);
+  assert.ok(html.indexOf('msg-toolcall') < html.indexOf('Found it.'), html);
 });
+
+// A reply whose end never came (a daemon that stopped mid-stream) is not
+// where the next one is written: a prompt or the turn's end closes it.
+for (const boundary of [
+  { type: 'turn.done', data: {} },
+  { type: 'turn.cancelled', data: {} },
+  { type: 'message.user', data: { text: 'next', auto: true } },
+]) {
+  test(`a reply left open is closed by ${boundary.type}${boundary.data.auto ? ' (auto)' : ''}`, async () => {
+    const app = await load();
+    app.applyEvent({ type: 'message.part.delta', data: { text: 'cut off' } });
+    app.applyEvent(boundary);
+    app.applyEvent({ type: 'message.part.delta', data: { text: 'next answer' } });
+    app.applyEvent({ type: 'message.part.end', data: { text: 'next answer' } });
+
+    const html = app.transcript();
+    assert.ok(html.includes('cut off'), html);
+    assert.equal(html.split('class="msg-model"').length - 1, 2, html);
+  });
+}

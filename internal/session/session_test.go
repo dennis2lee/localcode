@@ -651,6 +651,42 @@ func TestTailSince(t *testing.T) {
 	}
 }
 
+// A turn longer than 2n has no prompt for the cut to move back to, and
+// the cut can land inside a model message, on one of its tool calls. The
+// message's fragments and its calls before that one are in the tail too:
+// cut off, the reply arrived as its end alone and was drawn below the
+// calls it asked for.
+func TestTailSinceKeepsAMessageTheCutLandsIn(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	store.Append("s1", events.TypeUserMessage, map[string]any{"text": "go"})
+	for i := 0; i < 6; i++ {
+		store.Append("s1", events.TypeToolStart, map[string]any{"name": "read"})
+		store.Append("s1", events.TypeMessagePartEnd, map[string]any{"text": ""})
+		store.Append("s1", events.TypeToolEnd, map[string]any{})
+	}
+	first, _ := store.Append("s1", events.TypeMessagePartDelta, map[string]any{"text": "Let me "})
+	store.Append("s1", events.TypeMessagePartDelta, map[string]any{"text": "look."})
+	store.Append("s1", events.TypeToolStart, map[string]any{"name": "glob"})
+	store.Append("s1", events.TypeToolStart, map[string]any{"name": "grep"})
+	store.Append("s1", events.TypeMessagePartEnd, map[string]any{"text": "Let me look."})
+
+	// The last two readable events: the second call and the end.
+	since, err := store.TailSince("s1", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if since != first.Seq-1 {
+		t.Errorf("the tail starts after seq %d, want the reply's first fragment (seq %d) in it", since, first.Seq)
+	}
+}
+
 // A log shorter than the window has nothing to trim, and "from the
 // beginning" is already what 0 means everywhere else.
 func TestTailSinceOnAShortLog(t *testing.T) {
