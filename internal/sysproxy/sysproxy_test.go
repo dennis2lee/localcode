@@ -440,9 +440,9 @@ func TestASlowLookupIsNotWaitedOut(t *testing.T) {
 func TestAStuckLookupIsWaitedOnOnce(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
-	var calls atomic.Int32
+	started := make(chan struct{}, 2)
 	c := newCache(func(*url.URL) Choice {
-		calls.Add(1)
+		started <- struct{}{}
 		<-release
 		return Choice{}
 	})
@@ -459,10 +459,23 @@ func TestAStuckLookupIsWaitedOnOnce(t *testing.T) {
 	u := mustURL(t, "https://api.github.com/")
 
 	// The first request starts the lookup and is cancelled, so the test
-	// need not sit out the wait the lookup is given.
+	// need not sit out the wait the lookup is given. The lookup runs on a
+	// goroutine of its own: waited for here rather than assumed, since a
+	// scheduler that has not run it yet is not a lookup that was skipped.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	c.get(ctx, u)
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the lookup never started")
+	}
+	entry := func() *pending {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.entries["https://api.github.com"]
+	}
+	first := entry()
 
 	nowMu.Lock()
 	now = now.Add(lookupTTL + time.Second)
@@ -477,8 +490,15 @@ func TestAStuckLookupIsWaitedOnOnce(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("a request waited again on a lookup that had already had its wait")
 	}
-	if calls.Load() != 1 {
-		t.Errorf("the system was asked %d times, want once: a running lookup is never replaced", calls.Load())
+	// The same lookup is still the one for this host: a running lookup is
+	// never replaced, so a stuck one is not joined by another every TTL.
+	if first == nil || entry() != first {
+		t.Error("the running lookup was replaced by a new one")
+	}
+	select {
+	case <-started:
+		t.Error("a second lookup was started for the same host")
+	default:
 	}
 }
 
