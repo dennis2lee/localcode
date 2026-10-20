@@ -575,7 +575,7 @@ func TestInlineReasoningFromAMuseServerIsFolded(t *testing.T) {
 func TestTheDoctorSaysWhenReasoningIsInline(t *testing.T) {
 	run := doctorRun{Model: "muse", BaseURL: "http://127.0.0.1:1234/v1"}
 	run.Server.ReasoningPlacement = "inline"
-	if out := doctorReport(run, nil, "", nil, false); !strings.Contains(out, "reasoning: inside the answer as <think>") {
+	if out := doctorReport(run, nil, "", nil, false, nil); !strings.Contains(out, "reasoning: inside the answer as <think>") {
 		t.Errorf("the report does not say where the reasoning was:\n%s", out)
 	}
 	moved := func(base doctorRun) bool {

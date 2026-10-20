@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
@@ -24,12 +25,34 @@ import (
 func debugClient() *http.Client {
 	c := *http.DefaultClient
 	c.Transport = debuglog.Transport{Base: http.DefaultTransport}
-	c.CheckRedirect = refuseDowngrade
+	c.CheckRedirect = checkRedirect
 	return &c
 }
 
-// refuseDowngrade is the redirect policy: Go's own, ten redirects at most,
-// and no redirect from https to plain http. Go forwards the Authorization
+// checkRedirect is the redirect policy every HTTP provider is built with:
+// refuseDowngrade, and the headers a provider's config adds withheld from
+// any host but the one they were configured for.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if err := refuseDowngrade(req, via); err != nil {
+		return err
+	}
+	withholdOffHost(req, via)
+	return nil
+}
+
+// clientOr is c, or for a provider built without one, the client a
+// constructor would have given it. Not http.DefaultClient: that one has
+// neither the debug log nor the redirect policy, so a configured header
+// would follow a redirect to another host.
+func clientOr(c *http.Client) *http.Client {
+	if c != nil {
+		return c
+	}
+	return debugClient()
+}
+
+// refuseDowngrade is the half of the redirect policy that refuses: Go's
+// own, ten redirects at most, and no redirect from https to plain http. Go forwards the Authorization
 // header to a redirect on the same host whatever its scheme, so an https
 // endpoint that redirected to http sent the API key or the JWT across the
 // network unencrypted.
@@ -41,6 +64,38 @@ func refuseDowngrade(req *http.Request, via []*http.Request) error {
 		return fmt.Errorf("refused a redirect from https to %s: the request carries a credential, and plain http would send it unencrypted", req.URL.Redacted())
 	}
 	return nil
+}
+
+// withholdOffHost takes the headers a provider's config added off a
+// redirect that has left the host they were sent to.
+//
+// Go does that for Authorization and cookies and for nothing else: every
+// other header of the first request is copied onto the next one, wherever
+// it goes. So a gateway's second credential, which the key's own header
+// would not have carried there, went to whatever host a 307 named.
+//
+// By host and port, which is stricter than Go's rule for Authorization (a
+// subdomain keeps it). And once the chain has left the host the headers
+// stay off, even on a hop that comes back, as Go's own stripping does: the
+// host in between chose where the request went next.
+func withholdOffHost(req *http.Request, via []*http.Request) {
+	names := debuglog.SecretHeaders(req.Context())
+	if len(names) == 0 {
+		return
+	}
+	home := via[0].URL.Host
+	left := !strings.EqualFold(req.URL.Host, home)
+	for _, r := range via[1:] {
+		if !strings.EqualFold(r.URL.Host, home) {
+			left = true
+		}
+	}
+	if !left {
+		return
+	}
+	for _, name := range names {
+		req.Header.Del(name)
+	}
 }
 
 // loggingAWSClient wraps the HTTP client the AWS config resolved so a

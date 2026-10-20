@@ -328,3 +328,122 @@ func TestTheHintFollowsTheStatus(t *testing.T) {
 		t.Errorf("RawChat on an expired token: %v", err)
 	}
 }
+
+// A refusal that says a request header is missing or required is read as
+// that, from the shape of the sentence rather than any one gateway's
+// words, and the name is the header-shaped word nearest "header". A
+// refusal that names Authorization is about api_key, and a refusal that
+// does not mention a missing header is not this.
+func TestHeaderAsked(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		name string
+		ok   bool
+	}{
+		{`{"error":{"message":"Missing client API key (X-Team-Key header required)","type":"None","param":"None","code":"401"}}`, "X-Team-Key", true},
+		{`{"detail":"missing required header: X-Team-Key"}`, "X-Team-Key", true},
+		{`{"error":"Header 'x-team-key' is required"}`, "x-team-key", true},
+		{`{"error":"The request is missing the \"X-Region\" header."}`, "X-Region", true},
+		{"X-Team-Key header is missing", "X-Team-Key", true},
+		{"headers missing: X_TEAM_KEY", "X_TEAM_KEY", true},
+		{`{"message":"a required header is missing"}`, "", true},
+		// Cut short before it got here, so it no longer parses as JSON.
+		{`{"error":{"message":"Missing client API key (X-Team-Key header required)","type":"No`, "X-Team-Key", true},
+		{`{"error":"Authorization header is missing"}`, "", false},
+		{`{"error":"missing Authorization header"}`, "", false},
+		{`{"error":"invalid token"}`, "", false},
+		{`{"error":{"message":"invalid or expired token"}}`, "", false},
+		{`{"error":"invalid X-Team-Key header"}`, "", false},
+		{"", "", false},
+	} {
+		name, ok := HeaderAsked(tc.body)
+		if name != tc.name || ok != tc.ok {
+			t.Errorf("HeaderAsked(%s) = %q, %v; want %q, %v", tc.body, name, ok, tc.name, tc.ok)
+		}
+	}
+}
+
+// When the endpoint says a header is missing, the hint is about the
+// header, and never says the token is the cause: not sent, add it; sent,
+// its value was not taken. The token's date comes after only when it is a
+// second problem, and a valid date is not mentioned at all. A key that is
+// not a JWT gets the header hint too. Names only, never a value.
+func TestARefusalThatNamesAHeaderIsHintedAsOne(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	past := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": now.Add(-72 * time.Hour).Unix()})
+	future := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": now.Add(300 * 24 * time.Hour).Unix()})
+	missing := `{"error":{"message":"Missing client API key (X-Team-Key header required)"}}`
+	sent := map[string]string{"x-team-key": "made-up-team-key-0001"}
+	for _, tc := range []struct {
+		name    string
+		status  int
+		key     string
+		headers map[string]string
+		body    string
+		want    []string
+		not     []string
+	}{
+		{"not sent", 401, future, nil, missing,
+			[]string{`asks for request header X-Team-Key, which this provider does not send. Add it under this provider's "headers"`},
+			[]string{"valid until", "date", "check-jwt-key"}},
+		{"sent", 403, future, sent, missing,
+			[]string{"this provider sends one, so it is that header's value the endpoint did not take"},
+			[]string{"valid until", "made-up-team-key-0001"}},
+		{"sent empty", 401, future, map[string]string{"X-Team-Key": "  "}, missing,
+			[]string{"which this provider does not send"}, nil},
+		{"no name", 401, future, nil, `{"error":"a required header is missing"}`,
+			[]string{"a request header it needs is missing, and does not say which"}, nil},
+		{"expired too", 401, past, nil, missing,
+			[]string{"does not send. Add it", "Separately, the JWT in api_key expired on 2026-10-16 12:00 UTC and needs replacing as well"},
+			[]string{"Get a new token, put it in api_key"}},
+		{"not a JWT", 401, "sk-not-a-jwt", nil, missing,
+			[]string{"which this provider does not send"}, []string{"JWT"}},
+		{"not a refusal", 500, future, nil, missing, nil, []string{"hint"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := refusalHint(tc.status, tc.key, tc.headers, tc.body, now)
+			if len(tc.want) > 0 && !strings.HasPrefix(got, "\n\nhint: the endpoint ") {
+				t.Errorf("not a hint paragraph about the endpoint: %q", got)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("the hint does not say %q: %q", w, got)
+				}
+			}
+			for _, n := range tc.not {
+				if strings.Contains(got, n) {
+					t.Errorf("the hint says %q: %q", n, got)
+				}
+			}
+		})
+	}
+	// A refusal that names no header is the JWT hint, as before.
+	if got := refusalHint(401, future, sent, `{"error":"invalid token"}`, now); got != jwtRefusalHint(401, future, `{"error":"invalid token"}`, now) {
+		t.Errorf("a refusal that names no header: %q", got)
+	}
+}
+
+// End to end, the turn's error and /llm-doctor's: the endpoint's words,
+// then the header hint in place of the date one.
+func TestATurnRefusedForAMissingHeaderSaysSo(t *testing.T) {
+	valid := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": time.Now().Add(48 * time.Hour).Unix()})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":{"message":"Missing client API key (X-Team-Key header required)","code":"401"}}`))
+	}))
+	defer srv.Close()
+	p := NewOpenAICompat(srv.URL, valid)
+	_, err := p.Chat(t.Context(), ChatRequest{Model: "m", Messages: []Message{{Role: RoleUser, Content: []Block{TextBlock("hi")}}}})
+	if err == nil || !strings.Contains(err.Error(), "X-Team-Key header required") ||
+		!strings.Contains(err.Error(), "hint: the endpoint asks for request header X-Team-Key, which this provider does not send") {
+		t.Fatalf("the turn's error: %v", err)
+	}
+	if strings.Contains(err.Error(), "its date is not why") {
+		t.Errorf("the turn's error points at the token: %v", err)
+	}
+	p.Headers = map[string]string{"X-Team-Key": "made-up-team-key-0001"}
+	_, err = p.RawChat(t.Context(), []byte(`{"model":"m","messages":[]}`))
+	if err == nil || !strings.Contains(err.Error(), "that header's value the endpoint did not take") || strings.Contains(err.Error(), "made-up-team-key-0001") {
+		t.Errorf("RawChat with the header sent: %v", err)
+	}
+}

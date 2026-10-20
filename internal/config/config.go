@@ -579,6 +579,19 @@ type ProviderConfig struct {
 	// provider doesn't need to embed the key itself.
 	APIKey string `json:"api_key,omitempty"`
 
+	// Headers are sent on every HTTP request this provider makes, beside
+	// the ones localcode sets itself: for a gateway that wants a second
+	// credential next to the bearer token, or a header that routes the
+	// request. openai-compat and anthropic only. Bedrock's requests are
+	// built by the AWS SDK, so a headers block on a bedrock provider is
+	// refused at load rather than accepted and never sent.
+	//
+	// The values are treated as secrets, the way api_key is: trimmed like
+	// it, never printed by check-jwt-key or /llm-doctor, redacted in a
+	// debug log, and withheld from a redirect to another host. Validated
+	// at load (see validateProviderHeaders), and read through SentHeaders.
+	Headers map[string]string `json:"headers,omitempty"`
+
 	// MaxConcurrentTasks caps how many background tasks may run against
 	// this endpoint at once. Zero, the default, means no lane: this
 	// provider is bounded only by the daemon-wide max_concurrent_tasks,
@@ -597,6 +610,110 @@ type ProviderConfig struct {
 	// beside it. A provider block already needs a restart to take effect,
 	// since the clients themselves are constructed at startup.
 	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`
+}
+
+// SentHeaders is Headers as a request carries them: each value trimmed of
+// the spaces and line ends around it, the way api_key is, and a value that
+// is empty after that left out, the way an empty api_key sends no
+// Authorization. So "{env:NAME:-}" leaves the header off when the variable
+// is unset. Nil when there is nothing to send.
+func (p ProviderConfig) SentHeaders() map[string]string {
+	var out map[string]string
+	for k, v := range p.Headers {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, len(p.Headers))
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// headersLocalcodeSets are the request headers a provider client sets
+// itself, by provider type, lower-cased. A configured header of the same
+// name would be overwritten on every request, or replace the credential,
+// so it is refused at load with what to write instead.
+var headersLocalcodeSets = map[ProviderType]map[string]string{
+	ProviderOpenAICompat: {
+		"authorization": "localcode sends api_key in it as a bearer token; put the token in api_key instead",
+		"content-type":  "localcode sets it on every request it sends; remove it from headers",
+	},
+	ProviderAnthropic: {
+		"authorization":     "the anthropic provider sends its key from api_key, as x-api-key; put the key in api_key instead",
+		"x-api-key":         "localcode sends api_key in it; put the key in api_key instead",
+		"anthropic-version": "localcode sets it on every request it sends; remove it from headers",
+		"content-type":      "localcode sets it on every request it sends; remove it from headers",
+	},
+}
+
+// connectionHeaders are the ones Go's HTTP client writes from the request
+// itself or refuses to send, lower-cased. Configured, they would be dropped
+// without a word or make every request fail, and an HTTP/2 refusal quotes
+// the value it refused, which would put it in an error message.
+var connectionHeaders = map[string]bool{
+	"host": true, "content-length": true, "transfer-encoding": true, "trailer": true,
+	"connection": true, "keep-alive": true, "proxy-connection": true, "upgrade": true, "te": true,
+}
+
+// validateProviderHeaders checks one provider's headers block. Every error
+// names the provider and the header, and none quotes a value: the values
+// are secrets, and an error is printed.
+func validateProviderHeaders(name string, p ProviderConfig) error {
+	if len(p.Headers) == 0 {
+		return nil
+	}
+	if p.Type == ProviderBedrock {
+		return fmt.Errorf("provider %q: headers is not supported on a bedrock provider: the AWS SDK builds its requests and localcode adds nothing to them. Remove the headers block", name)
+	}
+	seen := map[string]string{}
+	for _, h := range sortedKeys(p.Headers) {
+		lower := strings.ToLower(h)
+		switch {
+		case h == "":
+			return fmt.Errorf("provider %q: headers has an entry with an empty name", name)
+		case !isHTTPToken(h):
+			return fmt.Errorf("provider %q: header name %q is not a valid HTTP header name: it may hold only letters, digits and !#$%%&'*+-.^_`|~", name, h)
+		case seen[lower] != "":
+			return fmt.Errorf("provider %q: headers names %q and %q, which are the same header (names are not case-sensitive); keep one of them", name, seen[lower], h)
+		case connectionHeaders[lower]:
+			return fmt.Errorf("provider %q: header %q is written by the HTTP client from the request itself and cannot be set in headers; remove it", name, h)
+		}
+		if why, ok := headersLocalcodeSets[p.Type][lower]; ok {
+			return fmt.Errorf("provider %q: header %q is one localcode sets: %s", name, h, why)
+		}
+		seen[lower] = h
+		// Trimmed first, as SentHeaders sends it: a newline at the end of
+		// a pasted value is taken off rather than refused.
+		v := strings.TrimSpace(p.Headers[h])
+		if strings.ContainsAny(v, "\r\n") {
+			return fmt.Errorf("provider %q: the value of header %q has a line break in it, which a header cannot carry", name, h)
+		}
+		if strings.IndexFunc(v, func(r rune) bool { return r != '\t' && (r < 0x20 || r == 0x7f) }) >= 0 {
+			return fmt.Errorf("provider %q: the value of header %q has a control character in it, which a header cannot carry", name, h)
+		}
+	}
+	return nil
+}
+
+// isHTTPToken reports whether s is a token in RFC 9110's sense, which is
+// what a header name has to be.
+func isHTTPToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 type ProviderType string
@@ -964,6 +1081,13 @@ func (c *Config) Validate() error {
 		if p.MaxConcurrentTasks < 0 || p.MaxConcurrentTasks > maxProviderConcurrency {
 			return fmt.Errorf("provider %q: max_concurrent_tasks is %d, outside 0..%d (0 means no per-provider limit)",
 				name, p.MaxConcurrentTasks, maxProviderConcurrency)
+		}
+	}
+	// In name order, so a config with two bad blocks reports the same one
+	// every time.
+	for _, name := range sortedKeys(c.Providers) {
+		if err := validateProviderHeaders(name, c.Providers[name]); err != nil {
+			return err
 		}
 	}
 

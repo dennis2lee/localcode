@@ -340,6 +340,23 @@ localcode check-jwt-key gw
 
 It decodes the token and shows its expiry, lists the models the gateway serves, and sends one short chat request. See [`localcode check-jwt-key`](USAGE.md#checking-a-jwt-key-localcode-check-jwt-key). A token that expires is replaced by hand: localcode does not renew it. When the gateway refuses an expired token, the error the turn ends with names the date it expired.
 
+Some gateways want a second credential beside the JWT, in a header of their own. The model list then works and the chat request is refused with a 401 that names the header, for example `X-Team-Key header required`. Put the header under `headers` on the same provider; localcode sends it on every request to that provider:
+
+```json
+{
+  "providers": {
+    "gw": {
+      "type": "openai-compat",
+      "base_url": "https://gateway.example.com/v1",
+      "api_key": "{env:GATEWAY_JWT}",
+      "headers": { "X-Team-Key": "{env:TEAM_KEY}" }
+    }
+  }
+}
+```
+
+`localcode check-jwt-key gw` lists the header names it sends, never their values. When a refusal names a header that is not configured, its result says to add it under `providers.gw.headers`. When the header is configured, the result says the gateway did not take its value. Neither result blames the token. See [Provider headers](USAGE.md#provider-headers).
+
 Some opencode fields have no localcode equivalent:
 
 | opencode field | Why there is no equivalent |

@@ -711,12 +711,29 @@ func localMouseEnabled(configPath string) bool {
 	return cfg.Mouse != nil && *cfg.Mouse
 }
 
-func newAnthropic(apiKey, baseURL string) *provider.AnthropicDirect {
+func newAnthropic(apiKey, baseURL string, headers map[string]string) *provider.AnthropicDirect {
 	ad := provider.NewAnthropicDirect(apiKey)
 	if baseURL != "" {
 		ad.BaseURL = baseURL
 	}
+	ad.Headers = headers
 	return ad
+}
+
+// newOpenAICompat builds an openai-compat provider from its config block:
+// the key, and the headers it sends on every request.
+//
+// The key is trimmed, as a key pasted into config.json often carries a
+// newline or a space: Go refuses to send a header with a newline in it,
+// and a server reads a trailing space as part of the key. The headers are
+// SentHeaders, trimmed the same way.
+//
+// One function for the daemon, "localcode run" and "localcode
+// check-jwt-key", so the check sends exactly what a turn sends.
+func newOpenAICompat(pc config.ProviderConfig) *provider.OpenAICompat {
+	p := provider.NewOpenAICompat(pc.BaseURL, strings.TrimSpace(pc.APIKey))
+	p.Headers = pc.SentHeaders()
+	return p
 }
 
 // keylessAnthropic is an anthropic provider declared with no api_key. It
@@ -730,6 +747,7 @@ func newAnthropic(apiKey, baseURL string) *provider.AnthropicDirect {
 // client is rebuilt only when the key has changed.
 type keylessAnthropic struct {
 	name, home, baseURL string
+	headers             map[string]string
 
 	mu    sync.Mutex
 	key   string
@@ -748,7 +766,7 @@ func (k *keylessAnthropic) Chat(ctx context.Context, req provider.ChatRequest) (
 	}
 	k.mu.Lock()
 	if k.ready == nil || k.key != key {
-		k.key, k.ready = key, newAnthropic(key, k.baseURL)
+		k.key, k.ready = key, newAnthropic(key, k.baseURL, k.headers)
 	}
 	ready := k.ready
 	k.mu.Unlock()
@@ -766,14 +784,10 @@ func buildProviders(ctx context.Context, cfg *config.Config, e env) (map[string]
 			// make a local-only daemon depend on ~/.aws or an AWS profile.
 			out[name] = provider.NewBedrock(pc.Region, pc.Profile)
 		case config.ProviderOpenAICompat:
-			// Trimmed, as a key pasted into config.json often carries a
-			// newline or a space: Go refuses to send a header with a newline
-			// in it, and a server reads a trailing space as part of the key.
-			// "localcode check-jwt-key" sends the key the same way.
-			out[name] = provider.NewOpenAICompat(pc.BaseURL, strings.TrimSpace(pc.APIKey))
+			out[name] = newOpenAICompat(pc)
 		case config.ProviderAnthropic:
 			if key := strings.TrimSpace(pc.APIKey); key != "" {
-				out[name] = newAnthropic(key, pc.BaseURL)
+				out[name] = newAnthropic(key, pc.BaseURL, pc.SentHeaders())
 				continue
 			}
 			// No key in the config: the one `localcode login anthropic`
@@ -782,7 +796,7 @@ func buildProviders(ctx context.Context, cfg *config.Config, e env) (map[string]
 			// config named the provider, including people who only ever
 			// use a local model and copied config.example.json, which
 			// names all three.
-			out[name] = &keylessAnthropic{name: name, home: e.home, baseURL: pc.BaseURL}
+			out[name] = &keylessAnthropic{name: name, home: e.home, baseURL: pc.BaseURL, headers: pc.SentHeaders()}
 		default:
 			return nil, fmt.Errorf("provider %q has unknown type %q", name, pc.Type)
 		}

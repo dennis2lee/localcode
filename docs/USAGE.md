@@ -521,10 +521,36 @@ A step counts as new work only when it makes a call not already made this turn a
 | `anthropic.api_key` | Optional. Omit it and the key stored by `localcode login anthropic` in `~/.localcode/credentials.json` is used. |
 | `anthropic.base_url` | Defaults to `api.anthropic.com`. Override it to go through a corporate proxy. |
 | `openai-compat.base_url` | The URL prefix in front of `/chat/completions` |
-| `openai-compat.api_key` | Optional, usually unnecessary for a local server. Sent as `Authorization: Bearer <key>`. A JWT that a gateway issues works as is. [`localcode check-jwt-key`](#checking-a-jwt-key-localcode-check-jwt-key) checks that the endpoint accepts it. When the endpoint refuses a JWT that carries an expiry or a start date (401 or 403), the error the turn ends with says one of four things: the token expired and when, it is not valid until a date, the endpoint says it expired while this machine's clock says it is valid until a date, or it is valid until a date and so its date is not the cause. `/llm-doctor` reports refusals the same way. |
+| `openai-compat.api_key` | Optional, usually unnecessary for a local server. Sent as `Authorization: Bearer <key>`. A JWT that a gateway issues works as is. [`localcode check-jwt-key`](#checking-a-jwt-key-localcode-check-jwt-key) checks that the endpoint accepts it. When the endpoint refuses a JWT that carries an expiry or a start date (401 or 403), the error the turn ends with says one of four things: the token expired and when, it is not valid until a date, the endpoint says it expired while this machine's clock says it is valid until a date, or it is valid until a date and so its date is not the cause. When the refusal says a request header is missing or required, the error says that instead: whether this provider sends the header, and so whether to add it under `headers` or check its value. `/llm-doctor` reports refusals the same way. |
+| `<type>.headers` | `openai-compat` and `anthropic` only. Request headers sent on every request to the endpoint, beside the ones localcode sets itself. For a gateway that wants a second credential next to the bearer token in `api_key`. See [Provider headers](#provider-headers). |
 | `<type>.max_concurrent_tasks` | Concurrent background-task limit for one provider endpoint. Acquired before the global limit. Zero or unset: no per-provider limit, so the endpoint is bounded only by the daemon-wide `max_concurrent_tasks`, which defaults to 1. Maximum: 64. Validated at startup. |
 
 See [MODELS.md](MODELS.md) for real model IDs, region prefixes, and Bedrock troubleshooting.
+
+#### Provider headers
+
+`headers` adds request headers to every HTTP request a provider sends. Use it when a gateway wants a header besides `Authorization`, such as a client key next to a JWT.
+
+```json
+"providers": {
+  "gw": {
+    "type": "openai-compat",
+    "base_url": "https://gateway.example.com/v1",
+    "api_key": "{env:GATEWAY_JWT}",
+    "headers": { "X-Team-Key": "{env:TEAM_KEY}" }
+  }
+}
+```
+
+| Rule | Detail |
+|---|---|
+| Providers | `openai-compat` and `anthropic`. A `headers` block on a `bedrock` provider is refused at load, because the AWS SDK builds those requests. |
+| Requests | Every request the provider makes: chat, `GET /models`, the context-window probes, and the `/llm-doctor` probes. `localcode check-jwt-key` sends them on both of its requests. |
+| Values | Text, `{env:NAME}`, or `{env:NAME:-fallback}`, as anywhere in the file. Trimmed of surrounding spaces and line ends, as `api_key` is. A value that is empty after trimming is not sent, so `{env:NAME:-}` leaves the header off when the variable is unset. |
+| Refused at load | An empty name. A name that is not an HTTP token. Two names that differ only in case. A value with a line break or a control character inside it. `Authorization` (use `api_key`) and `Content-Type`. On `anthropic`, also `x-api-key` (use `api_key`) and `anthropic-version`. `Host`, `Content-Length`, `Transfer-Encoding`, `Trailer`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade` and `TE`, which the HTTP client writes itself. Names are compared without case. The error names the provider and the header, never the value. |
+| Secrecy | Values are treated as `api_key` is. `localcode check-jwt-key` and `/llm-doctor` print names only. A debug log replaces each value with `[redacted]`. A redirect to another host does not carry them, from that hop on. |
+| Merging | A project's provider block replaces the home directory's block of the same name whole, `headers` included. |
+| opencode | A provider's `options.headers` is read as `headers`. On a bedrock provider it is refused. A model's own `headers` is refused, because localcode sends headers per provider. |
 
 #### Agent fields
 
@@ -893,6 +919,7 @@ provider gw (openai-compat, https://gateway.example.com/v1)
   key       JWT, RS256, key id gw-2026, issuer gateway-auth, audience gateway-api
   expires   2027-08-15 11:35 UTC (299 days left)
   written   in ~/.localcode/config.json
+  headers   none
   models    accepted: 3 model(s): model-a, model-b, model-c
   chat      accepted: model-a answered "OK" (12 + 1 tokens)
 result: the key works
@@ -903,14 +930,27 @@ result: the key works
 | `key` | The token's algorithm, key id, issuer and audience. It is decoded, not verified: the endpoint holds the key that checks it. |
 | `expires` | The JWT's `exp`, and how long is left. An expired token is still sent, because the endpoint decides and a clock here can be wrong. |
 | `written` | Which config file holds the token as written text: the project's `.localcode/config.json`, `~/.localcode/config.json`, or the file `--config` names. A file listed under `include` is not looked in. A warning follows when the file is the project's own, which is committed with the project, or when other users can read it. Run in the home directory, the home's file is not the project's. |
+| `headers` | The names in the provider's [`headers`](#provider-headers) block, which both requests carry. Never the values. `none` when there are none. A header whose value is empty is marked as not sent. |
 | `models` | `GET <base_url>/models` with the key: the models listed, or the status the endpoint answered. |
 | `chat` | One short `POST <base_url>/chat/completions` reply, the request every turn makes. The model is `--model`, else the model of a profile on that provider (`default_profile` first), else the first model listed. |
-| `result` | `the key works` exits 0, and so does a model list accepted under `--no-chat`. Anything else exits 1. A refusal (401 or 403) from either request says what to change, and says so when the token has expired. |
+| `result` | `the key works` exits 0, and so does a model list accepted under `--no-chat`. Anything else exits 1. A refusal (401 or 403) from either request says what to change, and says so when the token has expired. A refusal that says a request header is missing or required is reported as that, and the token is not blamed. See the next table. |
+
+When a refusal says a request header is missing or required, the result says one of these. The chat request's refusal decides when there is one, otherwise the model list's. The words are read generically: `header` in the same clause as `missing`, `required` or a similar word, and the header-shaped word nearest to it as the name. A refusal that names `Authorization` is about `api_key` and gets the ordinary result.
+
+| The header | The result |
+|---|---|
+| Not in `headers` | It is missing and not configured. Add it under `providers.<name>.headers`. |
+| In `headers` with an empty value | It is configured, but its value is empty, so it is not sent. |
+| In `headers` and sent | The endpoint did not take that header's value. Check the value. |
+| Not named by the endpoint | A request header is missing. Add the one it needs under `providers.<name>.headers`. |
+
+An expired token is added to any of these as a second problem.
 
 * `--no-chat` sends only the model list request. A model list can be open to anybody, so this proves less than the chat request.
 * `--config <path>` checks that file instead of the merged `~/.localcode` and project files. `--timeout` bounds each request, one minute by default.
-* A warning is printed when `base_url` is plain `http` to another machine, since the key would cross the network unencrypted. OpenAI-compatible and Anthropic API providers, and this check, refuse a redirect from `https` to plain `http` for the same reason. Bedrock requests go through the AWS SDK's own client.
+* A warning is printed when `base_url` is plain `http` to another machine, since the key, and the headers when there are any, would cross the network unencrypted. OpenAI-compatible and Anthropic API providers, and this check, refuse a redirect from `https` to plain `http` for the same reason. Bedrock requests go through the AWS SDK's own client.
 * The token is never printed. In text the endpoint sends back, every run of 12 or more characters that also appears in the token is replaced with `[the key]`, so a reply that repeats part of the token, or is cut short part way through it, does not show the rest. A key shorter than 8 characters is not hidden.
+* Header values are never printed either. They are hidden by the same rule, with `[the <name> value]` in place of each run.
 * The provider name may come before or after the flags.
 
 ## Part 3. Project context
@@ -1527,7 +1567,7 @@ For a local muse or gemma behind vLLM or another OpenAI-compatible server. When 
 | Sampling | Muse is sent temperature 1.0, `top_p` 0.95 and `top_k` 64, with `Reasoning strength: high` in the system prompt, because that is what its own vLLM recipe asks for and it warns against greedy decoding. Gemma is sent temperature 0 with a seed. The report names the sampling it used. |
 | Baseline | `/llm-doctor baseline` keeps the last run as the reference for this model. Later runs list what differs: server facts, the fingerprint, each canary's verdict, and localcode's own version, so a change on the client side is named too. |
 
-The command exists only for models whose name contains `muse` or `gemma`; on another model it says so and sends nothing. Runs are kept under `~/.localcode/doctor/`, one file per model, and a failing canary's request is written beside them so whoever runs the server can replay the same bytes with `curl`. When the profile carries an `api_key`, the printed `curl` line names the `Authorization` header with a blank where the key goes; the key itself is never printed.
+The command exists only for models whose name contains `muse` or `gemma`; on another model it says so and sends nothing. Runs are kept under `~/.localcode/doctor/`, one file per model, and a failing canary's request is written beside them so whoever runs the server can replay the same bytes with `curl`. When the profile carries an `api_key`, the printed `curl` line names the `Authorization` header with a blank where the key goes; the key itself is never printed. The headers in the provider's [`headers`](#provider-headers) block are named the same way, with a blank where each value goes.
 
 Two verdicts are withheld rather than guessed. A canary whose whole token budget went to reasoning, in `reasoning_content` or in a `<think>` block the server left in the answer, never produced an answer to judge, and a canary that passed on one of its two runs and failed on the other has measured a coin toss. Both are reported as inconclusive, and neither counts as a pass or a failure against the baseline. A verdict that moves into or out of inconclusive is still listed as a difference.
 
@@ -2841,7 +2881,7 @@ The [Typography](#settings) text size is the other half of sizing: zoom scales t
 
 Empty logs are removed: a prompt answered by a slash command makes no model call, and a file for each of those would bury the real ones.
 
-Credentials never reach the file. `Authorization`, `x-api-key`, `api-key`, `x-goog-api-key`, `proxy-authorization`, `cookie`, `set-cookie` and the AWS signature headers have their values replaced with `[redacted]`, by header name rather than by guessing at value shapes.
+Credentials never reach the file. `Authorization`, `x-api-key`, `api-key`, `x-goog-api-key`, `proxy-authorization`, `cookie`, `set-cookie` and the AWS signature headers have their values replaced with `[redacted]`, by header name rather than by guessing at value shapes. So do the headers a provider's [`headers`](#provider-headers) block adds, in the request and in a response that repeats them.
 
 Everything else does reach it. The file holds the system prompt, this project's rules, the auto-memory index, every file the model read and every command it ran. Read one before sharing it.
 

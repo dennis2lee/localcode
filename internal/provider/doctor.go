@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // The probes behind "/llm-doctor". They ask an OpenAI-compatible server
@@ -197,18 +196,14 @@ func labelValue(labels, key string) string {
 }
 
 func (p *OpenAICompat) getText(ctx context.Context, url string) (string, bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := newRequest(ctx, http.MethodGet, url, nil, p.Headers)
 	if err != nil {
 		return "", false
 	}
 	if p.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
-	client := p.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := clientOr(p.Client).Do(req)
 	if err != nil {
 		return "", false
 	}
@@ -256,7 +251,7 @@ type RawToolCall struct {
 // error names the status and what the server said, because the person
 // reading it is diagnosing that server.
 func (p *OpenAICompat) RawChat(ctx context.Context, body []byte) (RawReply, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+"/chat/completions", bytes.NewReader(body))
+	req, err := newRequest(ctx, http.MethodPost, p.BaseURL+"/chat/completions", bytes.NewReader(body), p.Headers)
 	if err != nil {
 		return RawReply{}, err
 	}
@@ -264,11 +259,7 @@ func (p *OpenAICompat) RawChat(ctx context.Context, body []byte) (RawReply, erro
 	if p.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
-	client := p.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := clientOr(p.Client).Do(req)
 	if err != nil {
 		return RawReply{}, err
 	}
@@ -282,9 +273,10 @@ func (p *OpenAICompat) RawChat(ctx context.Context, body []byte) (RawReply, erro
 		if len(msg) > 300 {
 			msg = msg[:300] + "…"
 		}
-		// The JWT hint as a turn gets it, so a canary that fails on an
-		// expired token is not read as the server having changed.
-		return RawReply{}, fmt.Errorf("the server answered %d: %s%s", resp.StatusCode, msg, jwtRefusalHint(resp.StatusCode, p.APIKey, string(raw), time.Now()))
+		// The refusal hint as a turn gets it, so a canary that fails on an
+		// expired token, or on a header the gateway wants, is not read as
+		// the server having changed.
+		return RawReply{}, fmt.Errorf("the server answered %d: %s%s", resp.StatusCode, msg, p.refusalHint(resp.StatusCode, string(raw)))
 	}
 	var parsed struct {
 		Choices []struct {

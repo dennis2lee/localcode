@@ -40,6 +40,7 @@ type doctorFake struct {
 	sawTopP   float64
 	sawTopK   int
 	sawAuth   string
+	sawTeam   string
 }
 
 func (f *doctorFake) server(t *testing.T) *httptest.Server {
@@ -85,6 +86,7 @@ func (f *doctorFake) server(t *testing.T) *httptest.Server {
 			}
 			f.sawTemp, f.sawTopP, f.sawTopK = *req.Temperature, req.TopP, req.TopK
 			f.sawAuth = r.Header.Get("Authorization")
+			f.sawTeam = r.Header.Get("X-Team-Key")
 			f.sawSystem = ""
 			if req.Messages[0].Role == "system" {
 				f.sawSystem = req.Messages[0].Content
@@ -539,5 +541,33 @@ func TestLLMDoctorReplayNamesTheKeyHeaderWithoutTheKey(t *testing.T) {
 	}
 	if fake.sawAuth != "Bearer sekret-key" {
 		t.Errorf("the probe itself did not send the key: %q", fake.sawAuth)
+	}
+}
+
+// A provider's own headers are named in the replay line the same way, with
+// a blank where each value goes: a gateway that wants one refuses the
+// replay without it, and the value is as secret as the key.
+func TestLLMDoctorReplayNamesTheProvidersHeadersWithoutTheirValues(t *testing.T) {
+	fake := healthyDoctorFake()
+	fake.toolAsText = true
+	srv := fake.server(t)
+	defer srv.Close()
+	loop, sid := doctorLoop(t, srv.URL, "muse-glimmer")
+	p := provider.NewOpenAICompat(srv.URL, "")
+	p.Headers = map[string]string{"X-Team-Key": "made-up-team-key-0001"}
+	loop.Providers["local"] = p
+
+	got := runDoctorCommand(t, loop, sid, "/llm-doctor")
+	if !strings.Contains(got, "-H 'X-Team-Key: <this provider's X-Team-Key value>'") {
+		t.Errorf("the replay line does not name the header:\n%s", got)
+	}
+	if strings.Contains(got, "made-up-team-key-0001") {
+		t.Errorf("the report carries the header's value:\n%s", got)
+	}
+	if strings.Contains(got, "Authorization") {
+		t.Errorf("a provider with no api_key got an Authorization header in the replay line:\n%s", got)
+	}
+	if fake.sawTeam != "made-up-team-key-0001" {
+		t.Errorf("the probe itself did not send the header: %q", fake.sawTeam)
 	}
 }

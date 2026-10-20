@@ -1,0 +1,207 @@
+package provider
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"regexp"
+	"sort"
+	"strings"
+
+	"localcode/internal/debuglog"
+)
+
+// newRequest builds every HTTP request a provider sends, with the headers
+// its config adds (providers.<name>.headers) already on it. One function,
+// so a request site added later cannot leave them off: the model list and
+// the /llm-doctor probes reach a gateway through the same door the chat
+// stream does, and a gateway that wants a second credential wants it on
+// all of them.
+//
+// They go on first and the caller's own Set calls come after, so the
+// headers localcode sets itself win. Config validation already refuses
+// those names; this order means one that got past it still cannot replace
+// the key or the content type.
+//
+// The names also go on the request's context. That is how the debug log
+// knows to redact their values, and how the redirect policy knows to
+// withhold them from another host (see withholdOffHost).
+func newRequest(ctx context.Context, method, url string, body io.Reader, headers map[string]string) (*http.Request, error) {
+	if len(headers) > 0 {
+		names := make([]string, 0, len(headers))
+		for k := range headers {
+			names = append(names, k)
+		}
+		ctx = debuglog.WithSecretHeaders(ctx, names...)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		if v != "" {
+			req.Header.Set(k, v)
+		}
+	}
+	return req, nil
+}
+
+// HeaderAsked reports whether an endpoint's refusal says that a request
+// header is missing or required, and names the header when the refusal
+// does. A gateway that takes a JWT as the bearer token and also wants a
+// key of its own in another header answers 401 when that header is
+// absent, and a 401 reads as a refused token unless something reads the
+// words.
+//
+// Read generically, from the shape of the sentence and not from any one
+// gateway's wording: the word "header" in the same clause as "missing",
+// "required" or one of their relatives, and the name is the nearest word
+// to "header" that is shaped like a header name: quoted, or with a hyphen
+// or an underscore in it. A JSON body is read string by string, so the
+// clause is the message and not the punctuation around it.
+//
+// Authorization is not reported. That header carries api_key, and a
+// refusal that names it is about the key, which is what the caller says
+// already.
+func HeaderAsked(body string) (name string, ok bool) {
+	for _, s := range refusalStrings(body) {
+		for _, clause := range clauseBreak.Split(s, -1) {
+			n, found := headerAskedIn(clause)
+			if !found {
+				continue
+			}
+			if strings.EqualFold(n, "authorization") {
+				return "", false
+			}
+			if n != "" {
+				return n, true
+			}
+			ok = true
+		}
+	}
+	return "", ok
+}
+
+// refusalStrings is the text a refusal is read in: each string in a JSON
+// body, in key order, or the body itself when it is not JSON (or was cut
+// short before it got here, which leaves JSON that does not parse).
+func refusalStrings(body string) []string {
+	var doc any
+	if json.Unmarshal([]byte(body), &doc) != nil {
+		// Escaped quotes read as quotes, so a quoted name in a body that
+		// no longer parses is still a quoted name.
+		return []string{strings.ReplaceAll(body, `\"`, `"`)}
+	}
+	var out []string
+	var walk func(v any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case string:
+			out = append(out, t)
+		case []any:
+			for _, item := range t {
+				walk(item)
+			}
+		case map[string]any:
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				walk(t[k])
+			}
+		}
+	}
+	walk(doc)
+	return out
+}
+
+// clauseBreak ends a clause. Not the quotes, the parentheses or the colon,
+// which are where a header's name tends to sit.
+var clauseBreak = regexp.MustCompile(`[.;,!?\n]+`)
+
+// headerWord finds the words a header name is looked for around: a run of
+// letters, digits, hyphens and underscores, with the quote on either side
+// of it if there is one.
+var headerWord = regexp.MustCompile("([\"'`]?)([A-Za-z][A-Za-z0-9_-]*)([\"'`]?)")
+
+// askedPhrases are what a sentence that asks for a header says.
+var askedPhrases = []string{
+	"missing", "require", "absent",
+	"not provided", "not present", "not supplied", "not set", "not found", "not sent", "not included",
+	"must be", "must include", "must provide", "must send", "must contain",
+	"please provide", "please include",
+}
+
+// notAName are the words that can stand next to "header" quoted or
+// hyphenated without being one: the keys of a JSON body that no longer
+// parses, and the words of the sentence itself.
+var notAName = map[string]bool{
+	"header": true, "headers": true, "required": true, "missing": true, "request": true,
+	"error": true, "message": true, "detail": true, "details": true, "code": true, "type": true,
+	"param": true, "msg": true, "reason": true, "status": true, "description": true,
+}
+
+// maxNameDistance is how many words from "header" a name is looked for,
+// and maxNameLen the longest word taken for one.
+const (
+	maxNameDistance = 4
+	maxNameLen      = 64
+)
+
+// headerAskedIn reads one clause. found is set when the clause asks for a
+// header, and name is the header it names, or "".
+func headerAskedIn(clause string) (name string, found bool) {
+	lower := strings.ToLower(clause)
+	asked := false
+	for _, p := range askedPhrases {
+		if strings.Contains(lower, p) {
+			asked = true
+			break
+		}
+	}
+	if !asked {
+		return "", false
+	}
+	type word struct {
+		text   string
+		quoted bool
+	}
+	var words []word
+	for _, m := range headerWord.FindAllStringSubmatch(clause, -1) {
+		words = append(words, word{text: m[2], quoted: m[1] != "" && m[1] == m[3]})
+	}
+	best, bestDist := "", 0
+	for i, w := range words {
+		if l := strings.ToLower(w.text); l != "header" && l != "headers" {
+			continue
+		}
+		found = true
+		for j, c := range words {
+			if notAName[strings.ToLower(c.text)] {
+				continue
+			}
+			if !c.quoted && !strings.ContainsAny(c.text, "-_") && !strings.EqualFold(c.text, "authorization") {
+				continue
+			}
+			d := j - i
+			if d < 0 {
+				d = -d
+			}
+			// Close by, and short: a name is a word or two away from
+			// "header", and a long hyphenated run further off is more
+			// likely a piece of an echoed token than a header name.
+			if d > maxNameDistance || len(c.text) > maxNameLen {
+				continue
+			}
+			// Nearest wins, and the word before "header" wins a tie:
+			// "X-Team-Key header" is the more common order.
+			if best == "" || d < bestDist || d == bestDist && j < i {
+				best, bestDist = c.text, d
+			}
+		}
+	}
+	return best, found
+}

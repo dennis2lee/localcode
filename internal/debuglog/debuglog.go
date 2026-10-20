@@ -24,7 +24,8 @@
 // Credentials never reach the file. See redactHeaders: the values that
 // authenticate are replaced, not shortened, and the list is of header
 // names rather than of value shapes, because a header nobody thought of
-// is the one that leaks.
+// is the one that leaks. The headers a provider's config adds are named
+// on the request's context (WithSecretHeaders) and redacted the same way.
 package debuglog
 
 import (
@@ -193,7 +194,10 @@ func (s *Sink) exchange() int {
 // transport is ever wired there. Replaced with a fixed string rather
 // than a prefix of the value: a prefix is enough to identify a key, and
 // the point of the file is that it can be pasted into an issue.
-func redactHeaders(h http.Header) http.Header {
+//
+// extra is the names WithSecretHeaders put on the request's context: the
+// headers a provider's config adds, which no fixed list can name.
+func redactHeaders(h http.Header, extra ...string) http.Header {
 	secret := map[string]bool{
 		"authorization":        true,
 		"x-api-key":            true,
@@ -204,6 +208,9 @@ func redactHeaders(h http.Header) http.Header {
 		"set-cookie":           true,
 		"x-amz-security-token": true,
 		"x-amz-content-sha256": true,
+	}
+	for _, name := range extra {
+		secret[strings.ToLower(name)] = true
 	}
 	out := make(http.Header, len(h))
 	for k, v := range h {
@@ -263,7 +270,8 @@ func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "==== %d >>> %s %s  %s\n", n, req.Method, req.URL.String(),
 		time.Now().Format(time.RFC3339Nano))
-	writeHeaders(&b, redactHeaders(req.Header))
+	secrets := SecretHeaders(req.Context())
+	writeHeaders(&b, redactHeaders(req.Header, secrets...))
 
 	// The body is copied as the transport sends it, not read out and put
 	// back.
@@ -300,7 +308,9 @@ func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var rb strings.Builder
 	rb.WriteString("\n")
 	fmt.Fprintf(&rb, "==== %d <<< %s  after %s\n", n, resp.Status, time.Since(start).Round(time.Millisecond))
-	writeHeaders(&rb, redactHeaders(resp.Header))
+	// The same names in the response too: a server that echoes a request
+	// header back would otherwise put its value in the file.
+	writeHeaders(&rb, redactHeaders(resp.Header, secrets...))
 	rb.WriteString("\n")
 	s.writeBlockFor(n, rb.String())
 

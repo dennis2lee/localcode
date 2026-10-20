@@ -913,11 +913,31 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 				delete(optionsMap, "endpoint")
 				provChanged = true
 			}
-			if _, ok := optionsMap["headers"]; ok {
-				refusals = append(refusals, refusal{
-					path: fmt.Sprintf("provider.%s.options.headers", pName),
-					msg:  fmt.Sprintf(`provider %q: options.headers sets headers on every request to this provider, and localcode's clients send only their own — the headers named here would not be sent.`, pName),
-				})
+			// options.headers is localcode's headers, one level down. Not on
+			// bedrock, whose requests the AWS SDK builds: there it is refused
+			// here, in opencode's terms, rather than translated into a
+			// headers block that Validate then refuses in localcode's.
+			if rawHeaders, ok := optionsMap["headers"]; ok {
+				var fromOptions, existing any
+				_ = json.Unmarshal(rawHeaders, &fromOptions)
+				rawExisting, hasExisting := provMap["headers"]
+				if hasExisting {
+					_ = json.Unmarshal(rawExisting, &existing)
+				}
+				switch {
+				case provType == "bedrock":
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("provider.%s.options.headers", pName),
+						msg:  fmt.Sprintf(`provider %q: options.headers sets headers on every request to this provider, and localcode's bedrock requests are built by the AWS SDK, which localcode adds no headers to — the headers named here would not be sent.`, pName),
+					})
+				case hasExisting && !reflect.DeepEqual(fromOptions, existing):
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("provider.%s.options.headers", pName),
+						msg:  fmt.Sprintf(`provider %q: headers and options.headers are two spellings of the same block, and they disagree; keep one of them`, pName),
+					})
+				default:
+					provMap["headers"] = rawHeaders
+				}
 				delete(optionsMap, "headers")
 				provChanged = true
 			}
@@ -1126,7 +1146,7 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 					if _, ok := mEntry["headers"]; ok {
 						refusals = append(refusals, refusal{
 							path: fmt.Sprintf("provider.%s.models.%s.headers", pName, mKey),
-							msg:  fmt.Sprintf(`provider %q model %q: headers sets headers on requests for this model, and localcode's clients send only their own — the headers named here would not be sent.`, pName, mKey),
+							msg:  fmt.Sprintf(`provider %q model %q: headers sets headers on requests for this model, and localcode sends headers per provider, not per model — the headers named here would not be sent. Move them to the provider's options.headers if every model on it may carry them, or give this model a provider block of its own.`, pName, mKey),
 						})
 					}
 					if _, ok := mEntry["variants"]; ok {

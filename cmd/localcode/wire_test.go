@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -144,5 +145,57 @@ func TestAProviderKeyIsSentWithoutSurroundingSpace(t *testing.T) {
 	}
 	if _, ok := providers["blank"].(*keylessAnthropic); !ok {
 		t.Errorf("a key of only spaces = %#v, want the stored key looked up instead", providers["blank"])
+	}
+}
+
+// A provider's headers reach the client a turn talks through, trimmed as
+// the key is and without the ones whose value is empty: on openai-compat,
+// on anthropic with a key, and on anthropic waiting for the key `localcode
+// login anthropic` saves, whose client is built at the first request.
+func TestAProviderIsBuiltWithItsHeaders(t *testing.T) {
+	home := t.TempDir()
+	var mu sync.Mutex
+	var gotTeam string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotTeam = r.Header.Get("X-Team-Key")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+	headers := map[string]string{"X-Team-Key": " made-up-team-key\n", "X-Optional": ""}
+	cfg := &config.Config{Providers: map[string]config.ProviderConfig{
+		"gw":      {Type: config.ProviderOpenAICompat, BaseURL: "https://gateway.example.com/v1", Headers: headers},
+		"claude":  {Type: config.ProviderAnthropic, APIKey: "sk-ant-config", Headers: headers},
+		"keyless": {Type: config.ProviderAnthropic, BaseURL: srv.URL, Headers: headers},
+	}}
+	providers, err := buildProviders(context.Background(), cfg, env{home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"X-Team-Key": "made-up-team-key"}
+	if oa, ok := providers["gw"].(*provider.OpenAICompat); !ok || !reflect.DeepEqual(oa.Headers, want) {
+		t.Errorf("openai-compat provider = %#v, want headers %q", providers["gw"], want)
+	}
+	if ad, ok := providers["claude"].(*provider.AnthropicDirect); !ok || !reflect.DeepEqual(ad.Headers, want) {
+		t.Errorf("anthropic provider = %#v, want headers %q", providers["claude"], want)
+	}
+
+	if err := credentials.SaveAnthropicAPIKey(home, "sk-ant-later"); err != nil {
+		t.Fatal(err)
+	}
+	req := provider.ChatRequest{Model: "claude-sonnet-5-5", MaxTokens: 16,
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("hi")}}}}
+	stream, err := providers["keyless"].Chat(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gotTeam != "made-up-team-key" {
+		t.Errorf("the keyless anthropic provider sent X-Team-Key %q, want the configured value", gotTeam)
 	}
 }

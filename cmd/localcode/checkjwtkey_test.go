@@ -603,3 +603,173 @@ func TestCheckJWTKeyEdges(t *testing.T) {
 		t.Errorf("a 403 with no model to ask:\n%s", out.String())
 	}
 }
+
+// missingHeaderBody is a refusal in the shape a gateway that wants a key
+// of its own beside the JWT gives it, with a made-up header name.
+const missingHeaderBody = `{"error":{"message":"Missing client API key (X-Team-Key header required)","type":"None","param":"None","code":"401"}}`
+
+// newTeamGateway takes the bearer token accept for its model list, and
+// for chat also wants X-Team-Key to be team. Without the header it says
+// the header is missing; with another value it says the header is
+// required and repeats what it was sent, the way a careless gateway might.
+func newTeamGateway(t *testing.T, accept, team string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+accept {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"invalid token"}`))
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/models":
+			w.Write([]byte(`{"data":[{"id":"CodeA"},{"id":"CodeB"}]}`))
+		case "/v1/chat/completions":
+			switch got := r.Header.Get("X-Team-Key"); got {
+			case team:
+				w.Write([]byte(`{"choices":[{"message":{"content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1}}`))
+			case "":
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(missingHeaderBody))
+			default:
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprintf(w, `{"error":{"message":"X-Team-Key header required: %s is not a client key"}}`, got)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// writeHeaderConfig is writeKeyConfig with a headers block on the
+// provider.
+func writeHeaderConfig(t *testing.T, path, baseURL, key string, headers map[string]string) {
+	t.Helper()
+	cfg := map[string]any{
+		"providers":       map[string]any{"gw": map[string]any{"type": "openai-compat", "base_url": baseURL, "api_key": key, "headers": headers}},
+		"profiles":        map[string]any{"main": map[string]any{"provider": "gw", "model": "CodeB"}},
+		"default_profile": "main",
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// resultLine is the report's last line.
+func resultLine(report string) string {
+	_, after, _ := strings.Cut(report, "\nresult: ")
+	line, _, _ := strings.Cut(after, "\n")
+	return "result: " + line
+}
+
+// The headers a provider's config adds go on both requests, the way a
+// turn sends them, and the report lists them by name. Their values are
+// never printed.
+func TestCheckJWTKeySendsTheConfiguredHeaders(t *testing.T) {
+	home, _ := keyCheckEnv(t)
+	key := testJWT(t, time.Now().Add(24*time.Hour))
+	team := "made-up-team-key-0001"
+	srv := newTeamGateway(t, key, team)
+	writeHeaderConfig(t, filepath.Join(home, ".localcode", "config.json"), srv.URL+"/v1", key, map[string]string{"X-Team-Key": " " + team + "\n"})
+
+	var out bytes.Buffer
+	if err := checkJWTKey(nil, &out); err != nil {
+		t.Fatalf("check-jwt-key: %v\n%s", err, out.String())
+	}
+	report := out.String()
+	for _, want := range []string{"headers   X-Team-Key\n", `accepted: CodeB answered "OK"`, "result: the key works"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("the report does not say %q:\n%s", want, report)
+		}
+	}
+	if strings.Contains(report, team) {
+		t.Errorf("the report prints the header's value:\n%s", report)
+	}
+	noKeyIn(t, report, key)
+}
+
+// When the refusal says a header is missing or required, the verdict is
+// about that header and not about the token: not configured, add it under
+// providers.<name>.headers; configured with no value, it is not sent;
+// configured and sent, the endpoint did not take its value. It never says
+// to check the token. An expired token is said as a second problem. The
+// model list's refusal counts the same way under --no-chat, and a refusal
+// that names no header still says a header is missing.
+func TestCheckJWTKeyBlamesTheHeaderAndNotTheToken(t *testing.T) {
+	home, _ := keyCheckEnv(t)
+	cfgPath := filepath.Join(home, ".localcode", "config.json")
+	good := testJWT(t, time.Now().Add(24*time.Hour))
+	old := testJWT(t, time.Now().Add(-24*time.Hour))
+	team := "made-up-team-key-0001"
+	wrong := "made-up-wrong-key-0002"
+	gw := func(key string) string { return newTeamGateway(t, key, team).URL }
+	for _, tc := range []struct {
+		name    string
+		url     string
+		key     string
+		headers map[string]string
+		args    []string
+		want    []string
+	}{
+		{"not configured", gw(good), good, nil, nil, []string{
+			"headers   none",
+			"chat      CodeB: the server answered 401: " + missingHeaderBody,
+			"result: the key was not confirmed: the endpoint refused the request (401) because header X-Team-Key is missing, and it is not configured. Add it under providers.gw.headers\n",
+		}},
+		{"configured empty", gw(good), good, map[string]string{"X-Team-Key": " "}, nil, []string{
+			"headers   X-Team-Key (empty, so not sent)",
+			"because header X-Team-Key is missing. It is in providers.gw.headers, but its value is empty, so it is not sent",
+		}},
+		{"value refused", gw(good), good, map[string]string{"x-team-key": wrong}, nil, []string{
+			"headers   x-team-key",
+			"X-Team-Key header required: [the x-team-key value] is not a client key",
+			"and asks for header x-team-key, which is sent: it did not take that header's value. Check the value in providers.gw.headers",
+		}},
+		{"token expired too", gw(old), old, nil, nil, []string{
+			"EXPIRED on",
+			"because header X-Team-Key is missing, and it is not configured. Add it under providers.gw.headers. The token has also expired: replace api_key as well",
+		}},
+		{"model list, --no-chat", newScriptedGateway(t, status(403, missingHeaderBody), status(500, "unused")).URL, good, nil, []string{"--no-chat"}, []string{
+			"models    refused (403): ",
+			"the endpoint refused the request (403) because header X-Team-Key is missing, and it is not configured",
+		}},
+		{"no name", newScriptedGateway(t, status(200, `{"data":[{"id":"CodeA"}]}`), status(401, `{"error":"a required header is missing"}`)).URL, good, nil, nil, []string{
+			"because a request header is missing, and does not say which. Add the one it needs under providers.gw.headers",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writeHeaderConfig(t, cfgPath, tc.url+"/v1", tc.key, tc.headers)
+			var out bytes.Buffer
+			err := checkJWTKey(tc.args, &out)
+			if err == nil || !strings.Contains(err.Error(), "the key of gw did not work") {
+				t.Errorf("err = %v, want the check to fail", err)
+			}
+			report := out.String()
+			for _, want := range tc.want {
+				if !strings.Contains(report, want) {
+					t.Errorf("the report does not say %q:\n%s", want, report)
+				}
+			}
+			result := resultLine(report)
+			for _, blame := range []string{"Check that api_key", "issued for this endpoint", "JWT", "the key does not work"} {
+				if strings.Contains(result, blame) {
+					t.Errorf("the verdict points at the token (%q): %s", blame, result)
+				}
+			}
+			for _, secret := range []string{team, wrong} {
+				if strings.Contains(report, secret) {
+					t.Errorf("the report prints a header value:\n%s", report)
+				}
+			}
+			noKeyIn(t, report, tc.key)
+		})
+	}
+}

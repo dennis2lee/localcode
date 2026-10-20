@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -321,7 +323,7 @@ func (l *Loop) routeLLMDoctor(ctx context.Context, sessionID, agentName, text st
 	file.Last = &run
 	saveErr := saveDoctorFile(path, file)
 	replays := writeDoctorReplays(path, run)
-	report := doctorReport(run, file.Baseline, path, replays, oa.APIKey != "")
+	report := doctorReport(run, file.Baseline, path, replays, oa.APIKey != "", slices.Sorted(maps.Keys(oa.Headers)))
 	if saveErr != nil {
 		report += "\n\n(this run was not saved: " + saveErr.Error() + ")"
 	}
@@ -534,7 +536,10 @@ func writeDoctorReplays(path string, run doctorRun) []string {
 
 // --- the report ---
 
-func doctorReport(run doctorRun, base *doctorRun, path string, replays []string, keyed bool) string {
+// doctorReport is the reply to "/llm-doctor". keyed and headers are for the
+// replay line: whether the provider sends api_key, and the names of the
+// headers its config adds to every request. Never their values.
+func doctorReport(run doctorRun, base *doctorRun, path string, replays []string, keyed bool, headers []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "llm-doctor: %s at %s (localcode %s), %s\n",
 		run.Model, doctorHost(run.BaseURL), run.Localcode, run.At.Format("2006-01-02 15:04"))
@@ -626,10 +631,15 @@ func doctorReport(run doctorRun, base *doctorRun, path string, replays []string,
 	if len(replays) > 0 {
 		// The key is the profile's, and it stays there: a report is
 		// pasted into chats and issues. The header is named so the line
-		// works, with a blank where the key goes.
+		// works, with a blank where the key goes. The provider's own
+		// headers the same way: a gateway that wants one refuses the
+		// replay without it, and its value is as secret as the key.
 		auth := ""
 		if keyed {
 			auth = " -H 'Authorization: Bearer <this profile's api_key>'"
+		}
+		for _, h := range headers {
+			auth += fmt.Sprintf(" -H '%s: <this provider's %s value>'", h, h)
 		}
 		fmt.Fprintf(&b, "\nReplay a failing canary yourself, or hand it to whoever runs the server:\n  curl -s %s/chat/completions -H 'Content-Type: application/json'%s -d @%s",
 			run.BaseURL, auth, replays[0])

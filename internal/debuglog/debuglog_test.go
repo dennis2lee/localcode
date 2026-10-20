@@ -117,6 +117,49 @@ func TestCredentialsNeverReachTheFile(t *testing.T) {
 	}
 }
 
+// A header a provider's config adds has a name no fixed list knows, so the
+// request's context names it, and its value is redacted like the key's: in
+// the request, and in a response that echoes it. A header nobody named is
+// still written, which is what makes the rest of the file useful.
+func TestHeadersNamedOnTheContextAreRedactedToo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Team-Key", r.Header.Get("X-Team-Key"))
+		io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+
+	sink, err := Create(t.TempDir(), "s1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithSecretHeaders(With(context.Background(), sink), "x-team-key")
+	c := &http.Client{Transport: Transport{}}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	req.Header.Set("X-Team-Key", "made-up-team-secret")
+	req.Header.Set("X-Request-Note", "plain-value")
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	sink.Close()
+
+	got := read(t, sink.Path())
+	if strings.Contains(got, "made-up-team-secret") {
+		t.Errorf("the log carries the configured header's value:\n%s", got)
+	}
+	if strings.Count(got, "X-Team-Key: [redacted]") != 2 {
+		t.Errorf("the header is not redacted in both the request and the response:\n%s", got)
+	}
+	if !strings.Contains(got, "X-Request-Note: plain-value") {
+		t.Errorf("a header nobody named was redacted too:\n%s", got)
+	}
+	if names := SecretHeaders(WithSecretHeaders(ctx, "X-Other")); len(names) != 2 {
+		t.Errorf("names added to a context that had some = %q, want both", names)
+	}
+}
+
 // Without a sink on the context the transport is the transport.
 func TestNothingIsWrittenWithoutASink(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

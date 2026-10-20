@@ -21,7 +21,7 @@ import (
 //
 // The write is temp-file + rename so a crash or full disk can never leave a
 // truncated config.json, and the file is created 0o600 because it can hold
-// provider API keys and MCP auth headers.
+// provider API keys and headers, and MCP auth headers.
 func updateRawConfig(path string, mutate func(raw map[string]json.RawMessage) error) error {
 	raw := map[string]json.RawMessage{}
 	data, err := os.ReadFile(path)
@@ -71,8 +71,8 @@ func updateRawConfig(path string, mutate func(raw map[string]json.RawMessage) er
 
 // writeFileAtomic is the temp-file + rename this package has always used:
 // a crash or a full disk can never leave a truncated config.json, and the
-// file is created 0o600 because it can hold provider API keys and MCP
-// auth headers.
+// file is created 0o600 because it can hold provider API keys and
+// headers, and MCP auth headers.
 func writeFileAtomic(path string, out []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

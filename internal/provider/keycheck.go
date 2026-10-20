@@ -118,18 +118,14 @@ func epoch(v any) time.Time {
 // from an endpoint that has no model list. err is set only when no answer
 // came back at all.
 func (p *OpenAICompat) ModelList(ctx context.Context) (ids []string, status int, detail string, err error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.BaseURL+"/models", nil)
+	req, err := newRequest(ctx, http.MethodGet, p.BaseURL+"/models", nil, p.Headers)
 	if err != nil {
 		return nil, 0, "", err
 	}
 	if p.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
-	client := p.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := clientOr(p.Client).Do(req)
 	if err != nil {
 		return nil, 0, "", err
 	}
@@ -202,4 +198,61 @@ func jwtRefusalHint(status int, key, body string, now time.Time) string {
 		return fmt.Sprintf("\n\nhint: the JWT in this provider's api_key is valid until %s, so its date is not why it was refused. Run `localcode check-jwt-key` to see what the endpoint says", c.Expires.Format(layout))
 	}
 	return ""
+}
+
+// refusalHint is the paragraph a refusal (401 or 403) gets after the
+// endpoint's own words, on a turn and on /llm-doctor's raw requests.
+func (p *OpenAICompat) refusalHint(status int, body string) string {
+	return refusalHint(status, p.APIKey, p.Headers, body, time.Now())
+}
+
+// refusalHint says what a refusal is about. When the endpoint says that a
+// request header is missing or required (see HeaderAsked), it is about that
+// header, whatever the key is: it says whether this provider sends the
+// header, and so whether to add it or to check its value. The JWT's date
+// follows only when it is a second problem, and is said as one. A date
+// hint on its own there sent a person to replace a token the endpoint had
+// not complained of, or told them the date was fine and to look elsewhere
+// without saying where.
+//
+// Otherwise it is jwtRefusalHint. Names only, never a value: the values
+// are secrets, and this text is shown and logged.
+func refusalHint(status int, key string, headers map[string]string, body string, now time.Time) string {
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return ""
+	}
+	name, asked := HeaderAsked(body)
+	if !asked {
+		return jwtRefusalHint(status, key, body, now)
+	}
+	var hint string
+	switch {
+	case name == "":
+		hint = `the endpoint says a request header it needs is missing, and does not say which. Add the one it needs under this provider's "headers" in config.json`
+	case sendsHeader(headers, name):
+		hint = fmt.Sprintf(`the endpoint asks for request header %s, and this provider sends one, so it is that header's value the endpoint did not take. Check the value under this provider's "headers" in config.json`, name)
+	default:
+		hint = fmt.Sprintf(`the endpoint asks for request header %s, which this provider does not send. Add it under this provider's "headers" in config.json`, name)
+	}
+	if c, ok := ParseJWT(key); ok {
+		const layout = "2006-01-02 15:04 MST"
+		switch {
+		case !c.Expires.IsZero() && !now.Before(c.Expires):
+			hint += fmt.Sprintf(". Separately, the JWT in api_key expired on %s and needs replacing as well", c.Expires.Format(layout))
+		case !c.NotBefore.IsZero() && now.Before(c.NotBefore):
+			hint += fmt.Sprintf(". Separately, the JWT in api_key is not valid until %s", c.NotBefore.Format(layout))
+		}
+	}
+	return "\n\nhint: " + hint
+}
+
+// sendsHeader reports whether headers sends name: there, under any case,
+// with a value.
+func sendsHeader(headers map[string]string, name string) bool {
+	for k, v := range headers {
+		if strings.EqualFold(k, name) && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
 }

@@ -116,18 +116,14 @@ func (p *OpenAICompat) probeProps(ctx context.Context) (int, bool) {
 }
 
 func (p *OpenAICompat) getJSON(ctx context.Context, url string, out any) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := newRequest(ctx, http.MethodGet, url, nil, p.Headers)
 	if err != nil {
 		return false
 	}
 	if p.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
-	client := p.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := clientOr(p.Client).Do(req)
 	if err != nil {
 		return false
 	}

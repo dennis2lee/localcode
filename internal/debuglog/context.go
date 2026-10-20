@@ -32,3 +32,32 @@ func From(ctx context.Context) *Sink {
 	s, _ := ctx.Value(sinkKey{}).(*Sink)
 	return s
 }
+
+type secretHeadersKey struct{}
+
+// WithSecretHeaders marks names as headers whose values are credentials on
+// every request made under ctx, on top of the fixed list redactHeaders
+// knows: the headers a provider's config adds, whose names nobody can list
+// in advance. On the context for the reason the sink is, so the request
+// that carries the headers carries the fact that they are secret, and
+// nothing has to be told twice.
+func WithSecretHeaders(ctx context.Context, names ...string) context.Context {
+	if len(names) == 0 {
+		return ctx
+	}
+	prev := SecretHeaders(ctx)
+	all := make([]string, 0, len(prev)+len(names))
+	all = append(append(all, prev...), names...)
+	return context.WithValue(ctx, secretHeadersKey{}, all)
+}
+
+// SecretHeaders is the header names WithSecretHeaders put on ctx. The
+// provider package reads it too, to withhold the same headers from a
+// redirect to another host.
+func SecretHeaders(ctx context.Context) []string {
+	if ctx == nil {
+		return nil
+	}
+	names, _ := ctx.Value(secretHeadersKey{}).([]string)
+	return names
+}

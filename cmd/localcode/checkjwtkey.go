@@ -26,8 +26,9 @@ import (
 // says what the token claims (decoded, not verified: the endpoint holds the
 // key that checks it), when it expires, where it is written and who can
 // read that file, and then asks the endpoint with it: once for its model
-// list and once for one short chat reply. The token itself is never
-// printed. A key that is not a JWT is not its business.
+// list and once for one short chat reply, with the provider's headers on
+// both, as a turn sends them. The token itself is never printed, and nor
+// is any header's value. A key that is not a JWT is not its business.
 //
 // The chat reply is the answer. A model list can be open to anybody or not
 // offered at all, so a 200 there proves less than the request every turn
@@ -99,7 +100,7 @@ func checkJWTKey(args []string, out io.Writer) error {
 			fmt.Fprintln(out)
 		}
 		pc := cfg.Providers[n]
-		r := &keyReport{out: out, key: pc.APIKey}
+		r := &keyReport{out: out, key: pc.APIKey, headers: pc.Headers, provider: n}
 		ok := r.check(n, pc, cfg, files, project, *model, *noChat, *timeout)
 		if !ok {
 			failed = append(failed, n)
@@ -174,15 +175,31 @@ func projectConfigFile(e env) string {
 }
 
 // keyReport writes one provider's report. Every line goes through line,
-// which takes the key out of anything an endpoint said back, so a server
-// that echoes the Authorization header does not put the key on screen.
+// which takes the key and every header value out of anything an endpoint
+// said back, so a server that echoes the Authorization header, or the
+// gateway's own key header, does not put it on screen.
 type keyReport struct {
 	out io.Writer
 	key string
+	// headers is the provider's headers block as written: the names the
+	// report lists, and the values it hides.
+	headers  map[string]string
+	provider string
 }
 
 func (r *keyReport) line(label, format string, a ...any) {
-	fmt.Fprintf(r.out, "  %-9s %s\n", label, redactKey(fmt.Sprintf(format, a...), r.key))
+	fmt.Fprintf(r.out, "  %-9s %s\n", label, r.redact(fmt.Sprintf(format, a...)))
+}
+
+// redact takes the key, and then each header's value, out of text. A
+// header value is replaced by a mark that names the header, so a line that
+// had one in it still says which.
+func (r *keyReport) redact(text string) string {
+	text = redactKey(text, r.key)
+	for _, name := range sortedNames(r.headers) {
+		text = redactSecret(text, r.headers[name], "[the "+name+" value]")
+	}
+	return text
 }
 
 // minSecretLen is the shortest key the report hides. Shorter, and hiding
@@ -201,19 +218,26 @@ const minEchoLen = 12
 // short before it got here. Matching the key whole missed all but the
 // first of those.
 func redactKey(text, key string) string {
-	key = strings.TrimSpace(key)
-	if len(key) < minSecretLen {
+	return redactSecret(text, key, "[the key]")
+}
+
+// redactSecret is redactKey for any secret, with mark in place of each
+// run. A header's value is hidden by the same rule as the key, and a value
+// shorter than minSecretLen is not hidden, for the same reason.
+func redactSecret(text, secret, mark string) string {
+	secret = strings.TrimSpace(secret)
+	if len(secret) < minSecretLen {
 		return text
 	}
-	least := min(minEchoLen, len(key))
+	least := min(minEchoLen, len(secret))
 	var b strings.Builder
 	for i := 0; i < len(text); {
 		j := i
-		for j < len(text) && strings.Contains(key, text[i:j+1]) {
+		for j < len(text) && strings.Contains(secret, text[i:j+1]) {
 			j++
 		}
 		if j-i >= least {
-			b.WriteString("[the key]")
+			b.WriteString(mark)
 			i = j
 			continue
 		}
@@ -225,19 +249,27 @@ func redactKey(text, key string) string {
 
 func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Config, files []string, project, model string, noChat bool, timeout time.Duration) bool {
 	key := strings.TrimSpace(pc.APIKey)
-	fmt.Fprintln(r.out, redactKey(fmt.Sprintf("provider %s (openai-compat, %s)", name, pc.BaseURL), key))
+	fmt.Fprintln(r.out, r.redact(fmt.Sprintf("provider %s (openai-compat, %s)", name, pc.BaseURL)))
 
 	expired := r.describeKey(key)
 	r.describeFile(key, files, project)
+	r.describeHeaders()
 	if sendsKeyInClear(pc.BaseURL) {
-		r.line("warning", "base_url is http and not this machine: the key goes over the network unencrypted")
+		what := "the key goes"
+		if len(pc.SentHeaders()) > 0 {
+			what = "the key and the headers go"
+		}
+		r.line("warning", "base_url is http and not this machine: %s over the network unencrypted", what)
 	}
 
-	p := provider.NewOpenAICompat(pc.BaseURL, key)
+	// Built as a turn builds it, so the check sends what a turn sends:
+	// the trimmed key and the headers.
+	p := newOpenAICompat(pc)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	ids, status, detail, err := p.ModelList(ctx)
 	cancel()
 	listed := false
+	var asked headerAsk
 	switch {
 	case err != nil:
 		r.line("models", "no answer: %v", err)
@@ -246,6 +278,7 @@ func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Con
 		r.line("models", "accepted: %d model(s)%s", len(ids), listOf(ids))
 	case status == 401 || status == 403:
 		r.line("models", "refused (%d): %s", status, detail)
+		asked = headerAskIn(detail)
 	default:
 		r.line("models", "no model list (%d): %s", status, detail)
 	}
@@ -256,7 +289,7 @@ func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Con
 			fmt.Fprintln(r.out, "result: the endpoint accepted the key for its model list (no chat request sent)")
 			return true
 		case status == 401 || status == 403:
-			r.result(false, expired, status)
+			r.result(false, expired, status, asked)
 			return false
 		default:
 			fmt.Fprintln(r.out, "result: not known: the model list did not answer, and --no-chat sent nothing else")
@@ -270,7 +303,7 @@ func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Con
 		// A refusal is an answer, whether or not a chat request could be
 		// made after it.
 		if status == 401 || status == 403 {
-			r.result(false, expired, status)
+			r.result(false, expired, status, asked)
 		} else {
 			fmt.Fprintln(r.out, "result: not known")
 		}
@@ -293,16 +326,64 @@ func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Con
 		// A refusal from either request is the answer: a chat request that
 		// failed some other way after the model list refused the key does
 		// not make the key less refused.
+		//
+		// The chat request's refusal, when there is one, is the one every
+		// turn will get, so what it says about a header is what the
+		// verdict goes by, and the model list's is set aside.
 		verdict := chatStatus(err)
-		if verdict != 401 && verdict != 403 && (status == 401 || status == 403) {
+		if verdict == 401 || verdict == 403 {
+			_, body, _ := strings.Cut(said, ": ")
+			asked = headerAskIn(body)
+		} else if status == 401 || status == 403 {
 			verdict = status
 		}
-		r.result(false, expired, verdict)
+		r.result(false, expired, verdict, asked)
 		return false
 	}
 	r.line("chat", "accepted: %s answered %q (%d + %d tokens)", m, shortReply(reply.Content), reply.PromptTokens, reply.OutputTokens)
-	r.result(true, expired, 200)
+	r.result(true, expired, 200, headerAsk{})
 	return true
+}
+
+// headerAsk is what a refusal said about a request header: whether it
+// said one is missing or required, and the name it gave, if any.
+type headerAsk struct {
+	said bool
+	name string
+}
+
+func headerAskIn(body string) headerAsk {
+	name, said := provider.HeaderAsked(body)
+	return headerAsk{said: said, name: name}
+}
+
+// describeHeaders lists the headers this provider adds to every request,
+// by name and never by value: the values are secrets as the key is. A
+// header whose value is empty is listed as not sent, since it is not.
+func (r *keyReport) describeHeaders() {
+	if len(r.headers) == 0 {
+		r.line("headers", "none")
+		return
+	}
+	var names []string
+	for _, name := range sortedNames(r.headers) {
+		if strings.TrimSpace(r.headers[name]) == "" {
+			name += " (empty, so not sent)"
+		}
+		names = append(names, name)
+	}
+	r.line("headers", "%s", strings.Join(names, ", "))
+}
+
+// configuredHeader is how the headers block spells name, compared without
+// case, and whether it sends it: there, with a value.
+func (r *keyReport) configuredHeader(name string) (spelled string, sent bool) {
+	for k, v := range r.headers {
+		if strings.EqualFold(k, name) {
+			return k, strings.TrimSpace(v) != ""
+		}
+	}
+	return "", false
 }
 
 // describeKey says what the token claims, and reports whether it has
@@ -370,10 +451,12 @@ func (r *keyReport) describeFile(key string, files []string, project string) {
 
 // result is the last line: whether the key works, and when it does not,
 // what to do about it.
-func (r *keyReport) result(ok, expired bool, status int) {
+func (r *keyReport) result(ok, expired bool, status int, asked headerAsk) {
 	switch {
 	case ok:
 		fmt.Fprintln(r.out, "result: the key works")
+	case (status == 401 || status == 403) && asked.said:
+		r.headerResult(status, expired, asked)
 	case (status == 401 || status == 403) && expired:
 		fmt.Fprintf(r.out, "result: the key does not work: the endpoint refused it (%d), and the token has expired. Get a new one and replace api_key\n", status)
 	case status == 401 || status == 403:
@@ -381,6 +464,31 @@ func (r *keyReport) result(ok, expired bool, status int) {
 	default:
 		fmt.Fprintln(r.out, "result: the key was not confirmed: the request failed for another reason, shown above")
 	}
+}
+
+// headerResult is the last line when the refusal said that a request
+// header is missing or required. The endpoint named a header and not the
+// token, so this never says to check the token: it says to add the header,
+// or, when it is sent already, that its value was not taken. Whether the
+// key works is not known until the header is right.
+func (r *keyReport) headerResult(status int, expired bool, asked headerAsk) {
+	where := "providers." + r.provider + ".headers"
+	spelled, sent := r.configuredHeader(asked.name)
+	var s string
+	switch {
+	case asked.name == "":
+		s = fmt.Sprintf("the endpoint refused the request (%d) because a request header is missing, and does not say which. Add the one it needs under %s", status, where)
+	case sent:
+		s = fmt.Sprintf("the endpoint refused the request (%d) and asks for header %s, which is sent: it did not take that header's value. Check the value in %s", status, spelled, where)
+	case spelled != "":
+		s = fmt.Sprintf("the endpoint refused the request (%d) because header %s is missing. It is in %s, but its value is empty, so it is not sent", status, spelled, where)
+	default:
+		s = fmt.Sprintf("the endpoint refused the request (%d) because header %s is missing, and it is not configured. Add it under %s", status, asked.name, where)
+	}
+	if expired {
+		s += ". The token has also expired: replace api_key as well"
+	}
+	fmt.Fprintln(r.out, r.redact("result: the key was not confirmed: "+s))
 }
 
 // chatModel is the model the chat check asks: the one passed, else the

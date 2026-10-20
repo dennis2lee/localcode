@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 )
 
 // OpenAICompat talks to any OpenAI-compatible /v1/chat/completions endpoint
@@ -18,6 +17,9 @@ import (
 type OpenAICompat struct {
 	BaseURL string
 	APIKey  string
+	// Headers go on every request this provider sends, from the
+	// provider's "headers" in config.json. See newRequest.
+	Headers map[string]string
 	Client  *http.Client
 }
 
@@ -410,7 +412,7 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+"/chat/completions", bytes.NewReader(payload))
+	httpReq, err := newRequest(ctx, http.MethodPost, p.BaseURL+"/chat/completions", bytes.NewReader(payload), p.Headers)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -427,7 +429,7 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		defer resp.Body.Close()
 		body := errorBody(resp.Body)
 		return nil, wrapVisionRefusal(fmt.Errorf("openai-compat endpoint returned %d: %s%s",
-			resp.StatusCode, body, jwtRefusalHint(resp.StatusCode, p.APIKey, body, time.Now())), req.Model)
+			resp.StatusCode, body, p.refusalHint(resp.StatusCode, body)), req.Model)
 	}
 
 	out := make(chan StreamEvent, 16)

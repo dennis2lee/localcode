@@ -26,6 +26,9 @@ const anthropicDefaultBaseURL = "https://api.anthropic.com"
 type AnthropicDirect struct {
 	BaseURL string
 	APIKey  string
+	// Headers go on every request this provider sends, from the
+	// provider's "headers" in config.json. See newRequest.
+	Headers map[string]string
 	Client  *http.Client
 }
 
@@ -550,7 +553,7 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.BaseURL, "/")+"/v1/messages", bytes.NewReader(payload))
+	httpReq, err := newRequest(ctx, http.MethodPost, strings.TrimRight(p.BaseURL, "/")+"/v1/messages", bytes.NewReader(payload), p.Headers)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -558,11 +561,7 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 	httpReq.Header.Set("x-api-key", p.APIKey)
 	httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
 
-	client := p.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(httpReq)
+	resp, err := clientOr(p.Client).Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("do request: %w", err)
 	}
