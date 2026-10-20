@@ -539,6 +539,9 @@ func writeDoctorReplays(path string, run doctorRun) []string {
 // the endpoint wrote into a run: its answers and its refusals, which can
 // quote what it was sent. The run is saved to a file other users can read
 // and printed in the conversation, which is pasted into chats and issues.
+//
+// Every string the server wrote, not only the ones an echo is likely in:
+// what it reports about itself is printed and saved beside them.
 func redactCanaries(run *doctorRun, redact func(string) string) {
 	for i := range run.Canaries {
 		c := &run.Canaries[i]
@@ -546,7 +549,14 @@ func redactCanaries(run *doctorRun, redact func(string) string) {
 		c.Reply = redact(c.Reply)
 		c.Reasoning = redact(c.Reasoning)
 		c.Reply2 = redact(c.Reply2)
+		c.FinishReason = redact(c.FinishReason)
 	}
+	s := &run.Server
+	s.ModelID = redact(s.ModelID)
+	s.Version = redact(s.Version)
+	s.CacheDtype = redact(s.CacheDtype)
+	s.Fingerprint = redact(s.Fingerprint)
+	s.ReasoningPlacement = redact(s.ReasoningPlacement)
 }
 
 // sentHeaderNames are the names of the headers a request carries: those

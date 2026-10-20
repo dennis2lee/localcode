@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 )
@@ -131,6 +132,20 @@ func Install(p Policy) {
 // first one's policy.
 func Wrap(base *http.Transport, p Policy) *http.Transport {
 	t := base.Clone()
+	// The destination is checked where the proxy is chosen, before any
+	// is: through a proxy the dialer below sees only the proxy's address,
+	// and a proxy the policy allows (one on this machine always is) was a
+	// way to anywhere. The dialer still checks the proxy itself.
+	proxy := t.Proxy
+	t.Proxy = func(req *http.Request) (*url.URL, error) {
+		if host := req.URL.Hostname(); !p.Permits(host) {
+			return nil, &BlockedError{Host: host}
+		}
+		if proxy == nil {
+			return nil, nil
+		}
+		return proxy(req)
+	}
 	dial := t.DialContext
 	if dial == nil {
 		dial = (&net.Dialer{}).DialContext

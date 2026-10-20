@@ -78,20 +78,23 @@ func refuseDowngrade(req *http.Request, via []*http.Request) error {
 //
 // By host and port, which is stricter than Go's rule for Authorization (a
 // subdomain keeps it), with the port a URL leaves out read as its
-// scheme's: example.com and example.com:443 are one place over https, and
-// http://example.com:80 and https://example.com are two. And once the
-// chain has left the host the headers stay off, even on a hop that comes
-// back, as Go's own stripping does: the host in between chose where the
-// request went next.
+// scheme's: example.com and example.com:443 are one place over https. The
+// one change of port allowed is an http endpoint moving its caller to
+// https on the same host, from 80 to 443, which Go allows the key's own
+// header too: refused, the request went on without the header and came
+// back with the refusal the hint then blamed on a header it does send.
+// And once the chain has left the host the headers stay off, even on a
+// hop that comes back, as Go's own stripping does: the host in between
+// chose where the request went next.
 func withholdOffHost(req *http.Request, via []*http.Request) {
 	names := debuglog.SecretHeaders(req.Context())
 	if len(names) == 0 {
 		return
 	}
-	home := hostPort(via[0].URL)
-	left := hostPort(req.URL) != home
+	home := via[0].URL
+	left := !samePlace(home, req.URL)
 	for _, r := range via[1:] {
-		if hostPort(r.URL) != home {
+		if !samePlace(home, r.URL) {
 			left = true
 		}
 	}
@@ -101,6 +104,18 @@ func withholdOffHost(req *http.Request, via []*http.Request) {
 	for _, name := range names {
 		req.Header.Del(name)
 	}
+}
+
+// samePlace reports whether a redirect from home to u stays where the
+// headers were configured to go: the same host and port, or the same host
+// moved from http on 80 to https on 443.
+func samePlace(home, u *url.URL) bool {
+	if hostPort(home) == hostPort(u) {
+		return true
+	}
+	return strings.EqualFold(home.Hostname(), u.Hostname()) &&
+		strings.EqualFold(home.Scheme, "http") && strings.EqualFold(u.Scheme, "https") &&
+		strings.HasSuffix(hostPort(home), ":80") && strings.HasSuffix(hostPort(u), ":443")
 }
 
 // hostPort is u's host, lower-cased, and its port, with the scheme's

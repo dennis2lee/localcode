@@ -297,3 +297,58 @@ func TestUpdateRequestsFollowTheEgressPolicy(t *testing.T) {
 		t.Errorf("github.com was asked %d times after egress refused the API", n)
 	}
 }
+
+// After a redirect, the request that failed is the last hop, and the
+// message names that hop's host beside that hop's route, not the first
+// request's host with the last one's route.
+func TestAFailedRedirectNamesTheHopThatFailed(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://127.0.0.1:1/moved", http.StatusFound)
+	}))
+	t.Cleanup(proxy.Close)
+	pu, _ := url.Parse(proxy.URL)
+	old := proxyFor
+	proxyFor = func(_ context.Context, u *url.URL) (sysproxy.Choice, error) {
+		if u.Hostname() == "api.example.com" {
+			return sysproxy.Choice{Proxy: pu, From: "HTTPS_PROXY"}, nil
+		}
+		return sysproxy.Choice{Note: "the second hop goes direct"}, nil
+	}
+	t.Cleanup(func() { proxyFor = old })
+
+	_, err := Checker{Repo: "o/r", API: "http://api.example.com"}.Latest(context.Background())
+	if err == nil {
+		t.Fatal("the check succeeded against a redirect to a closed port")
+	}
+	if msg := err.Error(); strings.Contains(msg, "connection to api.example.com") || !strings.Contains(msg, "127.0.0.1:1") {
+		t.Errorf("the message does not name the hop that failed: %v", err)
+	}
+}
+
+// egress checks a proxied request's destination as well as its proxy: a
+// loopback proxy, which the policy always allows, is not a way past it.
+func TestEgressSeesTheDestinationBehindAProxy(t *testing.T) {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Skip("the default transport is not an *http.Transport here")
+	}
+	http.DefaultTransport = egress.Wrap(base, egress.Policy{Enforced: true, Allow: []string{"models.example.com"}})
+	t.Cleanup(func() { http.DefaultTransport = base })
+	var asked atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		_, _ = w.Write([]byte(`{"tag_name":"v9.9.9","html_url":"x","assets":[]}`))
+	}))
+	t.Cleanup(proxy.Close)
+	pu, _ := url.Parse(proxy.URL)
+	withProxy(t, sysproxy.Choice{Proxy: pu, From: "the Windows proxy settings"})
+
+	_, err := Checker{Repo: "o/r", API: "http://api.blocked.example.com"}.Latest(context.Background())
+	var blocked *egress.BlockedError
+	if !errors.As(err, &blocked) || blocked.Host != "api.blocked.example.com" {
+		t.Errorf("a destination outside the allow list went through the proxy: %v", err)
+	}
+	if asked.Load() != 0 {
+		t.Error("the proxy was asked for it")
+	}
+}

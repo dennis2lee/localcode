@@ -370,11 +370,38 @@ func TestHeaderAsked(t *testing.T) {
 		{`{"title": "Missing required header", "detail": "xxxxxxxx`, "", true},
 		// A word that only contains "token" is not about the token.
 		{`{"error":"Missing required header: X-Tokenizer-Id"}`, "X-Tokenizer-Id", true},
+		{`{"error":"X-Auth-Token header is missing"}`, "X-Auth-Token", true},
+		// The token mentioned beside a header to add: the header is
+		// still the one asked for.
+		{`{"message":"Missing required header 'X-Team-Key' for authorization"}`, "X-Team-Key", true},
+		{`{"message":"The request is missing the X-Team-Key header (needed to validate your token)"}`, "X-Team-Key", true},
+		{`{"message":"A valid JWT was found but the X-Team-Key header is missing"}`, "X-Team-Key", true},
+		// The token's own header, named by its parts or its fields.
+		{`{"message":"Invalid credential: the JOSE header is missing \"enc\""}`, "", false},
+		{`{"message":"Invalid credential: header segment is missing the \"typ\" field"}`, "", false},
+		{`{"message":"header is missing 'kid'"}`, "", false},
+		// Plain text that starts with a bracket is plain text.
+		{"[gateway] Missing required header: X-Team-Key", "X-Team-Key", true},
+		{"{auth} request is missing the X-Team-Key header", "X-Team-Key", true},
 	} {
 		name, ok := HeaderAsked(tc.body)
 		if name != tc.name || ok != tc.ok {
 			t.Errorf("HeaderAsked(%s) = %q, %v; want %q, %v", tc.body, name, ok, tc.name, tc.ok)
 		}
+	}
+}
+
+// LiteLLM's refusal echoes the request after the cause, and errorBody cuts
+// it there, mid-string: what HeaderAsked reads is JSON that does not
+// parse, whose one unfinished string is the message itself.
+func TestHeaderAskedReadsALiteLLMRefusalCutShort(t *testing.T) {
+	raw := `{"error":{"message":"litellm.AuthenticationError: Missing required header 'X-Team-Key'\nReceived Messages=[{'role': 'user', 'content': 'hi'}]","type":"auth_error","param":null,"code":"401"}}`
+	body := errorBody(strings.NewReader(raw))
+	if json.Valid([]byte(body)) {
+		t.Fatalf("errorBody left the body whole, so this tests nothing: %q", body)
+	}
+	if name, ok := HeaderAsked(body); name != "X-Team-Key" || !ok {
+		t.Errorf("HeaderAsked(%q) = %q, %v; want X-Team-Key, true", body, name, ok)
 	}
 }
 

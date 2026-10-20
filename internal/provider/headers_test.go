@@ -312,8 +312,8 @@ func TestEveryRequestIsBuiltByNewRequest(t *testing.T) {
 
 // A redirect keeps the headers only to the same host and port, with the
 // port a URL leaves out read as its scheme's: http://example.com:80 and
-// http://example.com are one place, and http to https on the same name
-// is a different port and so a different place.
+// http://example.com are one place. The one move allowed is http on 80 to
+// https on 443 on the same host, which Go allows the key's header too.
 func TestARedirectKeepsHeadersOnlyToTheSamePlace(t *testing.T) {
 	for _, tc := range []struct {
 		from, to string
@@ -321,7 +321,9 @@ func TestARedirectKeepsHeadersOnlyToTheSamePlace(t *testing.T) {
 	}{
 		{"http://example.com:80/v1/models", "http://example.com/v2/models", true},
 		{"https://example.com/v1/models", "https://EXAMPLE.com:443/v2/models", true},
-		{"http://example.com/v1/models", "https://example.com/v1/models", false},
+		{"http://example.com/v1/models", "https://example.com/v1/models", true},
+		{"http://example.com:8080/v1/models", "https://example.com/v1/models", false},
+		{"http://example.com/v1/models", "https://api.example.com/v1/models", false},
 		{"https://example.com/v1/models", "https://example.com:8443/v1/models", false},
 		{"https://example.com/v1/models", "https://api.example.com/v1/models", false},
 	} {
@@ -375,5 +377,15 @@ func TestAnAnthropicRefusalThatNamesAHeaderIsHinted(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "hint: the endpoint asks for request header X-Team-Key, which this provider does not send") {
 		t.Errorf("err = %v, want the header hint", err)
+	}
+}
+
+// The anthropic provider sends its key in x-api-key, so a refusal that
+// asks for that header is about api_key, not about "headers", which
+// refuses x-api-key at load.
+func TestAnAnthropicRefusalForItsKeyHeaderPointsAtTheKey(t *testing.T) {
+	got := anthropicRefusalHint(401, "", nil, `{"type":"error","error":{"type":"authentication_error","message":"x-api-key header is required"}}`)
+	if !strings.Contains(got, "which carries this provider's api_key") || strings.Contains(got, `"headers"`) {
+		t.Errorf("hint = %q", got)
 	}
 }

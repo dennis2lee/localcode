@@ -63,9 +63,13 @@ func newRequest(ctx context.Context, method, url string, body io.Reader, headers
 //
 // Authorization is not reported. That header carries api_key, and a
 // refusal that names it is about the key, which is what the caller says
-// already. Nor is a clause about the token: a JWT has a header of its own,
-// and "the JWT header is missing kid" or "Bearer header must be a valid
-// JWT" is a refused token, not a request header to add.
+// already. Nor is a header that is the token's: a JWT has a header of its
+// own, and "the JWT header is missing kid", "Bearer header must be a valid
+// JWT" or "header segment is missing typ" is a refused token, not a
+// request header to add. Which header is meant is read from the word in
+// front of it, so a sentence that names a header to add and mentions the
+// token besides ("... header is missing (needed to validate your token)")
+// is still read as asking for that header.
 func HeaderAsked(body string) (name string, ok bool) {
 	for _, s := range refusalStrings(body) {
 		for _, clause := range clauseBreak.Split(s, -1) {
@@ -91,18 +95,13 @@ func HeaderAsked(body string) (name string, ok bool) {
 func refusalStrings(body string) []string {
 	var doc any
 	if json.Unmarshal([]byte(body), &doc) != nil {
-		// JSON cut short is still read string by string, from the
-		// strings that are whole: read as one text, its keys sat beside
-		// the words and "title" or "detail" was taken for a header name.
-		if t := strings.TrimSpace(body); strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[") {
-			var out []string
-			for _, lit := range jsonString.FindAllString(t, -1) {
-				var s string
-				if json.Unmarshal([]byte(lit), &s) == nil {
-					out = append(out, s)
-				}
-			}
-			return out
+		// An object cut short (errorBody cuts LiteLLM's echo of the
+		// request, mid-string) is read as one text with its keys taken
+		// out: left in, they sat beside the words and "title" or "detail"
+		// was taken for a header name. Read as its whole strings only, it
+		// lost the message itself, which is the string that was cut.
+		if strings.HasPrefix(strings.TrimSpace(body), "{") {
+			body = jsonKey.ReplaceAllString(body, " ")
 		}
 		// Escaped quotes read as quotes, so a quoted name in a body that
 		// is not JSON is still a quoted name.
@@ -133,8 +132,8 @@ func refusalStrings(body string) []string {
 	return out
 }
 
-// jsonString is one whole JSON string literal.
-var jsonString = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
+// jsonKey is an object's key and its colon.
+var jsonKey = regexp.MustCompile(`"(?:[^"\\]|\\.)*"\s*:`)
 
 // clauseBreak ends a clause. Not the quotes, the parentheses or the colon,
 // which are where a header's name tends to sit.
@@ -153,10 +152,36 @@ var askedPhrases = []string{
 	"please provide", "please include",
 }
 
-// aboutTheToken are the words that make a clause about the key rather
-// than about a header to add: the token's own header (alg, kid, typ), and
-// the Authorization header that carries it.
-var aboutTheToken = []string{"jwt", "jws", "jwe", "token", "bearer", "authorization", "alg", "kid"}
+// tokenParts are the words a header named by them is the token's, or the
+// one that carries it: "JWT header", "Bearer header", "bearer-token
+// header", "Authorization header". A name made of other words as well
+// ("X-Auth-Token") is a request header like any other.
+var tokenParts = map[string]bool{
+	"jwt": true, "jws": true, "jwe": true, "jose": true, "token": true, "bearer": true,
+	"authorization": true, "auth": true, "id": true, "access": true,
+}
+
+// tokenStructure are the words after "header" that make it a part of the
+// token: "header segment", "header part".
+var tokenStructure = map[string]bool{"segment": true, "part": true, "section": true}
+
+// joseParams are the fields of a JWT's own header. One named beside
+// "header" is the token's header being refused, not a request header.
+var joseParams = map[string]bool{
+	"alg": true, "kid": true, "typ": true, "cty": true, "enc": true, "zip": true,
+	"jku": true, "jwk": true, "x5u": true, "x5c": true, "x5t": true, "crit": true,
+}
+
+// isTokenWord reports whether w, a word in front of "header", makes that
+// header the token's.
+func isTokenWord(w string) bool {
+	for _, part := range strings.FieldsFunc(strings.ToLower(w), func(r rune) bool { return r == '-' || r == '_' }) {
+		if !tokenParts[part] {
+			return false
+		}
+	}
+	return w != ""
+}
 
 // containsWord reports whether word is in s with no letter, digit, hyphen
 // or underscore on either side, so "token" is found in "invalid token"
@@ -199,11 +224,6 @@ const (
 // header, and name is the header it names, or "".
 func headerAskedIn(clause string) (name string, found bool) {
 	lower := strings.ToLower(clause)
-	for _, w := range aboutTheToken {
-		if containsWord(lower, w) {
-			return "", false
-		}
-	}
 	asked := false
 	for _, p := range askedPhrases {
 		if strings.Contains(lower, p) {
@@ -214,17 +234,19 @@ func headerAskedIn(clause string) (name string, found bool) {
 	if !asked {
 		return "", false
 	}
-	type word struct {
-		text   string
-		quoted bool
-	}
-	var words []word
+	var words []clauseWord
 	for _, m := range headerWord.FindAllStringSubmatch(clause, -1) {
-		words = append(words, word{text: m[2], quoted: m[1] != "" && m[1] == m[3]})
+		words = append(words, clauseWord{text: m[2], quoted: m[1] != "" && m[1] == m[3]})
 	}
 	best, bestDist := "", 0
 	for i, w := range words {
 		if l := strings.ToLower(w.text); l != "header" && l != "headers" {
+			continue
+		}
+		if i > 0 && isTokenWord(words[i-1].text) || i+1 < len(words) && tokenStructure[strings.ToLower(words[i+1].text)] {
+			continue
+		}
+		if joseNear(words, i) {
 			continue
 		}
 		found = true
@@ -252,5 +274,28 @@ func headerAskedIn(clause string) (name string, found bool) {
 			}
 		}
 	}
+	// "Authorization is required in the request header": the key's
+	// header, named too far off to be taken for the name, is still what
+	// the sentence is about.
+	if found && best == "" && containsWord(lower, "authorization") {
+		return "", false
+	}
 	return best, found
+}
+
+// clauseWord is one word of a clause, and whether it was quoted.
+type clauseWord struct {
+	text   string
+	quoted bool
+}
+
+// joseNear reports whether a field of a JWT's own header is named, quoted,
+// within reach of the "header" at i.
+func joseNear(words []clauseWord, i int) bool {
+	for j := max(0, i-maxNameDistance); j < len(words) && j <= i+maxNameDistance; j++ {
+		if words[j].quoted && joseParams[strings.ToLower(words[j].text)] {
+			return true
+		}
+	}
+	return false
 }

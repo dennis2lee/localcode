@@ -608,3 +608,19 @@ func TestLLMDoctorKeepsTheProvidersSecretsOutOfTheRun(t *testing.T) {
 		t.Errorf("the replay line names a header no request carries:\n%s", got)
 	}
 }
+
+// Everything the server wrote into a run is redacted, not only its
+// answers: what it says about itself is printed and saved beside them.
+func TestRedactCanariesCoversEveryStringTheServerWrote(t *testing.T) {
+	const key = "made-up-api-key-0123456789abcdef"
+	p := &provider.OpenAICompat{APIKey: key}
+	run := doctorRun{
+		Server:   provider.ServerFacts{ModelID: key, Version: key, CacheDtype: key, Fingerprint: "fp-" + key, ReasoningPlacement: key},
+		Canaries: []doctorResult{{Name: "c", Why: "refused: " + key, Reply: key, Reasoning: key, Reply2: key, FinishReason: key}},
+	}
+	redactCanaries(&run, p.RedactSecrets)
+	b, _ := json.Marshal(run)
+	if strings.Contains(string(b), key) {
+		t.Errorf("the key is still in the run:\n%s", b)
+	}
+}

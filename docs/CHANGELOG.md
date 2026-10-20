@@ -27,6 +27,7 @@ A reply that calls a tool is drawn once, a provider can send extra request heade
 
 * Provider header values redacted in `check-jwt-key`, `/llm-doctor` and the debug log, and withheld from a redirect to another host or port
 * `/llm-doctor`: the `api_key` and header values an endpoint quotes back in a refusal or a reply taken out of the report and of the saved run, a file other users of the machine can read
+* `network.egress` checking a proxied request's destination as well as the proxy: through a proxy the policy allows (one on this machine always is), a request reached hosts the allow list does not name
 
 ## v0.163.0
 

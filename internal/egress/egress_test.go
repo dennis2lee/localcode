@@ -4,7 +4,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -110,5 +112,50 @@ func TestInstalledPolicyBlocksARealRequest(t *testing.T) {
 		if !strings.Contains(blocked.Error(), want) {
 			t.Errorf("the message does not say %q: %s", want, blocked.Error())
 		}
+	}
+}
+
+// Through a proxy the dialer sees only the proxy, and a proxy the policy
+// allows (loopback always is) was a way to anywhere. The destination is
+// checked where the proxy is chosen; the proxy is still checked where it
+// is dialled.
+func TestADestinationIsCheckedBehindAProxy(t *testing.T) {
+	var asked atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer proxy.Close()
+	pu, _ := url.Parse(proxy.URL)
+
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Skip("the default transport is not an *http.Transport here")
+	}
+	viaProxy := base.Clone()
+	viaProxy.Proxy = http.ProxyURL(pu)
+	client := &http.Client{Transport: Wrap(viaProxy, Policy{Enforced: true, Allow: []string{"api.example.com"}})}
+
+	_, err := client.Get("http://blocked.example.org/x")
+	var blocked *BlockedError
+	if !errors.As(err, &blocked) || blocked.Host != "blocked.example.org" {
+		t.Errorf("a refused destination behind an allowed proxy: err = %v", err)
+	}
+	if asked.Load() != 0 {
+		t.Error("the proxy was asked for a destination the policy refuses")
+	}
+	resp, err := client.Get("http://api.example.com/x")
+	if err != nil {
+		t.Fatalf("an allowed destination behind an allowed proxy was refused: %v", err)
+	}
+	resp.Body.Close()
+
+	// A proxy outside the allow list is refused for an allowed
+	// destination too: this machine connects to it.
+	other := base.Clone()
+	other.Proxy = http.ProxyURL(&url.URL{Scheme: "http", Host: "proxy.example.net:8080"})
+	client = &http.Client{Transport: Wrap(other, Policy{Enforced: true, Allow: []string{"api.example.com"}})}
+	if _, err := client.Get("http://api.example.com/x"); !errors.As(err, &blocked) || blocked.Host != "proxy.example.net" {
+		t.Errorf("a refused proxy for an allowed destination: err = %v", err)
 	}
 }

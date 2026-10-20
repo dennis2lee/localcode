@@ -156,6 +156,13 @@ func TestOpencodeOptionsHeadersBecomeProviderHeaders(t *testing.T) {
 		t.Errorf("the same headers once trimmed: %v, %+v", err, cfg)
 	}
 
+	// Accept-Encoding: identity asks for no compression, which is the one
+	// value that leaves the answer readable.
+	if _, err := loadText(t, `{"providers": {"gw": {"type": "openai-compat", "base_url": "https://gateway.example.com/v1",
+		"headers": {"Accept-Encoding": " Identity "}}}}`); err != nil {
+		t.Errorf("Accept-Encoding: identity was refused: %v", err)
+	}
+
 	// An empty block on bedrock asks for nothing, as an empty headers
 	// block does.
 	if _, err := loadText(t, `{"provider": {"aws": {"npm": "@ai-sdk/amazon-bedrock", "options": {"region": "us-west-2", "headers": {}}}}}`); err != nil {

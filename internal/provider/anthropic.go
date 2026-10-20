@@ -572,7 +572,7 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 		// the Anthropic API can want a header of its own just the same.
 		body := errorBody(resp.Body)
 		return nil, wrapVisionRefusal(fmt.Errorf("anthropic API returned %d: %s%s",
-			resp.StatusCode, body, refusalHint(resp.StatusCode, p.APIKey, p.Headers, body, time.Now())), req.Model)
+			resp.StatusCode, body, anthropicRefusalHint(resp.StatusCode, p.APIKey, p.Headers, body)), req.Model)
 	}
 
 	out := make(chan StreamEvent, 16)
@@ -740,4 +740,17 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 	}()
 
 	return out, nil
+}
+
+// anthropicRefusalHint is refusalHint for this provider, which sends its
+// key in x-api-key rather than Authorization. A refusal that asks for
+// x-api-key is about api_key: that header cannot be set under "headers",
+// and saying to add it there named a fix config refuses.
+func anthropicRefusalHint(status int, key string, headers map[string]string, body string) string {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		if name, ok := HeaderAsked(body); ok && strings.EqualFold(name, "x-api-key") {
+			return "\n\nhint: the endpoint asks for request header " + name + ", which carries this provider's api_key. Check api_key, or run localcode login anthropic"
+		}
+	}
+	return refusalHint(status, key, headers, body, time.Now())
 }

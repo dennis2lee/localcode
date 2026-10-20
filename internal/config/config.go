@@ -656,7 +656,9 @@ var headersLocalcodeSets = map[ProviderType]map[string]string{
 //
 // Accept-Encoding with them: Go asks for gzip itself and unpacks the
 // answer only when it did the asking, so one set here had every reply
-// arrive compressed and read as no text at all.
+// arrive compressed and read as no text at all. "identity", which asks
+// for no compression, is the one value that cannot do that, and is let
+// through.
 var connectionHeaders = map[string]bool{
 	"host": true, "content-length": true, "transfer-encoding": true, "trailer": true,
 	"connection": true, "keep-alive": true, "proxy-connection": true, "upgrade": true, "te": true,
@@ -683,6 +685,7 @@ func validateProviderHeaders(name string, p ProviderConfig) error {
 			return fmt.Errorf("provider %q: header name %q is not a valid HTTP header name: it may hold only letters, digits and !#$%%&'*+-.^_`|~", name, h)
 		case seen[lower] != "":
 			return fmt.Errorf("provider %q: headers names %q and %q, which are the same header (names are not case-sensitive); keep one of them", name, seen[lower], h)
+		case lower == "accept-encoding" && strings.EqualFold(strings.TrimSpace(p.Headers[h]), "identity"):
 		case connectionHeaders[lower]:
 			return fmt.Errorf("provider %q: header %q is written by the HTTP client from the request itself and cannot be set in headers; remove it", name, h)
 		}

@@ -49,7 +49,22 @@ func transport() http.RoundTripper {
 		return http.DefaultTransport
 	}
 	t := base.Clone()
+	// The default transport's own choice is asked first for one answer
+	// only: an egress refusal of the destination, which egress.Wrap puts
+	// there and a proxy chosen here would otherwise go around. Anything
+	// else it says is the environment's, which proxyFor reads its own way,
+	// and Go's error for a variable it cannot parse quotes the value.
+	envChoice := base.Proxy
 	t.Proxy = func(req *http.Request) (*url.URL, error) {
+		if envChoice != nil {
+			var blocked *egress.BlockedError
+			if _, err := envChoice(req); errors.As(err, &blocked) {
+				if r, ok := req.Context().Value(routeKey{}).(*route); ok {
+					r.set(sysproxy.Choice{}, err)
+				}
+				return nil, err
+			}
+		}
 		c, err := proxyFor(req.Context(), req.URL)
 		if r, ok := req.Context().Value(routeKey{}).(*route); ok {
 			r.set(c, err)

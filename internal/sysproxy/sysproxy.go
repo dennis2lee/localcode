@@ -253,7 +253,7 @@ func scriptChoice(u *url.URL, a autoAnswer) Choice {
 	case r.socks4:
 		return Choice{Note: "the Windows proxy script names only a SOCKS version 4 proxy for " + host + ", which localcode does not use"}
 	}
-	return Choice{Note: fmt.Sprintf("the Windows proxy script answered %q, which names no HTTP proxy for %s", withoutUserinfo(a.Proxy), u.Scheme)}
+	return Choice{Note: fmt.Sprintf("the Windows proxy script answered %s, which names no HTTP proxy for %s", quotedAnswer(a.Proxy), u.Scheme)}
 }
 
 // lookupWait is how long a request waits for the system's answer before

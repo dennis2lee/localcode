@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -167,7 +168,16 @@ func (c Checker) latestFromAPI(ctx context.Context) (Release, error) {
 			// way.
 			return Release{}, err
 		}
-		return Release{}, &unreachableError{host: req.URL.Host, scheme: req.URL.Scheme, via: via, err: err}
+		// The host of the request that failed, which after a redirect is
+		// not the one asked: the route kept is that request's too.
+		failed := req.URL
+		var ue *neturl.Error
+		if errors.As(err, &ue) {
+			if u, perr := neturl.Parse(ue.URL); perr == nil && u.Host != "" {
+				failed = u
+			}
+		}
+		return Release{}, &unreachableError{host: failed.Host, scheme: failed.Scheme, via: via, err: err}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

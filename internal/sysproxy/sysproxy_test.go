@@ -373,6 +373,8 @@ func TestAProxyVariableIsNeverQuoted(t *testing.T) {
 // password an entry in it may carry.
 func TestAQuotedScriptAnswerCarriesNoCredentials(t *testing.T) {
 	for _, answer := range []string{
+		"PROXY user:my pass@proxy.example.com:8080/x",
+		"PROXY user:pa;ss@proxy.example.com:8080/x",
 		"http://alice:s3cret@proxy.example.com:8080/badpath",
 		"PROXY ftp://alice:s3cret@proxy.example.com:21; PROXY ftp://bob:hunter2@other.example.com:21",
 		"ftp=alice:p@ss@ftp.example.com:21",
@@ -387,9 +389,15 @@ func TestAQuotedScriptAnswerCarriesNoCredentials(t *testing.T) {
 				t.Errorf("%q: String() = %q, which carries %q", answer, got.String(), secret)
 			}
 		}
-		if !strings.Contains(got.Note, "example.com") {
-			t.Errorf("%q: note = %q, want the answer quoted, less its credentials", answer, got.Note)
+		if !strings.Contains(got.Note, "not quoted here") {
+			t.Errorf("%q: note = %q, want it to say the answer is not quoted", answer, got.Note)
 		}
+	}
+	// Nothing that could be a credential: quoted whole.
+	script := fakeScript{answer: autoAnswer{Proxy: "PROXY ftp://10.0.0.5:21"}}
+	got := decide(mustURL(t, "https://api.github.com/"), settings{AutoDetect: true}, script.run)
+	if !strings.Contains(got.Note, `"PROXY ftp://10.0.0.5:21"`) {
+		t.Errorf("note = %q, want the answer quoted", got.Note)
 	}
 }
 

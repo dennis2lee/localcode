@@ -3,7 +3,7 @@ package sysproxy
 import (
 	"net"
 	"net/url"
-	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -257,13 +257,13 @@ func wildcard(pattern, s string) bool {
 	return p == len(pattern)
 }
 
-// userinfoRe is the "user:password@" in an entry of a proxy string, with
-// the scheme in front of it, if any, kept. It runs to the entry's last
-// "@", since a password typed into a script is not always escaped.
-var userinfoRe = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)?[^\s;]*@`)
-
-// withoutUserinfo is a proxy string with every user name and password
-// taken out, for a message that quotes it.
-func withoutUserinfo(list string) string {
-	return userinfoRe.ReplaceAllString(list, "$1")
+// quotedAnswer is a proxy string as a message may quote it: whole when
+// nothing in it can be a user name or a password, and not at all when
+// something can. Taking the credentials out instead was tried, and a
+// password with a space or a semicolon in it kept half of itself.
+func quotedAnswer(list string) string {
+	if strings.Contains(list, "@") {
+		return "with an address that has a user name or a password in it, not quoted here"
+	}
+	return strconv.Quote(list)
 }
