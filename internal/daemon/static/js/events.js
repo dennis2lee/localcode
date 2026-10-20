@@ -4,7 +4,7 @@ import {
   appendUser, appendTool, appendAsk, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
   appendReview, appendThinking, endThinking, foldThinking, clearTranscript, showEarlierBanner,
-  abandonPendingUsers, settleThinkingBlock, hasLiveThinking,
+  abandonPendingUsers, settleThinkingBlock, hasLiveThinking, landBeforeSeq,
 } from './transcript.js';
 import { findRefresh } from './find.js';
 import { renderStatusBar, renderTasks, renderTaskProgress, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
@@ -121,7 +121,11 @@ const handlers = {
     // what rebuilds the list, so recall survives a reload and a switch
     // through another conversation.
     recordHistoryEntry(d.text);
-    appendUser(d.text, d.images);
+    // The prompt carries its event's sequence, which is how a walk back
+    // through the turns finds it again after the transcript is redrawn
+    // whole: see loadEarlierTurns.
+    const div = appendUser(d.text, d.images);
+    if (div && applyingSeq > 0) div.dataset.seq = String(applyingSeq);
   },
   // Reasoning, live. The deltas are never replayed; a muse model's block
   // comes back on a reload as the thinking.block the daemon logged.
@@ -635,10 +639,20 @@ const handlers = {
   },
 };
 
+// applyingSeq is the sequence of the event being applied, for a handler
+// that records where in the log what it draws came from; 0 for an event
+// that carries none.
+let applyingSeq = 0;
+
 export function applyEvent(ev) {
   const h = handlers[ev.type];
   if (!h) return;
-  h(ev.data ?? {});
+  applyingSeq = typeof ev.seq === 'number' ? ev.seq : 0;
+  try {
+    h(ev.data ?? {});
+  } finally {
+    applyingSeq = 0;
+  }
   // One place, instead of a hand-picked call site per case. The light
   // reads the task list as well as the turn now, so every event that can
   // move a task's status has to be able to move it.
@@ -680,13 +694,46 @@ function noticeTruncation(ev) {
   const seq = Number(ev && ev.seq);
   if (!Number.isFinite(seq) || seq <= 0) return;
   sawFirstSeq = true;
+  firstLoadedSeq = seq;
   if (seq > 1) showEarlierBanner(openWholeTranscript);
 }
 
-export function openWholeTranscript() {
+// firstLoadedSeq is the sequence the transcript on screen starts at, for a
+// walk back that runs out of loaded turns with no prompt loaded at all.
+let firstLoadedSeq = 0;
+
+// pendingLanding is a walk back waiting for the whole conversation to be
+// drawn: land on the last prompt before sequence before, once the replay
+// has come back to sequence until, the last one this page had seen. The
+// daemon does not mark the end of a replay, and landing earlier would be
+// undone by every later prompt it draws, each of which scrolls to the
+// bottom. timer lands anyway if nothing that late arrives.
+let pendingLanding = null;
+const landingWaitMs = 5000;
+
+// openWholeTranscript redraws the conversation from its first event. The
+// banner's button calls it with nothing; a walk back through the turns
+// calls it with the sequence of the oldest prompt it had, and lands on the
+// one before that when the redraw is done.
+export function openWholeTranscript(before) {
+  if (pendingLanding) clearTimeout(pendingLanding.timer);
+  pendingLanding = null;
+  if (typeof before === 'number') {
+    const p = { before: before > 0 ? before : firstLoadedSeq, until: lastSeenSeq };
+    p.timer = setTimeout(() => landPending(p), landingWaitMs);
+    pendingLanding = p;
+  }
   wantWholeTranscript = true;
   clearTranscript();
   connectEvents();
+}
+
+// landPending carries out p if it is still the walk waiting to land.
+function landPending(p) {
+  if (pendingLanding !== p) return;
+  clearTimeout(p.timer);
+  pendingLanding = null;
+  landBeforeSeq(p.before);
 }
 
 // resetTranscriptWindow puts the next connection back to opening at the
@@ -695,6 +742,9 @@ export function openWholeTranscript() {
 export function resetTranscriptWindow() {
   wantWholeTranscript = false;
   sawFirstSeq = false;
+  firstLoadedSeq = 0;
+  if (pendingLanding) clearTimeout(pendingLanding.timer);
+  pendingLanding = null;
 }
 
 // resyncAfterReconnect asks the daemon whether the turn this client
@@ -888,6 +938,7 @@ export function connectEvents(opts = {}) {
       if (typeof ev.seq === 'number' && ev.seq > lastSeenSeq) lastSeenSeq = ev.seq;
       noticeTruncation(ev);
       applyEvent(ev);
+      if (pendingLanding && typeof ev.seq === 'number' && ev.seq >= pendingLanding.until) landPending(pendingLanding);
     } catch (err) { console.error('bad event', err); }
   };
   eventSource.onerror = () => {

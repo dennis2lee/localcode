@@ -47,14 +47,25 @@ export function createFollower(el, onChange = () => {}, threshold = DEFAULT_THRE
     onChange(now);
   };
 
-  el.addEventListener('scroll', notify);
+  // heldAt is the scrollTop a jump left the view at, or null. While it is
+  // set the view is not followed, at the bottom or not: a jump to a turn
+  // near the end cannot bring it to the top, leaves the view at the
+  // bottom, and following from there dragged the turn off the screen with
+  // every fragment of a reply arriving below it. The reader scrolling
+  // lets go of it, and so does anything that forces the bottom.
+  let heldAt = null;
+
+  el.addEventListener('scroll', () => {
+    if (heldAt !== null && Math.abs(el.scrollTop - heldAt) > 1) heldAt = null;
+    notify();
+  });
 
   return {
     // keeping runs a change to the content and holds the reader's place
     // across it. Returns whatever the change returned, so a call site
     // stays one expression.
     keeping(mutate) {
-      const follow = atBottom();
+      const follow = heldAt === null && atBottom();
       const out = mutate();
       if (follow) toBottom();
       notify();
@@ -64,8 +75,14 @@ export function createFollower(el, onChange = () => {}, threshold = DEFAULT_THRE
     // opening a session, clicking the jump control. Those are a request
     // to be at the bottom, not new output arriving at it.
     force() {
+      heldAt = null;
       toBottom();
       notify();
+    },
+    // hold keeps the view where it is now until the reader moves it; see
+    // heldAt.
+    hold() {
+      heldAt = el.scrollTop;
     },
     atBottom,
   };

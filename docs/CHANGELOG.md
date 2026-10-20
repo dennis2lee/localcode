@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.165.0
+
+Alt+Up and Alt+Down reach every prompt of a long or re-opened conversation, and step one turn at a time.
+
+**Fixed**
+
+* Alt+Up stopping at the oldest prompt of the part a long or re-opened conversation opens with (its last few hundred events, which can be three prompts); it now loads the whole conversation and lands on the prompt before
+* The first Alt+Up from the end of a long answer skipping the prompt that answer belongs to, and from inside any turn skipping that turn's prompt
+* Alt+Down landing on the same turn on every press near the end of the conversation, where a turn cannot be scrolled to the top; past the newest prompt it now returns to the end
+* A reply arriving below a turn the reader jumped to dragging the view back to the bottom when the jump had left it there
+
 ## v0.164.0
 
 A reply that calls a tool is drawn once, a provider can send extra request headers, and the update check follows the Windows proxy.

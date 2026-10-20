@@ -198,38 +198,121 @@ export function abandonPendingUsers() {
 // the real one lands, and a list maintained beside all that is a second
 // copy waiting to disagree with the first.
 export function jumpToTurn(direction) {
+  const turns = loadedTurns();
+  const top = transcriptEl.scrollTop;
+
+  // Which turn comes next. Three cases, in this order.
+  //
+  // The view has not moved since the last jump: the walk goes on from the
+  // turn that jump landed on. Measured from the position alone, a turn
+  // near the end, which the browser cannot scroll to the top, reads as
+  // still being the turn before it, and "next" came back to the same turn
+  // every time.
+  //
+  // Up: the nearest turn that starts above the top of the view, which is
+  // the prompt of the turn being read when the view is inside it. Taking
+  // "the turn the view is on" and stepping back from it skipped that
+  // prompt, and from the end of a long answer the first press went past
+  // the prompt just sent. At the bottom of the transcript the newest
+  // prompt is the first stop wherever it sits on the screen: that is the
+  // prompt just sent, and the one a reader at the end means by "back".
+  //
+  // Down: the first turn that starts below the top of the view.
+  //
+  // A few pixels of slack either way, so a turn scrolled exactly into
+  // place counts as the one the view is at.
+  const landed = lastLanding && Math.abs(top - lastLanding.scrollTop) <= 1
+    ? turns.findIndex((t) => t.msg === lastLanding.msg)
+    : -1;
+  let next = -1;
+  if (landed >= 0) {
+    next = landed + direction;
+  } else if (direction < 0) {
+    const atEnd = follower.atBottom();
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const d = turns[i].top - top;
+      if (d < -4 || (atEnd && d > 4)) { next = i; break; }
+    }
+  } else {
+    next = turns.findIndex((t) => t.top > top + 4);
+  }
+
+  if (direction < 0 && next < 0) return loadEarlierTurns(turns);
+  if (next < 0 || next >= turns.length) {
+    // Past the last prompt is the end of the conversation, where a walk
+    // back through it started.
+    if (direction > 0 && !follower.atBottom()) {
+      lastLanding = null;
+      scrollToBottom();
+      return true;
+    }
+    return false;
+  }
+  landOn(turns, next);
+  return true;
+}
+
+// loadedTurns are the prompts in the page, each with the position the view
+// is scrolled to for it: the separator above the prompt, when there is one.
+// The separator is what the view is scrolled to, so the boundary lands on
+// screen rather than just above it, and it is therefore also what "which
+// turn am I on" has to be measured against. Measuring the position against
+// the prompt while scrolling to the separator was an off-by-one that only
+// showed up in use.
+function loadedTurns() {
   const offsetOf = (el) => el.offsetTop - transcriptEl.offsetTop;
-  // Each turn is the prompt and the separator above it, when there is
-  // one. The separator is what the view is scrolled to, so the boundary
-  // lands on screen rather than just above it — and it is therefore also
-  // what "which turn am I on" has to be measured against. Measuring the
-  // position against the prompt while scrolling to the separator is an
-  // off-by-one that only shows up in use: after jumping to a turn, the
-  // prompt sits a few pixels below the fold, so the turn reads as the
-  // previous one and pressing "next" comes straight back to where it
-  // already was.
-  const turns = Array.from(transcriptEl.querySelectorAll('.msg-user'), (msg) => {
+  return Array.from(transcriptEl.querySelectorAll('.msg-user'), (msg) => {
     const prev = msg.previousElementSibling;
     const sep = prev && prev.className && prev.className.split(' ').includes('turn-sep') ? prev : msg;
     return { msg, top: offsetOf(sep) };
   });
-  if (turns.length === 0) return false;
+}
 
-  // Which turn the view is on: the last one whose top has reached the top
-  // of the scroll box. Measured against the box rather than the window,
-  // since the transcript is the thing that scrolls. A few pixels of slack
-  // so a turn scrolled exactly into place counts as the current one
-  // rather than as the one behind it.
-  const top = transcriptEl.scrollTop;
-  let current = -1;
+// lastLanding is where the last jump put the view: the prompt it landed on
+// and the scrollTop it left, which is less than the prompt's position when
+// the browser stopped at the end of the content. See jumpToTurn.
+let lastLanding = null;
+
+// earlierLoader is what showEarlierBanner was given: the request for the
+// part of the conversation a long one opens without. Kept so that a walk
+// back which runs out of loaded turns asks for it, as the banner's button
+// does, instead of stopping at the oldest loaded prompt with nothing to
+// say why. A long or re-opened session holds only the last few hundred
+// events, which can be as few as three prompts.
+let earlierLoader = null;
+
+// loadEarlierTurns asks for the whole conversation when there is more of it
+// than the page holds, and has the walk land on the turn before the oldest
+// one loaded once it is drawn. It passes the oldest loaded prompt's event
+// sequence, which survives the redraw where the element does not, or 0
+// when no prompt is loaded at all.
+function loadEarlierTurns(turns) {
+  if (!earlierLoader || !transcriptEl.querySelector('.msg-earlier')) return false;
+  const oldest = turns.length > 0 ? Number(turns[0].msg.dataset.seq) : 0;
+  earlierLoader(oldest > 0 ? oldest : 0);
+  return true;
+}
+
+// landBeforeSeq lands on the last prompt logged before sequence seq: the
+// end of a walk back that had to load the rest of the conversation first.
+export function landBeforeSeq(seq) {
+  const turns = loadedTurns();
+  let at = -1;
   for (let i = 0; i < turns.length; i++) {
-    if (turns[i].top <= top + 4) current = i;
+    const s = Number(turns[i].msg.dataset.seq);
+    if (s > 0 && s < seq) at = i;
   }
+  if (at < 0) return false;
+  landOn(turns, at);
+  return true;
+}
 
-  const next = direction < 0 ? current - 1 : current + 1;
-  if (next < 0 || next >= turns.length) return false;
-
-  transcriptEl.scrollTop = turns[next].top;
+// landOn scrolls turn i to the top of the view, holds the view there
+// against output arriving below, and says where the reader landed.
+function landOn(turns, i) {
+  transcriptEl.scrollTop = turns[i].top;
+  lastLanding = { msg: turns[i].msg, scrollTop: transcriptEl.scrollTop };
+  follower.hold();
 
   // Say where the reader landed, on exactly one turn. Clearing every
   // other one first is not tidiness: the class outlives its animation, so
@@ -237,11 +320,10 @@ export function jumpToTurn(direction) {
   //
   // Re-triggered by removing the class and forcing a reflow, or jumping
   // to the same turn twice would animate once and then look broken.
-  const target = turns[next].msg;
+  const target = turns[i].msg;
   for (const t of turns) t.msg.classList.remove('landed');
   void target.offsetWidth;
   target.classList.add('landed');
-  return true;
 }
 export function appendTool(text) { return appendDiv('msg-tool', text); }
 // The model stopping a turn to ask the person something (ask_user). A tool
@@ -268,6 +350,7 @@ export function appendError(err) { return appendDiv('msg-error', 'Error: ' + Str
 // bottom looking at the newest message, and yanking them upward to show
 // them a notice would be worse than the notice is worth.
 export function showEarlierBanner(onOpen) {
+  earlierLoader = onOpen;
   if (transcriptEl.querySelector('.msg-earlier')) return;
   const div = document.createElement('div');
   div.className = 'msg-earlier';
@@ -798,6 +881,7 @@ export function clearTranscript() {
   // previous one's scrolled-up state over would open a session showing
   // its middle.
   scrollToBottom();
+  lastLanding = null;
   session.currentModelEl = null;
   session.currentModelBuffer = '';
   // The rows these pointed at are gone with the innerHTML above; holding
