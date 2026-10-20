@@ -217,7 +217,9 @@ export function jumpToTurn(direction) {
   // prompt is the first stop wherever it sits on the screen: that is the
   // prompt just sent, and the one a reader at the end means by "back".
   //
-  // Down: the first turn that starts below the top of the view.
+  // Down: the first turn that starts below the top of the view, and
+  // nothing at the bottom, which is the end of the conversation however
+  // many turns near it start below the top.
   //
   // A few pixels of slack either way, so a turn scrolled exactly into
   // place counts as the one the view is at.
@@ -233,15 +235,18 @@ export function jumpToTurn(direction) {
       const d = turns[i].top - top;
       if (d < -4 || (atEnd && d > 4)) { next = i; break; }
     }
-  } else {
+  } else if (!follower.atBottom()) {
     next = turns.findIndex((t) => t.top > top + 4);
   }
 
   if (direction < 0 && next < 0) return loadEarlierTurns(turns);
   if (next < 0 || next >= turns.length) {
     // Past the last prompt is the end of the conversation, where a walk
-    // back through it started.
-    if (direction > 0 && !follower.atBottom()) {
+    // back through it started, and following the output again. Said
+    // also when the view is at the bottom already, after a landing near
+    // the end left it there held: there it is the following that comes
+    // back.
+    if (direction > 0 && (lastLanding || !follower.atBottom())) {
       lastLanding = null;
       scrollToBottom();
       return true;
@@ -295,14 +300,25 @@ function loadEarlierTurns(turns) {
 
 // landBeforeSeq lands on the last prompt logged before sequence seq: the
 // end of a walk back that had to load the rest of the conversation first.
+// With none before it, the prompt the walk was on was the first one, and
+// the walk stays on it rather than being left at the bottom, where the
+// redraw put the view; with no prompt at all, the view goes to the start.
 export function landBeforeSeq(seq) {
   const turns = loadedTurns();
   let at = -1;
+  let same = -1;
   for (let i = 0; i < turns.length; i++) {
     const s = Number(turns[i].msg.dataset.seq);
     if (s > 0 && s < seq) at = i;
+    if (s === seq) same = i;
   }
-  if (at < 0) return false;
+  if (at < 0) at = same >= 0 ? same : (turns.length > 0 ? 0 : -1);
+  if (at < 0) {
+    lastLanding = null;
+    transcriptEl.scrollTop = 0;
+    follower.hold();
+    return false;
+  }
   landOn(turns, at);
   return true;
 }

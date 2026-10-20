@@ -114,12 +114,19 @@ test('the jump moves forward from where the last jump landed', async () => {
     app.sse.emit({ seq: i + 1, type: 'message.user', data: { text: `prompt ${i}` } });
   }
   const { el } = layOut(app);
+  // A transcript taller than its window, so the top of it is not also
+  // the bottom.
+  el.scrollHeight = 2000;
+  el.clientHeight = 400;
 
   el.scrollTop = 0;
   assert.equal(app.jumpToTurn(1), true);
   assert.equal(el.scrollTop, 100);
   assert.equal(app.jumpToTurn(1), true);
   assert.equal(el.scrollTop, 200, 'the second forward jump did not advance');
+  // Past the newest turn is the end of the conversation, and then there
+  // is nowhere further to go.
+  assert.equal(app.jumpToTurn(1), true, 'past the newest turn did not return to the end');
   assert.equal(app.jumpToTurn(1), false, 'there is no fourth turn to reach');
 });
 
@@ -207,7 +214,9 @@ test('the walk near the end steps one turn at a time both ways', async () => {
     walk.push(landedIndex(msgs));
   }
   assert.deepEqual(walk, [2, 1, 0, 1, 2], 'the walk did not visit each turn once');
-  assert.equal(app.jumpToTurn(1), false, 'past the newest turn at the bottom there is nowhere to go');
+  // Past the newest turn: back to the end and following, then nowhere.
+  assert.equal(app.jumpToTurn(1), true, 'past the newest turn did not return to the end');
+  assert.equal(app.jumpToTurn(1), false, 'at the end, following, there is nowhere to go');
 });
 
 // Past the last prompt is the end of the conversation, where the walk
@@ -249,6 +258,24 @@ test('a jump holds the view against output arriving below it', async () => {
   el.fire('scroll');
   app.sse.emit({ type: 'message.part.delta', data: { text: ' and more' } });
   assert.equal(el.scrollTop, 450, 'following did not resume once the reader scrolled');
+});
+
+// Anything that sends the view to the bottom lets go of a hold too: here
+// Alt+Down past the newest prompt, after a landing near the end left the
+// view at the bottom already.
+test('returning to the end after a jump follows the output again', async () => {
+  const app = await load();
+  for (let i = 0; i < 3; i++) {
+    app.sse.emit({ seq: i + 1, type: 'message.user', data: { text: `prompt ${i}` } });
+  }
+  const { el } = layOut(app);
+  clampScroll(el, 450, 400);
+  el.scrollTop = 50;
+  app.jumpToTurn(-1);
+  assert.equal(app.jumpToTurn(1), true);
+  Object.defineProperty(el, 'scrollTop', { value: 50, writable: true, configurable: true });
+  app.sse.emit({ type: 'message.part.delta', data: { text: 'more' } });
+  assert.equal(el.scrollTop, 450, 'the output is not followed after returning to the end');
 });
 
 // A turn scrolled exactly to the top by hand is the one the view is at,
@@ -298,6 +325,27 @@ test('walking back past the oldest loaded prompt loads the rest and lands before
   assert.equal(landedIndex(msgs), 3, 'did not land on the prompt before the oldest one loaded');
   assert.equal(el.scrollTop, 300);
   assert.equal(el.querySelector('.msg-earlier'), null, 'the whole conversation is still marked as cut');
+});
+
+// When the oldest prompt loaded was the first one, the walk stays on it
+// after the rest is loaded, rather than being left at the bottom where
+// the redraw put the view.
+test('walking back past the first prompt of all stays on it', async () => {
+  const app = await load();
+  app.sse.emit({ seq: 41, type: 'message.user', data: { text: 'prompt 0' } });
+  app.sse.emit({ seq: 46, type: 'message.part.end', data: { text: 'answer 0' } });
+  let { el } = layOut(app);
+  el.scrollTop = 50;
+  assert.equal(app.jumpToTurn(-1), true); // prompt 0
+  assert.equal(app.jumpToTurn(-1), true); // loads the rest
+
+  app.sse.emit({ seq: 10, type: 'effort.changed', data: {} });
+  app.sse.emit({ seq: 41, type: 'message.user', data: { text: 'prompt 0' } });
+  ({ el } = layOut(app));
+  app.sse.emit({ seq: 46, type: 'message.part.end', data: { text: 'answer 0' } });
+  const msgs = el.querySelectorAll('.msg-user');
+  assert.equal(landedIndex(msgs), 0, 'the walk did not stay on the first prompt');
+  assert.equal(el.scrollTop, 0);
 });
 
 // The banner's own button still opens the whole conversation at its end,
