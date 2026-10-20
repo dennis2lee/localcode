@@ -1538,6 +1538,7 @@ Permission rules answer "which tool, on which path". They say nothing about dest
 * `enforced: false` leaves the list inert, so it can be written and read back before anything depends on it. Enforcing an empty list is refused: it would turn off every provider, which is not what turning it on means.
 * Global against project: unlike `permission` and `mcp_servers`, which merge entry by entry, a project config.json's `network` block replaces the global one entirely. A project carrying any `network` object discards the home directory's egress allow list, so a project can widen or switch off what the global file enforces.
 * A refused connection says which host and where to change it. "Not allowed" and "no route to host" are different problems, and one reported as the other is debugged for hours.
+* A request sent through a proxy connects to the proxy, so the proxy's host is the one checked. This applies to `HTTPS_PROXY`, and to the Windows proxy settings the update check follows. See [Proxies and networks that block GitHub](#proxies-and-networks-that-block-github).
 
 **What it does not cover**, stated plainly because a partial control described as a complete one is worse than none:
 
@@ -3162,6 +3163,73 @@ A Windows MSI update never brings back a terminal. Quit localcode to run the ins
 An older MSI installs over a newer one. Windows Installer would otherwise refuse with "a newer version is already installed", which only ever sent people to Add/Remove Programs first — the same outcome with an extra step. The permission lives in the package being installed, so it holds for every version from 0.133.0 on: any of those can be installed over anything newer, and nothing before 0.133.0 can be.
 
 The MSI uses basic UI with a full log beside it. The helper runs the installer after the localcode that asked exits, so that process holds nothing when it runs. Another localcode still open holds its files still, and the installer's own files-in-use dialog names what is open. Full UI requires a package-authored dialog that this package does not contain.
+
+#### Proxies and networks that block GitHub
+
+The update check and the download use the proxy a browser on the same Windows machine uses. When api.github.com gets no answer at all, the check reads the release from github.com instead. When both fail, the message says how the request was sent and what usually fixes it.
+
+**Which proxy.** The first source that names one decides:
+
+| Order | Source | How it is read |
+|---|---|---|
+| 1 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, either case | As Go reads them. A variable for the request's scheme decides that request, `NO_PROXY` included. `NO_PROXY` on its own names exceptions to nothing and does not stop the Windows settings. |
+| 2 | Windows: the proxy script in Internet Options | "Automatically detect settings" (WPAD) and "Use automatic configuration script". Windows runs the script through WinHTTP, so a script written for browsers gives the browser's answer. |
+| 3 | Windows: the fixed proxy in Internet Options | "Use a proxy server", per protocol or for all, with its exceptions and "Bypass proxy server for local addresses". Used when no script answered. |
+| 4 | A direct connection | |
+
+* Loopback addresses never go through a proxy.
+* A Windows lookup is given 5 seconds. A request that waits longer goes direct and says so. Each answer is kept for 5 minutes per host.
+* macOS and Linux read the environment only. The macOS system proxy settings are not read.
+* SOCKS version 4 entries are skipped, because Go supports SOCKS5 only. A script's `SOCKS5` answer is used.
+* A proxy that answers 407 is signed in to only with a user name and password in `HTTPS_PROXY`, as in `http://user:password@proxy.example.com:8080`. Windows integrated sign-in (NTLM, Kerberos) is not supported.
+* The machine's WinHTTP proxy (`netsh winhttp`) is not read. Browsers do not read it either.
+* `update_url` requests use the same rule. An internal mirror listed in the proxy exceptions, or answered `DIRECT` by the script, is reached directly.
+* With `network.egress` enforced, a proxied request is checked against the proxy's host. Add the proxy's host to `network.egress.allow`.
+* Model provider requests read the environment only.
+
+**Certificates.** A proxy that inspects TLS presents its own certificate. On Windows and macOS, localcode verifies certificates with the operating system's store, so a root certificate installed there for the browser is trusted. On Linux, Go reads the system bundle, and `SSL_CERT_FILE` or `SSL_CERT_DIR` when set.
+
+**The github.com fallback.** Tried only when the request to api.github.com gets no HTTP answer: refused, reset, timed out, a name that did not resolve, a failed TLS handshake, or a proxy that did not carry it. An HTTP status, a rate limit included, is reported as it is. A request refused by `network.egress` is not retried.
+
+| Step | Request | What is read |
+|---|---|---|
+| 1 | `GET https://github.com/<repo>/releases/latest` | The redirect's `Location`, which ends in `/releases/tag/<tag>`. The redirect is not followed. |
+| 2 | `GET https://github.com/<repo>/releases/expanded_assets/<tag>` | Each `/releases/download/<tag>/<name>` link, and the `sha256:` digest printed in the same row |
+
+* A download from the fallback is checked as one from the API is: the SHA-256 must match, and the first bytes must be the container the name promises. The page gives no exact size. The SHA-256 already fixes it.
+* A file the page shows no SHA-256 for is not installed. The check still reports the newer version and its release page, and says why it will not install it. At startup the same sentence is printed.
+* The API path is unchanged: a release published before GitHub recorded digests is still installed, checked by size, and reported as unverified.
+* Release notes are not read from the page.
+* The startup check's four seconds cover the Windows proxy lookup, the API request and the fallback together.
+
+**When the check fails.** The message is Go's error, then `Tried ...` naming how the request was sent, then the likely cause:
+
+| The message says | Meaning | What to do |
+|---|---|---|
+| `Tried with no proxy (...)` and `did not let a direct connection to api.github.com through` | No proxy was found, and the network refused the direct connection. The parentheses say why no proxy applied. | Put the proxy the browser uses in `HTTPS_PROXY` or the Windows proxy settings, or set `update_url` |
+| `Tried through proxy proxy.example.com:8080 (from ...)` and `The proxy did not carry the connection` | A proxy was used, and it refused or dropped the connection | Check that it is the proxy the browser uses. `HTTPS_PROXY` overrides the Windows settings. |
+| `The proxy asked for a sign-in` | The proxy answered 407 | Put a user name and password in `HTTPS_PROXY`, or set `update_url` |
+| `is not one this machine trusts` | `x509: certificate signed by unknown authority`, usually a proxy that inspects TLS | Install the proxy's root certificate in the system store |
+| `Reading the release from github.com instead failed too` | github.com could not be read either | As for the first failure |
+
+The proxy is named by host and port only. Credentials in a proxy URL are never printed.
+
+**Finding the case on Windows.** In `cmd.exe`:
+
+| Command | Shows |
+|---|---|
+| `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable` | Whether the fixed proxy is on (`0x1`) |
+| `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer` | The fixed proxy |
+| `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyOverride` | Its exceptions |
+| `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v AutoConfigURL` | The proxy script's address |
+| `netsh winhttp show proxy` | The machine's WinHTTP proxy, which localcode does not read |
+| `echo %HTTPS_PROXY%` | The environment variable |
+| `curl.exe -v https://api.github.com/` | Whether a direct connection to the API works. `curl.exe` does not read the Windows proxy settings. |
+| `curl.exe -v --proxy http://proxy.example.com:8080 https://api.github.com/` | Whether the API works through that proxy |
+
+Settings > Network & internet > Proxy shows "Automatically detect settings", which the registry keeps in a binary value.
+
+Open `https://api.github.com/` in the browser that reaches github.com. JSON there means the browser's proxy carries the API, and localcode reaches it once it uses the same proxy. A failure there means the network blocks the API host for the browser too, and the github.com fallback is the path that works.
 
 #### Updating from somewhere other than GitHub
 
