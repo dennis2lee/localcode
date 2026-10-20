@@ -773,3 +773,63 @@ func TestCheckJWTKeyBlamesTheHeaderAndNotTheToken(t *testing.T) {
 		})
 	}
 }
+
+// The headers line names headers and holds no value, so nothing is taken
+// out of it: a value that has its header's name in it took that name out
+// of its own line.
+func TestTheHeadersLineIsNotRedacted(t *testing.T) {
+	home, _ := keyCheckEnv(t)
+	key := testJWT(t, time.Now().Add(24*time.Hour))
+	srv := newTeamGateway(t, key, "made-up-team-key-0001")
+	writeHeaderConfig(t, filepath.Join(home, ".localcode", "config.json"), srv.URL+"/v1", key, map[string]string{
+		"X-Team-Client": "X-Team-Client:made-up-0001",
+	})
+	var out bytes.Buffer
+	_ = checkJWTKey(nil, &out)
+	if !strings.Contains(out.String(), "  headers   X-Team-Client\n") {
+		t.Errorf("the headers line lost a header's name:\n%s", out.String())
+	}
+}
+
+// A header value written as plain text gets the warnings the token gets,
+// for the file it is in, when the token itself is not written there.
+func TestAHeaderValueWrittenInTheProjectConfigIsWarnedAbout(t *testing.T) {
+	_, project := keyCheckEnv(t)
+	key := testJWT(t, time.Now().Add(24*time.Hour))
+	t.Setenv("MADE_UP_GATEWAY_JWT", key)
+	srv := newTeamGateway(t, key, "made-up-team-key-0001")
+	cfg := filepath.Join(project, ".localcode", "config.json")
+	writeHeaderConfig(t, cfg, srv.URL+"/v1", "{env:MADE_UP_GATEWAY_JWT}", map[string]string{"X-Team-Key": "made-up-team-key-0001"})
+	if err := os.Chmod(cfg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := checkJWTKey(nil, &out); err != nil {
+		t.Fatalf("check-jwt-key: %v\n%s", err, out.String())
+	}
+	report := out.String()
+	if !strings.Contains(report, "the value of header X-Team-Key is written in the project's config file") {
+		t.Errorf("no warning about the project's config file:\n%s", report)
+	}
+	if runtime.GOOS != "windows" && !strings.Contains(report, "which is readable by other users (mode 0644)") {
+		t.Errorf("no warning about a file other users can read:\n%s", report)
+	}
+}
+
+// In the file the token is written in, the token's warnings are said and
+// cover the header values beside it; they are not said a second time for
+// each header.
+func TestAHeaderValueBesideTheTokenIsNotWarnedAboutTwice(t *testing.T) {
+	_, project := keyCheckEnv(t)
+	key := testJWT(t, time.Now().Add(24*time.Hour))
+	srv := newTeamGateway(t, key, "made-up-team-key-0001")
+	cfg := filepath.Join(project, ".localcode", "config.json")
+	writeHeaderConfig(t, cfg, srv.URL+"/v1", key, map[string]string{"X-Team-Key": "made-up-team-key-0001"})
+	var out bytes.Buffer
+	if err := checkJWTKey(nil, &out); err != nil {
+		t.Fatalf("check-jwt-key: %v\n%s", err, out.String())
+	}
+	if report := out.String(); !strings.Contains(report, "that is the project's config file") || strings.Contains(report, "the value of header") {
+		t.Errorf("want the token's warning alone:\n%s", report)
+	}
+}

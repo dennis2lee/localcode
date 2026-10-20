@@ -24,7 +24,8 @@ A reply that calls a tool is drawn once, a provider can send extra request heade
 
 **Security**
 
-* Provider header values redacted in `check-jwt-key`, `/llm-doctor` and the debug log, and withheld from a redirect to another host
+* Provider header values redacted in `check-jwt-key`, `/llm-doctor` and the debug log, and withheld from a redirect to another host or port
+* `/llm-doctor`: the `api_key` and header values an endpoint quotes back in a refusal or a reply taken out of the report and of the saved run, a file other users of the machine can read
 
 ## v0.163.0
 

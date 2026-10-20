@@ -320,10 +320,11 @@ func (l *Loop) routeLLMDoctor(ctx context.Context, sessionID, agentName, text st
 	runCtx, cancel := context.WithTimeout(ctx, doctorTimeout)
 	defer cancel()
 	run := l.runDoctor(runCtx, oa, key, profile.Model)
+	redactCanaries(&run, oa.RedactSecrets)
 	file.Last = &run
 	saveErr := saveDoctorFile(path, file)
 	replays := writeDoctorReplays(path, run)
-	report := doctorReport(run, file.Baseline, path, replays, oa.APIKey != "", slices.Sorted(maps.Keys(oa.Headers)))
+	report := doctorReport(run, file.Baseline, path, replays, oa.APIKey != "", sentHeaderNames(oa.Headers))
 	if saveErr != nil {
 		report += "\n\n(this run was not saved: " + saveErr.Error() + ")"
 	}
@@ -532,6 +533,32 @@ func writeDoctorReplays(path string, run doctorRun) []string {
 		}
 	}
 	return out
+}
+
+// redactCanaries takes the provider's key and header values out of what
+// the endpoint wrote into a run: its answers and its refusals, which can
+// quote what it was sent. The run is saved to a file other users can read
+// and printed in the conversation, which is pasted into chats and issues.
+func redactCanaries(run *doctorRun, redact func(string) string) {
+	for i := range run.Canaries {
+		c := &run.Canaries[i]
+		c.Why = redact(c.Why)
+		c.Reply = redact(c.Reply)
+		c.Reasoning = redact(c.Reasoning)
+		c.Reply2 = redact(c.Reply2)
+	}
+}
+
+// sentHeaderNames are the names of the headers a request carries: those
+// with a value, as newRequest sends them.
+func sentHeaderNames(headers map[string]string) []string {
+	var names []string
+	for _, name := range slices.Sorted(maps.Keys(headers)) {
+		if strings.TrimSpace(headers[name]) != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // --- the report ---

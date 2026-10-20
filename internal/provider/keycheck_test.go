@@ -355,6 +355,21 @@ func TestHeaderAsked(t *testing.T) {
 		{`{"error":{"message":"invalid or expired token"}}`, "", false},
 		{`{"error":"invalid X-Team-Key header"}`, "", false},
 		{"", "", false},
+		// About the token, whose own header (alg, kid) or carrier
+		// (Authorization, Bearer) is named: a refused key, not a request
+		// header to add.
+		{`{"error": "JWT header is missing required 'kid'"}`, "", false},
+		{`{"error": "Missing 'alg' in token header"}`, "", false},
+		{`{"error": "The Authorization bearer-token header is missing"}`, "", false},
+		{`{"error": "Invalid 'Bearer' header: Authorization is required"}`, "", false},
+		{`{"error": "Authorization is required in the request header"}`, "", false},
+		{`{"error": "The bearer header must be a valid JWT"}`, "", false},
+		{`{"error": "Bearer header invalid: user_id not found"}`, "", false},
+		// Cut short, with its keys beside the words: "title" is a key,
+		// not a header.
+		{`{"title": "Missing required header", "detail": "xxxxxxxx`, "", true},
+		// A word that only contains "token" is not about the token.
+		{`{"error":"Missing required header: X-Tokenizer-Id"}`, "X-Tokenizer-Id", true},
 	} {
 		name, ok := HeaderAsked(tc.body)
 		if name != tc.name || ok != tc.ok {

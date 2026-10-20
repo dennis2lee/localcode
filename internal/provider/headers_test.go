@@ -309,3 +309,71 @@ func TestEveryRequestIsBuiltByNewRequest(t *testing.T) {
 		t.Errorf("newRequest builds %d requests, want 1; the walk is not finding what it should: %v", len(builders), builders)
 	}
 }
+
+// A redirect keeps the headers only to the same host and port, with the
+// port a URL leaves out read as its scheme's: http://example.com:80 and
+// http://example.com are one place, and http to https on the same name
+// is a different port and so a different place.
+func TestARedirectKeepsHeadersOnlyToTheSamePlace(t *testing.T) {
+	for _, tc := range []struct {
+		from, to string
+		kept     bool
+	}{
+		{"http://example.com:80/v1/models", "http://example.com/v2/models", true},
+		{"https://example.com/v1/models", "https://EXAMPLE.com:443/v2/models", true},
+		{"http://example.com/v1/models", "https://example.com/v1/models", false},
+		{"https://example.com/v1/models", "https://example.com:8443/v1/models", false},
+		{"https://example.com/v1/models", "https://api.example.com/v1/models", false},
+	} {
+		first, err := newRequest(context.Background(), http.MethodGet, tc.from, nil, teamHeaders)
+		if err != nil {
+			t.Fatal(err)
+		}
+		next, _ := http.NewRequestWithContext(first.Context(), http.MethodGet, tc.to, nil)
+		next.Header = first.Header.Clone()
+		withholdOffHost(next, []*http.Request{first})
+		if kept := next.Header.Get("X-Team-Key") != ""; kept != tc.kept {
+			t.Errorf("%s -> %s: header kept = %v, want %v", tc.from, tc.to, kept, tc.kept)
+		}
+	}
+}
+
+// A provider made without a client gets the one a constructor would have
+// given it, on the chat stream as on every other request, rather than a
+// nil client to call.
+func TestAChatWithoutAClientUsesTheDefaultOne(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	t.Cleanup(srv.Close)
+	p := &OpenAICompat{BaseURL: srv.URL, Headers: teamHeaders}
+	ch, err := p.Chat(context.Background(), ChatRequest{
+		Model:    "m",
+		Messages: []Message{{Role: RoleUser, Content: []Block{TextBlock("hi")}}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	for range ch {
+	}
+}
+
+// A gateway in front of the Anthropic API that wants a header of its own
+// gets the same hint an openai-compat refusal does.
+func TestAnAnthropicRefusalThatNamesAHeaderIsHinted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Missing required header: X-Team-Key"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	p := NewAnthropicDirect("made-up-anthropic-key-0001")
+	p.BaseURL = srv.URL
+	_, err := p.Chat(context.Background(), ChatRequest{
+		Model: "CodeA", MaxTokens: 16,
+		Messages: []Message{{Role: RoleUser, Content: []Block{TextBlock("hi")}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "hint: the endpoint asks for request header X-Team-Key, which this provider does not send") {
+		t.Errorf("err = %v, want the header hint", err)
+	}
+}

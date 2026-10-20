@@ -421,7 +421,7 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
 
-	resp, err := p.Client.Do(httpReq)
+	resp, err := clientOr(p.Client).Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("do request: %w", err)
 	}

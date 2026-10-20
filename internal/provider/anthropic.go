@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // anthropicAPIVersion is the API version header Anthropic's Messages API
@@ -567,7 +568,11 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, wrapVisionRefusal(fmt.Errorf("anthropic API returned %d: %s", resp.StatusCode, errorBody(resp.Body)), req.Model)
+		// The hint an openai-compat refusal gets: a gateway in front of
+		// the Anthropic API can want a header of its own just the same.
+		body := errorBody(resp.Body)
+		return nil, wrapVisionRefusal(fmt.Errorf("anthropic API returned %d: %s%s",
+			resp.StatusCode, body, refusalHint(resp.StatusCode, p.APIKey, p.Headers, body, time.Now())), req.Model)
 	}
 
 	out := make(chan StreamEvent, 16)

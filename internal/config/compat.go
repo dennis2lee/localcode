@@ -925,12 +925,15 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 					_ = json.Unmarshal(rawExisting, &existing)
 				}
 				switch {
-				case provType == "bedrock":
+				case provType == "bedrock" && !emptyObject(fromOptions):
 					refusals = append(refusals, refusal{
 						path: fmt.Sprintf("provider.%s.options.headers", pName),
 						msg:  fmt.Sprintf(`provider %q: options.headers sets headers on every request to this provider, and localcode's bedrock requests are built by the AWS SDK, which localcode adds no headers to — the headers named here would not be sent.`, pName),
 					})
-				case hasExisting && !reflect.DeepEqual(fromOptions, existing):
+				case provType == "bedrock":
+					// An empty block asks for nothing, as an empty headers
+					// block does in localcode's own spelling.
+				case hasExisting && !reflect.DeepEqual(trimmedValues(fromOptions), trimmedValues(existing)):
 					refusals = append(refusals, refusal{
 						path: fmt.Sprintf("provider.%s.options.headers", pName),
 						msg:  fmt.Sprintf(`provider %q: headers and options.headers are two spellings of the same block, and they disagree; keep one of them`, pName),
@@ -1630,4 +1633,29 @@ func sortedUnion(a, b []string) []string {
 	}
 	sort.Strings(res)
 	return res
+}
+
+// emptyObject reports whether v, decoded JSON, is an object with nothing
+// in it.
+func emptyObject(v any) bool {
+	m, ok := v.(map[string]any)
+	return ok && len(m) == 0
+}
+
+// trimmedValues is a decoded headers object with its string values
+// trimmed, as they are sent: two spellings that send the same bytes do
+// not disagree because one of them has a newline at the end.
+func trimmedValues(v any) any {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return v
+	}
+	out := make(map[string]any, len(m))
+	for k, val := range m {
+		if s, ok := val.(string); ok {
+			val = strings.TrimSpace(s)
+		}
+		out[k] = val
+	}
+	return out
 }

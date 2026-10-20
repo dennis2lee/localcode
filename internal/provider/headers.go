@@ -63,7 +63,9 @@ func newRequest(ctx context.Context, method, url string, body io.Reader, headers
 //
 // Authorization is not reported. That header carries api_key, and a
 // refusal that names it is about the key, which is what the caller says
-// already.
+// already. Nor is a clause about the token: a JWT has a header of its own,
+// and "the JWT header is missing kid" or "Bearer header must be a valid
+// JWT" is a refused token, not a request header to add.
 func HeaderAsked(body string) (name string, ok bool) {
 	for _, s := range refusalStrings(body) {
 		for _, clause := range clauseBreak.Split(s, -1) {
@@ -89,8 +91,21 @@ func HeaderAsked(body string) (name string, ok bool) {
 func refusalStrings(body string) []string {
 	var doc any
 	if json.Unmarshal([]byte(body), &doc) != nil {
+		// JSON cut short is still read string by string, from the
+		// strings that are whole: read as one text, its keys sat beside
+		// the words and "title" or "detail" was taken for a header name.
+		if t := strings.TrimSpace(body); strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[") {
+			var out []string
+			for _, lit := range jsonString.FindAllString(t, -1) {
+				var s string
+				if json.Unmarshal([]byte(lit), &s) == nil {
+					out = append(out, s)
+				}
+			}
+			return out
+		}
 		// Escaped quotes read as quotes, so a quoted name in a body that
-		// no longer parses is still a quoted name.
+		// is not JSON is still a quoted name.
 		return []string{strings.ReplaceAll(body, `\"`, `"`)}
 	}
 	var out []string
@@ -118,6 +133,9 @@ func refusalStrings(body string) []string {
 	return out
 }
 
+// jsonString is one whole JSON string literal.
+var jsonString = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
+
 // clauseBreak ends a clause. Not the quotes, the parentheses or the colon,
 // which are where a header's name tends to sit.
 var clauseBreak = regexp.MustCompile(`[.;,!?\n]+`)
@@ -133,6 +151,32 @@ var askedPhrases = []string{
 	"not provided", "not present", "not supplied", "not set", "not found", "not sent", "not included",
 	"must be", "must include", "must provide", "must send", "must contain",
 	"please provide", "please include",
+}
+
+// aboutTheToken are the words that make a clause about the key rather
+// than about a header to add: the token's own header (alg, kid, typ), and
+// the Authorization header that carries it.
+var aboutTheToken = []string{"jwt", "jws", "jwe", "token", "bearer", "authorization", "alg", "kid"}
+
+// containsWord reports whether word is in s with no letter, digit, hyphen
+// or underscore on either side, so "token" is found in "invalid token"
+// and not in "x-tokenizer-id".
+func containsWord(s, word string) bool {
+	for i := 0; ; {
+		j := strings.Index(s[i:], word)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(word)
+		if (start == 0 || !isNameByte(s[start-1])) && (end == len(s) || !isNameByte(s[end])) {
+			return true
+		}
+		i = start + 1
+	}
+}
+
+func isNameByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_'
 }
 
 // notAName are the words that can stand next to "header" quoted or
@@ -155,6 +199,11 @@ const (
 // header, and name is the header it names, or "".
 func headerAskedIn(clause string) (name string, found bool) {
 	lower := strings.ToLower(clause)
+	for _, w := range aboutTheToken {
+		if containsWord(lower, w) {
+			return "", false
+		}
+	}
 	asked := false
 	for _, p := range askedPhrases {
 		if strings.Contains(lower, p) {

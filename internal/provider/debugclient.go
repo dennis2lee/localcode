@@ -3,7 +3,9 @@ package provider
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -75,18 +77,21 @@ func refuseDowngrade(req *http.Request, via []*http.Request) error {
 // would not have carried there, went to whatever host a 307 named.
 //
 // By host and port, which is stricter than Go's rule for Authorization (a
-// subdomain keeps it). And once the chain has left the host the headers
-// stay off, even on a hop that comes back, as Go's own stripping does: the
-// host in between chose where the request went next.
+// subdomain keeps it), with the port a URL leaves out read as its
+// scheme's: example.com and example.com:443 are one place over https, and
+// http://example.com:80 and https://example.com are two. And once the
+// chain has left the host the headers stay off, even on a hop that comes
+// back, as Go's own stripping does: the host in between chose where the
+// request went next.
 func withholdOffHost(req *http.Request, via []*http.Request) {
 	names := debuglog.SecretHeaders(req.Context())
 	if len(names) == 0 {
 		return
 	}
-	home := via[0].URL.Host
-	left := !strings.EqualFold(req.URL.Host, home)
+	home := hostPort(via[0].URL)
+	left := hostPort(req.URL) != home
 	for _, r := range via[1:] {
-		if !strings.EqualFold(r.URL.Host, home) {
+		if hostPort(r.URL) != home {
 			left = true
 		}
 	}
@@ -96,6 +101,21 @@ func withholdOffHost(req *http.Request, via []*http.Request) {
 	for _, name := range names {
 		req.Header.Del(name)
 	}
+}
+
+// hostPort is u's host, lower-cased, and its port, with the scheme's
+// default when the URL names none.
+func hostPort(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	return net.JoinHostPort(strings.ToLower(u.Hostname()), port)
 }
 
 // loggingAWSClient wraps the HTTP client the AWS config resolved so a

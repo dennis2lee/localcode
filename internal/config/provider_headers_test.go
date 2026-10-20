@@ -79,6 +79,7 @@ func TestProviderHeadersThatCannotWorkAreRefused(t *testing.T) {
 		{"anthropic version", ProviderAnthropic, map[string]string{"Anthropic-Version": teamKey}, []string{`"Anthropic-Version" is one localcode sets`}},
 		{"host", ProviderOpenAICompat, map[string]string{"Host": teamKey}, []string{`"Host" is written by the HTTP client`}},
 		{"connection", ProviderAnthropic, map[string]string{"Connection": teamKey}, []string{`"Connection" is written by the HTTP client`}},
+		{"accept-encoding", ProviderOpenAICompat, map[string]string{"Accept-Encoding": "gzip"}, []string{`"Accept-Encoding" is written by the HTTP client`}},
 		{"line break", ProviderOpenAICompat, map[string]string{"X-Team-Key": teamKey + "\nX-Other: y"}, []string{`header "X-Team-Key" has a line break in it`}},
 		{"carriage return", ProviderOpenAICompat, map[string]string{"X-Team-Key": "a\rb" + teamKey}, []string{"line break"}},
 		{"control character", ProviderOpenAICompat, map[string]string{"X-Team-Key": teamKey + "\x00"}, []string{"control character"}},
@@ -142,10 +143,22 @@ func TestOpencodeOptionsHeadersBecomeProviderHeaders(t *testing.T) {
 		})
 	}
 
-	// The same block under both spellings is one block, not a conflict.
+	// The same block under both spellings is one block, not a conflict,
+	// and values that send the same bytes once trimmed are the same.
 	cfg, err = loadText(t, `{"providers": {"gw": {"type": "openai-compat", "base_url": "https://gateway.example.com/v1",
 		"headers": {"X-Team-Key": "a"}, "options": {"headers": {"X-Team-Key": "a"}}}}}`)
 	if err != nil || cfg.Providers["gw"].Headers["X-Team-Key"] != "a" {
 		t.Errorf("the same headers under both spellings: %v, %+v", err, cfg)
+	}
+	cfg, err = loadText(t, `{"providers": {"gw": {"type": "openai-compat", "base_url": "https://gateway.example.com/v1",
+		"headers": {"X-Team-Key": "  a\n"}, "options": {"headers": {"X-Team-Key": "a"}}}}}`)
+	if err != nil || cfg.Providers["gw"].SentHeaders()["X-Team-Key"] != "a" {
+		t.Errorf("the same headers once trimmed: %v, %+v", err, cfg)
+	}
+
+	// An empty block on bedrock asks for nothing, as an empty headers
+	// block does.
+	if _, err := loadText(t, `{"provider": {"aws": {"npm": "@ai-sdk/amazon-bedrock", "options": {"region": "us-west-2", "headers": {}}}}}`); err != nil {
+		t.Errorf("an empty options.headers on bedrock was refused: %v", err)
 	}
 }

@@ -202,21 +202,17 @@ func (r *keyReport) redact(text string) string {
 	return text
 }
 
-// minSecretLen is the shortest key the report hides. Shorter, and hiding
-// it rewrites ordinary words while protecting nothing a guess would not
-// find.
-const minSecretLen = 8
-
-// minEchoLen is the shortest run of the key's characters taken out of a
-// line: long enough that ordinary text does not match it by chance, short
-// enough that what is left of a key cut off mid-way is no use to anyone.
-const minEchoLen = 12
+// minSecretLen and minEchoLen are the rule every redaction here follows;
+// see provider.RedactEcho.
+const (
+	minSecretLen = provider.MinSecretLen
+	minEchoLen   = provider.MinEchoLen
+)
 
 // redactKey replaces every run of minEchoLen or more characters that also
 // appears, in that order, in the key: the whole key, one of a JWT's three
 // parts, or the part of one that survived an endpoint's reply being cut
-// short before it got here. Matching the key whole missed all but the
-// first of those.
+// short before it got here.
 func redactKey(text, key string) string {
 	return redactSecret(text, key, "[the key]")
 }
@@ -225,26 +221,7 @@ func redactKey(text, key string) string {
 // run. A header's value is hidden by the same rule as the key, and a value
 // shorter than minSecretLen is not hidden, for the same reason.
 func redactSecret(text, secret, mark string) string {
-	secret = strings.TrimSpace(secret)
-	if len(secret) < minSecretLen {
-		return text
-	}
-	least := min(minEchoLen, len(secret))
-	var b strings.Builder
-	for i := 0; i < len(text); {
-		j := i
-		for j < len(text) && strings.Contains(secret, text[i:j+1]) {
-			j++
-		}
-		if j-i >= least {
-			b.WriteString(mark)
-			i = j
-			continue
-		}
-		b.WriteByte(text[i])
-		i++
-	}
-	return b.String()
+	return provider.RedactEcho(text, secret, mark)
 }
 
 func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Config, files []string, project, model string, noChat bool, timeout time.Duration) bool {
@@ -252,8 +229,9 @@ func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Con
 	fmt.Fprintln(r.out, r.redact(fmt.Sprintf("provider %s (openai-compat, %s)", name, pc.BaseURL)))
 
 	expired := r.describeKey(key)
-	r.describeFile(key, files, project)
+	keyFile := r.describeFile(key, files, project)
 	r.describeHeaders()
+	r.describeHeaderFiles(files, project, keyFile)
 	if sendsKeyInClear(pc.BaseURL) {
 		what := "the key goes"
 		if len(pc.SentHeaders()) > 0 {
@@ -372,7 +350,47 @@ func (r *keyReport) describeHeaders() {
 		}
 		names = append(names, name)
 	}
-	r.line("headers", "%s", strings.Join(names, ", "))
+	// Names only, so the values are not looked for: a value that has a
+	// header's name in it would otherwise take that name out of its own
+	// line.
+	fmt.Fprintf(r.out, "  %-9s %s\n", "headers", redactKey(strings.Join(names, ", "), r.key))
+}
+
+// describeHeaderFiles warns about header values written as plain text
+// where the token's own warnings would: in the project's config file, or
+// in one other users can read. Not for the file the token was found in,
+// whose warnings are already said and cover everything in it.
+func (r *keyReport) describeHeaderFiles(files []string, project, keyFile string) {
+	for _, path := range files {
+		if path == keyFile {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var held []string
+		for _, name := range sortedNames(r.headers) {
+			v := strings.TrimSpace(r.headers[name])
+			if len(v) >= minSecretLen && strings.Contains(string(data), v) {
+				held = append(held, name)
+			}
+		}
+		if len(held) == 0 {
+			continue
+		}
+		what := "the value of header " + strings.Join(held, ", ")
+		if len(held) > 1 {
+			what = "the values of headers " + strings.Join(held, ", ")
+		}
+		shown := shownPath(path)
+		if project != "" && userdirs.SameDirectory(path, project) {
+			r.line("warning", "%s is written in the project's config file, %s: it is committed with the project unless ignored. Write {env:NAME} for it and keep it in the environment", what, shown)
+		}
+		if info, err := os.Stat(path); err == nil && runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+			r.line("warning", "%s is written in %s, which is readable by other users (mode %04o). Run: chmod 600 %s", what, shown, info.Mode().Perm(), path)
+		}
+	}
 }
 
 // configuredHeader is how the headers block spells name, compared without
@@ -421,22 +439,17 @@ func (r *keyReport) describeKey(key string) bool {
 // describeFile says which config file holds the key and who can read it. A
 // key written into the project's file travels with the project, and a file
 // others can read gives them the key.
-func (r *keyReport) describeFile(key string, files []string, project string) {
+func (r *keyReport) describeFile(key string, files []string, project string) string {
 	if len(key) < minSecretLen {
 		r.line("written", "not looked for: a key this short would match text that is not the key")
-		return
+		return ""
 	}
 	for _, path := range files {
 		data, err := os.ReadFile(path)
 		if err != nil || !strings.Contains(string(data), key) {
 			continue
 		}
-		shown := path
-		if home, err := os.UserHomeDir(); err == nil {
-			if rel, err := filepath.Rel(home, path); err == nil && !strings.HasPrefix(rel, "..") {
-				shown = filepath.Join("~", rel)
-			}
-		}
+		shown := shownPath(path)
 		r.line("written", "in %s", shown)
 		if project != "" && userdirs.SameDirectory(path, project) {
 			r.line("warning", "that is the project's config file: it is committed with the project unless ignored. Keep the token in ~/.localcode/config.json, or write {env:NAME} and keep it in the environment")
@@ -444,9 +457,20 @@ func (r *keyReport) describeFile(key string, files []string, project string) {
 		if info, err := os.Stat(path); err == nil && runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 			r.line("warning", "%s is readable by other users (mode %04o). Run: chmod 600 %s", shown, info.Mode().Perm(), path)
 		}
-		return
+		return path
 	}
 	r.line("written", "not as written text in %s: an {env:} value or an included file", strings.Join(files, " or "))
+	return ""
+}
+
+// shownPath is path with the home directory written as ~.
+func shownPath(path string) string {
+	if home, err := os.UserHomeDir(); err == nil {
+		if rel, err := filepath.Rel(home, path); err == nil && !strings.HasPrefix(rel, "..") {
+			return filepath.Join("~", rel)
+		}
+	}
+	return path
 }
 
 // result is the last line: whether the key works, and when it does not,

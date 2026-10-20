@@ -653,9 +653,14 @@ var headersLocalcodeSets = map[ProviderType]map[string]string{
 // itself or refuses to send, lower-cased. Configured, they would be dropped
 // without a word or make every request fail, and an HTTP/2 refusal quotes
 // the value it refused, which would put it in an error message.
+//
+// Accept-Encoding with them: Go asks for gzip itself and unpacks the
+// answer only when it did the asking, so one set here had every reply
+// arrive compressed and read as no text at all.
 var connectionHeaders = map[string]bool{
 	"host": true, "content-length": true, "transfer-encoding": true, "trailer": true,
 	"connection": true, "keep-alive": true, "proxy-connection": true, "upgrade": true, "te": true,
+	"accept-encoding": true,
 }
 
 // validateProviderHeaders checks one provider's headers block. Every error

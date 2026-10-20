@@ -571,3 +571,40 @@ func TestLLMDoctorReplayNamesTheProvidersHeadersWithoutTheirValues(t *testing.T)
 		t.Errorf("the probe itself did not send the header: %q", fake.sawTeam)
 	}
 }
+
+// An endpoint's refusal can quote what it was sent. The key and the
+// provider's header values are taken out of what a run records before it
+// is printed or saved, and the replay line names only the headers a
+// request carries.
+func TestLLMDoctorKeepsTheProvidersSecretsOutOfTheRun(t *testing.T) {
+	const key, team = "made-up-api-key-0001", "made-up-team-key-0001"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"refused ` + r.Header.Get("Authorization") + ` and X-Team-Key ` + r.Header.Get("X-Team-Key") + `"}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	loop, sid := doctorLoop(t, srv.URL, "muse-glimmer")
+	p := provider.NewOpenAICompat(srv.URL, key)
+	p.Headers = map[string]string{"X-Team-Key": team, "X-Empty": "  "}
+	loop.Providers["local"] = p
+
+	got := runDoctorCommand(t, loop, sid, "/llm-doctor")
+	saved, err := os.ReadFile(doctorPath(loop.DoctorDir, "muse-glimmer"))
+	if err != nil {
+		t.Fatalf("read the saved run: %v", err)
+	}
+	for where, text := range map[string]string{"report": got, "saved run": string(saved)} {
+		for _, secret := range []string{key, team} {
+			if strings.Contains(text, secret) {
+				t.Errorf("the %s carries %q:\n%s", where, secret, text)
+			}
+		}
+	}
+	if !strings.Contains(string(saved), "[the X-Team-Key value]") || !strings.Contains(string(saved), "[the key]") {
+		t.Errorf("the saved run does not mark what was taken out:\n%s", saved)
+	}
+	if strings.Contains(got, "X-Empty") {
+		t.Errorf("the replay line names a header no request carries:\n%s", got)
+	}
+}
