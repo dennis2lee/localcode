@@ -8,12 +8,13 @@ A reply that calls a tool is drawn once, a provider can send extra request heade
 
 * Provider `headers`: request headers sent on every request to an `openai-compat` or `anthropic` provider, for a gateway that wants a client key beside the JWT in `api_key`; `{env:NAME}` values, trimming and load-time validation, and opencode `options.headers` read as `headers`
 * `check-jwt-key` `headers` line, and a verdict that names a header the endpoint says is missing or did not accept, in place of telling the user to check the JWT; a turn's refusal hint says the same
-* Windows proxy settings for the update check and its download: a proxy script (automatic detection or a PAC address, run by WinHTTP), then the fixed proxy and its bypass list, after `HTTPS_PROXY`
-* github.com fallback for the update check when api.github.com gets no answer at all, with each download checked against the SHA-256 the release page shows; a file the page shows none for is not installed
+* Windows proxy settings for the update check and its download: a proxy script (automatic detection or a PAC address, run by WinHTTP), then the fixed proxy and its bypass list, after `HTTPS_PROXY`; a lookup that has not answered in 5 seconds is waited on once, and later requests go direct
+* github.com fallback for the update check when api.github.com gets no answer at all, with each download checked against the SHA-256 the release page shows; a file the page shows none for is not installed, and a tag or a file link that is not this repository's own release is not followed
 
 **Changed**
 
-* Update-check failures that name the proxy used, or why none was, and the likely fix
+* Update-check failures that name the route the request took (the proxy, or why none was used) and the likely fix, with no proxy credentials or variable values in them; a check that ran out of its caller's time is not reported as a network refusal
+* Update downloads stopped one byte past the file's published size, or at 1 GiB when no size is published
 * `update_url` requests that follow the same proxy rule
 
 **Fixed**
