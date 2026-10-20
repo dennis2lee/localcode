@@ -273,9 +273,30 @@ test('returning to the end after a jump follows the output again', async () => {
   el.scrollTop = 50;
   app.jumpToTurn(-1);
   assert.equal(app.jumpToTurn(1), true);
+  assert.equal(el.scrollTop, 50, 'did not return to the end');
   Object.defineProperty(el, 'scrollTop', { value: 50, writable: true, configurable: true });
   app.sse.emit({ type: 'message.part.delta', data: { text: 'more' } });
   assert.equal(el.scrollTop, 450, 'the output is not followed after returning to the end');
+});
+
+// In a transcript too short to scroll the view never moves, so the walk
+// cannot tell from the position that anything happened. Sending a prompt
+// starts it again from the newest, which is now the one just sent.
+test('a prompt sent between presses starts the walk again from the newest', async () => {
+  const app = await load();
+  for (let i = 0; i < 3; i++) {
+    app.sse.emit({ seq: i + 1, type: 'message.user', data: { text: `prompt ${i}` } });
+  }
+  let { el, msgs } = layOut(app);
+  clampScroll(el, 300, 400);
+  app.jumpToTurn(-1);
+  app.jumpToTurn(-1);
+  assert.equal(landedIndex(msgs), 1);
+
+  app.sse.emit({ seq: 4, type: 'message.user', data: { text: 'prompt 3' } });
+  ({ msgs } = layOut(app));
+  assert.equal(app.jumpToTurn(-1), true);
+  assert.equal(landedIndex(msgs), 3, 'the walk carried on from where it had landed');
 });
 
 // A turn scrolled exactly to the top by hand is the one the view is at,
@@ -334,18 +355,40 @@ test('walking back past the first prompt of all stays on it', async () => {
   const app = await load();
   app.sse.emit({ seq: 41, type: 'message.user', data: { text: 'prompt 0' } });
   app.sse.emit({ seq: 46, type: 'message.part.end', data: { text: 'answer 0' } });
+  app.sse.emit({ seq: 51, type: 'message.user', data: { text: 'prompt 1' } });
+  app.sse.emit({ seq: 56, type: 'message.part.end', data: { text: 'answer 1' } });
   let { el } = layOut(app);
-  el.scrollTop = 50;
+  el.scrollTop = 150;
+  assert.equal(app.jumpToTurn(-1), true); // prompt 1
   assert.equal(app.jumpToTurn(-1), true); // prompt 0
   assert.equal(app.jumpToTurn(-1), true); // loads the rest
 
   app.sse.emit({ seq: 10, type: 'effort.changed', data: {} });
   app.sse.emit({ seq: 41, type: 'message.user', data: { text: 'prompt 0' } });
-  ({ el } = layOut(app));
   app.sse.emit({ seq: 46, type: 'message.part.end', data: { text: 'answer 0' } });
+  app.sse.emit({ seq: 51, type: 'message.user', data: { text: 'prompt 1' } });
+  ({ el } = layOut(app));
+  app.sse.emit({ seq: 56, type: 'message.part.end', data: { text: 'answer 1' } });
   const msgs = el.querySelectorAll('.msg-user');
   assert.equal(landedIndex(msgs), 0, 'the walk did not stay on the first prompt');
   assert.equal(el.scrollTop, 0);
+});
+
+// A tail with no prompt in it at all: the walk back loads the rest and
+// lands on the last prompt before the point the tail started at.
+test('walking back from a tail with no prompt lands on the prompt before it', async () => {
+  const app = await load();
+  app.sse.emit({ seq: 41, type: 'message.part.end', data: { text: 'the end of a long answer' } });
+  assert.ok(app.el('transcript').querySelector('.msg-earlier'));
+  assert.equal(app.jumpToTurn(-1), true, 'the walk did not ask for the rest');
+
+  let el;
+  for (let i = 0; i < 4; i++) {
+    app.sse.emit({ seq: i * 10 + 1, type: 'message.user', data: { text: `prompt ${i}` } });
+    ({ el } = layOut(app));
+  }
+  app.sse.emit({ seq: 41, type: 'message.part.end', data: { text: 'the end of a long answer' } });
+  assert.equal(landedIndex(el.querySelectorAll('.msg-user')), 3);
 });
 
 // The banner's own button still opens the whole conversation at its end,

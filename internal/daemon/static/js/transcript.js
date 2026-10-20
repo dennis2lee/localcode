@@ -13,12 +13,23 @@ import { closeFind, findRefresh } from './find.js';
 const follower = createFollower(transcriptEl, (following) => {
   jumpBottomBtn.hidden = following;
 });
-jumpBottomBtn.addEventListener('click', () => follower.force());
+// lastLanding is where the last jump put the view: the prompt it landed on
+// and the scrollTop it left, which is less than the prompt's position when
+// the browser stopped at the end of the content. See jumpToTurn.
+let lastLanding = null;
+
+jumpBottomBtn.addEventListener('click', () => scrollToBottom());
 
 // scrollToBottom is the deliberate one: the reader asked to be at the
 // bottom (sent a prompt, opened a session), so following resumes whether
-// or not they had scrolled away.
-export function scrollToBottom() { follower.force(); }
+// or not they had scrolled away. A walk through the turns starts over
+// from there too: in a transcript too short to scroll, the view does not
+// move when a prompt is sent, and the walk would otherwise carry on from
+// the turn it last landed on instead of starting at the newest.
+export function scrollToBottom() {
+  lastLanding = null;
+  follower.force();
+}
 
 // Every change to the transcript goes through one of these two, and the
 // difference between them is whether an open find bar is told about it.
@@ -247,7 +258,6 @@ export function jumpToTurn(direction) {
     // the end left it there held: there it is the following that comes
     // back.
     if (direction > 0 && (lastLanding || !follower.atBottom())) {
-      lastLanding = null;
       scrollToBottom();
       return true;
     }
@@ -272,11 +282,6 @@ function loadedTurns() {
     return { msg, top: offsetOf(sep) };
   });
 }
-
-// lastLanding is where the last jump put the view: the prompt it landed on
-// and the scrollTop it left, which is less than the prompt's position when
-// the browser stopped at the end of the content. See jumpToTurn.
-let lastLanding = null;
 
 // earlierLoader is what showEarlierBanner was given: the request for the
 // part of the conversation a long one opens without. Kept so that a walk
@@ -897,7 +902,6 @@ export function clearTranscript() {
   // previous one's scrolled-up state over would open a session showing
   // its middle.
   scrollToBottom();
-  lastLanding = null;
   session.currentModelEl = null;
   session.currentModelBuffer = '';
   // The rows these pointed at are gone with the innerHTML above; holding
