@@ -70,7 +70,7 @@ const httpSourceNote = "The source uses plain http, so the host was not authenti
 func (d *Daemon) updateChecker() update.Checker {
 	// config.json's update_url wins when it is set, which is the whole of
 	// how an internal build gets installed instead of a public one.
-	return update.Checker{API: d.UpdateAPI, URL: d.Loop.Config.UpdateURL}
+	return update.Checker{API: d.UpdateAPI, Web: d.UpdateWeb, URL: d.Loop.Config.UpdateURL}
 }
 
 // handleUpdateCheck asks GitHub what the latest release is and reports it

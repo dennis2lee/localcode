@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,6 +61,11 @@ type Release struct {
 	Notes     string    `json:"notes,omitempty"`
 	Published time.Time `json:"published,omitempty"`
 	Assets    []Asset   `json:"assets,omitempty"`
+	// FromPage says the release was read from github.com's pages because
+	// api.github.com could not be reached. Its assets carry the SHA-256
+	// the page printed and no size, and one without a SHA-256 is not
+	// installed. See github_page.go.
+	FromPage bool `json:"from_page,omitempty"`
 }
 
 // Checker asks a repository what its latest release is.
@@ -68,14 +74,19 @@ type Checker struct {
 	Repo string
 	// API overrides GitHub's address. Empty means the real one.
 	API string
+	// Web overrides github.com's address, which is asked instead when the
+	// API gets no answer at all. Empty means the real one, but only while
+	// API is empty too. See Checker.web.
+	Web string
 	// URL, when set, replaces GitHub entirely: a plain address where the
 	// installers are published, config.json's "update_url". See mirror.go
 	// for why the two sources cannot share a code path — one answers a
 	// question about releases and the other is a directory of files.
 	URL string
-	// Client is the HTTP client to use. Nil means a plain one with a
-	// timeout, because the default client has none and this call is made
-	// from a click.
+	// Client is the HTTP client to use. Nil means one with a timeout,
+	// because the default client has none and this call is made from a
+	// click, and with the proxy this machine's settings name. See
+	// network.go.
 	Client *http.Client
 }
 
@@ -97,7 +108,7 @@ func (c Checker) client() *http.Client {
 	if c.Client != nil {
 		return c.Client
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return &http.Client{Timeout: 30 * time.Second, Transport: transport()}
 }
 
 // Latest returns the most recent published release, from update_url when
@@ -113,7 +124,29 @@ func (c Checker) Latest(ctx context.Context) (Release, error) {
 	return c.latestFromGitHub(ctx)
 }
 
+// latestFromGitHub asks the API, and github.com's pages when the API gets
+// no answer at all. Only then: an HTTP status is GitHub answering, a rate
+// limit included, and the pages would only be asked the same question
+// again by a route that reads less.
 func (c Checker) latestFromGitHub(ctx context.Context) (Release, error) {
+	rel, err := c.latestFromAPI(ctx)
+	var lost *unreachableError
+	if !errors.As(err, &lost) {
+		return rel, err
+	}
+	web, ok := c.web()
+	if !ok || ctx.Err() != nil {
+		return Release{}, err
+	}
+	rel, err = c.latestFromPage(ctx, web)
+	if err != nil {
+		lost.fallback = err
+		return Release{}, lost
+	}
+	return rel, nil
+}
+
+func (c Checker) latestFromAPI(ctx context.Context) (Release, error) {
 	url := fmt.Sprintf("%s/repos/%s/releases/latest", c.api(), c.repo())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -122,7 +155,15 @@ func (c Checker) latestFromGitHub(ctx context.Context) (Release, error) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := c.client().Do(req)
 	if err != nil {
-		return Release{}, fmt.Errorf("ask GitHub for the latest release: %w", err)
+		err = fmt.Errorf("ask GitHub for the latest release: %w", err)
+		if !noAnswer(err) {
+			return Release{}, err
+		}
+		// Asked again rather than remembered: the transport asked the
+		// same function a moment ago, and the answer is cached there or
+		// read straight from the environment.
+		via, _ := proxyFor(ctx, req.URL)
+		return Release{}, &unreachableError{host: req.URL.Host, via: via, err: err}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -255,7 +296,7 @@ func (r Release) HandoffAssetFor(goos, goarch string, packaged bool) (Asset, err
 	if goos == "windows" {
 		for _, a := range r.Assets {
 			if strings.HasSuffix(a.Name, "-windows-"+goarch+".zip") {
-				return a, nil
+				return r.checkable(a)
 			}
 		}
 		return Asset{}, fmt.Errorf("release %s has no windows/%s zip to hand off to", r.Version, goarch)
@@ -264,6 +305,33 @@ func (r Release) HandoffAssetFor(goos, goarch string, packaged bool) (Asset, err
 }
 
 func (r Release) AssetFor(goos, goarch string, packaged bool) (Asset, error) {
+	a, err := r.assetFor(goos, goarch, packaged)
+	if err != nil {
+		return Asset{}, err
+	}
+	return r.checkable(a)
+}
+
+// checkable refuses an asset read from github.com's pages without the
+// SHA-256 the page should have printed beside it.
+//
+// The API path still downloads a file GitHub recorded no checksum for,
+// checked by size and said to be unverified, because that is a release
+// published before GitHub recorded them. A page gives no size to fall
+// back on, and GitHub records a checksum for every file uploaded now, so
+// a missing one most likely means the page was not read correctly. That
+// is reported with the page, where the file can be fetched by hand,
+// rather than run on a guess.
+func (r Release) checkable(a Asset) (Asset, error) {
+	if r.FromPage && a.Digest == "" {
+		return Asset{}, fmt.Errorf("release %s: %w. The release was read from github.com's pages because api.github.com could not be reached, "+
+			"and the page shows no SHA-256 for %s, so localcode will not install it. Download it from %s",
+			r.Version, ErrUnchecked, a.Name, r.PageURL)
+	}
+	return a, nil
+}
+
+func (r Release) assetFor(goos, goarch string, packaged bool) (Asset, error) {
 	want := func(suffixes ...string) (Asset, bool) {
 		for _, suffix := range suffixes {
 			for _, a := range r.Assets {
@@ -397,7 +465,9 @@ func Download(ctx context.Context, client *http.Client, a Asset, dir string) (st
 		// No overall timeout: this is tens of megabytes over whatever
 		// connection the machine has, and a deadline that fits a fast one
 		// is a slow one that can never update. The context is what ends it.
-		client = &http.Client{}
+		// The proxy is the check's: a network that needed one to answer
+		// the check needs it for the file as well.
+		client = &http.Client{Transport: transport()}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
 	if err != nil {

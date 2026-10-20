@@ -3,11 +3,15 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"localcode/internal/agent"
 	"localcode/internal/config"
+	"localcode/internal/update"
 )
 
 // Whether work in flight blocks an update depends on one thing: whether
@@ -136,5 +140,57 @@ func TestStartupIsNotGatedOnTheRemoteInstallFlag(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "cannot install updates") {
 		t.Errorf("startup was refused by the remote-install flag: %v", err)
+	}
+}
+
+// A release read from github.com's pages, with a file the page shows no
+// checksum for, is not installed at startup, and startup says why. It is
+// not "nothing to install", which startup keeps quiet about: the file is
+// there, and the reason nothing happened is one somebody can act on.
+func TestStartupSaysWhyAnUncheckedReleaseWasNotInstalled(t *testing.T) {
+	// api.github.com, reset before it answers.
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			conn.Close()
+		}
+	}))
+	t.Cleanup(api.Close)
+	// github.com, whose asset list links every file and prints no
+	// checksum for any of them.
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/" + update.DefaultRepo + "/releases/latest":
+			http.Redirect(w, r, "/"+update.DefaultRepo+"/releases/tag/v0.46.0", http.StatusFound)
+		case "/" + update.DefaultRepo + "/releases/expanded_assets/v0.46.0":
+			for _, name := range []string{
+				"localcode-0.46.0-windows-amd64.msi", "localcode-0.46.0-windows-amd64.zip", "localcode-0.46.0-windows-arm64.zip",
+				"LocalCode-0.46.0-darwin-universal-app.tar.gz", "localcode-0.46.0-darwin-universal.tar.gz",
+				"localcode-0.46.0-linux-amd64.deb", "localcode-0.46.0-linux-amd64.tar.gz",
+				"localcode-0.46.0-linux-arm64.deb", "localcode-0.46.0-linux-arm64.tar.gz",
+			} {
+				fmt.Fprintf(w, `<li><a href="/%s/releases/download/v0.46.0/%s">%s</a> 12.7 MB</li>`, update.DefaultRepo, name, name)
+			}
+		default:
+			t.Errorf("asked for %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(web.Close)
+
+	d := &Daemon{
+		Version:   "0.1.0",
+		Loop:      &agent.Loop{Config: &config.Config{}},
+		UpdateAPI: api.URL,
+		UpdateWeb: web.URL,
+	}
+	for _, handoff := range []bool{false, true} {
+		_, _, err := d.InstallAtStartup(context.Background(), d.Version, handoff)
+		if errors.Is(err, ErrNoUpdate) {
+			t.Errorf("handoff=%v: an unchecked release was reported as nothing to install, which startup does not print", handoff)
+		}
+		if !errors.Is(err, update.ErrUnchecked) {
+			t.Errorf("handoff=%v: err = %v, want the refusal to install unchecked", handoff, err)
+		}
 	}
 }

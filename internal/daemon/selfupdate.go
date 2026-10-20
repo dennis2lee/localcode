@@ -56,6 +56,12 @@ func (d *Daemon) fetchLatestFrom(ctx context.Context, running string, forHandoff
 		asset, err = rel.AssetFor(runtime.GOOS, runtime.GOARCH, bundledApp())
 	}
 	if err != nil {
+		// A file that is there with no checksum to check it against is
+		// not "nothing for this platform". Startup keeps quiet about
+		// that, and this has to be said: it is why nothing installed.
+		if errors.Is(err, update.ErrUnchecked) {
+			return rel, "", false, err
+		}
 		return rel, "", false, fmt.Errorf("%w: %v", errNoAssetForBuild, err)
 	}
 	dir, err := updateDir()

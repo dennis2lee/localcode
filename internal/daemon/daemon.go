@@ -86,6 +86,11 @@ type Daemon struct {
 	// UpdateAPI overrides GitHub's API address for the update check. Empty
 	// in every real build; set by tests.
 	UpdateAPI string
+	// UpdateWeb overrides github.com's address, which the check reads
+	// instead when the API gets no answer. Empty in every real build; set
+	// by tests. With UpdateAPI set and this empty there is no fallback,
+	// so a test pointed at a dead API never reaches the real github.com.
+	UpdateWeb string
 
 	// ConfigPath is the config.json settings changes are written to, or
 	// "" when this daemon was started without one. Empty is not an
