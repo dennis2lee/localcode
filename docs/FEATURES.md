@@ -23,7 +23,7 @@ The full reference: every capability localcode ships, one line each, grouped by 
 
 | Area | What you get |
 |---|---|
-| Providers | Bedrock, Anthropic API, and OpenAI-compatible providers in one config file. AWS configuration loads only on first Bedrock use. Unused Bedrock entries do not block local startup. |
+| Providers | Bedrock, Anthropic API, and OpenAI-compatible providers in one config file. AWS configuration loads only on first Bedrock use. Unused Bedrock entries do not block local startup. Extra request headers per provider, for a gateway that wants a second credential. See [USAGE.md](USAGE.md#provider-headers). |
 | Auth | `localcode login bedrock` (AWS SSO device flow, no AWS CLI needed), `localcode login anthropic` (stores an API key). |
 | Model switching | Hosted and local models in one conversation. Tab or `/agent` changes the model, prompt, and tool scope for the next message. `/model <profile>` changes only the model and keeps the agent's prompt, tools, and permissions. History remains unchanged. Each switch is an event. |
 | Effort | `off`, `low`, `medium`, `high`, or `xhigh` per model, kept per model across switches. Only the levels a model tells apart are offered. See [USAGE.md](USAGE.md#effort). |
@@ -102,7 +102,7 @@ The full reference: every capability localcode ships, one line each, grouped by 
 | Config | localcode reads `~/.localcode/config.json` and the project's `.localcode/config.json`. A file written for opencode or Claude Code is read only when listed under `include`. `config.example.json` documents every key and includes a tested orchestration example. User config supports JSONC. localcode preserves comments during config writes. |
 | Environment values | String fields support `{env:NAME}` and `{env:NAME:-fallback}` at load time, including API keys, `base_url`, model IDs, and MCP environments. Missing variables produce an error with the variable and field names. Files retain the placeholder. |
 | Project context | Workspace rules from `AGENTS.md`/`CLAUDE.md` with `@path` imports. Skills and commands from project and home roots. `/init` drafts, auto memory persists. See [USAGE.md](USAGE.md#part-3-project-context). |
-| Updating | Newer releases install at startup or on `/update`, SHA-256 verified. `auto_update: false` turns it off. See [USAGE.md](USAGE.md#checking-for-updates). |
+| Updating | Newer releases install at startup or on `/update`, SHA-256 verified. `auto_update: false` turns it off. The check follows `HTTPS_PROXY` and the Windows proxy settings, and reads github.com when api.github.com is blocked. See [USAGE.md](USAGE.md#checking-for-updates). |
 | Windows | Shell selection order: the `shell` config key when set, then `sh`, Git for Windows `bash.exe`, then `cmd /c`. Missing `python` or `python3`, including Microsoft Store stubs, produces a `winget install` command through the normal permission gate. Detection uses PATH lookup and does not depend on localized shell error text. |
 | Linux | User install of one static binary in `~/.local/bin`, with nothing left outside `$HOME`. System `.deb` packages for Ubuntu and Debian. Portable tarballs for other distributions. `CGO_ENABLED=0` and no `Depends:` entry. Linux supports the daemon, TUI, and Web UI, but not the desktop window. |
 

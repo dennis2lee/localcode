@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.164.0
+
+A reply that calls a tool is drawn once, a provider can send extra request headers, and the update check follows the Windows proxy.
+
+**Added**
+
+* Provider `headers`: request headers sent on every request to an `openai-compat` or `anthropic` provider, for a gateway that wants a client key beside the JWT in `api_key`; `{env:NAME}` values, trimming and load-time validation, and opencode `options.headers` read as `headers`
+* `check-jwt-key` `headers` line, and a verdict that names a header the endpoint says is missing or did not accept, in place of telling the user to check the JWT; a turn's refusal hint says the same
+* Windows proxy settings for the update check and its download: a proxy script (automatic detection or a PAC address, run by WinHTTP), then the fixed proxy and its bypass list, after `HTTPS_PROXY`
+* github.com fallback for the update check when api.github.com gets no answer at all, with each download checked against the SHA-256 the release page shows; a file the page shows none for is not installed
+
+**Changed**
+
+* Update-check failures that name the proxy used, or why none was, and the likely fix
+* `update_url` requests that follow the same proxy rule
+
+**Fixed**
+
+* A reply that said something before calling a tool drawn twice in the terminal and in a task's window, above the call's line and again below it
+* A message sent into a running turn whose `[sent]` line the streaming reply overwrote in the terminal, and a refused command, a status note or a Ctrl+O note that had the reply drawn again below it
+* A re-opened conversation that drew each tool call above the sentence that introduced it, including a conversation opened on a tail that started inside a message
+
+**Security**
+
+* Provider header values redacted in `check-jwt-key`, `/llm-doctor` and the debug log, and withheld from a redirect to another host
+
 ## v0.163.0
 
 A JWT that an OpenAI-compatible endpoint refuses is reported with its expiry date.
