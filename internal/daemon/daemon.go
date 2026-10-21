@@ -127,6 +127,10 @@ type Daemon struct {
 	// to cancel each one — see turns.go.
 	turns turnTracker
 
+	// activityMu orders session.activity announcements. See
+	// announceActivity.
+	activityMu sync.Mutex
+
 	// daemonEvents fans out events that belong to the daemon rather than
 	// to a conversation (MCP status), which is why they bypass the
 	// session event log entirely — see broadcast.go.
@@ -178,11 +182,20 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 	// One event per session whose turn starts or ends, so the session
 	// list can show which conversations are working without polling —
 	// and, more to the point, which one is holding up a workspace change.
-	d.turns.onChange = func(sessionID string, busy bool) {
-		d.daemonEvents.send(events.Event{
-			Type: events.TypeSessionActivity,
-			Data: map[string]any{"session": sessionID, "busy": busy},
-		})
+	//
+	// The event carries everything the session is doing, not only its
+	// turn, and so it is sent from every place one of those things
+	// changes: a turn starting or ending, a task it started starting or
+	// unwinding, and a question for a person going up or coming down.
+	d.turns.onChange = func(sessionID string, _ bool) { d.announceActivity(sessionID) }
+	if tasks != nil {
+		tasks.OnTasksChanged(d.announceActivity)
+	}
+	if broker != nil {
+		broker.OnAskingChanged(d.announceActivity)
+	}
+	if loop != nil && loop.Input != nil {
+		loop.Input.OnAskingChanged(d.announceActivity)
 	}
 	// One place every switch change becomes an event, wired here so no
 	// path that changes a setting can forget it: the toggle commands

@@ -1,5 +1,5 @@
 import { inputEl } from './dom.js';
-import { app, session } from './state.js';
+import { app, session, sessionWorking } from './state.js';
 import {
   appendUser, appendTool, appendAsk, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
@@ -551,20 +551,30 @@ const handlers = {
   // Daemon-wide, not part of this conversation: it arrives on the same
   // stream but carries the whole server list every time, so the handler
   // replaces rather than merges.
-  // Daemon-wide, like mcp.status: which session is working right now.
-  // The list's own `busy` fields are the load-time answer; these keep it
-  // current without polling.
+  // Daemon-wide, like mcp.status: what each session is doing right now.
+  // The list's own fields are the load-time answer; these keep it current
+  // without polling. Each event is the session's whole state, sent
+  // whenever any part of it changes: its turn, the tasks it started that
+  // are still running, and a permission request or a question waiting
+  // for a person. A daemon from before tasks and questions were in it
+  // sends the turn alone, and what it does not say is left as it was.
   'session.activity': (d) => {
     const s = (app.sessions || []).find(x => x.id === d.session);
-    if (!s || s.busy === !!d.busy) return;
-    const finished = s.busy && !d.busy;
+    if (!s) return;
+    const before = [!!s.busy, s.tasks || 0, !!s.asking].join();
+    const wasWorking = sessionWorking(s);
     s.busy = !!d.busy;
-    // A turn that ended somewhere you were not looking leaves an answer
-    // behind, and the light says so until you go and read it. A turn that
-    // ended in the session on screen does not: you watched it arrive, so
-    // the light goes straight back to idle rather than asking you to
-    // acknowledge something you have already seen.
-    if (finished && d.session !== session.sessionID) {
+    if (typeof d.tasks === 'number') s.tasks = d.tasks;
+    if (typeof d.asking === 'boolean') s.asking = d.asking;
+    if ([!!s.busy, s.tasks || 0, !!s.asking].join() === before) return;
+    // Work that ended somewhere you were not looking leaves an answer
+    // behind, and the light says so until you go and read it: the turn
+    // and every task it started, since the session is not finished while
+    // a task it started is still working. Work that ended in the session
+    // on screen does not: you watched it arrive, so the light goes
+    // straight back to idle rather than asking you to acknowledge
+    // something you have already seen.
+    if (wasWorking && !sessionWorking(s) && d.session !== session.sessionID) {
       app.unreadSessions.add(d.session);
     }
     renderSessionList();

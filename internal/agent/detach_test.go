@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 
 	"net/http"
 	"net/http/httptest"
@@ -198,4 +199,53 @@ func waitUntil(t *testing.T, within time.Duration, cond func() bool, msg string)
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal(msg)
+}
+
+// A child let go of is a background task from then on, and its
+// conversation is working until it finishes: the count goes up when it is
+// spawned, stays up after the parent's turn has its answer back, and comes
+// down, with the conversation told, when the child is done.
+func TestALetGoChildCountsForItsConversationUntilItEnds(t *testing.T) {
+	release := make(chan struct{})
+	srv := slowServer(t, release)
+	loop, tasks := newBackgroundLoop(t, srv.URL)
+	if _, err := loop.Store.CreateSession("parent", "", "explore", true); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var counts []int
+	tasks.OnTasksChanged(func(id string) {
+		if id == "parent" {
+			mu.Lock()
+			counts = append(counts, tasks.RunningFor("parent"))
+			mu.Unlock()
+		}
+	})
+
+	answered := make(chan struct{})
+	go func() {
+		defer close(answered)
+		_, _, _ = tasks.SpawnSyncInto(context.Background(), "parent", "", "explore", "take your time")
+	}()
+	waitUntil(t, 5*time.Second, func() bool {
+		_, ok := tasks.DetachChildOf("parent")
+		return ok
+	}, "nothing was blocking the parent to let go of")
+	<-answered
+	if n := tasks.RunningFor("parent"); n != 1 {
+		t.Errorf("RunningFor(parent) = %d after letting go, want the child still counted", n)
+	}
+
+	close(release)
+	waitUntil(t, 5*time.Second, func() bool { return tasks.RunningFor("parent") == 0 }, "the child never stopped counting")
+	waitUntil(t, 5*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(counts) >= 2 && counts[len(counts)-1] == 0
+	}, "the conversation was not told the child had ended")
+	mu.Lock()
+	defer mu.Unlock()
+	if counts[0] != 1 {
+		t.Errorf("counts told %v, want 1 first", counts)
+	}
 }

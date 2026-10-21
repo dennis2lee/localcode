@@ -65,6 +65,17 @@ type TaskManager struct {
 	// scrolled away.
 	detach     map[string]chan struct{}
 	syncParent map[string]string
+
+	// owner is the conversation each running task counts for: the
+	// top-level session at the root of its chain of parents, from the
+	// moment it is spawned until its goroutine has unwound, whether it
+	// runs in the background or a turn is waiting on it. A session list
+	// marks a conversation as working while any of them runs, and that
+	// is the session someone can see, not the task's own. See RunningFor.
+	owner map[string]string
+	// onTasksChanged, if set, is told the session whose count of running
+	// tasks just changed.
+	onTasksChanged func(sessionID string)
 }
 
 func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *TaskManager {
@@ -83,6 +94,7 @@ func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *Tas
 		results:    map[string]taskOutcome{},
 		pending:    map[string][]string{},
 		done:       map[string]chan struct{}{},
+		owner:      map[string]string{},
 	}
 	// Back-reference so the loop can delegate a turn on its own (see
 	// Loop.delegatePrompt) rather than only when the model calls the Task
@@ -177,8 +189,10 @@ func (tm *TaskManager) spawn(launchCtx context.Context, parentSessionID, agentNa
 	})
 
 	ctx, cancel := context.WithCancel(childCtx)
+	owner := tm.topLevel(parentSessionID)
 	tm.mu.Lock()
 	tm.done[taskID] = make(chan struct{})
+	tm.owner[taskID] = owner
 	tm.cancels[taskID] = cancel
 	// Only a task somebody can come back for gets result bookkeeping. A
 	// client-spawned task reads its answer out of the child session's own
@@ -189,10 +203,60 @@ func (tm *TaskManager) spawn(launchCtx context.Context, parentSessionID, agentNa
 		tm.waiters[taskID] = make(chan struct{})
 	}
 	tm.mu.Unlock()
+	tm.tasksChanged(owner)
 
 	go tm.run(ctx, taskID, parentSessionID, agentName, prompt)
 
 	return taskID, nil
+}
+
+// RunningFor counts the tasks running for sessionID: spawned under it or
+// under one of its tasks, at any depth, and not yet unwound.
+func (tm *TaskManager) RunningFor(sessionID string) int {
+	if tm == nil {
+		return 0
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	n := 0
+	for _, owner := range tm.owner {
+		if owner == sessionID {
+			n++
+		}
+	}
+	return n
+}
+
+// OnTasksChanged registers fn to be told the session whose count of
+// running tasks has just changed. Called outside the manager's lock.
+func (tm *TaskManager) OnTasksChanged(fn func(sessionID string)) {
+	tm.mu.Lock()
+	tm.onTasksChanged = fn
+	tm.mu.Unlock()
+}
+
+func (tm *TaskManager) tasksChanged(sessionID string) {
+	tm.mu.Lock()
+	fn := tm.onTasksChanged
+	tm.mu.Unlock()
+	if fn != nil && sessionID != "" {
+		fn(sessionID)
+	}
+}
+
+// topLevel is the session at the root of id's chain of parents: the
+// conversation a task's work belongs to, which a nested task's own
+// parent, another task, is not. Bounded, so a parent chain that loops
+// cannot hang a spawn.
+func (tm *TaskManager) topLevel(id string) string {
+	for i := 0; i < 32; i++ {
+		s, err := tm.loop.Store.Get(id)
+		if err != nil || s.ParentID == "" {
+			return id
+		}
+		id = s.ParentID
+	}
+	return id
 }
 
 // childContext is what a background child runs under: rooted in the
@@ -255,7 +319,10 @@ func (tm *TaskManager) run(ctx context.Context, taskID, parentSessionID, agentNa
 			close(ch)
 			delete(tm.done, taskID)
 		}
+		owner := tm.owner[taskID]
+		delete(tm.owner, taskID)
 		tm.mu.Unlock()
+		tm.tasksChanged(owner)
 	}()
 
 	// Every way out of this function is terminal for the task, so every
@@ -529,23 +596,28 @@ func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, 
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	syncDone := make(chan struct{})
 	detached := make(chan struct{})
+	owner := tm.topLevel(parentSessionID)
 	tm.mu.Lock()
 	tm.cancels[taskID] = cancel
 	tm.done[taskID] = syncDone
+	tm.owner[taskID] = owner
 	tm.detach[taskID] = detached
 	tm.syncParent[taskID] = parentSessionID
 	tm.mu.Unlock()
+	tm.tasksChanged(owner)
 	tm.loop.lifecycle.admitted(parentSessionID)
 
 	release := func() {
 		tm.mu.Lock()
 		delete(tm.cancels, taskID)
 		delete(tm.done, taskID)
+		delete(tm.owner, taskID)
 		delete(tm.detach, taskID)
 		delete(tm.syncParent, taskID)
 		tm.mu.Unlock()
 		cancel()
 		close(syncDone)
+		tm.tasksChanged(owner)
 	}
 
 	// No semaphore here, deliberately.

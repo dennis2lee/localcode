@@ -1716,13 +1716,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   50% { opacity: 0.25; }
 }
 
-/* Someone who has asked for less motion gets a steady dot rather than
-   none: the information is the point, the blinking is decoration.
-   Running and unread then look alike, which is the honest trade — both
-   still say "this session has something", and the alternative is motion
-   someone has explicitly asked not to see. */
+/* Someone who has asked for less motion gets no blinking, and running is
+   then drawn as a green ring instead: steady, and still told apart from
+   unread's solid dot. Steady alone made the two the same light, and a
+   session with work going on read as one that had finished. Windows
+   reports less motion whenever its animation effects are off, which
+   remote desktops and managed machines often set for everyone. */
 @media (prefers-reduced-motion: reduce) {
-  .session-led.running { animation: none; }
+  .session-led.running {
+    animation: none;
+    background: transparent;
+    box-shadow: inset 0 0 0 2px var(--ok);
+  }
 }
 
 /* The settings window. Same box as the other modals; the additions are

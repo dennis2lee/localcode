@@ -1,5 +1,5 @@
 import { sessionListEl, sessionIdEl, archiveToggleEl, archiveListEl, inputEl } from './dom.js';
-import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft } from './state.js';
+import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft, sessionWorking } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, appendTool, clearTranscript } from './transcript.js';
 import { formatTime, shortenPath } from './format.js';
@@ -158,6 +158,15 @@ export function forgetCollapsedGroups(groups) {
   return collapsed;
 }
 
+// runningTitle says what is working in a session whose light blinks.
+function runningTitle(s) {
+  const n = s.tasks > 0 ? s.tasks : 0;
+  const tasks = `${n} background task${n === 1 ? '' : 's'}`;
+  if (s.busy && n > 0) return `a turn is running in this session, and ${tasks}`;
+  if (n > 0) return `${tasks} still running in this session`;
+  return 'a turn is running in this session';
+}
+
 function renderSessionCard(s, filtering) {
   const div = document.createElement('div');
   div.className = 'session-item' + (s.id === session.sessionID ? ' active' : '');
@@ -185,14 +194,17 @@ function renderSessionCard(s, filtering) {
   // — including a turn stuck waiting on a permission request, which
   // blocks workspace switching for every session until it is answered.
   // Four states, one dot, and every session has one:
-  //   waiting        amber, steady    — stopped, and only you can restart it
-  //   running        green, blinking  — the model is working
+  //   waiting        amber, steady    — stopped on a permission request or
+  //                                      a question, and only you can
+  //                                      restart it
+  //   running        green, blinking  — the model is working, in its turn
+  //                                      or in a task it started
   //   answer unread  green, steady    — it finished while you were elsewhere
   //   idle           grey, steady     — nothing is happening here
   //
   // Waiting is tested first because it is almost always true *alongside*
-  // running: a permission request is raised from inside a turn, and the
-  // turn stays open while the question sits there. Drawing the turn
+  // running: a permission request or a question is raised from inside a
+  // turn, and the turn stays open while it sits there. Drawing the turn
   // would be drawing the less useful of two true things — "busy" is
   // something to wait out, "waiting for you" is something to do.
   //
@@ -206,12 +218,12 @@ function renderSessionCard(s, filtering) {
   // green states only mean something against a light that is reliably
   // there when nothing is going on.
   const unread = app.unreadSessions.has(s.id);
-  const state = s.asking ? 'asking' : s.busy ? 'running' : unread ? 'unread' : 'idle';
+  const state = s.asking ? 'asking' : sessionWorking(s) ? 'running' : unread ? 'unread' : 'idle';
   const led = document.createElement('span');
   led.className = 'session-led ' + state;
   led.title = {
-    asking: 'this session is waiting for you to answer a permission request',
-    running: 'a turn is running in this session',
+    asking: 'this session is waiting for you: a permission request or a question',
+    running: runningTitle(s),
     unread: 'this session has a reply you have not looked at',
     idle: 'nothing is running in this session',
   }[state];
@@ -394,15 +406,15 @@ export function renderSessionList() {
     // anything it is covering, by the same order of urgency as a row.
     if (isCollapsed) {
       const hidden = inGroupAll.some(g => g.asking) ? 'asking'
-        : inGroupAll.some(g => g.busy) ? 'running'
+        : inGroupAll.some(sessionWorking) ? 'running'
           : inGroupAll.some(g => app.unreadSessions.has(g.id)) ? 'unread'
             : '';
       if (hidden) {
         const led = document.createElement('span');
         led.className = 'session-led ' + hidden;
         led.title = {
-          asking: 'a session in this group is waiting for you to answer a permission request',
-          running: 'a turn is running in a session in this group',
+          asking: 'a session in this group is waiting for you: a permission request or a question',
+          running: 'the model is working in a session in this group',
           unread: 'a session in this group has a reply you have not looked at',
         }[hidden];
         header.appendChild(led);

@@ -290,10 +290,21 @@ func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	// person, which is the one state a client should draw differently
 	// because it is the one the person can do something about.
 	asking := d.Broker.Asking()
+	// The model's own question stops a session for a person as much as a
+	// permission request does, and draws the same.
+	for id := range d.Loop.Input.Asking() {
+		if asking == nil {
+			asking = map[string]bool{}
+		}
+		asking[id] = true
+	}
 	type listed struct {
 		session.Session
 		Busy   bool `json:"busy"`
 		Asking bool `json:"asking"`
+		// Tasks counts the tasks still running for the session, which
+		// is working while any is, whether or not its own turn is.
+		Tasks int `json:"tasks"`
 	}
 	// ?archived=1 asks for the other list. One handler and one row shape,
 	// so there is one place membership is decided and a client cannot get
@@ -305,7 +316,7 @@ func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]listed, 0, len(sessions))
 	for _, s := range sessions {
-		out = append(out, listed{Session: s, Busy: busy[s.ID], Asking: asking[s.ID]})
+		out = append(out, listed{Session: s, Busy: busy[s.ID], Asking: asking[s.ID], Tasks: d.Tasks.RunningFor(s.ID)})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

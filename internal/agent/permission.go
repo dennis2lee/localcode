@@ -115,6 +115,10 @@ type PermissionBroker struct {
 	// onChanged, if set, tells the daemon a session's switches moved, so
 	// a window showing them follows an answer given at the prompt.
 	onChanged func(sessionID string)
+	// onAsking, if set, is told each session that has just started or
+	// stopped holding a question, so a session list can mark it without
+	// reloading. See OnAskingChanged.
+	onAsking func(sessionID string)
 }
 
 // mark and unmark move a session in and out of "waiting for an answer".
@@ -126,21 +130,48 @@ type PermissionBroker struct {
 // left marked would sit showing a light for a question nobody can see.
 func (b *PermissionBroker) mark(sessions []string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	for _, id := range sessions {
 		b.asking[id]++
 	}
+	fn := b.onAsking
+	b.mu.Unlock()
+	notifyAsking(fn, sessions)
 }
 
 func (b *PermissionBroker) unmark(sessions []string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	for _, id := range sessions {
 		if b.asking[id] <= 1 {
 			delete(b.asking, id)
 			continue
 		}
 		b.asking[id]--
+	}
+	fn := b.onAsking
+	b.mu.Unlock()
+	notifyAsking(fn, sessions)
+}
+
+// OnAskingChanged registers fn to be told each session that has just
+// started or stopped holding a question. Called outside the broker's lock:
+// the daemon fans the news out to every client.
+func (b *PermissionBroker) OnAskingChanged(fn func(sessionID string)) {
+	b.mu.Lock()
+	b.onAsking = fn
+	b.mu.Unlock()
+}
+
+// notifyAsking tells fn about each session once, in order.
+func notifyAsking(fn func(string), sessions []string) {
+	if fn == nil {
+		return
+	}
+	seen := map[string]bool{}
+	for _, id := range sessions {
+		if !seen[id] {
+			seen[id] = true
+			fn(id)
+		}
 	}
 }
 

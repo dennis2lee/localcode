@@ -55,10 +55,53 @@ type InputBroker struct {
 	mu      sync.Mutex
 	counter int
 	pending map[string]chan string
+	// asking counts the questions each session is waiting on an answer
+	// to. The model asking the person something is a session stopped and
+	// waiting for them as much as a permission request is, and a session
+	// list draws the two alike. A count, as the permission broker's is.
+	asking   map[string]int
+	onAsking func(sessionID string)
 }
 
 func NewInputBroker(store *session.Store) *InputBroker {
-	return &InputBroker{store: store, pending: map[string]chan string{}}
+	return &InputBroker{store: store, pending: map[string]chan string{}, asking: map[string]int{}}
+}
+
+// Asking reports which sessions are waiting on an answer to a question
+// the model asked. A copy, taken under the lock.
+func (b *InputBroker) Asking() map[string]bool {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make(map[string]bool, len(b.asking))
+	for id, n := range b.asking {
+		if n > 0 {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// OnAskingChanged registers fn to be told each session that has just
+// started or stopped waiting on an answer. Called outside the lock.
+func (b *InputBroker) OnAskingChanged(fn func(sessionID string)) {
+	b.mu.Lock()
+	b.onAsking = fn
+	b.mu.Unlock()
+}
+
+// waiting moves sessionID in or out of "waiting for an answer".
+func (b *InputBroker) waiting(sessionID string, delta int) {
+	b.mu.Lock()
+	b.asking[sessionID] += delta
+	if b.asking[sessionID] <= 0 {
+		delete(b.asking, sessionID)
+	}
+	fn := b.onAsking
+	b.mu.Unlock()
+	notifyAsking(fn, []string{sessionID})
 }
 
 // Ask puts the question in the session and waits. It returns the answer,
@@ -73,6 +116,10 @@ func (b *InputBroker) Ask(ctx context.Context, sessionID, question string, optio
 	ch := make(chan string, 1)
 	b.pending[id] = ch
 	b.mu.Unlock()
+	// Up before the question is written and down on every way out, so
+	// the mark covers exactly the span in which somebody could answer.
+	b.waiting(sessionID, 1)
+	defer b.waiting(sessionID, -1)
 
 	opts := make([]any, 0, len(options))
 	for _, o := range options {

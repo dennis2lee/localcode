@@ -96,3 +96,104 @@ test('the light under the prompt goes amber and steady while a question is unans
   assert.ok(!dot.className.includes('asking'), dot.className);
   assert.ok(dot.className.includes('active'), 'the turn is still running');
 });
+
+// Reported from real use: a conversation with a task still running after
+// its turn had ended drew a steady green light, the light for "finished
+// while you were elsewhere". A task it started keeps it blinking.
+test('a session whose tasks are still running is drawn as working', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/sessions': [
+        { id: 's1', title: 'tasks', agent: 'general-purpose', workspace: '/w', tasks: 2 },
+        { id: 's2', title: 'turn and task', agent: 'general-purpose', workspace: '/w', busy: true, tasks: 1 },
+      ],
+    },
+  });
+  assert.deepEqual(leds(app), ['running', 'running']);
+  const titles = app.el('session-list').children.map((row) => row.querySelector('.session-led').title);
+  assert.match(titles[0], /2 background tasks still running/);
+  assert.match(titles[1], /a turn is running in this session, and 1 background task/);
+});
+
+// The activity event is the session's whole state. The turn ending while
+// a task it started still runs is not the session finishing; the last
+// task ending is, and only then does the light say there is something to
+// read.
+test('a session finishes when its last task does, not when its turn does', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/sessions': [
+        { id: 'sess-1', title: 'here', agent: 'general-purpose', workspace: '/w' },
+        { id: 's2', title: 'elsewhere', agent: 'general-purpose', workspace: '/w', busy: true },
+      ],
+    },
+  });
+  app.sse.emit({ type: 'session.activity', data: { session: 's2', busy: true, tasks: 1, asking: false } });
+  app.sse.emit({ type: 'session.activity', data: { session: 's2', busy: false, tasks: 1, asking: false } });
+  assert.deepEqual(leds(app), ['idle', 'running'], 'the turn ending drew the session as finished');
+
+  app.sse.emit({ type: 'session.activity', data: { session: 's2', busy: false, tasks: 0, asking: false } });
+  assert.deepEqual(leds(app), ['idle', 'unread']);
+});
+
+// A question in another conversation turns its light amber when it is
+// asked, not when the list happens to be loaded again, and back when it
+// is answered.
+test('a session starts and stops waiting for you as it happens', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/sessions': [
+        { id: 'sess-1', title: 'here', agent: 'general-purpose', workspace: '/w' },
+        { id: 's2', title: 'elsewhere', agent: 'general-purpose', workspace: '/w', busy: true },
+      ],
+    },
+  });
+  app.sse.emit({ type: 'session.activity', data: { session: 's2', busy: true, tasks: 0, asking: true } });
+  assert.deepEqual(leds(app), ['idle', 'asking']);
+  app.sse.emit({ type: 'session.activity', data: { session: 's2', busy: true, tasks: 0, asking: false } });
+  assert.deepEqual(leds(app), ['idle', 'running']);
+});
+
+// A daemon from before tasks and questions were in the event sends the
+// turn alone, and what it does not say is left as the list had it.
+test('an older daemon\'s activity event leaves what it does not mention alone', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/sessions': [
+        { id: 'sess-1', title: 'here', agent: 'general-purpose', workspace: '/w' },
+        { id: 's2', title: 'elsewhere', agent: 'general-purpose', workspace: '/w', busy: true, tasks: 1 },
+      ],
+    },
+  });
+  app.sse.emit({ type: 'session.activity', data: { session: 's2', busy: false } });
+  assert.deepEqual(leds(app), ['idle', 'running'], 'the task the event did not mention was dropped');
+});
+
+// A folded group's header carries the strongest light of what it covers,
+// and a session whose tasks are running is working there too.
+test('a folded group shows a session whose tasks are running as working', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/sessions': [
+        { id: 's1', title: 'tasks', agent: 'general-purpose', workspace: '/w', group: 'work', tasks: 1 },
+      ],
+      'GET /api/sessions/groups': { names: ['work'] },
+    },
+    localStorage: { 'localcode.collapsedGroups': JSON.stringify(['work']) },
+  });
+  const header = app.el('session-list').querySelector('.session-group-header');
+  const led = header.querySelector('.session-led');
+  assert.ok(led, 'the folded group has no light');
+  assert.equal(led.className, 'session-led running');
+});
+
+// Without motion, working is a ring rather than a blink, so it is still
+// told apart from the solid dot of a finished session. Windows asks for
+// less motion whenever its animation effects are off.
+test('without motion a working session is a ring, not the finished dot', () => {
+  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../internal/daemon/static/style.css'), 'utf8');
+  const blocks = css.split('@media (prefers-reduced-motion: reduce)').slice(1);
+  const ring = blocks.find((b) => /\.session-led\.running\s*\{[^}]*box-shadow:\s*inset 0 0 0 2px var\(--ok\)/.test(b));
+  assert.ok(ring, 'a working session looks like a finished one when motion is reduced');
+  assert.match(ring, /\.session-led\.running\s*\{[^}]*background:\s*transparent/);
+});

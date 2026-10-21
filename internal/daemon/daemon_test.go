@@ -120,6 +120,8 @@ func newTestDaemon(t *testing.T, modelURL string) *Daemon {
 
 	providers := map[string]provider.Provider{"local": provider.NewOpenAICompat(modelURL, "")}
 	loop := agent.New(store, registry, providers, cfg)
+	// As wire.go sets it: the model's own questions to a person.
+	loop.Input = agent.NewInputBroker(store)
 	tasks := agent.NewTaskManager(context.Background(), loop, cfg.MaxConcurrentTasks)
 
 	return New(loop, broker, tasks, nil, nil, "test-version")

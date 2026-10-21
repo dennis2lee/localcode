@@ -252,10 +252,7 @@ func (d *Daemon) watchTakeover() {
 			if len(d.turns.anyBusy([]string{id})) > 0 {
 				continue
 			}
-			d.daemonEvents.send(events.Event{
-				Type: events.TypeSessionActivity,
-				Data: map[string]any{"session": id, "busy": false},
-			})
+			d.announceActivity(id)
 		}
 	}
 }

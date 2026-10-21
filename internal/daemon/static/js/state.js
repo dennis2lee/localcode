@@ -168,6 +168,15 @@ export const session = freshSessionState(null);
 // session panel reads. Taking either as "working" is what stops the light
 // under the prompt from sitting solid while the light in the panel, three
 // inches away, blinks about the same turn.
+// sessionWorking is what the session panel's blinking light means: the
+// model is working in the conversation, in its own turn or in a task it
+// started that is still running after the turn ended. A turn alone was
+// the old test, and a conversation whose turn had finished with a task
+// still working drew as finished.
+export function sessionWorking(s) {
+  return !!(s && (s.busy || s.tasks > 0));
+}
+
 export function currentSessionBusy() {
   const s = (app.sessions || []).find(x => x.id === session.sessionID);
   return !!(s && s.busy);

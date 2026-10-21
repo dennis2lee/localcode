@@ -1918,7 +1918,7 @@ Every session on the daemon, newest first. Each card shows:
 
 | Line | Contents |
 |---|---|
-| Title | Title or session ID. Indicator: grey for idle, blinking green for running, steady green for unread reply, steady amber for pending permission. Permission state takes precedence. |
+| Title | Title or session ID. Indicator: grey for idle; blinking green while the model is working, in a turn or in a background task the session started, including one let go of with Ctrl+B; steady green for a reply you have not read, set when the turn and its last task have ended while another session was on screen; steady amber while it waits for you, on a permission request or a question the model asked. Waiting takes precedence. With less motion asked for (on Windows, animation effects off), working is a green ring instead of a blink. The light changes as it happens, in every session, without reloading the list. |
 | Workspace | Current directory, shortened from the front. Tooltip shows the full path. |
 | Created | Local date and time |
 
@@ -1960,7 +1960,7 @@ A group name is refused, by name, if it is empty, starts or ends with a space, i
 
 `POST /api/sessions/groups` needs the `names` field. It takes the whole list, so a body without it would otherwise read as an empty list and take every group down with it; `{"names": []}` is how you say that on purpose.
 
-A folded group still carries the light of what it is hiding: if a session inside it is waiting for a permission answer, running a turn, or holding a reply you have not read, the header shows that session's light. Folding a group is a way to make it quiet, not a way to lose track of it.
+A folded group still carries the light of what it is hiding: if a session inside it is waiting for an answer, working, or holding a reply you have not read, the header shows that session's light. Folding a group is a way to make it quiet, not a way to lose track of it.
 
 Filtering narrows the rows as before, and a group whose sessions are all hidden loses its header too. A filter also opens any group it matched, since a fold that hid the row you just searched for would be the panel refusing to show what it found; clicking a header does nothing while a filter is on, for the same reason dragging is off. The count beside a group's name stays the real number in the group, so a group showing one row of two tells you the filter is hiding the other. Dragging is off while a filter is on, for the same reason it always was.
 

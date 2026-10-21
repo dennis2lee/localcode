@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.166.0
+
+A session's light blinks while a task it started is still working, and turns amber when the model asks you a question.
+
+**Fixed**
+
+* A session whose turn had ended with a background task still working drawn with the steady green of a finished session; it blinks until its last task ends, at any depth, a child let go of with Ctrl+B included
+* A permission request or a question in another session turning its light amber only when the session list was next loaded; the light changes as it happens
+* A question the model asks you (`ask_user`) not counted as waiting for you; it draws amber, as a permission request does
+* With animation effects off in Windows, or less motion asked for elsewhere, a working session drawn the same as a finished one; it is a green ring
+
+**Changed**
+
+* `GET /api/sessions` rows carry `tasks`, and `asking` includes the model's own questions; `session.activity` carries the session's whole state: `busy`, `tasks` and `asking`
+
 ## v0.165.0
 
 Alt+Up and Alt+Down reach every prompt of a long or re-opened conversation, and step one turn at a time.
