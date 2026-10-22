@@ -2,7 +2,7 @@
 
 ## v0.166.0
 
-A session's light blinks while a task it started is still working, and turns amber when the model asks you a question.
+Session and scheduled-task lights blink while work goes on, turn amber while it waits for you, and stay told apart without animation.
 
 **Fixed**
 
@@ -10,6 +10,9 @@ A session's light blinks while a task it started is still working, and turns amb
 * A permission request or a question in another session turning its light amber only when the session list was next loaded; the light changes as it happens
 * A question the model asks you (`ask_user`) not counted as waiting for you; it draws amber, as a permission request does
 * With animation effects off in Windows, or less motion asked for elsewhere, a working session drawn the same as a finished one; it is a green ring
+* A repeating scheduled task whose first result had been read drawn every later result as read, in the right panel and after a restart, where clicking it then recorded nothing; each run's result is unread until read
+* A scheduled run waiting on a permission request or a question drawn as running; its row is amber while it waits
+* With less motion asked for, a scheduled run still going drawn as a dimmed copy of a finished one; it is a green ring, as an MCP server that is degraded is
 
 **Changed**
 

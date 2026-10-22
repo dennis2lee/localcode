@@ -147,3 +147,40 @@ test('delete carries the shared danger class', async () => {
   const del = app.el('schedules').querySelectorAll('button')[1];
   assert.ok(del.classList.contains('danger-btn'));
 });
+
+// Without motion, a booking still waiting or running is a ring, not a
+// dimmed copy of the solid light a finished one has. Windows asks for
+// less motion whenever its animation effects are off.
+test('without motion a waiting or running booking is a ring', () => {
+  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../internal/daemon/static/style.css'), 'utf8');
+  const blocks = css.split('@media (prefers-reduced-motion: reduce)').slice(1);
+  const ring = blocks.find((b) => /\.led-degraded\s*\{[^}]*box-shadow:\s*inset 0 0 0 2px var\(--ok\)/.test(b));
+  assert.ok(ring, 'a running booking looks like a finished one when motion is reduced');
+  assert.match(ring, /\.led-degraded\s*\{[^}]*background:\s*transparent/);
+});
+
+// A run stopped on a permission request or a question is waiting for a
+// person, and its row is amber for as long as it waits. Run sessions are
+// not in the session list, so the row that opens one is where it shows.
+test('a run waiting for you is amber until it is answered', async () => {
+  const app = await load();
+  book(app);
+  app.applyEvent({ type: 'schedule.status', data: { id: 's1', status: 'running', run_session: 's1-run' } });
+  assert.match(app.el('schedules').innerHTML, /led-degraded/);
+
+  app.applyEvent({ type: 'session.activity', data: { session: 's1-run', busy: false, tasks: 0, asking: true } });
+  assert.match(app.el('schedules').innerHTML, /led-asking/, 'a run waiting for an answer did not say so');
+  app.applyEvent({ type: 'session.activity', data: { session: 'another-run', busy: false, tasks: 0, asking: false } });
+  assert.match(app.el('schedules').innerHTML, /led-asking/, 'another session\'s news reached this row');
+
+  app.applyEvent({ type: 'session.activity', data: { session: 's1-run', busy: false, tasks: 0, asking: false } });
+  assert.match(app.el('schedules').innerHTML, /led-degraded/, 'answered, it is running again');
+  app.applyEvent({ type: 'session.activity', data: { session: 's1-run', busy: false, tasks: 0, asking: true } });
+  app.applyEvent({ type: 'schedule.status', data: { id: 's1', status: 'done', run_session: 's1-run' } });
+  assert.match(app.el('schedules').innerHTML, /led-connected/, 'a finished run still drawn as waiting');
+
+  // What the run waited on is not carried into the next one.
+  app.applyEvent({ type: 'schedule.status', data: { id: 's1', status: 'pending', runs: 1 } });
+  app.applyEvent({ type: 'schedule.status', data: { id: 's1', status: 'running', run_session: 's1-run' } });
+  assert.match(app.el('schedules').innerHTML, /led-degraded/, 'the next run started out waiting');
+});

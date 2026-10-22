@@ -2953,7 +2953,7 @@ Scheduled permission requests appear in the booking conversation and expire afte
 | Where | What you get |
 |---|---|
 | **schedule** button | Separate time and task fields with parsed-time preview. |
-| Right panel | Task rows: blinking green while waiting, solid green for unread results, grey after reading. Click for results; double-click for booking details. Rename changes the label. Delete removes the booking and run transcript. |
+| Right panel | Task rows: blinking green while waiting or running, amber while a run waits on a permission request or a question, solid green for an unread result, grey after reading. Each run's result is unread until read, so a repeat's later run turns its row solid green again. With less motion asked for (on Windows, animation effects off), blinking is a green ring. Click for results; double-click for booking details. Rename changes the label. Delete removes the booking and run transcript. |
 | `/show-scheduled-task` | The same list as text, for the TUI. |
 | `/schedule cancel <id>` | Removes one. Ids are short and belong to the conversation: `s1`, `s2`. |
 | `/schedule rename <id> <name>` | Labels one; an empty name clears it. |

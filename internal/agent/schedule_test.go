@@ -695,3 +695,44 @@ func TestAPipeIsToldThereWasNobodyToAskRatherThanThatNobodyAnswered(t *testing.T
 		t.Fatal("a turn with no wait configured waited anyway")
 	}
 }
+
+// A repeat's later answer is unread after a restart even when an earlier
+// one had been read: the restored read mark was the first run's, and
+// MarkSeen, which writes nothing for a booking already read, then could
+// never record that the new answer had been read.
+func TestALaterRunsAnswerIsUnreadAfterARestart(t *testing.T) {
+	loop := scheduleLoop(t)
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	next := time.Now().Add(time.Hour).Format(time.RFC3339)
+	for _, ev := range []struct {
+		typ  events.Type
+		data map[string]any
+	}{
+		{events.TypeScheduleCreated, map[string]any{"id": "sched-1", "at": next, "prompt": "check", "agent": "general-purpose", "repeat_every": 1, "repeat_unit": "day"}},
+		{events.TypeScheduleStatus, map[string]any{"id": "sched-1", "status": ScheduleDone, "run_session": "run-1"}},
+		{events.TypeScheduleStatus, map[string]any{"id": "sched-1", "status": SchedulePending, "at": next, "runs": 1}},
+		{events.TypeScheduleSeen, map[string]any{"id": "sched-1"}},
+		{events.TypeScheduleStatus, map[string]any{"id": "sched-1", "status": ScheduleDone, "run_session": "run-2"}},
+		{events.TypeScheduleStatus, map[string]any{"id": "sched-1", "status": SchedulePending, "at": next, "runs": 2}},
+	} {
+		if _, err := loop.Store.Append(sid, ev.typ, ev.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sched := NewScheduler(context.Background(), loop)
+	sched.Restore([]string{sid}, time.Now())
+
+	e, ok := sched.Get(sid, "sched-1")
+	if !ok {
+		t.Fatal("the booking was not restored")
+	}
+	if e.Seen {
+		t.Error("the second run's answer was restored as read")
+	}
+	if !sched.MarkSeen(sid, "sched-1") {
+		t.Error("reading the second run's answer recorded nothing")
+	}
+}

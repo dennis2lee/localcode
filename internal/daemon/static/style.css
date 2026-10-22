@@ -1662,10 +1662,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   50% { opacity: 0.15; }
 }
 /* Someone who has asked for less motion should not get a light pulsing at
-   them in the corner all session; the colour still distinguishes it from
-   disconnected. */
+   them in the corner all session. The blinking light is a green ring
+   instead: dimmed, it was a green dot hardly apart from the steady one,
+   and a scheduled run still going read as one that had finished. The
+   same ring as a working session's in the session list. */
 @media (prefers-reduced-motion: reduce) {
-  .led-degraded { animation: none; opacity: 0.55; }
+  .led-degraded {
+    animation: none;
+    background: transparent;
+    box-shadow: inset 0 0 0 2px var(--ok);
+  }
 }
 
 /* The per-session activity dot in the left panel. Same idea as the

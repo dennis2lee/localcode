@@ -15,7 +15,7 @@ import {
   applySessionPermissions,
   applyEffort,
 } from './modals.js';
-import { applyScheduleEvent } from './schedules.js';
+import { applyScheduleEvent, applyRunActivity } from './schedules.js';
 import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen, refreshModelInvocableIfOpen } from './settings.js';
 import { refreshTaskViewStatus, taskDeleted } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
@@ -559,6 +559,7 @@ const handlers = {
   // for a person. A daemon from before tasks and questions were in it
   // sends the turn alone, and what it does not say is left as it was.
   'session.activity': (d) => {
+    applyRunActivity(d.session, d.asking);
     const s = (app.sessions || []).find(x => x.id === d.session);
     if (!s) return;
     const before = [!!s.busy, s.tasks || 0, !!s.asking].join();

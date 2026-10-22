@@ -727,6 +727,13 @@ func (s *Scheduler) restore(sessions []string, now time.Time, missed func(time.T
 				order = append(order, id)
 			case events.TypeScheduleStatus:
 				if e := byID[id]; e != nil {
+					// News about a run is unread until it is read, as the
+					// re-arming that ends a run says live. Left as the
+					// first run's read mark, a later answer read back as
+					// read after a restart, and MarkSeen, which writes
+					// nothing for a booking already read, could then never
+					// turn its light grey.
+					e.Seen = false
 					e.Status = str(ev.Data["status"])
 					if rs := str(ev.Data["run_session"]); rs != "" {
 						e.RunSession = rs

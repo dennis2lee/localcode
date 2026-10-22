@@ -92,6 +92,19 @@ test('an unread result outranks being armed for the next run', async () => {
   app.applyEvent({ type: 'schedule.seen', data: { id: 's1' } });
   assert.match(app.el('schedules').innerHTML, /led-degraded/,
     'once read, it is back to waiting for the next one');
+
+  // The next run's answer is a new one, and unread until it is read in
+  // turn: having read the first does not mean having read every later
+  // one. The row stayed blinking, saying there was nothing to read.
+  app.applyEvent({ type: 'schedule.status', data: { id: 's1', status: 'running', run_session: 's1-run2' } });
+  assert.match(app.el('schedules').innerHTML, /led-degraded/, 'the second run is going');
+  app.applyEvent({ type: 'schedule.status', data: { id: 's1', status: 'done', run_session: 's1-run2' } });
+  app.applyEvent({
+    type: 'schedule.status',
+    data: { id: 's1', status: 'pending', at: '2026-09-03T09:00:00Z', runs: 2, run_session: 's1-run2' },
+  });
+  assert.match(app.el('schedules').innerHTML, /led-connected/,
+    'the second run finished and nobody has read it');
 });
 
 // The one state that wants a person. Amber means "this one is yours"

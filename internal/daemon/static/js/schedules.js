@@ -32,8 +32,11 @@ import { openTaskView } from './taskview.js';
 function ledClass(s) {
   // A repeat that stopped itself is the one state that wants a person:
   // amber means "this one is yours" everywhere else in the product, and
-  // a suspended booking is not going to un-suspend on its own.
+  // a suspended booking is not going to un-suspend on its own. So is a
+  // run stopped on a permission request or a question, for as long as it
+  // waits: a run is unattended, and the request expires.
   if (s.status === 'suspended') return 'led-asking';
+  if (s.status === 'running' && s.asking) return 'led-asking';
   // A repeat between runs is armed and has an unread answer at the same
   // time. Unread wins: "there is something to read" is the useful half,
   // and "it will run again" is what the row's own line already says.
@@ -365,6 +368,15 @@ export function applyScheduleEvent(type, d) {
     case 'schedule.status':
       session.schedules.set(d.id, {
         ...cur,
+        // News about a run is unread until it is read: a repeat's next
+        // run, its answer and the re-arming that follows it. Read once,
+        // the row stayed read for every later run, and blinked as though
+        // waiting while a new answer sat there. The daemon clears its own
+        // flag on the same events.
+        seen: false,
+        // A status is a new phase of the run, and whatever it was waiting
+        // on is not carried into the next one.
+        asking: d.status === 'running' ? cur.asking : false,
         status: d.status,
         run_session: d.run_session || cur.run_session,
         error: d.error || '',
@@ -387,6 +399,21 @@ export function applyScheduleEvent(type, d) {
       return;
   }
   renderSchedules();
+}
+
+// applyRunActivity takes a session.activity about a scheduled run's own
+// session: whether the run is waiting for a person. Run sessions are not
+// in the session list, so the row that opens one is where it is drawn.
+export function applyRunActivity(sessionID, asking) {
+  if (!session.schedules || typeof asking !== 'boolean') return;
+  let changed = false;
+  for (const [id, s] of session.schedules) {
+    if (s.run_session === sessionID && !!s.asking !== asking) {
+      session.schedules.set(id, { ...s, asking });
+      changed = true;
+    }
+  }
+  if (changed) renderSchedules();
 }
 
 // ---- Booking one from the window ----
