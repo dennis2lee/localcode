@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"localcode/internal/agent"
 	"localcode/internal/events"
 	"localcode/internal/hooks"
 	"localcode/internal/session"
@@ -217,6 +218,7 @@ func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var seqs agent.SeqMap
 	for _, ev := range evs {
 		// session.renamed describes the *source's* title, which the fork
 		// does not share — copying it would put a claim in the fork's log
@@ -228,10 +230,14 @@ func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
 		}
 		// Seq is reassigned by Append; the fork's log is its own sequence
 		// starting at 1, which is what its clients' resume logic expects.
-		if _, err := d.Loop.Store.Append(newID, ev.Type, ev.Data); err != nil {
+		// What a rewind or a redo names is reassigned with it; see
+		// agent.SeqMap.
+		copied, err := d.Loop.Store.Append(newID, ev.Type, agent.ForkData(ev, &seqs))
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Errorf("copy event log: %w", err))
 			return
 		}
+		seqs.Add(ev.Seq, copied.Seq)
 	}
 
 	if title := forkTitle(src); title != "" {

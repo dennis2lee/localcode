@@ -296,6 +296,20 @@ type Archived struct {
 	At    time.Time
 }
 
+// Copy identifies this copy among the archived copies of its note: the
+// time in its file name, or the file's own name for one put there by
+// hand. Search shows it, and read and restore take it, so the copy a
+// search found is the copy that is read.
+func (a Archived) Copy() string {
+	st := stem(a.File)
+	if i := strings.LastIndex(st, "~"); i >= 0 {
+		if _, err := time.Parse(archiveStamp, st[i+1:]); err == nil {
+			return st[i+1:]
+		}
+	}
+	return st
+}
+
 // archiveStamp is the time format in an archived copy's file name, which
 // is the note's name, "~", and when it was archived: unique per copy, so
 // archiving the same name twice keeps both, and sortable as text.
@@ -350,10 +364,23 @@ func (s Store) ArchivedNotes() ([]Archived, error) {
 // replaced, or a note forgotten, is read back through the tools: restore
 // brings a forgotten note back, and a replaced note's earlier text is
 // read here and saved again if it was the right one.
-func (s Store) ReadArchived(name string) (Archived, int, error) {
-	list, err := s.ArchivedNotes()
+func (s Store) ReadArchived(name, copy string) (Archived, int, error) {
+	found, err := s.archivedCopies(name)
 	if err != nil {
 		return Archived{}, 0, err
+	}
+	pick, err := pickCopy(found, copy)
+	if err != nil {
+		return Archived{}, 0, err
+	}
+	return pick, len(found) - 1, nil
+}
+
+// archivedCopies is every archived copy of a note, newest first.
+func (s Store) archivedCopies(name string) ([]Archived, error) {
+	list, err := s.ArchivedNotes()
+	if err != nil {
+		return nil, err
 	}
 	norm, nerr := NormalizeName(name)
 	want := strings.TrimSuffix(strings.TrimSpace(name), ".md")
@@ -364,9 +391,26 @@ func (s Store) ReadArchived(name string) (Archived, int, error) {
 		}
 	}
 	if len(found) == 0 {
-		return Archived{}, 0, ErrNotFound
+		return nil, ErrNotFound
 	}
-	return found[0], len(found) - 1, nil
+	return found, nil
+}
+
+// ErrNoSuchCopy is returned for a copy that is not among a note's
+// archived copies.
+var ErrNoSuchCopy = errors.New("no archived copy of that note has that copy id")
+
+// pickCopy is the copy named, or the newest when none is.
+func pickCopy(found []Archived, copy string) (Archived, error) {
+	if copy = strings.TrimSpace(copy); copy == "" {
+		return found[0], nil
+	}
+	for _, a := range found {
+		if a.Copy() == copy {
+			return a, nil
+		}
+	}
+	return Archived{}, ErrNoSuchCopy
 }
 
 // find resolves a name to a note file in dir: the normalized name first,
@@ -728,26 +772,20 @@ func (s Store) Forget(name string, now time.Time) (string, error) {
 	return stem(file), err
 }
 
-// Restore brings the most recently archived copy of a note back.
-func (s Store) Restore(name string, now time.Time) (string, error) {
+// Restore brings an archived copy of a note back: the one copy names, or
+// the most recent.
+func (s Store) Restore(name, copy string, now time.Time) (string, error) {
 	var restored string
 	err := s.withLock(func() error {
-		list, err := s.ArchivedNotes()
+		found, err := s.archivedCopies(name)
 		if err != nil {
 			return err
 		}
-		norm, nerr := NormalizeName(name)
-		var pick *Archived
-		for i := range list {
-			n := list[i].Entry.Name
-			if strings.EqualFold(n, strings.TrimSuffix(strings.TrimSpace(name), ".md")) || (nerr == nil && n == norm) {
-				pick = &list[i]
-				break
-			}
+		chosen, err := pickCopy(found, copy)
+		if err != nil {
+			return err
 		}
-		if pick == nil {
-			return ErrNotFound
-		}
+		pick := &chosen
 		file := pick.Entry.Name + ".md"
 		// A name the store cannot hold as a note: "memory.md" is the
 		// index itself on a disk that ignores case, and a Windows device
@@ -757,7 +795,7 @@ func (s Store) Restore(name string, now time.Time) (string, error) {
 			return fmt.Errorf("an archived copy named %q cannot be restored under that name; read it with memory_search and save its text under another name", pick.Entry.Name)
 		}
 		if _, err := os.Lstat(filepath.Join(s.Dir, file)); err == nil {
-			return fmt.Errorf("a note named %s exists, so the archived copy cannot take its place. memory_read with archived true shows the archived text; saving that text under this name replaces the current note, whose text then goes to the archive in turn", pick.Entry.Name)
+			return fmt.Errorf("a note named %s exists, so the archived copy cannot take its place. memory_read with archived true (and its copy id, from memory_search) shows the archived text; saving that text under this name replaces the current note, whose text then goes to the archive in turn", pick.Entry.Name)
 		}
 		existing, err := noteFiles(s.Dir)
 		if err != nil {
@@ -881,6 +919,9 @@ func (s Store) removeStaleTemps() {
 type Hit struct {
 	Entry    Entry
 	Archived bool
+	// Copy is an archived hit's copy id, for reading or restoring the
+	// copy that matched rather than the newest.
+	Copy string
 	// IndexLine is set for a hit in MEMORY.md's own text, which is
 	// searched because a long hand-written index is exactly what the
 	// prompt's budget leaves out.
@@ -937,7 +978,7 @@ func (s Store) Search(query string) ([]Hit, error) {
 		e := a.Entry
 		if sc := score(e.Name+"\n"+e.Description+"\n"+e.Body, e.Name+" "+e.Description); sc > 0 {
 			seen[e.Name] = true
-			old = append(old, Hit{Entry: e, Archived: true, Score: sc})
+			old = append(old, Hit{Entry: e, Archived: true, Copy: a.Copy(), Score: sc})
 		}
 	}
 	sort.SliceStable(old, func(i, j int) bool { return old[i].Score > old[j].Score })

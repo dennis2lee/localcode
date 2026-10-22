@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.168.2
+
+The archived copy a memory search finds is the one that is read and restored, and a fork keeps what a redone turn did.
+
+**Fixed**
+
+* A memory search matching an older archived copy of a note while `memory_read` showed the newest; search names the copy, and `memory_read` and restore take its `copy` id
+* A hand-written index line with a reference link, an autolink or a bare URL in it deleted when its legacy note was adopted or forgotten
+* A fork of a conversation with a rewound and redone turn losing that turn: the fork copied the sequence numbers the rewind and the redo named unchanged, so its replay took the redone turn for an undone one and dropped its history and its session notes
+
 ## v0.168.1
 
 Replaced memory text readable again through the memory tools, and hand-written index lines kept when they say more than a link.

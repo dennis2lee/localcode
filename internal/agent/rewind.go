@@ -411,3 +411,51 @@ func childIDs(children []session.Session) []string {
 	}
 	return ids
 }
+
+// SeqMap carries a source log's sequence numbers over to a fork's, which
+// numbers its copy from one. A rewind names the event it rewound from
+// (from_seq) and a redo the rewind it put back (rewind_seq); copied with
+// the source's numbers, the fork's replay matched them against its own
+// events, so a redone turn read as still undone and its history and its
+// session notes were dropped.
+type SeqMap struct {
+	old, new []uint64
+}
+
+// Add records that the source's event oldSeq is the fork's newSeq. Calls
+// come in source order.
+func (m *SeqMap) Add(oldSeq, newSeq uint64) {
+	m.old = append(m.old, oldSeq)
+	m.new = append(m.new, newSeq)
+}
+
+// Map is the fork's number for the source's oldSeq: its own copy's, or,
+// for an event the fork did not copy (a rename), the first copied event
+// after it, which is where the same position in the conversation is. 0
+// when nothing at or after it was copied.
+func (m *SeqMap) Map(oldSeq uint64) uint64 {
+	for i, o := range m.old {
+		if o >= oldSeq {
+			return m.new[i]
+		}
+	}
+	return 0
+}
+
+// ForkData is an event's data as a fork copies it: the same, except that
+// the sequence numbers a rewind or a redo names are the fork's.
+func ForkData(ev events.Event, m *SeqMap) map[string]any {
+	if ev.Type != events.TypeRewound && ev.Type != events.TypeRedone {
+		return ev.Data
+	}
+	out := make(map[string]any, len(ev.Data))
+	for k, v := range ev.Data {
+		out[k] = v
+	}
+	for _, key := range []string{"from_seq", "rewind_seq"} {
+		if _, ok := ev.Data[key]; ok {
+			out[key] = m.Map(dataUint(ev.Data, key))
+		}
+	}
+	return out
+}

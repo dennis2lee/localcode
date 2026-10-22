@@ -298,7 +298,12 @@ func dropOnlyLinks(re *regexp.Regexp, text string) string {
 	return re.ReplaceAllStringFunc(text, func(line string) string {
 		m := re.FindStringSubmatch(line)
 		after := strings.TrimRight(m[1], "\r")
-		if strings.Contains(after, "](") || len([]rune(after)) > maxHook {
+		// Any other link, in any of Markdown's forms (inline, reference
+		// [text][ref] or [ref], autolink <https://...>, a bare URL), makes
+		// the line the person's: keeping a line that only looked like
+		// more costs a duplicate, deleting one that was more costs what
+		// it said.
+		if strings.ContainsAny(after, "[<") || strings.Contains(after, "://") || len([]rune(after)) > maxHook {
 			return line
 		}
 		return ""

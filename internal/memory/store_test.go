@@ -409,11 +409,11 @@ func TestForgetArchivesAndRestoreBringsBack(t *testing.T) {
 		t.Errorf("search did not find the archived note: %+v", hits)
 	}
 	save(t, s, "a", TypeProject, "new a", "new", t0)
-	if _, err := s.Restore("a", t0); err == nil {
+	if _, err := s.Restore("a", "", t0); err == nil {
 		t.Error("restore over an existing note succeeded")
 	}
 	s.Forget("a", t0) // the new one replaces the archived copy
-	if _, err := s.Restore("a", t0); err != nil {
+	if _, err := s.Restore("a", "", t0); err != nil {
 		t.Fatal(err)
 	}
 	if e, _, _ := s.Read("a", t0); e.Body != "new" {
@@ -990,7 +990,7 @@ func TestAnArchivedCopyUnderAReservedNameIsNotRestored(t *testing.T) {
 	for _, name := range []string{"memory", "MEMORY", "con"} {
 		os.MkdirAll(filepath.Join(s.Dir, archiveDirName), 0o755)
 		os.WriteFile(filepath.Join(s.Dir, archiveDirName, name+"~20261001T090000.000000000Z.md"), []byte("hand-placed\n"), 0o600)
-		if _, err := s.Restore(name, t0); err == nil || !strings.Contains(err.Error(), "cannot be restored") {
+		if _, err := s.Restore(name, "", t0); err == nil || !strings.Contains(err.Error(), "cannot be restored") {
 			t.Errorf("restore %s: %v", name, err)
 		}
 	}
@@ -1113,7 +1113,7 @@ func TestRestoreAtTheEntryLimitIsRefused(t *testing.T) {
 
 	// Now try to restore note1 when store already holds 2 notes (its limit).
 	// Existing tests in store_test.go do not test Restore at entry limit.
-	_, err := s.Restore("note1", t0)
+	_, err := s.Restore("note1", "", t0)
 	if err == nil {
 		t.Fatalf("Restore at entry limit succeeded, want error '%s memory already holds 2 notes, its limit'", s.Scope)
 	}
@@ -2079,7 +2079,7 @@ func TestForgetAndRestoreSucceedOnceTheNoteHasMoved(t *testing.T) {
 	if _, err := s.Forget("n", t0); err != nil {
 		t.Fatalf("forget: %v", err)
 	}
-	if _, err := s.Restore("n", t0); err != nil {
+	if _, err := s.Restore("n", "", t0); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	if e, _, err := s.Read("n", t0); err != nil || e.Body != "x" {
@@ -2135,11 +2135,32 @@ func TestReadArchivedTakesTheNewestCopy(t *testing.T) {
 	save(t, s, "n", TypeProject, "", "one", t0)
 	save(t, s, "n", TypeProject, "", "two", t0.Add(time.Minute))
 	save(t, s, "n", TypeProject, "", "three", t0.Add(2*time.Minute))
-	a, older, err := s.ReadArchived("N")
+	a, older, err := s.ReadArchived("N", "")
 	if err != nil || a.Entry.Body != "two" || older != 1 {
 		t.Errorf("newest archived %q, older %d, %v", a.Entry.Body, older, err)
 	}
-	if _, _, err := s.ReadArchived("missing"); err != ErrNotFound {
+	if _, _, err := s.ReadArchived("missing", ""); err != ErrNotFound {
 		t.Errorf("missing: %v", err)
+	}
+}
+
+// Another link in any of Markdown's forms keeps a hand-written line, not
+// only an inline one.
+func TestEveryFormOfAnotherLinkKeepsTheLine(t *testing.T) {
+	for _, line := range []string{
+		"- [Build](build.md); approval from [Release owners][owners]",
+		"- [Build](build.md); approval from [owners]",
+		"- [Build](build.md); approval from <https://example.com/owners>",
+		"- [Build](build.md); see https://example.com/owners",
+		"- [Build](build.md); mail <owners@example.com>",
+	} {
+		s := projectStore(t)
+		os.MkdirAll(s.Dir, 0o755)
+		os.WriteFile(IndexPath(s.Dir), []byte(line+"\n\n[owners]: https://example.com/owners\n"), 0o600)
+		os.WriteFile(filepath.Join(s.Dir, "build.md"), []byte("x\n"), 0o600)
+		save(t, s, "build", TypeProject, "Build procedure", "make build", t0)
+		if got := readFile(t, IndexPath(s.Dir)); !strings.Contains(got, line) {
+			t.Errorf("dropped %q:\n%s", line, got)
+		}
 	}
 }

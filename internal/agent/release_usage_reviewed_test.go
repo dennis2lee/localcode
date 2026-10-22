@@ -34,13 +34,16 @@ func reviewedFork(t *testing.T, loop *Loop, srcID, forkID string) {
 	}); err != nil {
 		t.Fatalf("forked marker: %v", err)
 	}
+	var seqs SeqMap
 	for _, ev := range evs {
 		if ev.Type == events.TypeSessionRenamed {
 			continue
 		}
-		if _, err := loop.Store.Append(forkID, ev.Type, ev.Data); err != nil {
+		copied, err := loop.Store.Append(forkID, ev.Type, ForkData(ev, &seqs))
+		if err != nil {
 			t.Fatalf("copy event: %v", err)
 		}
+		seqs.Add(ev.Seq, copied.Seq)
 	}
 }
 

@@ -43,6 +43,7 @@ type memoryArgs struct {
 	Query       string `json:"query"`
 	Restore     bool   `json:"restore"`
 	Archived    bool   `json:"archived"`
+	Copy        string `json:"copy"`
 }
 
 func parseMemoryArgs(input json.RawMessage) (memoryArgs, error) {
@@ -309,7 +310,8 @@ func (MemoryReadTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` +
 		`"name":{"type":"string","description":"The note's name, as the index or memory_search shows it."},` +
 		`"scope":{"type":"string","enum":["session","project","user"],"description":"Where to look. Optional."},` +
-		`"archived":{"type":"boolean","description":"Read the most recent archived copy of a project or user note: what a save replaced, or what was forgotten. Optional."}` +
+		`"archived":{"type":"boolean","description":"Read an archived copy of a project or user note instead: what a save replaced, or what was forgotten. The most recent, unless copy names another. Optional."},` +
+		`"copy":{"type":"string","description":"With archived: the copy id memory_search showed, to read that copy rather than the most recent. Optional."}` +
 		`},"required":["name"],"additionalProperties":false}`)
 }
 
@@ -337,8 +339,8 @@ func (t MemoryReadTool) Execute(ctx context.Context, input json.RawMessage) tool
 		scopes = []memory.Scope{scope}
 	}
 	now := l.Memory.now()
-	if a.Archived {
-		return l.readArchived(sessionID, a.Name, scopes)
+	if a.Archived || a.Copy != "" {
+		return l.readArchived(sessionID, a.Name, a.Copy, scopes)
 	}
 	for _, scope := range scopes {
 		if scope == memory.ScopeSession {
@@ -385,7 +387,7 @@ func (t MemoryReadTool) Execute(ctx context.Context, input json.RawMessage) tool
 // readArchived answers memory_read with archived set: the newest archived
 // copy of the name in the first durable scope that has one. Not a use of
 // anything: what is read is not a live note.
-func (l *Loop) readArchived(sessionID, name string, scopes []memory.Scope) tools.Result {
+func (l *Loop) readArchived(sessionID, name, copy string, scopes []memory.Scope) tools.Result {
 	for _, scope := range scopes {
 		if scope == memory.ScopeSession {
 			continue
@@ -393,27 +395,30 @@ func (l *Loop) readArchived(sessionID, name string, scopes []memory.Scope) tools
 		if scope == memory.ScopeProject && l.noProjectMemory(sessionID) != "" {
 			continue
 		}
-		a, older, err := l.durableStore(sessionID, scope).ReadArchived(name)
+		a, older, err := l.durableStore(sessionID, scope).ReadArchived(name, copy)
 		if errors.Is(err, memory.ErrNotFound) {
 			continue
+		}
+		if errors.Is(err, memory.ErrNoSuchCopy) {
+			return memoryErr("%s note %s has no archived copy %q; memory_search with the note's words lists the copies it finds", scope, name, copy)
 		}
 		if err != nil {
 			return memoryErr("%v", err)
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "archived %s note %s (type %s", scope, a.Entry.Name, a.Entry.Type)
+		fmt.Fprintf(&b, "archived %s note %s (type %s, copy %s", scope, a.Entry.Name, a.Entry.Type, a.Copy())
 		if !a.At.IsZero() {
 			fmt.Fprintf(&b, ", archived %s", describeAge(a.At, l.Memory.now()))
 		}
 		if older > 0 {
-			fmt.Fprintf(&b, "; %d older copies", older)
+			fmt.Fprintf(&b, "; %d other archived copies", older)
 		}
 		b.WriteString(")\n")
 		if a.Entry.Description != "" {
 			b.WriteString(memory.Neutralize(a.Entry.Description) + "\n\n")
 		}
 		b.WriteString(memory.Neutralize(a.Entry.Body))
-		b.WriteString("\n\nThis is not a live note. To bring it back: memory_forget with restore when no note of this name exists, or memory_save this text under the name, which archives the current text in turn.")
+		b.WriteString("\n\nThis is not a live note. To bring it back: memory_forget with restore (and this copy id) when no note of this name exists, or memory_save this text under the name, which archives the current text in turn.")
 		return tools.Result{Content: b.String()}
 	}
 	if len(scopes) == 1 && scopes[0] == memory.ScopeSession {
@@ -506,7 +511,7 @@ func (t MemorySearchTool) Execute(ctx context.Context, input json.RawMessage) to
 			case h.IndexLine != "":
 				fmt.Fprintf(&b, "- %s MEMORY.md line: %s\n", scope, h.IndexLine)
 			case h.Archived:
-				fmt.Fprintf(&b, "- %s %s (archived; memory_read with archived true shows it): %s\n", scope, h.Entry.Name, memory.Neutralize(h.Entry.Description))
+				fmt.Fprintf(&b, "- %s %s (archived copy %s; memory_read with archived true and this copy shows it): %s\n", scope, h.Entry.Name, h.Copy, memory.Neutralize(h.Entry.Description))
 			default:
 				fmt.Fprintf(&b, "- %s %s (%s): %s\n", scope, h.Entry.Name, h.Entry.Type, memory.Neutralize(h.Entry.Description))
 			}
@@ -595,7 +600,8 @@ func (MemoryForgetTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` +
 		`"name":{"type":"string","description":"The note's name."},` +
 		`"scope":{"type":"string","enum":["session","project","user"],"description":"Where the note is. Optional for session and project notes; required for a user note."},` +
-		`"restore":{"type":"boolean","description":"Bring the archived note back instead of forgetting it. Project and user scope."}` +
+		`"restore":{"type":"boolean","description":"Bring the archived note back instead of forgetting it. Project and user scope."},` +
+		`"copy":{"type":"string","description":"With restore: the copy id memory_search showed, to bring back that copy rather than the most recent. Optional."}` +
 		`},"required":["name"],"additionalProperties":false}`)
 }
 
@@ -657,10 +663,13 @@ func (t MemoryForgetTool) Execute(ctx context.Context, input json.RawMessage) to
 		if r := projectRefused(l, sessionID, scope); r != nil {
 			return *r
 		}
-		name, err := l.durableStore(sessionID, scope).Restore(a.Name, now)
+		name, err := l.durableStore(sessionID, scope).Restore(a.Name, a.Copy, now)
 		if err != nil {
 			if errors.Is(err, memory.ErrNotFound) {
 				return memoryErr("no archived %s note named %q", scope, a.Name)
+			}
+			if errors.Is(err, memory.ErrNoSuchCopy) {
+				return memoryErr("%s note %s has no archived copy %q", scope, a.Name, a.Copy)
 			}
 			return memoryErr("not restored: %v", err)
 		}

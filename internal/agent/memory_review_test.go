@@ -466,7 +466,7 @@ func TestReplacedTextIsReadBackThroughTheTools(t *testing.T) {
 		t.Errorf("the save does not say where the earlier text went: %s", saved)
 	}
 	search := mustMem(t, loop, sid, MemorySearchTool{loop}, `{"scope":"project","query":"cobalt"}`)
-	if !strings.Contains(search, "deploy-plan (archived; memory_read with archived true shows it)") {
+	if !strings.Contains(search, "deploy-plan (archived copy ") || !strings.Contains(search, "memory_read with archived true and this copy shows it") {
 		t.Errorf("search: %s", search)
 	}
 	old := mustMem(t, loop, sid, MemoryReadTool{loop}, `{"name":"deploy-plan","archived":true}`)
@@ -484,5 +484,82 @@ func TestReplacedTextIsReadBackThroughTheTools(t *testing.T) {
 	mustMem(t, loop, sid, MemoryReadTool{loop}, `{"name":"deploy-plan","archived":true}`)
 	if after := mustUsage(loop.projectStore(sid))["deploy-plan"].Uses; after != before {
 		t.Errorf("an archived read counted as a use: %d -> %d", before, after)
+	}
+}
+
+// The copy a search finds is the copy that is read and restored, not the
+// newest: three saves of one note, and a search for a fact only the first
+// held.
+func TestTheArchivedCopyASearchFindsIsTheOneRead(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	cfg := withMemory(t, loop)
+	now := cfg.now()
+	cfg.Now = func() time.Time { now = now.Add(time.Second); return now }
+	for _, body := range []string{"Use cobalt.internal.", "Use amber.internal.", "Use jade.internal."} {
+		mustMem(t, loop, sid, MemorySaveTool{loop}, `{"scope":"project","name":"deployment","description":"Deployment endpoint","content":"`+body+`"}`)
+	}
+	search := mustMem(t, loop, sid, MemorySearchTool{loop}, `{"scope":"project","query":"cobalt"}`)
+	i := strings.Index(search, "archived copy ")
+	if i < 0 {
+		t.Fatalf("search: %s", search)
+	}
+	copyID := strings.Fields(search[i+len("archived copy "):])[0]
+	copyID = strings.TrimSuffix(copyID, ";")
+	read := mustMem(t, loop, sid, MemoryReadTool{loop}, `{"name":"deployment","archived":true,"copy":"`+copyID+`"}`)
+	if !strings.Contains(read, "cobalt.internal") {
+		t.Errorf("read of copy %s: %s", copyID, read)
+	}
+	if newest := mustMem(t, loop, sid, MemoryReadTool{loop}, `{"name":"deployment","archived":true}`); !strings.Contains(newest, "amber.internal") {
+		t.Errorf("the newest archived copy: %s", newest)
+	}
+	if out, isErr := memCall(t, loop, sid, MemoryReadTool{loop}, `{"name":"deployment","archived":true,"copy":"nope"}`); !isErr || !strings.Contains(out, "no archived copy") {
+		t.Errorf("an unknown copy: %v %s", isErr, out)
+	}
+	// Restoring that copy, once the live note is forgotten.
+	mustMem(t, loop, sid, MemoryForgetTool{loop}, `{"name":"deployment"}`)
+	mustMem(t, loop, sid, MemoryForgetTool{loop}, `{"name":"deployment","restore":true,"copy":"`+copyID+`"}`)
+	if live := mustMem(t, loop, sid, MemoryReadTool{loop}, `{"name":"deployment"}`); !strings.Contains(live, "cobalt.internal") {
+		t.Errorf("restored: %s", live)
+	}
+}
+
+// A fork of a conversation whose turn was rewound and then redone keeps
+// that turn's session notes: the numbers the rewind and the redo name are
+// the fork's own in its copy.
+func TestAForkKeepsARedoneTurnsSessionNotes(t *testing.T) {
+	loop, sid, _ := memoryScriptedLoop(t,
+		toolTurn("c1", memorySaveTool, `{"scope":"session","name":"plan-b","content":"try the second approach"}`),
+		textTurn("noted"),
+	)
+	loop.Store.SetTitle(sid, "renamed once")
+	if err := loop.SendMessage(t.Context(), sid, "general-purpose", "remember plan b"); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range []string{"/rewind", "/redo"} {
+		if err := loop.SendMessage(t.Context(), sid, "general-purpose", cmd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(loop.sessionNotesOf(sid)) != 1 {
+		t.Fatalf("the source lost the note: %+v", loop.sessionNotesOf(sid))
+	}
+	reviewedFork(t, loop, sid, "fork")
+	loop.RehydrateSession("fork")
+	if notes := loop.sessionNotesOf("fork"); len(notes) != 1 || notes[0].Name != "plan-b" {
+		t.Errorf("the fork's notes: %+v", notes)
+	}
+}
+
+// A number the fork did not copy (a rename's) maps to the first event
+// after it that it did, which is the same place in the conversation.
+func TestSeqMapMapsAGapToTheNextCopiedEvent(t *testing.T) {
+	var m SeqMap
+	m.Add(2, 2)
+	m.Add(5, 3) // 3 and 4 were renames, not copied
+	m.Add(6, 4)
+	for old, want := range map[uint64]uint64{2: 2, 3: 3, 4: 3, 5: 3, 6: 4, 7: 0} {
+		if got := m.Map(old); got != want {
+			t.Errorf("Map(%d) = %d, want %d", old, got, want)
+		}
 	}
 }
