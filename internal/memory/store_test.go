@@ -740,8 +740,14 @@ func TestAnIndexTooLargeToKeepIsNotRewritten(t *testing.T) {
 	os.MkdirAll(s.Dir, 0o755)
 	big := strings.Repeat("line of hand-written notes\n", maxIndexFileBytes/20)
 	os.WriteFile(IndexPath(s.Dir), []byte(big), 0o644)
-	if _, err := s.Save(Entry{Name: "x", Type: TypeProject, Body: "x"}, nil, t0); err == nil || !strings.Contains(err.Error(), "larger than") {
-		t.Errorf("save with a huge index: %v", err)
+	// The note is saved, and said to be; the index is left alone, and the
+	// result says why.
+	res, err := s.Save(Entry{Name: "x", Type: TypeProject, Body: "x"}, nil, t0)
+	if err != nil || !strings.Contains(res.Warning, "larger than") {
+		t.Errorf("save with a huge index: %v, warning %q", err, res.Warning)
+	}
+	if _, err := os.Stat(filepath.Join(s.Dir, "x.md")); err != nil {
+		t.Error("the note was not written")
 	}
 	if got := readFile(t, IndexPath(s.Dir)); got != big {
 		t.Error("the oversized index was rewritten")
@@ -1801,5 +1807,182 @@ func TestLosingTheRenameToTheSameAdoptionIsFine(t *testing.T) {
 	}
 	if text, _ := (Store{Dir: UserDir(home), Scope: ScopeUser, Limits: UserLimits}).Load(); !strings.Contains(text, "shared") {
 		t.Errorf("user memory: %q", text)
+	}
+}
+
+// A start marker the person quoted in their own text, above the real
+// block, is their text: it is not paired with the real block's end, and
+// nothing between them is rewritten away.
+func TestAQuotedMarkerAboveTheBlockIsThePersonsText(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "n", TypeProject, "", "x", t0)
+	idx := readFile(t, IndexPath(s.Dir))
+	person := "My notes on the format:\n" + blockStart + "\nis how the block starts.\n\n"
+	os.WriteFile(IndexPath(s.Dir), []byte(person+idx), 0o644)
+	save(t, s, "m", TypeProject, "", "y", t0)
+	got := readFile(t, IndexPath(s.Dir))
+	if !strings.Contains(got, "My notes on the format:\n"+blockStart+"\nis how the block starts.") {
+		t.Errorf("the person's text was lost:\n%s", got)
+	}
+	if strings.Count(got, blockEnd) != 1 || !strings.Contains(got, "[m](m.md)") {
+		t.Errorf("index:\n%s", got)
+	}
+}
+
+// A save that fails leaves the archive as it was: no copy of a note it
+// did not replace, and no older copy pruned to make room for one.
+func TestAFailedSaveLeavesTheArchiveAsItWas(t *testing.T) {
+	defer func(n int) { maxArchived = n }(maxArchived)
+	maxArchived = 2
+	s := projectStore(t)
+	save(t, s, "n", TypeProject, "", "one", t0)
+	save(t, s, "n", TypeProject, "", "two", t0.Add(time.Minute))
+	save(t, s, "n", TypeProject, "", "three", t0.Add(2*time.Minute))
+	before, _ := s.ArchivedNotes()
+	// A legacy spelling whose move cannot happen makes the save fail
+	// after the replaced note was read.
+	os.WriteFile(filepath.Join(s.Dir, "N_.md"), []byte("legacy\n"), 0o644)
+	blocked := filepath.Join(s.Dir, archiveDirName, "N_~"+t0.Add(3*time.Minute).UTC().Format(archiveStamp)+".md")
+	os.MkdirAll(filepath.Join(blocked, "x"), 0o755)
+	if _, err := s.Save(Entry{Name: "n", Type: TypeProject, Body: "four"}, nil, t0.Add(3*time.Minute)); err == nil {
+		t.Fatal("the save succeeded")
+	}
+	after, _ := s.ArchivedNotes()
+	if len(after) != len(before) || after[0].Entry.Body != before[0].Entry.Body || after[len(after)-1].Entry.Body != before[len(before)-1].Entry.Body {
+		t.Errorf("archive before %d %q, after %d %q", len(before), before[0].Entry.Body, len(after), after[0].Entry.Body)
+	}
+	// The write itself failing: the note's own path taken by a
+	// directory.
+	s2 := projectStore(t)
+	os.MkdirAll(filepath.Join(s2.Dir, "w.md", "x"), 0o755)
+	os.WriteFile(filepath.Join(s2.Dir, "W_.md"), []byte("keep\n"), 0o644)
+	if _, err := s2.Save(Entry{Name: "w", Type: TypeProject, Body: "x"}, nil, t0); err == nil {
+		t.Fatal("a save onto a directory succeeded")
+	}
+	if got := readFile(t, filepath.Join(s2.Dir, "W_.md")); got != "keep\n" {
+		t.Errorf("the adopted file was not put back: %q", got)
+	}
+}
+
+func TestACapitalisedWordIsNotACredential(t *testing.T) {
+	for _, s := range []string{"password: Changeme", "api_key: Required", "Token: Pending"} {
+		if reason, ok := LooksSecret(s, nil); ok {
+			t.Errorf("%q refused (%s)", s, reason)
+		}
+	}
+	for _, s := range []string{"password: chaNgeMeNow", "api_key: XyZabcDEFgh"} {
+		if _, ok := LooksSecret(s, nil); !ok {
+			t.Errorf("%q was not caught", s)
+		}
+	}
+}
+
+// A marker and a back reference that spell one directory two ways (a
+// trailing separator, a link) still agree.
+func TestAdoptedComparesDirectoriesNotSpellings(t *testing.T) {
+	home, start := t.TempDir(), t.TempDir()
+	src := Dir(start, home)
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "MEMORY.md"), []byte("- x\n"), 0o600)
+	if _, err := AdoptStartDirectory(start, home); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(UserDir(home), adoptedFromFile), []byte(src+string(filepath.Separator)+"\n"), 0o600)
+	if !(Store{Dir: src}).Adopted() {
+		t.Error("a trailing separator broke the link")
+	}
+	if runtime.GOOS != "windows" {
+		link := filepath.Join(t.TempDir(), "link")
+		os.Symlink(src, link)
+		os.WriteFile(filepath.Join(UserDir(home), adoptedFromFile), []byte(link+"\n"), 0o600)
+		if !(Store{Dir: src}).Adopted() {
+			t.Error("a link to the same directory broke the link")
+		}
+	}
+}
+
+// The person's own blank lines after a block survive its removal: only
+// the block's own two line endings go.
+func TestOnlyTheBlocksOwnLineEndingsGo(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "n", TypeProject, "", "x", t0)
+	idx := readFile(t, IndexPath(s.Dir))
+	block := idx[:strings.Index(idx, blockEnd)+len(blockEnd)]
+	os.WriteFile(IndexPath(s.Dir), []byte(block+"\n\n\nB\n"), 0o644)
+	s.Forget("n", t0)
+	if got := readFile(t, IndexPath(s.Dir)); got != "\nB\n" {
+		t.Errorf("after the block went: %q", got)
+	}
+}
+
+// A marker that does not begin a line is quoted text, even when what
+// follows it looks like a block.
+func TestAMarkerInsideALineIsNotTheBlock(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(s.Dir, 0o755)
+	person := "Inline: " + blockStart + "\n## Project\n- [x](x.md): y\n" + blockEnd + "\n"
+	os.WriteFile(IndexPath(s.Dir), []byte(person), 0o644)
+	save(t, s, "n", TypeProject, "", "x", t0)
+	if got := readFile(t, IndexPath(s.Dir)); !strings.HasSuffix(got, person) {
+		t.Errorf("the person's text changed:\n%s", got)
+	}
+}
+
+// A conversation already counted (resumed after a restart) still gets the
+// housekeeping: the index repaired, a crash's temporary files removed.
+func TestHousekeepingRunsForAConversationAlreadyCounted(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "n", TypeProject, "", "x", t0)
+	if _, err := s.BeginSession("s1", t0, 90); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(IndexPath(s.Dir), []byte("stale\n"), 0o644)
+	stale := filepath.Join(s.Dir, ".tmp-left")
+	os.WriteFile(stale, []byte("x"), 0o600)
+	old := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(stale, old, old)
+	if _, err := s.BeginSession("s1", t0, 90); err != nil {
+		t.Fatal(err)
+	}
+	if idx := readFile(t, IndexPath(s.Dir)); !strings.Contains(idx, "[n](n.md)") {
+		t.Errorf("index not repaired:\n%s", idx)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Error("the stale temporary file is still there")
+	}
+	if _, _, n := s.UsageOf(); n != 1 {
+		t.Errorf("counted %d times", n)
+	}
+}
+
+// Once the note is written the save has happened: bookkeeping that
+// fails afterwards (here the usage record, which cannot be replaced) does
+// not turn it into an error the model would retry as a duplicate.
+func TestASaveThatWroteItsNoteSucceeds(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(filepath.Join(s.Dir, usageFileName, "x"), 0o755)
+	os.WriteFile(filepath.Join(s.Dir, "Build_Notes.md"), []byte("old\n"), 0o644)
+	if _, err := s.Save(Entry{Name: "build-notes", Type: TypeProject, Body: "new"}, nil, t0); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	files, _ := noteFiles(s.Dir)
+	if strings.Join(files, ",") != "build-notes.md" {
+		t.Errorf("files %v", files)
+	}
+	if hits, _ := s.Search("old"); len(hits) != 1 || !hits[0].Archived {
+		t.Errorf("the adopted file is not in the archive: %+v", hits)
+	}
+}
+
+func TestCredentialNameAndValueEdges(t *testing.T) {
+	for _, s := range []string{"password1: Abc12345", "secretkeys: Abc12345", "passphrase: correcthorsebatterystaplex.", "DB_PASSWORD=Tr0ub4dor;"} {
+		if _, ok := LooksSecret(s, nil); !ok {
+			t.Errorf("%q was not caught", s)
+		}
+	}
+	for _, s := range []string{"token_timeout: 30000000s", "max_tokens: 128k", "token_budget = 1.5GB", "secret_rotation: 90days"} {
+		if reason, ok := LooksSecret(s, nil); ok {
+			t.Errorf("%q refused (%s)", s, reason)
+		}
 	}
 }

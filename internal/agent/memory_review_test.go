@@ -401,3 +401,10 @@ func TestACitationAfterAMoveCountsInTheNewProject(t *testing.T) {
 		t.Errorf("note-in-a was credited in A after the move: %+v", u)
 	}
 }
+
+func TestTheSaveDescriptionOfAnUnknownScopeSaysSo(t *testing.T) {
+	out := MemorySaveTool{}.Describe(json.RawMessage(`{"scope":"team","name":"n","content":"c"}`))
+	if !strings.Contains(out, "not session, project or user") {
+		t.Errorf("description: %s", out)
+	}
+}

@@ -74,13 +74,16 @@ var secretPatterns = []*regexp.Regexp{
 	// checked again by looksLikeValue.
 	//
 	// After the word, only a separated suffix (secret_key, token-value)
-	// or the commonest unseparated ones (secretkey, tokens): a word that
-	// merely starts with one (secretary, tokenizer) is not a credential.
-	regexp.MustCompile(`(?i)(?:^|[^a-z0-9_-])[a-z0-9_-]*(password|passwd|secret|api[_-]?key|access[_-]?key|token)(?:[_-][a-z0-9_-]*|key|s)?["']?\s*[:=]\s*["']?([^\s"'$<{][^\s"']{7,})`),
+	// or the commonest unseparated ones (secretkey, secretkeys, tokens,
+	// password1): a word that merely starts with one (secretary,
+	// tokenizer) is not a credential. Before it, anything: clientsecret
+	// is a credential, and the rare word that ends in one (betoken) is
+	// the price of catching it.
+	regexp.MustCompile(`(?i)(?:^|[^a-z0-9_-])[a-z0-9_-]*(password|passwd|passphrase|secret|api[_-]?key|access[_-]?key|token)(?:[_-][a-z0-9_-]*|keys?|s|[0-9]+)?["']?\s*[:=]\s*["']?([^\s"'$<{][^\s"']{7,})`),
 }
 
 // looksLikeValue tells a credential from words and numbers: it has a
-// letter and a digit, or upper
+// letter and a digit, or a capital inside it beside lower
 // and lower case letters both, or it is minPassphrase letters or more
 // run together, longer than any ordinary word. "change-me-on-first-login",
 // "required," and "internationalization" are words about a password;
@@ -92,12 +95,16 @@ func looksLikeValue(v string) bool {
 	// that would be refused for "max_tokens: 128000".
 	var digit, upper, lower, other bool
 	letters := 0
-	for _, r := range v {
+	for i, r := range v {
 		switch {
 		case unicode.IsDigit(r):
 			digit = true
 		case unicode.IsUpper(r):
-			upper = true
+			// A capital that only starts the value is how a word is
+			// written ("Changeme", "Required"); one inside it is not.
+			if i > 0 {
+				upper = true
+			}
 			letters++
 		case unicode.IsLower(r):
 			lower = true
@@ -111,6 +118,10 @@ func looksLikeValue(v string) bool {
 	}
 	return digit || (upper && lower) || (!other && letters >= minPassphrase)
 }
+
+// quantity is a number with a unit after it (30000000s, 128k, 1.5GB): a
+// limit or a size, which a note about tokens records all the time.
+var quantity = regexp.MustCompile(`^[0-9][0-9.,_]*[A-Za-z]{0,3}$`)
 
 // minPassphrase is the shortest run of letters taken for a passphrase.
 // Past the longest words in ordinary use, of which "internationalization"
@@ -135,7 +146,8 @@ func LooksSecret(text string, known []string) (string, bool) {
 			continue
 		}
 		for _, m := range re.FindAllStringSubmatch(text, -1) {
-			if looksLikeValue(m[2]) {
+			// The sentence's own punctuation is not part of the value.
+			if v := strings.TrimRight(m[2], ".,;:!?)]}"); !quantity.MatchString(v) && looksLikeValue(v) {
 				return "it contains what looks like a credential (" + describePattern(re) + ")", true
 			}
 		}

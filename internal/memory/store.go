@@ -434,6 +434,9 @@ type SaveResult struct {
 	// Count is how many notes the directory holds now.
 	Count int
 	Stats IndexStats
+	// Warning says what the save could not do after the note itself was
+	// written, such as rewrite an index too large to keep.
+	Warning string
 }
 
 // Save writes a note, replacing one of the same name. e.Name must already
@@ -505,14 +508,22 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 				e.Keep = replaced.Keep
 			}
 		}
+		// What the note said before goes to the archive: a save that
+		// merges two notes into one, done badly, is the way a memory
+		// loses a fact, and it should be a fact that can be found again.
+		// Read now and archived once the save has succeeded, so a save
+		// that fails leaves the archive as it was, its oldest copies
+		// included.
+		var previous []byte
 		if exact != nil && (exact.Body != e.Body || exact.Description != e.Description || exact.Type != e.Type) {
-			// What the note said before goes to the archive: a save
-			// that merges two notes into one, done badly, is the way a
-			// memory loses a fact, and it should be a fact that can be
-			// found again.
-			if err := s.archiveCopy(e.File(), now); err != nil {
+			content, cut, err := readRegular(filepath.Join(s.Dir, e.File()), maxIndexFileBytes)
+			if err != nil {
 				return err
 			}
+			if cut {
+				return fmt.Errorf("%s is too large to archive", e.File())
+			}
+			previous = []byte(content)
 		}
 		// Moved before the new file is written, never after: on a disk
 		// that ignores case the new file is the old one's name. If one
@@ -536,25 +547,27 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 			undo()
 			return err
 		}
+		// The note is saved. What follows is bookkeeping, and none of it
+		// fails the save: a save that reported an error for a note it had
+		// written would be retried as a duplicate, or believed lost. A
+		// usage record, an index line or the generated block left behind
+		// is put right by the next conversation's first turn.
+		if previous != nil {
+			s.archiveBytes(e.File(), previous, now)
+		}
 		u := readUsage(s.Dir)
 		for _, o := range others {
 			delete(u.Entries, o.File())
 		}
 		u.use(e.File(), now)
-		if err := u.write(s.Dir); err != nil {
-			return err
-		}
+		u.write(s.Dir)
 		// The hand-written lines that only pointed at an adopted file,
 		// or at this one while it was untyped, would list it twice.
 		for _, o := range others {
-			if err := dropLegacyLine(s.Dir, o.File()); err != nil {
-				return err
-			}
+			dropLegacyLine(s.Dir, o.File())
 		}
 		if exact != nil && exact.Type == TypeLegacy {
-			if err := dropLegacyLine(s.Dir, e.File()); err != nil {
-				return err
-			}
+			dropLegacyLine(s.Dir, e.File())
 		}
 		res.Name = e.Name
 		res.Replaced = replaced
@@ -578,16 +591,30 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 		if exact == nil {
 			res.Count++
 		}
-		res.Stats, err = s.regenerate(u)
-		return err
+		if stats, err := s.regenerate(u); err == nil {
+			res.Stats = stats
+		} else {
+			entries, _ := readEntries(s.Dir)
+			_, res.Stats = s.load(entries, u)
+			res.Warning = "MEMORY.md was not rewritten: " + err.Error()
+		}
+		return nil
 	})
 	return res, err
 }
 
-// archiveCopy copies a note's current file into the archive under a
+// archiveBytes writes what a note's file held into the archive under a
 // unique name, and keeps the archive within maxArchived.
-func (s Store) archiveCopy(file string, now time.Time) error {
-	return s.archiveFile(file, now, false)
+func (s Store) archiveBytes(file string, data []byte, now time.Time) error {
+	dir, err := s.archiveDir(true)
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(filepath.Join(dir, stem(file)+"~"+now.UTC().Format(archiveStamp)+".md"), data); err != nil {
+		return err
+	}
+	s.pruneArchive(dir)
+	return nil
 }
 
 // archiveFile puts file into the archive, moving it or copying it.
@@ -747,8 +774,13 @@ func (s Store) BeginSession(sessionID string, now time.Time, retireDays int) ([]
 	var retired []string
 	err := s.withLock(func() error {
 		u := readUsage(s.Dir)
+		// Housekeeping whether or not the conversation is new here: a
+		// conversation resumed after a restart is counted already, and
+		// a crash before the restart is exactly what it is for.
+		s.removeStaleTemps()
 		if !u.countSession(sessionID) {
-			return nil
+			_, err := s.regenerate(u)
+			return err
 		}
 		entries, err := readEntries(s.Dir)
 		if err != nil {
@@ -784,7 +816,6 @@ func (s Store) BeginSession(sessionID string, now time.Time, retireDays int) ([]
 		if err := u.write(s.Dir); err != nil {
 			return err
 		}
-		s.removeStaleTemps()
 		// Every time, not only after a retirement: a crash between a
 		// note's write and the index's leaves MEMORY.md describing what
 		// was there before, and this is where it is put right. A

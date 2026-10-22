@@ -44,20 +44,59 @@ type IndexStats struct {
 
 // splitIndex separates MEMORY.md into the generated block and the rest.
 func splitIndex(content string) (block, rest string) {
-	start := strings.Index(content, blockStartPrefix)
-	if start < 0 {
-		return "", content
+	block, _, rest = findBlock(content)
+	return block, rest
+}
+
+// findBlock finds the generated block: a start marker that begins a
+// line, the first end marker after it that begins a line, and nothing
+// between them but what the generator writes (group headings, note
+// lines, blank lines). Anything else is not the block, however it
+// looks: the person quoting a marker in their own notes, above the real
+// block, would otherwise pair with the real end and everything between
+// would be taken for the block and rewritten away. start is where the
+// block begins, or -1.
+func findBlock(content string) (block string, start int, rest string) {
+	for from := 0; ; {
+		i := strings.Index(content[from:], blockStartPrefix)
+		if i < 0 {
+			return "", -1, content
+		}
+		at := from + i
+		from = at + len(blockStartPrefix)
+		if at > 0 && content[at-1] != '\n' {
+			continue
+		}
+		j := strings.Index(content[at:], "\n"+blockEnd)
+		if j < 0 {
+			// A start with no end: somebody cut the block in half. All
+			// of it is kept as the person's text, the marker line
+			// included, rather than thrown away as half a block or left
+			// as half a comment; a new block goes above it.
+			continue
+		}
+		end := at + j + 1 + len(blockEnd)
+		if !generatedBody(content[at:end]) {
+			continue
+		}
+		return content[at:end], at, content[:at] + content[end:]
 	}
-	end := strings.Index(content[start:], blockEnd)
-	if end < 0 {
-		// A start with no end: somebody cut the block in half. All of it
-		// is kept as the person's text, the marker line included, rather
-		// than thrown away as half a block or left as half a comment; a
-		// new block goes above it.
-		return "", content
+}
+
+// generatedBody reports whether a candidate block holds only lines the
+// generator writes.
+func generatedBody(block string) bool {
+	lines := strings.Split(strings.ReplaceAll(block, "\r\n", "\n"), "\n")
+	if len(lines) < 2 || !strings.HasSuffix(strings.TrimSpace(lines[0]), "-->") {
+		return false
 	}
-	end += start + len(blockEnd)
-	return content[start:end], content[:start] + content[end:]
+	for _, l := range lines[1 : len(lines)-1] {
+		l = strings.TrimSpace(l)
+		if l != "" && !strings.HasPrefix(l, "## ") && !strings.HasPrefix(l, "- [") {
+			return false
+		}
+	}
+	return true
 }
 
 // indexFile is MEMORY.md as read: its bytes after a byte-order mark,
@@ -191,14 +230,13 @@ func (s Store) regenerate(u *usage) (IndexStats, error) {
 		return IndexStats{}, err
 	}
 	f := readIndex(s.Dir)
-	block, rest := splitIndex(f.raw)
+	block, start, rest := findBlock(f.raw)
 	if block != "" {
 		// The block is followed by its own line ending and the blank
 		// line this function wrote after it: two line endings, taken off
 		// wherever the block is, so a block the person moved into the
 		// middle of their text leaves no blank lines behind when it
 		// moves back to the top or goes.
-		start := strings.Index(f.raw, blockStartPrefix)
 		rest = f.raw[:start] + trimEOLs(f.raw[start+len(block):], 2)
 	}
 	restText := strings.Trim(strings.ReplaceAll(rest, "\r\n", "\n"), "\n")
@@ -254,12 +292,11 @@ func dropLegacyLine(dir, file string) error {
 	// On the raw text: the person's lines go back exactly as they were,
 	// whatever ends them, and the pattern's [^\n]* takes a "\r" with
 	// the rest of the line.
-	block, rest := splitIndex(content)
+	block, start, rest := findBlock(content)
 	re := legacyLink(file)
 	if !re.MatchString(rest) {
 		return nil
 	}
-	start := strings.Index(content, blockStartPrefix)
 	var out string
 	if block == "" || start < 0 {
 		out = re.ReplaceAllString(content, "")

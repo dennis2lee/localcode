@@ -179,7 +179,11 @@ func (MemorySaveTool) Describe(input json.RawMessage) string {
 		memory.ScopeSession: "for this conversation only",
 	}
 	scope, _ := memory.ParseScope(a.Scope)
-	return fmt.Sprintf("save a %s memory note %q, %s:\n%s", strings.ToLower(a.Scope), a.Name, reach[scope], content)
+	where, ok := reach[scope]
+	if !ok {
+		where = "in a scope that is not session, project or user, which the save will refuse"
+	}
+	return fmt.Sprintf("save a %s memory note %q, %s:\n%s", strings.ToLower(a.Scope), a.Name, where, content)
 }
 
 func (t MemorySaveTool) Execute(ctx context.Context, input json.RawMessage) tools.Result {
@@ -241,6 +245,9 @@ func (t MemorySaveTool) Execute(ctx context.Context, input json.RawMessage) tool
 	}
 	fmt.Fprintf(&b, "\n%s memory now holds %d of %d notes; its index is %.1fKB of %.0fKB.", scope, res.Count, store.Limits.Entries,
 		float64(res.Stats.Bytes)/1024, float64(store.Limits.IndexBytes)/1024)
+	if res.Warning != "" {
+		b.WriteString(" " + res.Warning + ".")
+	}
 	if res.Stats.Omitted > 0 {
 		fmt.Fprintf(&b, " %d index lines no longer fit what a session loads: merge notes that overlap, or forget ones that stopped helping.", res.Stats.Omitted)
 	}
@@ -376,7 +383,7 @@ func (MemorySearchTool) Name() string { return memorySearchTool }
 
 func (MemorySearchTool) Description() string {
 	return "Search memory for notes containing every word of query, in every scope, archived notes included and marked. " +
-		"With no query, list every note: name, type, description and when it was last used. Use it before saving, to update " +
+		"With no query, list every note (up to 200 a scope): name, type, description and when it was last used. Use it before saving, to update " +
 		"a note that already covers the fact instead of adding another."
 }
 
@@ -479,7 +486,10 @@ func firstLineOf(s string) string {
 
 // listMemory is every note in the given scopes, bounded per scope.
 func (l *Loop) listMemory(sessionID string, scopes []memory.Scope) string {
-	const perScope = 60
+	// Every note of a scope the tools manage fits: 150 project notes and
+	// 60 user notes are the limits. Only a directory of hand-written
+	// files can hold more.
+	const perScope = 200
 	now := l.Memory.now()
 	var b strings.Builder
 	for _, scope := range scopes {

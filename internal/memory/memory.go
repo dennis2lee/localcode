@@ -157,7 +157,7 @@ func AdoptStartDirectory(startDir, home string) (bool, error) {
 		// right and these notes are user memory. If it was anything
 		// else, a first user note saved somewhere, these notes are not
 		// in it: the marker goes, and they stay this directory's.
-		if adoptedFrom(dst) == filepath.Clean(src) {
+		if sameDir(adoptedFrom(dst), src) {
 			return false, nil
 		}
 		os.Remove(marker)
@@ -224,7 +224,25 @@ func (s Store) Adopted() bool {
 	// directory says it was copied from here. Any other directory, or
 	// none, and these notes were never delivered, so they are not
 	// hidden.
-	return adoptedFrom(dst) == filepath.Clean(s.Dir)
+	return sameDir(adoptedFrom(dst), s.Dir)
+}
+
+// sameDir reports whether two paths name one directory: the same text
+// once cleaned, or, where they differ (a home spelled in another case on
+// a disk that ignores it, a link to it), the same directory on disk.
+func sameDir(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ia, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	ib, err := os.Stat(b)
+	return err == nil && os.SameFile(ia, ib)
 }
 
 // IsFilesystemRoot reports whether dir is the root of its volume: "/" or
