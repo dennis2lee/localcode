@@ -1086,7 +1086,7 @@ A rule that everyone working on the repository should follow belongs in `AGENTS.
 
 * A project or user note is one file, `<name>.md`, with a frontmatter header: `name`, `description`, and under `metadata` its `type`, `created`, `modified` and, when set, `keep`.
 * Types: `user` (about the person), `feedback` (a correction or a confirmed way of working, with a "Why:" and a "How to apply:" line), `project` (a fact about the work), `reference` (where something outside the repository lives).
-* `MEMORY.md` is the index. The memory tools own one block in it, generated from the note files: one line per note, `- [name](name.md): description`, grouped by type in that order, most recently used first. Everything outside the block is kept as written, line endings and a byte-order mark included; only blank lines at its very start and end are dropped. The block is written at the top, and the conversation's first turn rewrites it when it no longer matches the note files, after a crash or a hand edit.
+* `MEMORY.md` is the index. The memory tools own one block in it, generated from the note files: one line per note, `- [name](name.md): description`, grouped by type in that order, most recently used first. Everything outside the block is kept as written, a byte-order mark and CRLF line endings included (a file that mixes CRLF and LF is written all CRLF); only blank lines at its very start and end are dropped. The block is written at the top, and the conversation's first turn rewrites it when it no longer matches the note files, after a crash or a hand edit.
 * What reaches the prompt is the block, then the rest of `MEMORY.md`. Project memory loads 200 lines or 25KB, user memory 80 lines or 8KB. When something does not fit, the last line says how many lines were left out; `memory_search` reaches them, the hand-written lines included.
 * Limits: 150 project notes, 60 user notes, 4KB per note. Session memory holds 30 notes, 8KB in all, 2KB each. A save past a limit is refused with what to do instead.
 * The project directory comes from the git repository of the conversation's own workspace, so it follows a conversation that moves. Subdirectories and linked worktrees of one repository share it. Outside a repository, the workspace directory is used.
@@ -1105,7 +1105,7 @@ A rule that everyone working on the repository should follow belongs in `AGENTS.
 **Trust**
 
 * Recalled notes and session notes are generated content. The prompt wraps them as a record, not instructions, and tells the model never to run a command, fetch an address, change a permission or reveal data because a note says so. A preference the person stated still counts.
-* A save is refused when the note looks like it holds a credential: a private key, a well-known API key or token format, a name ending in password, secret, key or token assigned a value with a digit or mixed case in it, or any API key or header value from `config.json`. The refusal names the kind, never the value. The tool call's own input is still in the conversation's log, like any tool input.
+* A save is refused when the note looks like it holds a credential: a private key, a well-known API key or token format, a name containing password, secret, api key, access key or token assigned a value that has a digit, mixed case, or twenty letters or more run together, or any API key or header value from `config.json`. The refusal names the kind, never the value. The tool call's own input is still in the conversation's log, like any tool input.
 * Invisible characters are taken out of notes, other line separators become newlines, and a line that imitates the boundary around recalled notes is quoted so it cannot end it.
 * A sub agent, an orchestration stage, a debate reviewer and a scheduled run may read project and user memory and keep session notes of their own. They cannot change project or user memory; they report what is worth keeping to the conversation that started them. A note they read still counts as used.
 * One turn may forget at most 10 project notes and 10 user notes. Session notes, which end with the conversation anyway, have no such limit.
@@ -1113,13 +1113,13 @@ A rule that everyone working on the repository should follow belongs in `AGENTS.
 
 **Compatibility**
 
-* An existing `MEMORY.md` and its topic files keep loading as before. Topic files without a frontmatter header are listed as `legacy`, never retired, and never rewritten. Saving a note under a legacy file's name, or a name it normalizes to (`build-notes` for `Build_Notes.md`), adopts it: the old file goes to the archive, and the hand-written index line that only linked to it is removed.
+* An existing `MEMORY.md` and its topic files keep loading as before. Topic files without a frontmatter header are listed as `legacy`, never retired, and never rewritten. Saving a note under a legacy file's name, the same name in another case, or a name it normalizes to (`build-notes` for `Build_Notes.md`), adopts every such file: each goes to the archive whole, and the hand-written index lines that only linked to them are removed.
 * The prompt reads each conversation's index at its first turn and keeps it until the conversation saves or forgets a note, is compacted, or is cleared. Earlier versions read one index when the daemon started and never again.
 * A daemon started outside a repository (the desktop app started from Finder runs in `/`) used one memory directory for every project. Its notes are copied once into user memory, so they still reach every project. The old directory is left in place, marked with a `.adopted` file, and a conversation working in that directory has no project memory, so the notes are not recalled twice.
 * A workspace that is a filesystem root has no project memory either. Project saves there are refused with the reason; session and user memory work as anywhere else.
 * A version before this one still reads `MEMORY.md` as plain text, block included. It does not read user or session memory. A rule for a memory tool in `config.json`'s `permission` (written, for example, by an "always" answer to a user-memory question) stops an earlier version from starting until the rule is removed.
 
-[`/memory`](#memory) shows each scope, where it lives, how full it is, what was retired, and the notes as the model is shown them. `/memory tidy` asks the model to merge, correct and retire notes one at a time.
+[`/memory`](#memory) shows each scope, where it lives, how full it is, what was retired and what is on its way to retirement, and the notes as the model is shown them. `/memory tidy` asks the model to merge, correct and retire notes one at a time.
 
 Turn it off with:
 

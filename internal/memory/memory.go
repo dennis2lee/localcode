@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"localcode/internal/childproc"
@@ -93,6 +94,7 @@ func gitRoot(dir string) string {
 // already exists, so this runs at most once per home.
 func AdoptStartDirectory(startDir, home string) (bool, error) {
 	dst := UserDir(home)
+	removeStaleAdoptions(filepath.Dir(dst))
 	if _, err := os.Lstat(dst); err == nil {
 		return false, nil
 	}
@@ -141,20 +143,56 @@ func AdoptStartDirectory(startDir, home string) (bool, error) {
 		return false, err
 	}
 	if err := os.Rename(tmp, dst); err != nil {
+		// Another process got there first: a second daemon adopting the
+		// same directory, or one saving the first user note. Its user
+		// memory stands; if it is this same adoption, the marker is
+		// right, and if not, a marker naming a directory that holds
+		// other notes still means these are not recalled twice.
+		if _, serr := os.Lstat(dst); serr == nil {
+			return false, nil
+		}
 		os.Remove(marker)
 		return false, err
 	}
 	return true, nil
 }
 
+// removeStaleAdoptions deletes what an adoption that crashed left beside
+// the user directory: a half-built copy, an hour old or more.
+func removeStaleAdoptions(dir string) {
+	list, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, d := range list {
+		if !strings.HasPrefix(d.Name(), ".memory-adopting-") || !d.IsDir() {
+			continue
+		}
+		if info, err := d.Info(); err == nil && time.Since(info.ModTime()) > staleTemp {
+			os.RemoveAll(filepath.Join(dir, d.Name()))
+		}
+	}
+}
+
 // adoptedMarker marks a directory whose notes became user memory.
 const adoptedMarker = ".adopted"
 
 // Adopted reports whether the directory's notes were carried into user
-// memory by AdoptStartDirectory, which makes them user memory now.
+// memory by AdoptStartDirectory, which makes them user memory now. Only
+// when the user memory the marker names exists: a marker written by an
+// adoption that then failed, or a user directory removed since, would
+// otherwise hide the notes from every scope.
 func (s Store) Adopted() bool {
-	info, err := os.Lstat(filepath.Join(s.Dir, adoptedMarker))
-	return err == nil && info.Mode().IsRegular()
+	data, _, err := readRegular(filepath.Join(s.Dir, adoptedMarker), 4096)
+	if err != nil {
+		return false
+	}
+	dst := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(data), "copied into "))
+	if dst == "" {
+		return false
+	}
+	info, err := os.Lstat(dst)
+	return err == nil && info.IsDir()
 }
 
 // IsFilesystemRoot reports whether dir is the root of its volume: "/" or

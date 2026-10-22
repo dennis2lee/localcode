@@ -72,26 +72,32 @@ var secretPatterns = []*regexp.Regexp{
 	// reference to where the value lives ($VAR, ${VAR}, <placeholder>) is
 	// what a note should say instead, so it does not count. The value is
 	// checked again by looksLikeValue.
-	regexp.MustCompile(`(?i)(?:^|[^a-z0-9])[a-z0-9_]*(password|passwd|secret|api[_-]?key|access[_-]?key|token)[a-z0-9_]*\s*[:=]\s*["']?([^\s"'$<{][^\s"']{7,})`),
+	regexp.MustCompile(`(?i)(?:^|[^a-z0-9_-])[a-z0-9_-]*(password|passwd|secret|api[_-]?key|access[_-]?key|token)[a-z0-9_-]*["']?\s*[:=]\s*["']?([^\s"'$<{][^\s"']{7,})`),
 }
 
 // looksLikeValue tells a credential from words: it has a digit, or upper
-// and lower case letters both. "change-me-on-first-login" and
-// "required," are sentences about a password; "hunter2hunter2" and
-// "wJalrXUtnFEMI" are passwords.
+// and lower case letters both, or it is twenty letters or more run
+// together. "change-me-on-first-login" and "required," are sentences
+// about a password; "hunter2hunter2", "wJalrXUtnFEMI" and
+// "correcthorsebatterystaple" are passwords.
 func looksLikeValue(v string) bool {
-	var digit, upper, lower bool
+	var digit, upper, lower, other bool
+	letters := 0
 	for _, r := range v {
 		switch {
 		case unicode.IsDigit(r):
 			digit = true
 		case unicode.IsUpper(r):
 			upper = true
+			letters++
 		case unicode.IsLower(r):
 			lower = true
+			letters++
+		default:
+			other = true
 		}
 	}
-	return digit || (upper && lower)
+	return digit || (upper && lower) || (!other && letters >= 20)
 }
 
 // minKnownSecret is the shortest configured credential looked for by

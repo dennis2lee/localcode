@@ -42,7 +42,11 @@ type retirement struct {
 }
 
 const (
-	maxCounted = 200
+	// maxCounted is how many conversations are remembered as counted. A
+	// conversation that comes back after this many others is counted
+	// again, which brings a retirement one conversation closer and
+	// nothing worse.
+	maxCounted = 1000
 	maxRetired = 20
 )
 

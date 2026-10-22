@@ -352,12 +352,17 @@ func (l *Loop) describeStore(b *strings.Builder, st memory.Store) {
 	}
 	var idle []string
 	for _, e := range entries {
+		// Only notes that can retire: a user, feedback, kept or legacy
+		// note is not on its way anywhere for being unopened.
+		if e.Keep || (e.Type != memory.TypeProject && e.Type != memory.TypeReference) {
+			continue
+		}
 		if u, ok := use[e.Name]; ok && u.SessionsUnused >= memory.DefaultRetireSessions/2 {
 			idle = append(idle, fmt.Sprintf("%s (%s, %d conversations)", e.Name, e.Type, u.SessionsUnused))
 		}
 	}
 	if len(idle) > 0 {
-		fmt.Fprintf(b, "  Not used lately: %s\n", strings.Join(idle, ", "))
+		fmt.Fprintf(b, "  Not used lately, and on the way to retirement: %s\n", strings.Join(idle, ", "))
 	}
 }
 

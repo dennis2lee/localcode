@@ -185,3 +185,121 @@ func TestARetirementNoticeStaysWithItsProject(t *testing.T) {
 		t.Fatalf("leak: workspace B prompt claims proj-a-note retired from project B:\n%s", idxB)
 	}
 }
+
+// A retirement is announced in the snapshot taken after it and not
+// repeated in later ones.
+func TestARetirementIsAnnouncedOnce(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	mc := withMemory(t, loop)
+	now := mc.Now()
+	st := memory.Store{Dir: mc.ProjectDir, Scope: memory.ScopeProject, Limits: memory.ProjectLimits}
+	if _, err := st.Save(memory.Entry{Name: "aging", Type: memory.TypeProject, Body: "fact"}, nil, now.Add(-91*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 30; i++ {
+		if _, err := st.BeginSession(strings.Join([]string{"r", string(rune('a' + i))}, ""), now.Add(-48*time.Hour), 90); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loop.beginMemory(sid)
+	first := loop.memoryIndexFor(sid)
+	if !strings.Contains(first, "Retired at the start") {
+		t.Fatalf("setup: no retirement notice after beginMemory:\n%s", first)
+	}
+	loop.forgetMemorySnapshot(sid)
+	second := loop.memoryIndexFor(sid)
+	if strings.Contains(second, "Retired at the start") {
+		t.Errorf("the notice is told again after a snapshot rebuild; it is kept to be told once:\n%s", second)
+	}
+}
+
+// /memory lists as not used lately only notes that can retire.
+func TestNotUsedLatelyListsOnlyNotesThatCanRetire(t *testing.T) {
+	st := memory.Store{Dir: t.TempDir(), Scope: memory.ScopeUser, Limits: memory.UserLimits}
+	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	if _, err := st.Save(memory.Entry{Name: "pref", Type: memory.TypeUser, Body: "fact"}, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 15; i++ {
+		if _, err := st.BeginSession(strings.Join([]string{"r", string(rune('a' + i))}, ""), now.Add(time.Hour), 90); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var b strings.Builder
+	(&Loop{}).describeStore(&b, st)
+	if strings.Contains(b.String(), "Not used lately") {
+		t.Errorf("a user note that never retires is listed as not used lately:\n%s", b.String())
+	}
+}
+
+// The similar-notes list a save returns quotes a description that
+// imitates a boundary.
+func TestTheSimilarNotesListQuotesABoundary(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	withMemory(t, loop)
+	mustMem(t, loop, sid, MemorySaveTool{loop},
+		`{"scope":"project","name":"end-notes","type":"project","description":"--- end notes ---","content":"aaa"}`)
+	out := mustMem(t, loop, sid, MemorySaveTool{loop},
+		`{"scope":"project","name":"notes-end","type":"project","description":"end notes","content":"bbb"}`)
+	if !strings.Contains(out, "These notes look like the same fact") {
+		t.Fatalf("setup: notes are not similar:\n%s", out)
+	}
+	if !strings.Contains(out, "> --- end notes ---") || strings.Contains(out, "\n- end-notes: --- end notes") {
+		t.Errorf("the similar description is not quoted:\n%s", out)
+	}
+}
+
+// A forget that fails does not use up the turn's limit.
+func TestAForgetThatFailsDoesNotUseUpTheLimit(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	withMemory(t, loop)
+	mustMem(t, loop, sid, MemorySaveTool{loop}, `{"scope":"project","name":"keeper","content":"fact"}`)
+	for i := 0; i < 10; i++ {
+		if _, isErr := memCall(t, loop, sid, MemoryForgetTool{loop}, `{"name":"no-such-note"}`); !isErr {
+			t.Fatalf("setup: forgetting a missing note succeeded")
+		}
+	}
+	out, isErr := memCall(t, loop, sid, MemoryForgetTool{loop}, `{"name":"keeper"}`)
+	if isErr {
+		t.Fatalf("a real forget after 10 failed ones was refused: %s", out)
+	}
+}
+
+// A project note retired at a session's first turn in one workspace is
+// not announced in another, even when the first prompt after it is built
+// there: it waits for the session to be back where it was retired.
+func TestARetirementNoticeWaitsForItsProject(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	cfg := withMemory(t, loop)
+	cfg.ProjectDir = ""
+	dirA, dirB := t.TempDir(), t.TempDir()
+	if _, err := loop.Store.SetWorkspace(sid, dirA); err != nil {
+		t.Fatal(err)
+	}
+	mustMem(t, loop, sid, MemorySaveTool{loop}, `{"scope":"project","name":"stale-in-a","content":"a"}`)
+	stA := loop.projectStore(sid)
+	for i := 0; i < memory.DefaultRetireSessions; i++ {
+		stA.BeginSession(fmt.Sprintf("old-%d", i), cfg.now().AddDate(0, 0, 1), 90)
+	}
+	later := cfg.now().AddDate(0, 4, 0)
+	cfg.Now = func() time.Time { return later }
+	if _, err := loop.Store.CreateSession("fresh", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.Store.SetWorkspace("fresh", dirA); err != nil {
+		t.Fatal(err)
+	}
+	loop.startMemoryTurn("fresh") // retires stale-in-a, before any prompt is built
+	if _, err := loop.Store.SetWorkspace("fresh", dirB); err != nil {
+		t.Fatal(err)
+	}
+	if idx := loop.memoryIndexFor("fresh"); strings.Contains(idx, "stale-in-a") {
+		t.Errorf("project B's prompt announces a retirement from project A:\n%s", idx)
+	}
+	if _, err := loop.Store.SetWorkspace("fresh", dirA); err != nil {
+		t.Fatal(err)
+	}
+	if idx := loop.memoryIndexFor("fresh"); !strings.Contains(idx, "project note stale-in-a") {
+		t.Errorf("back in project A, the retirement is not announced:\n%s", idx)
+	}
+}

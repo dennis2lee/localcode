@@ -59,15 +59,26 @@ func splitIndex(content string) (block, rest string) {
 	return content[start:end], content[:start] + content[end:]
 }
 
-// indexFile is MEMORY.md as read: its text with a byte-order mark taken
-// off and line endings made "\n", which is what everything here works
-// on, and how it was written, so a rewrite gives the person's part back
-// the way they wrote it: CRLF stays CRLF, and a BOM stays at the start of
-// the file rather than ending up behind the generated block.
+// indexFile is MEMORY.md as read: its bytes after a byte-order mark,
+// untouched, and whether it had a mark or any CRLF line ending. The
+// person's part of the file is spliced back from raw exactly as it was,
+// whatever its line endings, and the generated block takes CRLF when the
+// file has any, so it does not stand out in a Windows editor. text is
+// raw with CRLF made LF, which is what reading and matching work on.
 type indexFile struct {
-	text string
-	crlf bool
-	bom  bool
+	raw    string
+	bom    bool
+	crlf   bool
+	exists bool
+}
+
+func (f indexFile) text() string { return strings.ReplaceAll(f.raw, "\r\n", "\n") }
+
+func (f indexFile) eol() string {
+	if f.crlf {
+		return "\r\n"
+	}
+	return "\n"
 }
 
 // readIndex reads MEMORY.md, refusing anything but a regular file for the
@@ -78,38 +89,44 @@ func readIndex(dir string) indexFile {
 	if err != nil {
 		return indexFile{}
 	}
-	f := indexFile{crlf: strings.Contains(data, "\r\n")}
+	f := indexFile{exists: true, crlf: strings.Contains(data, "\r\n")}
 	if strings.HasPrefix(data, "\ufeff") {
 		f.bom = true
 		data = strings.TrimPrefix(data, "\ufeff")
 	}
-	f.text = strings.ReplaceAll(data, "\r\n", "\n")
+	f.raw = data
 	return f
 }
 
-// encode is text written the way the file was.
-func (f indexFile) encode(text string) []byte {
-	if f.crlf {
-		text = strings.ReplaceAll(text, "\n", "\r\n")
+func readIndexFile(dir string) string { return readIndex(dir).text() }
+
+// writeIndex replaces MEMORY.md with raw, the mark put back in front,
+// unless that is what it already holds: a rewrite that changes nothing
+// should not touch the file, and BeginSession regenerates every time it
+// runs.
+func writeIndex(dir string, f indexFile, raw string) error {
+	if f.exists && raw == f.raw {
+		return nil
 	}
 	if f.bom {
-		text = "\ufeff" + text
+		raw = "\ufeff" + raw
 	}
-	return []byte(text)
+	return writeAtomic(IndexPath(dir), []byte(raw))
 }
 
-func readIndexFile(dir string) string { return readIndex(dir).text }
-
-// writeIndex replaces MEMORY.md with text, encoded as f was, unless that
-// is what it already holds: a rewrite that changes nothing should not
-// touch the file, and BeginSession regenerates every time it runs.
-func writeIndex(dir string, f indexFile, text string) error {
-	if text == f.text {
-		if _, err := os.Lstat(IndexPath(dir)); err == nil {
-			return nil
+// trimLeadingEOLs takes off the line endings at the start of s: the
+// blank line the block is separated from the person's text by.
+func trimLeadingEOLs(s string) string {
+	for {
+		switch {
+		case strings.HasPrefix(s, "\r\n"):
+			s = s[2:]
+		case strings.HasPrefix(s, "\n"):
+			s = s[1:]
+		default:
+			return s
 		}
 	}
-	return writeAtomic(IndexPath(dir), f.encode(text))
 }
 
 // indexTooLarge reports a MEMORY.md the tool will not rewrite, because it
@@ -172,28 +189,42 @@ func (s Store) regenerate(u *usage) (IndexStats, error) {
 		return IndexStats{}, err
 	}
 	f := readIndex(s.Dir)
-	_, rest := splitIndex(f.text)
-	rest = strings.Trim(rest, "\n")
-	lines := blockLines(entries, u, rest)
+	block, rest := splitIndex(f.raw)
+	if block != "" {
+		// What follows the block is the separator this function wrote
+		// last time, then the person's text.
+		if start := strings.Index(f.raw, blockStartPrefix); start >= 0 && strings.TrimSpace(f.raw[:start]) == "" {
+			rest = trimLeadingEOLs(rest)
+		}
+	}
+	restText := strings.Trim(strings.ReplaceAll(rest, "\r\n", "\n"), "\n")
+	lines := blockLines(entries, u, restText)
+	eol := f.eol()
 	var b strings.Builder
 	if len(lines) > 0 {
-		b.WriteString(blockStart + "\n")
-		b.WriteString(strings.Join(lines, "\n"))
-		b.WriteString("\n" + blockEnd + "\n")
+		b.WriteString(blockStart + eol)
+		b.WriteString(strings.Join(lines, eol))
+		b.WriteString(eol + blockEnd + eol)
 	}
-	if rest != "" {
+	if strings.TrimSpace(restText) != "" {
 		if b.Len() > 0 {
-			b.WriteString("\n")
+			b.WriteString(eol)
 		}
-		b.WriteString(rest + "\n")
+		b.WriteString(rest)
 	}
-	if b.Len() == 0 {
+	switch {
+	case b.Len() > 0:
+		if err := writeIndex(s.Dir, f, b.String()); err != nil {
+			return IndexStats{}, err
+		}
+	case block != "":
+		// The block was all the file held, and its last note is gone.
 		if err := os.Remove(IndexPath(s.Dir)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return IndexStats{}, err
 		}
-	} else if err := writeIndex(s.Dir, f, b.String()); err != nil {
-		return IndexStats{}, err
 	}
+	// Otherwise the file held no block and nothing but blank space, or
+	// nothing at all: it is the person's, and stays as it is.
 	_, stats := s.load(entries, u)
 	return stats, nil
 }
@@ -212,10 +243,13 @@ func dropLegacyLine(dir, file string) error {
 		return err
 	}
 	f := readIndex(dir)
-	content := f.text
+	content := f.raw
 	if content == "" {
 		return nil
 	}
+	// On the raw text: the person's lines go back exactly as they were,
+	// whatever ends them, and the pattern's [^\n]* takes a "\r" with
+	// the rest of the line.
 	block, rest := splitIndex(content)
 	re := legacyLink(file)
 	if !re.MatchString(rest) {

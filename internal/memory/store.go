@@ -445,6 +445,12 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 	if _, ok := ParseType(string(e.Type)); !ok {
 		return SaveResult{}, fmt.Errorf("type must be one of user, feedback, project, reference")
 	}
+	// The name becomes a path; only a normalized one is allowed to. The
+	// tools normalize before calling, and this is the check that keeps
+	// any other caller inside the directory.
+	if n, err := NormalizeName(e.Name); err != nil || n != e.Name {
+		return SaveResult{}, fmt.Errorf("%q is not a normalized note name", e.Name)
+	}
 	e.Description = oneLine(e.Description)
 	e.Body = strings.TrimSpace(Sanitize(e.Body))
 	if e.Body == "" {
@@ -462,25 +468,27 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 		if err != nil {
 			return err
 		}
-		var replaced *Entry
+		// Every file that is this note: the one with its exact name,
+		// and any hand-written one whose name differs only in case or
+		// spelling ("Build.md", "Build_Notes.md" for build-notes). Those
+		// are adopted: archived whole and replaced by the saved note,
+		// rather than left listed beside it. Case matters most: on a
+		// disk that ignores it, "build.md" is "Build.md", and writing
+		// the one would overwrite the other without archiving it.
+		var exact *Entry
+		var others []Entry
 		for i := range existing {
+			// The normalized name covers case as well as spelling: e.Name
+			// is lower case, so "Build" normalizes to it.
 			if existing[i].Name == e.Name {
-				replaced = &existing[i]
+				exact = &existing[i]
+			} else if n, err := NormalizeName(existing[i].Name); err == nil && n == e.Name {
+				others = append(others, existing[i])
 			}
 		}
-		// A hand-written file whose own name normalizes to this one
-		// ("Build_Notes.md" for build-notes) is the same note: the save
-		// adopts it rather than writing a second file beside it.
-		adoptFrom := ""
-		if replaced == nil {
-			if f, err := find(s.Dir, e.Name); err == nil && f != e.File() {
-				for i := range existing {
-					if existing[i].File() == f || existing[i].Name == stem(f) {
-						replaced = &existing[i]
-						adoptFrom = f
-					}
-				}
-			}
+		replaced := exact
+		if replaced == nil && len(others) > 0 {
+			replaced = &others[0]
 		}
 		if replaced == nil && len(existing) >= s.Limits.Entries {
 			return fmt.Errorf("%s memory already holds %d notes, its limit. Merge notes that say the same thing, or forget ones that no longer help, then save again", s.Scope, len(existing))
@@ -496,37 +504,42 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 			if keep == nil {
 				e.Keep = replaced.Keep
 			}
-			if adoptFrom == "" && (replaced.Body != e.Body || replaced.Description != e.Description || replaced.Type != e.Type) {
-				// What the note said before goes to the archive: a save
-				// that merges two notes into one, done badly, is the
-				// way a memory loses a fact, and it should be a fact
-				// that can be found again.
-				if err := s.archiveCopy(e.File(), now); err != nil {
-					return err
-				}
+		}
+		if exact != nil && (exact.Body != e.Body || exact.Description != e.Description || exact.Type != e.Type) {
+			// What the note said before goes to the archive: a save
+			// that merges two notes into one, done badly, is the way a
+			// memory loses a fact, and it should be a fact that can be
+			// found again.
+			if err := s.archiveCopy(e.File(), now); err != nil {
+				return err
+			}
+		}
+		// Moved before the new file is written, never after: on a disk
+		// that ignores case the new file is the old one's name.
+		for _, o := range others {
+			if err := s.archiveFile(o.File(), now, true); err != nil {
+				return err
 			}
 		}
 		if err := writeAtomic(filepath.Join(s.Dir, e.File()), []byte(e.Format())); err != nil {
 			return err
 		}
-		if adoptFrom != "" {
-			// The old file goes to the archive whole, under its own
-			// name, and its hand-written index line with it.
-			if err := s.archiveFile(adoptFrom, now, true); err != nil {
-				return err
-			}
-			if err := dropLegacyLine(s.Dir, adoptFrom); err != nil {
-				return err
-			}
-		}
 		u := readUsage(s.Dir)
+		for _, o := range others {
+			delete(u.Entries, o.File())
+		}
 		u.use(e.File(), now)
 		if err := u.write(s.Dir); err != nil {
 			return err
 		}
-		if replaced != nil && replaced.Type == TypeLegacy {
-			// The tool manages this file now, so the hand-written line
-			// that pointed at it would list it twice.
+		// The hand-written lines that only pointed at an adopted file,
+		// or at this one while it was untyped, would list it twice.
+		for _, o := range others {
+			if err := dropLegacyLine(s.Dir, o.File()); err != nil {
+				return err
+			}
+		}
+		if exact != nil && exact.Type == TypeLegacy {
 			if err := dropLegacyLine(s.Dir, e.File()); err != nil {
 				return err
 			}
@@ -534,8 +547,8 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 		res.Name = e.Name
 		res.Replaced = replaced
 		res.Similar = similar(e, existing)
-		res.Count = len(existing)
-		if replaced == nil {
+		res.Count = len(existing) - len(others)
+		if exact == nil {
 			res.Count++
 		}
 		res.Stats, err = s.regenerate(u)
@@ -735,7 +748,7 @@ func (s Store) BeginSession(sessionID string, now time.Time, retireDays int) ([]
 		if err := u.write(s.Dir); err != nil {
 			return err
 		}
-		s.removeStaleTemps(now)
+		s.removeStaleTemps()
 		// Every time, not only after a retirement: a crash between a
 		// note's write and the index's leaves MEMORY.md describing what
 		// was there before, and this is where it is put right. A
@@ -751,8 +764,12 @@ func (s Store) BeginSession(sessionID string, now time.Time, retireDays int) ([]
 const staleTemp = time.Hour
 
 // removeStaleTemps deletes the temporary files a crashed write left, in
-// the directory and its archive. Called holding the lock.
-func (s Store) removeStaleTemps(now time.Time) {
+// the directory and its archive. Called holding the lock. Against the
+// wall clock, not the caller's: a file's modification time is the
+// wall clock's, and a clock passed in for retirement's sake (a test's, a
+// skewed one) would take a writer's fresh file for a stale one.
+func (s Store) removeStaleTemps() {
+	now := time.Now()
 	dirs := []string{s.Dir}
 	if archive, err := s.archiveDir(false); err == nil && archive != "" {
 		dirs = append(dirs, archive)

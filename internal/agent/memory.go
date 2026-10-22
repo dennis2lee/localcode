@@ -73,6 +73,11 @@ type sessionNote struct {
 type memSnapshot struct {
 	projectDir string
 	text       string
+	// stale marks a snapshot the session has changed memory since, or
+	// started its history over since: the next prompt reads memory
+	// again. Its names stay usable until then, so a note named in the
+	// rest of the turn that made it stale still counts.
+	stale bool
 	// names are the notes indexed, for counting a note named in an
 	// answer as used.
 	project, user []string
@@ -215,7 +220,9 @@ func (l *Loop) beginMemory(sessionID string) {
 	if len(retired) > 0 {
 		l.memory.mu.Lock()
 		l.memory.retired[sessionID] = append(l.memory.retired[sessionID], retired...)
-		delete(l.memory.snaps, sessionID)
+		if snap := l.memory.snaps[sessionID]; snap != nil {
+			snap.stale = true
+		}
 		l.memory.mu.Unlock()
 	}
 }
@@ -257,18 +264,30 @@ func (l *Loop) memoryIndexFor(sessionID string) string {
 	l.memory.mu.Lock()
 	l.memory.init()
 	snap := l.memory.snaps[sessionID]
-	var retired []string
-	for _, r := range l.memory.retired[sessionID] {
-		// A user note's retirement is news in any workspace; a project
-		// note's only in the project it was retired from.
-		if r.dir == pdir || r.dir == l.userStore().Dir {
-			retired = append(retired, r.text)
-		}
-	}
-	l.memory.mu.Unlock()
-	if snap != nil && snap.projectDir == pdir {
+	if snap != nil && !snap.stale && snap.projectDir == pdir {
+		l.memory.mu.Unlock()
 		return snap.text
 	}
+	// Told once: the notice goes into the snapshot about to be taken,
+	// and stays in it until the snapshot is next read again, but no
+	// later snapshot repeats it. A user note's retirement is news in any
+	// workspace; a project note's only in the project it was retired
+	// from, so that one waits until the session is back there.
+	var retired []string
+	var keep []retiredNote
+	for _, r := range l.memory.retired[sessionID] {
+		if r.dir == pdir || r.dir == l.userStore().Dir {
+			retired = append(retired, r.text)
+		} else {
+			keep = append(keep, r)
+		}
+	}
+	if len(keep) > 0 {
+		l.memory.retired[sessionID] = keep
+	} else {
+		delete(l.memory.retired, sessionID)
+	}
+	l.memory.mu.Unlock()
 	snap = l.loadMemorySnapshot(sessionID, pdir, retired)
 	l.memory.mu.Lock()
 	l.memory.snaps[sessionID] = snap
@@ -312,10 +331,12 @@ func noteNames(st memory.Store) []string {
 
 // forgetMemorySnapshot makes the next turn read the stores again: after
 // this session changed them, after compaction or /clear, which start the
-// cached prefix over anyway.
+// cached prefix over anyway. Marked rather than dropped; see stale.
 func (l *Loop) forgetMemorySnapshot(sessionID string) {
 	l.memory.mu.Lock()
-	delete(l.memory.snaps, sessionID)
+	if snap := l.memory.snaps[sessionID]; snap != nil {
+		snap.stale = true
+	}
 	l.memory.mu.Unlock()
 }
 
@@ -341,17 +362,7 @@ func (l *Loop) noteMemoryCitations(sessionID string, blocks []provider.Block) {
 	snap := l.memory.snaps[sessionID]
 	l.memory.mu.Unlock()
 	if snap == nil {
-		// This turn saved or forgot a note, which lets go of the
-		// snapshot so the next turn reads memory again. The names an
-		// answer may cite are read now instead, or a note named right
-		// after a save would not count.
-		l.memoryIndexFor(sessionID)
-		l.memory.mu.Lock()
-		snap = l.memory.snaps[sessionID]
-		l.memory.mu.Unlock()
-		if snap == nil {
-			return
-		}
+		return
 	}
 	now := l.Memory.now()
 	if cited := memory.Cited(text.String(), snap.project); len(cited) > 0 {
