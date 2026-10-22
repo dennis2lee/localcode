@@ -119,9 +119,15 @@ func looksLikeValue(v string) bool {
 	return digit || (upper && lower) || (!other && letters >= minPassphrase)
 }
 
-// quantity is a number with a unit after it (30000000s, 128k, 1.5GB): a
-// limit or a size, which a note about tokens records all the time.
-var quantity = regexp.MustCompile(`^[0-9][0-9.,_]*[A-Za-z]{0,3}$`)
+// quantity is a number with a unit after it (30000000s, 128k, 1.5GB,
+// 3600seconds): a limit or a size, which a note about tokens records all
+// the time. The unit has to be one: "12345678a" is a value with a letter
+// at the end, not a number of anything.
+var quantity = regexp.MustCompile(`(?i)^[0-9][0-9.,_]*(?:` +
+	`[kmgtp]i?b?|b|bytes?|bits?|` +
+	`ns|us|ms|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?|w|wks?|weeks?|mo|months?|y|yrs?|years?|` +
+	`x|px|pt|em|rem|%|` +
+	`tokens?|chars?|characters?|lines?|words?|rows?|items?|requests?|req|rps|qps|tps|calls?|times?|turns?|steps?|retries)?$`)
 
 // minPassphrase is the shortest run of letters taken for a passphrase.
 // Past the longest words in ordinary use, of which "internationalization"
@@ -146,8 +152,9 @@ func LooksSecret(text string, known []string) (string, bool) {
 			continue
 		}
 		for _, m := range re.FindAllStringSubmatch(text, -1) {
-			// The sentence's own punctuation is not part of the value.
-			if v := strings.TrimRight(m[2], ".,;:!?)]}"); !quantity.MatchString(v) && looksLikeValue(v) {
+			// The sentence's own punctuation, and brackets or Markdown
+			// around the value, are not part of it.
+			if v := strings.TrimLeft(strings.TrimRight(m[2], ".,;:!?)]}`*_"), "([{`*_"); !quantity.MatchString(v) && looksLikeValue(v) {
 				return "it contains what looks like a credential (" + describePattern(re) + ")", true
 			}
 		}

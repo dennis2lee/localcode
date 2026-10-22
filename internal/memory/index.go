@@ -90,13 +90,21 @@ func generatedBody(block string) bool {
 	if len(lines) < 2 || !strings.HasSuffix(strings.TrimSpace(lines[0]), "-->") {
 		return false
 	}
+	// The generator never writes an empty block: no notes, no block. So
+	// a group heading is required, and a pair of markers with nothing
+	// between them is somebody quoting the format.
+	heading := false
 	for _, l := range lines[1 : len(lines)-1] {
 		l = strings.TrimSpace(l)
-		if l != "" && !strings.HasPrefix(l, "## ") && !strings.HasPrefix(l, "- [") {
+		switch {
+		case l == "", strings.HasPrefix(l, "- ["):
+		case strings.HasPrefix(l, "## "):
+			heading = true
+		default:
 			return false
 		}
 	}
-	return true
+	return heading
 }
 
 // indexFile is MEMORY.md as read: its bytes after a byte-order mark,

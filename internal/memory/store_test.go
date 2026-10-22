@@ -1986,3 +1986,137 @@ func TestCredentialNameAndValueEdges(t *testing.T) {
 		}
 	}
 }
+
+// A save that fails after adopting other spellings leaves the archive's
+// oldest copies where they were: pruning waits for the save to succeed.
+func TestAFailedAdoptionDoesNotPruneTheArchive(t *testing.T) {
+	defer func(n int) { maxArchived = n }(maxArchived)
+	maxArchived = 2
+	s := projectStore(t)
+	save(t, s, "other", TypeProject, "", "one", t0)
+	save(t, s, "other", TypeProject, "", "two", t0.Add(time.Minute))
+	save(t, s, "other", TypeProject, "", "three", t0.Add(2*time.Minute))
+	before, _ := s.ArchivedNotes()
+	os.WriteFile(filepath.Join(s.Dir, "Build_Notes.md"), []byte("legacy\n"), 0o644)
+	os.MkdirAll(filepath.Join(s.Dir, "build-notes.md", "x"), 0o755) // the write fails
+	if _, err := s.Save(Entry{Name: "build-notes", Type: TypeProject, Body: "new"}, nil, t0.Add(3*time.Minute)); err == nil {
+		t.Fatal("the save succeeded")
+	}
+	after, _ := s.ArchivedNotes()
+	if len(after) != len(before) || after[len(after)-1].Entry.Body != before[len(before)-1].Entry.Body {
+		t.Errorf("archive before %+v\nafter %+v", before, after)
+	}
+	if got := readFile(t, filepath.Join(s.Dir, "Build_Notes.md")); got != "legacy\n" {
+		t.Errorf("the legacy file was not put back: %q", got)
+	}
+}
+
+// An archive that cannot take the previous text of a replaced note stops
+// the replacement, rather than the fact being lost without a word.
+func TestABlockedArchiveStopsAReplacement(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "n", TypeProject, "", "the old fact", t0)
+	os.RemoveAll(filepath.Join(s.Dir, archiveDirName))
+	os.WriteFile(filepath.Join(s.Dir, archiveDirName), []byte("not a directory"), 0o644)
+	if _, err := s.Save(Entry{Name: "n", Type: TypeProject, Body: "the new fact"}, nil, t0.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "could not be kept") {
+		t.Errorf("save: %v", err)
+	}
+	if e, _, _ := s.Read("n", t0); e.Body != "the old fact" {
+		t.Errorf("the note was replaced: %q", e.Body)
+	}
+	// Search still finds the live notes.
+	if hits, err := s.Search("old fact"); err != nil || len(hits) != 1 {
+		t.Errorf("search with a blocked archive: %+v %v", hits, err)
+	}
+}
+
+func TestCredentialValuePunctuationAndWidth(t *testing.T) {
+	for _, s := range []string{"api_key: (Required)", "password: [Required]"} {
+		if reason, ok := LooksSecret(s, nil); ok {
+			t.Errorf("%q refused (%s)", s, reason)
+		}
+	}
+	// A unit of four letters is not a quantity: 1234abcd is a value.
+	// A trailing bracket is the sentence's, so the passphrase in it is
+	// still twenty-four letters.
+	for _, s := range []string{"token: 1234abcd", "passphrase: correcthorsebatterystaplex]", "secret: (Abc12345)"} {
+		if _, ok := LooksSecret(s, nil); !ok {
+			t.Errorf("%q was not caught", s)
+		}
+	}
+}
+
+// Lines between two markers that the generator does not write (a list
+// of the person's own, written "- item") make it not the block.
+func TestAPersonsListBetweenMarkersIsNotTheBlock(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(s.Dir, 0o755)
+	person := blockStart + "\n- first thing\n- second thing\n" + blockEnd + "\n"
+	os.WriteFile(IndexPath(s.Dir), []byte(person), 0o644)
+	save(t, s, "n", TypeProject, "", "x", t0)
+	if got := readFile(t, IndexPath(s.Dir)); !strings.HasSuffix(got, person) {
+		t.Errorf("the person's list was taken for the block:\n%s", got)
+	}
+}
+
+// Notes retired at a conversation's start are reported even when the
+// index could not be rewritten afterwards.
+func TestRetiredNotesAreReportedWhenTheIndexCannotBeRewritten(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "old-note", TypeProject, "", "x", t0)
+	for i := 0; i < DefaultRetireSessions; i++ {
+		s.BeginSession(fmt.Sprintf("s%d", i), t0.AddDate(0, 0, 1), 90)
+	}
+	os.WriteFile(IndexPath(s.Dir), []byte(strings.Repeat("line of hand-written notes\n", maxIndexFileBytes/20)), 0o644)
+	retired, err := s.BeginSession("late", t0.AddDate(1, 0, 0), 90)
+	if err == nil || strings.Join(retired, ",") != "old-note" {
+		t.Errorf("retired %v, %v", retired, err)
+	}
+}
+
+// A quantity needs a real unit: digits followed by letters that are not
+// one are a value.
+func TestAQuantityNeedsARealUnit(t *testing.T) {
+	for _, s := range []string{"password: 12345678a", "token: 987654321xyz", "api_key: 87654321abc"} {
+		if _, ok := LooksSecret(s, nil); !ok {
+			t.Errorf("%q was not caught", s)
+		}
+	}
+	for _, s := range []string{"token_window: 1000days", "token_timeout: 3600seconds", "token_ttl: 7200hours", "max_tokens: 4096tokens", "token_rate: 50rps", "password: `Changeme`", "api_key: **Required**"} {
+		if reason, ok := LooksSecret(s, nil); ok {
+			t.Errorf("%q refused (%s)", s, reason)
+		}
+	}
+}
+
+// A pair of markers with nothing between them is somebody quoting the
+// format: the generator never writes an empty block.
+func TestAnEmptyPairOfMarkersIsNotTheBlock(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(s.Dir, 0o755)
+	person := "The block looks like:\n" + blockStart + "\n" + blockEnd + "\n"
+	os.WriteFile(IndexPath(s.Dir), []byte(person), 0o644)
+	save(t, s, "n", TypeProject, "", "x", t0)
+	got := readFile(t, IndexPath(s.Dir))
+	if !strings.HasSuffix(got, person) || strings.Count(got, "[n](n.md)") != 1 {
+		t.Errorf("index:\n%s", got)
+	}
+}
+
+// Once a note has moved, a forget or a restore has happened: bookkeeping
+// that fails afterwards does not report it as failed.
+func TestForgetAndRestoreSucceedOnceTheNoteHasMoved(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "n", TypeProject, "", "x", t0)
+	os.Remove(usagePath(s.Dir))
+	os.MkdirAll(filepath.Join(usagePath(s.Dir), "x"), 0o755) // the usage record cannot be replaced
+	if _, err := s.Forget("n", t0); err != nil {
+		t.Fatalf("forget: %v", err)
+	}
+	if _, err := s.Restore("n", t0); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if e, _, err := s.Read("n", t0); err != nil || e.Body != "x" {
+		t.Errorf("after restore: %+v %v", e, err)
+	}
+}

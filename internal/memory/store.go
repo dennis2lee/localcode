@@ -508,33 +508,34 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 				e.Keep = replaced.Keep
 			}
 		}
-		// What the note said before goes to the archive: a save that
-		// merges two notes into one, done badly, is the way a memory
-		// loses a fact, and it should be a fact that can be found again.
-		// Read now and archived once the save has succeeded, so a save
-		// that fails leaves the archive as it was, its oldest copies
-		// included.
-		var previous []byte
-		if exact != nil && (exact.Body != e.Body || exact.Description != e.Description || exact.Type != e.Type) {
-			content, cut, err := readRegular(filepath.Join(s.Dir, e.File()), maxIndexFileBytes)
-			if err != nil {
-				return err
-			}
-			if cut {
-				return fmt.Errorf("%s is too large to archive", e.File())
-			}
-			previous = []byte(content)
-		}
-		// Moved before the new file is written, never after: on a disk
-		// that ignores case the new file is the old one's name. If one
-		// move, or the write, fails, the files already moved are put
-		// back, so a failed save leaves the directory as it found it.
+		// Everything this save puts into the archive is put there before
+		// the new note is written, and taken back out if the save fails:
+		// the archive pruned only once it has succeeded, so a failed save
+		// leaves the directory and the archive as they were.
+		var archived []string
 		var moved [][2]string
 		undo := func() {
 			for i := len(moved) - 1; i >= 0; i-- {
 				os.Rename(moved[i][1], moved[i][0])
 			}
+			for _, a := range archived {
+				os.Remove(a)
+			}
 		}
+		// What the note said before goes to the archive: a save that
+		// merges two notes into one, done badly, is the way a memory
+		// loses a fact, and it should be a fact that can be found again.
+		// An archive that cannot take it fails the save, rather than the
+		// save going ahead and the fact being lost without a word.
+		if exact != nil && (exact.Body != e.Body || exact.Description != e.Description || exact.Type != e.Type) {
+			to, err := s.archiveTo(e.File(), now, false)
+			if err != nil {
+				return fmt.Errorf("the previous text of %s could not be kept in the archive, so it was not replaced: %w", e.Name, err)
+			}
+			archived = append(archived, to)
+		}
+		// Moved before the new file is written, never after: on a disk
+		// that ignores case the new file is the old one's name.
 		for _, o := range others {
 			to, err := s.archiveTo(o.File(), now, true)
 			if err != nil {
@@ -552,8 +553,10 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 		// written would be retried as a duplicate, or believed lost. A
 		// usage record, an index line or the generated block left behind
 		// is put right by the next conversation's first turn.
-		if previous != nil {
-			s.archiveBytes(e.File(), previous, now)
+		if len(archived)+len(moved) > 0 {
+			if dir, err := s.archiveDir(false); err == nil && dir != "" {
+				s.pruneArchive(dir)
+			}
 		}
 		u := readUsage(s.Dir)
 		for _, o := range others {
@@ -603,27 +606,23 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 	return res, err
 }
 
-// archiveBytes writes what a note's file held into the archive under a
-// unique name, and keeps the archive within maxArchived.
-func (s Store) archiveBytes(file string, data []byte, now time.Time) error {
-	dir, err := s.archiveDir(true)
-	if err != nil {
-		return err
-	}
-	if err := writeAtomic(filepath.Join(dir, stem(file)+"~"+now.UTC().Format(archiveStamp)+".md"), data); err != nil {
-		return err
-	}
-	s.pruneArchive(dir)
-	return nil
-}
-
-// archiveFile puts file into the archive, moving it or copying it.
+// archiveFile puts file into the archive, moving it or copying it, and
+// keeps the archive within maxArchived. Pruning is housekeeping: a
+// failure to delete an old copy is no reason to fail the move or the copy
+// that has already happened.
 func (s Store) archiveFile(file string, now time.Time, move bool) error {
 	_, err := s.archiveTo(file, now, move)
+	if err == nil {
+		if dir, derr := s.archiveDir(false); derr == nil && dir != "" {
+			s.pruneArchive(dir)
+		}
+	}
 	return err
 }
 
-// archiveTo is archiveFile, saying where the copy went.
+// archiveTo puts file into the archive and says where; it does not
+// prune, so a caller that may still undo it decides when the oldest
+// copies go.
 func (s Store) archiveTo(file string, now time.Time, move bool) (string, error) {
 	dir, err := s.archiveDir(true)
 	if err != nil {
@@ -647,9 +646,6 @@ func (s Store) archiveTo(file string, now time.Time, move bool) (string, error) 
 			return "", err
 		}
 	}
-	// Pruning is housekeeping: a failure to delete an old copy is no
-	// reason to fail the move or the copy that has already happened.
-	s.pruneArchive(dir)
 	return dst, nil
 }
 
@@ -694,16 +690,16 @@ func (s Store) Forget(name string, now time.Time) (string, error) {
 		if err := s.archiveFile(file, now, true); err != nil {
 			return err
 		}
+		// Forgotten. The rest is bookkeeping that the next
+		// conversation's first turn puts right if it fails here, and a
+		// forget reported as failed after it happened would be retried
+		// on a note that is no longer there.
 		u := readUsage(s.Dir)
 		delete(u.Entries, file)
-		if err := u.write(s.Dir); err != nil {
-			return err
-		}
-		if err := dropLegacyLine(s.Dir, file); err != nil {
-			return err
-		}
-		_, err = s.regenerate(u)
-		return err
+		u.write(s.Dir)
+		dropLegacyLine(s.Dir, file)
+		s.regenerate(u)
+		return nil
 	})
 	return stem(file), err
 }
@@ -749,14 +745,13 @@ func (s Store) Restore(name string, now time.Time) (string, error) {
 		if err := os.Rename(filepath.Join(s.Dir, archiveDirName, pick.File), filepath.Join(s.Dir, file)); err != nil {
 			return err
 		}
+		// Restored; the rest is bookkeeping, as after a forget.
+		restored = pick.Entry.Name
 		u := readUsage(s.Dir)
 		u.use(file, now)
-		if err := u.write(s.Dir); err != nil {
-			return err
-		}
-		restored = pick.Entry.Name
-		_, err = s.regenerate(u)
-		return err
+		u.write(s.Dir)
+		s.regenerate(u)
+		return nil
 	})
 	return restored, err
 }
@@ -904,10 +899,9 @@ func (s Store) Search(query string) ([]Hit, error) {
 		}
 	}
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
-	archived, err := s.ArchivedNotes()
-	if err != nil {
-		return nil, err
-	}
+	// The archive is where search looks last; one that cannot be read
+	// costs its own results, not the live notes'.
+	archived, _ := s.ArchivedNotes()
 	seen := map[string]bool{}
 	var old []Hit
 	for _, a := range archived {

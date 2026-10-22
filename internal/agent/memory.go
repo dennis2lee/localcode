@@ -209,10 +209,10 @@ func (l *Loop) beginMemory(sessionID string) {
 	now := l.Memory.now()
 	var retired []retiredNote
 	for _, st := range todo {
-		names, err := st.BeginSession(sessionID, now, l.Memory.RetireDays)
-		if err != nil {
-			continue
-		}
+		// Names retired are announced even when the work after the
+		// retirement (rewriting the index) failed: the notes moved all
+		// the same.
+		names, _ := st.BeginSession(sessionID, now, l.Memory.RetireDays)
 		for _, n := range names {
 			retired = append(retired, retiredNote{dir: st.Dir, text: string(st.Scope) + " note " + n})
 		}

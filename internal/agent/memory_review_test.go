@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -406,5 +407,47 @@ func TestTheSaveDescriptionOfAnUnknownScopeSaysSo(t *testing.T) {
 	out := MemorySaveTool{}.Describe(json.RawMessage(`{"scope":"team","name":"n","content":"c"}`))
 	if !strings.Contains(out, "not session, project or user") {
 		t.Errorf("description: %s", out)
+	}
+}
+
+// A scope's list holds every note the tools can keep: more than sixty
+// project notes are all listed.
+func TestTheListHoldsEveryProjectNote(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	withMemory(t, loop)
+	st := loop.projectStore(sid)
+	for i := 0; i < 70; i++ {
+		if _, err := st.Save(memory.Entry{Name: fmt.Sprintf("note-%02d", i), Type: memory.TypeProject, Body: "x"}, nil, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := mustMem(t, loop, sid, MemorySearchTool{loop}, `{"scope":"project"}`)
+	if !strings.Contains(out, "note-69") || strings.Contains(out, "more; memory_search narrows it") {
+		t.Errorf("list:\n%s", out[:min(len(out), 400)])
+	}
+}
+
+// A note retired at a conversation's start is announced even when the
+// index could not be rewritten afterwards: it moved all the same.
+func TestARetirementIsAnnouncedWhenTheIndexCannotBeRewritten(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	cfg := withMemory(t, loop)
+	mustMem(t, loop, sid, MemorySaveTool{loop}, `{"scope":"project","name":"stale-note","content":"x"}`)
+	st := loop.projectStore(sid)
+	for i := 0; i < memory.DefaultRetireSessions; i++ {
+		st.BeginSession(fmt.Sprintf("old-%d", i), cfg.now().AddDate(0, 0, 1), 90)
+	}
+	big := strings.Repeat("line of hand-written notes\n", (4<<20)/20)
+	if err := os.WriteFile(memory.IndexPath(cfg.ProjectDir), []byte(big), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	later := cfg.now().AddDate(1, 0, 0)
+	cfg.Now = func() time.Time { return later }
+	if _, err := loop.Store.CreateSession("fresh", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	loop.startMemoryTurn("fresh")
+	if idx := loop.memoryIndexFor("fresh"); !strings.Contains(idx, "project note stale-note") {
+		t.Errorf("the retirement was not announced:\n%s", idx[:min(len(idx), 600)])
 	}
 }
