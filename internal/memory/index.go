@@ -50,10 +50,11 @@ func splitIndex(content string) (block, rest string) {
 	}
 	end := strings.Index(content[start:], blockEnd)
 	if end < 0 {
-		// A start with no end: somebody cut the block in half. What
-		// follows the marker is kept as the person's text rather than
-		// thrown away as half a block.
-		return "", content[:start] + content[start+len(blockStartPrefix):]
+		// A start with no end: somebody cut the block in half. All of it
+		// is kept as the person's text, the marker line included, rather
+		// than thrown away as half a block or left as half a comment; a
+		// new block goes above it.
+		return "", content
 	}
 	end += start + len(blockEnd)
 	return content[start:end], content[:start] + content[end:]
@@ -114,10 +115,10 @@ func writeIndex(dir string, f indexFile, raw string) error {
 	return writeAtomic(IndexPath(dir), []byte(raw))
 }
 
-// trimLeadingEOLs takes off the line endings at the start of s: the
-// blank line the block is separated from the person's text by.
-func trimLeadingEOLs(s string) string {
-	for {
+// trimEOLs takes up to n line endings off the start of s, and nothing
+// else.
+func trimEOLs(s string, n int) string {
+	for ; n > 0; n-- {
 		switch {
 		case strings.HasPrefix(s, "\r\n"):
 			s = s[2:]
@@ -127,6 +128,7 @@ func trimLeadingEOLs(s string) string {
 			return s
 		}
 	}
+	return s
 }
 
 // indexTooLarge reports a MEMORY.md the tool will not rewrite, because it
@@ -191,11 +193,13 @@ func (s Store) regenerate(u *usage) (IndexStats, error) {
 	f := readIndex(s.Dir)
 	block, rest := splitIndex(f.raw)
 	if block != "" {
-		// What follows the block is the separator this function wrote
-		// last time, then the person's text.
-		if start := strings.Index(f.raw, blockStartPrefix); start >= 0 && strings.TrimSpace(f.raw[:start]) == "" {
-			rest = trimLeadingEOLs(rest)
-		}
+		// The block is followed by its own line ending and the blank
+		// line this function wrote after it: two line endings, taken off
+		// wherever the block is, so a block the person moved into the
+		// middle of their text leaves no blank lines behind when it
+		// moves back to the top or goes.
+		start := strings.Index(f.raw, blockStartPrefix)
+		rest = f.raw[:start] + trimEOLs(f.raw[start+len(block):], 2)
 	}
 	restText := strings.Trim(strings.ReplaceAll(rest, "\r\n", "\n"), "\n")
 	lines := blockLines(entries, u, restText)

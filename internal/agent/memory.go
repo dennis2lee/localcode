@@ -361,6 +361,16 @@ func (l *Loop) noteMemoryCitations(sessionID string, blocks []provider.Block) {
 	l.memory.mu.Lock()
 	snap := l.memory.snaps[sessionID]
 	l.memory.mu.Unlock()
+	if snap != nil && snap.projectDir != l.memoryDirFor(l.SessionDir(sessionID)) {
+		// The session has moved to another project since the snapshot:
+		// a note named now is the new project's, which the next prompt
+		// reads anyway, so it is read now. A stale snapshot of the same
+		// project is used as it is; see stale.
+		l.memoryIndexFor(sessionID)
+		l.memory.mu.Lock()
+		snap = l.memory.snaps[sessionID]
+		l.memory.mu.Unlock()
+	}
 	if snap == nil {
 		return
 	}

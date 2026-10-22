@@ -515,13 +515,25 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 			}
 		}
 		// Moved before the new file is written, never after: on a disk
-		// that ignores case the new file is the old one's name.
-		for _, o := range others {
-			if err := s.archiveFile(o.File(), now, true); err != nil {
-				return err
+		// that ignores case the new file is the old one's name. If one
+		// move, or the write, fails, the files already moved are put
+		// back, so a failed save leaves the directory as it found it.
+		var moved [][2]string
+		undo := func() {
+			for i := len(moved) - 1; i >= 0; i-- {
+				os.Rename(moved[i][1], moved[i][0])
 			}
 		}
+		for _, o := range others {
+			to, err := s.archiveTo(o.File(), now, true)
+			if err != nil {
+				undo()
+				return err
+			}
+			moved = append(moved, [2]string{filepath.Join(s.Dir, o.File()), to})
+		}
 		if err := writeAtomic(filepath.Join(s.Dir, e.File()), []byte(e.Format())); err != nil {
+			undo()
 			return err
 		}
 		u := readUsage(s.Dir)
@@ -546,7 +558,22 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 		}
 		res.Name = e.Name
 		res.Replaced = replaced
-		res.Similar = similar(e, existing)
+		// Against what is left: an adopted file is this note now, and
+		// telling the model to merge it would have it forget the note it
+		// just saved.
+		left := make([]Entry, 0, len(existing))
+		for _, x := range existing {
+			adopted := false
+			for _, o := range others {
+				if o.Name == x.Name {
+					adopted = true
+				}
+			}
+			if !adopted {
+				left = append(left, x)
+			}
+		}
+		res.Similar = similar(e, left)
 		res.Count = len(existing) - len(others)
 		if exact == nil {
 			res.Count++
@@ -565,29 +592,38 @@ func (s Store) archiveCopy(file string, now time.Time) error {
 
 // archiveFile puts file into the archive, moving it or copying it.
 func (s Store) archiveFile(file string, now time.Time, move bool) error {
+	_, err := s.archiveTo(file, now, move)
+	return err
+}
+
+// archiveTo is archiveFile, saying where the copy went.
+func (s Store) archiveTo(file string, now time.Time, move bool) (string, error) {
 	dir, err := s.archiveDir(true)
 	if err != nil {
-		return err
+		return "", err
 	}
 	dst := filepath.Join(dir, stem(file)+"~"+now.UTC().Format(archiveStamp)+".md")
 	src := filepath.Join(s.Dir, file)
 	if move {
 		if err := os.Rename(src, dst); err != nil {
-			return err
+			return "", err
 		}
 	} else {
 		content, cut, err := readRegular(src, maxIndexFileBytes)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if cut {
-			return fmt.Errorf("%s is too large to archive", file)
+			return "", fmt.Errorf("%s is too large to archive", file)
 		}
 		if err := writeAtomic(dst, []byte(content)); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return s.pruneArchive(dir)
+	// Pruning is housekeeping: a failure to delete an old copy is no
+	// reason to fail the move or the copy that has already happened.
+	s.pruneArchive(dir)
+	return dst, nil
 }
 
 func (s Store) pruneArchive(dir string) error {

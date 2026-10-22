@@ -173,7 +173,13 @@ func (MemorySaveTool) Describe(input json.RawMessage) string {
 	if len(content) > 600 {
 		content = content[:600] + "…"
 	}
-	return fmt.Sprintf("save a %s memory note %q, which every later session in every project will see:\n%s", strings.ToLower(a.Scope), a.Name, content)
+	reach := map[memory.Scope]string{
+		memory.ScopeUser:    "which every later session in every project will see",
+		memory.ScopeProject: "which later sessions in this project will see",
+		memory.ScopeSession: "for this conversation only",
+	}
+	scope, _ := memory.ParseScope(a.Scope)
+	return fmt.Sprintf("save a %s memory note %q, %s:\n%s", strings.ToLower(a.Scope), a.Name, reach[scope], content)
 }
 
 func (t MemorySaveTool) Execute(ctx context.Context, input json.RawMessage) tools.Result {

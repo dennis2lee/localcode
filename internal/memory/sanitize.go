@@ -72,15 +72,24 @@ var secretPatterns = []*regexp.Regexp{
 	// reference to where the value lives ($VAR, ${VAR}, <placeholder>) is
 	// what a note should say instead, so it does not count. The value is
 	// checked again by looksLikeValue.
-	regexp.MustCompile(`(?i)(?:^|[^a-z0-9_-])[a-z0-9_-]*(password|passwd|secret|api[_-]?key|access[_-]?key|token)[a-z0-9_-]*["']?\s*[:=]\s*["']?([^\s"'$<{][^\s"']{7,})`),
+	//
+	// After the word, only a separated suffix (secret_key, token-value)
+	// or the commonest unseparated ones (secretkey, tokens): a word that
+	// merely starts with one (secretary, tokenizer) is not a credential.
+	regexp.MustCompile(`(?i)(?:^|[^a-z0-9_-])[a-z0-9_-]*(password|passwd|secret|api[_-]?key|access[_-]?key|token)(?:[_-][a-z0-9_-]*|key|s)?["']?\s*[:=]\s*["']?([^\s"'$<{][^\s"']{7,})`),
 }
 
-// looksLikeValue tells a credential from words: it has a digit, or upper
-// and lower case letters both, or it is twenty letters or more run
-// together. "change-me-on-first-login" and "required," are sentences
-// about a password; "hunter2hunter2", "wJalrXUtnFEMI" and
-// "correcthorsebatterystaple" are passwords.
+// looksLikeValue tells a credential from words and numbers: it has a
+// letter and a digit, or upper
+// and lower case letters both, or it is minPassphrase letters or more
+// run together, longer than any ordinary word. "change-me-on-first-login",
+// "required," and "internationalization" are words about a password;
+// "hunter2hunter2", "wJalrXUtnFEMI" and "correcthorsebatterystaple" are
+// passwords.
 func looksLikeValue(v string) bool {
+	// A value with no letter in it is a number: a limit, a size, a port.
+	// A password of digits alone is possible, and rarer than the notes
+	// that would be refused for "max_tokens: 128000".
 	var digit, upper, lower, other bool
 	letters := 0
 	for _, r := range v {
@@ -97,8 +106,16 @@ func looksLikeValue(v string) bool {
 			other = true
 		}
 	}
-	return digit || (upper && lower) || (!other && letters >= 20)
+	if letters == 0 {
+		return false
+	}
+	return digit || (upper && lower) || (!other && letters >= minPassphrase)
 }
+
+// minPassphrase is the shortest run of letters taken for a passphrase.
+// Past the longest words in ordinary use, of which "internationalization"
+// (twenty) is the one a note about software is likeliest to hold.
+const minPassphrase = 24
 
 // minKnownSecret is the shortest configured credential looked for by
 // value. Shorter, and ordinary words would match.

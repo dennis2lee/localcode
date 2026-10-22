@@ -1595,3 +1595,211 @@ func TestAdoptionClearsWhatACrashedOneLeft(t *testing.T) {
 		t.Error("an adoption in progress lost its directory")
 	}
 }
+
+// A marker is believed only when the directory it names says it was
+// copied from here: a marker naming any other directory, a file, or
+// nothing hides no notes.
+func TestAMarkerIsBelievedOnlyWithItsBackReference(t *testing.T) {
+	home, start := t.TempDir(), t.TempDir()
+	src := Dir(start, home)
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "n0.md"), []byte("fact\n"), 0o600)
+	st := Store{Dir: src, Scope: ScopeProject, Limits: ProjectLimits}
+	other := t.TempDir()
+	file := filepath.Join(t.TempDir(), "f")
+	os.WriteFile(file, []byte("x"), 0o600)
+	for _, target := range []string{other, file, filepath.Join(other, "missing")} {
+		os.WriteFile(filepath.Join(src, adoptedMarker), []byte("copied into "+target+"\n"), 0o600)
+		if st.Adopted() {
+			t.Errorf("a marker naming %s hides the notes", target)
+		}
+	}
+	os.Remove(filepath.Join(src, adoptedMarker))
+	if adopted, err := AdoptStartDirectory(start, home); err != nil || !adopted {
+		t.Fatalf("adopt: %v %v", adopted, err)
+	}
+	if !st.Adopted() {
+		t.Error("a real adoption is not recognized")
+	}
+}
+
+// User memory created by something other than this adoption while it
+// copied (a first user note saved elsewhere) does not hold these notes:
+// the marker goes, and they stay where they are.
+func TestAnAdoptionBeatenByAnUnrelatedSaveLeavesTheNotesInPlace(t *testing.T) {
+	home, start := t.TempDir(), t.TempDir()
+	src := Dir(start, home)
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "MEMORY.md"), []byte("- shared\n"), 0o600)
+	// The race, made certain: user memory appears after the check and
+	// before the rename.
+	os.MkdirAll(filepath.Join(home, ".localcode"), 0o755)
+	beforeRename = func() {
+		user := Store{Dir: UserDir(home), Scope: ScopeUser, Limits: UserLimits}
+		if _, err := user.Save(Entry{Name: "elsewhere", Type: TypeUser, Body: "x"}, nil, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { beforeRename = nil }()
+	if adopted, err := AdoptStartDirectory(start, home); adopted || err == nil {
+		t.Fatalf("adopted %v, %v", adopted, err)
+	}
+	if (Store{Dir: src}).Adopted() {
+		t.Error("the notes are hidden though user memory does not hold them")
+	}
+	if _, err := os.Lstat(filepath.Join(src, adoptedMarker)); !os.IsNotExist(err) {
+		t.Error("the marker was left")
+	}
+}
+
+func TestPassphraseLengthBoundary(t *testing.T) {
+	// Twenty-four, as USAGE says.
+	if _, ok := LooksSecret("password: "+strings.Repeat("q", 24), nil); !ok {
+		t.Error("24 letters were not caught")
+	}
+	if _, ok := LooksSecret("password: "+strings.Repeat("q", 23), nil); ok {
+		t.Error("23 letters were caught")
+	}
+	for _, s := range []string{"token: internationalization", "secretary: Jane Smith-Brown2", "tokenizer: SentencePiece"} {
+		if reason, ok := LooksSecret(s, nil); ok {
+			t.Errorf("%q refused (%s)", s, reason)
+		}
+	}
+	for _, s := range []string{"secretkey: Ab12cd34ef", "tokens = Zz9yYxXwW", "secret_value=Qw3rty123"} {
+		if _, ok := LooksSecret(s, nil); !ok {
+			t.Errorf("%q was not caught", s)
+		}
+	}
+}
+
+// The ring of counted conversations holds maxCounted: one counted that
+// many conversations ago is still known, one more and it is forgotten.
+func TestTheCountedRingHoldsItsSize(t *testing.T) {
+	if maxCounted != 1000 {
+		t.Fatalf("maxCounted is %d; the ring is meant to hold a thousand", maxCounted)
+	}
+	u := &usage{Entries: map[string]*useMark{}}
+	u.countSession("first")
+	for i := 1; i < maxCounted; i++ {
+		u.countSession(fmt.Sprintf("s%d", i))
+	}
+	if u.countSession("first") {
+		t.Errorf("a conversation %d back was counted again", maxCounted-1)
+	}
+	u.countSession("one-more")
+	u2 := &usage{Entries: map[string]*useMark{}}
+	u2.countSession("first")
+	for i := 1; i <= maxCounted; i++ {
+		u2.countSession(fmt.Sprintf("s%d", i))
+	}
+	if !u2.countSession("first") {
+		t.Errorf("the ring holds more than %d", maxCounted)
+	}
+}
+
+// A block the person moved into the middle of their text goes back to the
+// top, or away, without leaving blank lines where it was.
+func TestAMovedBlockLeavesNoBlankLines(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "n", TypeProject, "", "x", t0)
+	idx := readFile(t, IndexPath(s.Dir))
+	block := idx[:strings.Index(idx, blockEnd)+len(blockEnd)]
+	os.WriteFile(IndexPath(s.Dir), []byte("A\n\n"+block+"\n\nB\n"), 0o644)
+	s.Forget("n", t0)
+	if got := readFile(t, IndexPath(s.Dir)); got != "A\n\nB\n" {
+		t.Errorf("after the block went: %q", got)
+	}
+}
+
+// The similar-notes list does not name a file the save just adopted.
+func TestTheSimilarListLeavesOutWhatTheSaveAdopted(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(s.Dir, 0o755)
+	os.WriteFile(filepath.Join(s.Dir, "Build_Notes.md"), []byte("---\ndescription: build notes for the gui\nmetadata:\n  type: project\n---\nold\n"), 0o644)
+	res := save(t, s, "build-notes", TypeProject, "build notes for the gui", "new", t0)
+	for _, e := range res.Similar {
+		if strings.EqualFold(e.Name, "Build_Notes") {
+			t.Errorf("similar names the adopted file: %+v", res.Similar)
+		}
+	}
+}
+
+// A number assigned to a word like token is a limit, not a credential;
+// letters and digits together still are.
+func TestANumberIsNotACredential(t *testing.T) {
+	for _, s := range []string{"max_tokens: 12800000", "total-tokens: 20000000", "token_limit: 10000000", "password_min_length = 12345678"} {
+		if reason, ok := LooksSecret(s, nil); ok {
+			t.Errorf("%q refused (%s)", s, reason)
+		}
+	}
+	if _, ok := LooksSecret("token: 9f8e7d6c5b", nil); !ok {
+		t.Error("letters and digits together were not caught")
+	}
+}
+
+// A block cut in half by hand is the person's text now, kept whole, the
+// broken marker line included; a new block goes above it.
+func TestAHalfBlockIsKeptWhole(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(s.Dir, 0o755)
+	half := blockStart + "\n## Project\n- [gone](gone.md): x\nmy own line\n"
+	os.WriteFile(IndexPath(s.Dir), []byte(half), 0o644)
+	save(t, s, "n", TypeProject, "", "x", t0)
+	idx := readFile(t, IndexPath(s.Dir))
+	if !strings.HasSuffix(idx, half) || !strings.HasPrefix(idx, blockStart+"\n## Project\n- [n](n.md)") {
+		t.Errorf("index:\n%s", idx)
+	}
+	save(t, s, "n", TypeProject, "", "y", t0)
+	if again := readFile(t, IndexPath(s.Dir)); !strings.HasSuffix(again, half) {
+		t.Errorf("a second save changed the person's text:\n%s", again)
+	}
+}
+
+// A save that adopts several legacy files and fails part way puts back
+// what it moved: a failed save leaves the directory as it was.
+func TestAFailedAdoptionPutsBackWhatItMoved(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(filepath.Join(s.Dir, archiveDirName), 0o755)
+	os.WriteFile(filepath.Join(s.Dir, "Build_Notes.md"), []byte("first\n"), 0o644)
+	os.WriteFile(filepath.Join(s.Dir, "build notes.md"), []byte("second\n"), 0o644)
+	// The second move's destination is taken by a directory with
+	// something in it, so the rename fails.
+	blocked := filepath.Join(s.Dir, archiveDirName, "build notes~"+t0.UTC().Format(archiveStamp)+".md")
+	os.MkdirAll(filepath.Join(blocked, "x"), 0o755)
+	if _, err := s.Save(Entry{Name: "build-notes", Type: TypeProject, Body: "new"}, nil, t0); err == nil {
+		t.Fatal("the save succeeded with a move that cannot happen")
+	}
+	files, _ := noteFiles(s.Dir)
+	if strings.Join(files, ",") != "Build_Notes.md,build notes.md" {
+		t.Errorf("files after the failed save: %v", files)
+	}
+	if got := readFile(t, filepath.Join(s.Dir, "Build_Notes.md")); got != "first\n" {
+		t.Errorf("Build_Notes.md holds %q", got)
+	}
+}
+
+// Two daemons started in the same place adopt the same directory at
+// once: the one that loses the rename finds its own adoption in place,
+// keeps the marker, and reports no error.
+func TestLosingTheRenameToTheSameAdoptionIsFine(t *testing.T) {
+	home, start := t.TempDir(), t.TempDir()
+	src := Dir(start, home)
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "MEMORY.md"), []byte("- shared\n"), 0o600)
+	beforeRename = func() {
+		beforeRename = nil
+		if adopted, err := AdoptStartDirectory(start, home); err != nil || !adopted {
+			t.Errorf("the other daemon's adoption: %v %v", adopted, err)
+		}
+	}
+	defer func() { beforeRename = nil }()
+	if adopted, err := AdoptStartDirectory(start, home); adopted || err != nil {
+		t.Fatalf("the losing adoption: %v %v", adopted, err)
+	}
+	if !(Store{Dir: src}).Adopted() {
+		t.Error("the marker was lost")
+	}
+	if text, _ := (Store{Dir: UserDir(home), Scope: ScopeUser, Limits: UserLimits}).Load(); !strings.Contains(text, "shared") {
+		t.Errorf("user memory: %q", text)
+	}
+}

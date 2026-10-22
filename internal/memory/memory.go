@@ -132,6 +132,12 @@ func AdoptStartDirectory(startDir, home string) (bool, error) {
 			return false, err
 		}
 	}
+	// And the other half of the link: the user memory says where it came
+	// from, so a marker is believed only when the directory it names
+	// really is this one's copy.
+	if err := writeAtomic(filepath.Join(tmp, adoptedFromFile), []byte(filepath.Clean(src)+"\n")); err != nil {
+		return false, err
+	}
 	if err := os.Chmod(tmp, dirMode); err != nil {
 		return false, err
 	}
@@ -142,19 +148,42 @@ func AdoptStartDirectory(startDir, home string) (bool, error) {
 	if err := writeAtomic(marker, []byte("copied into "+dst+"\n")); err != nil {
 		return false, err
 	}
+	if beforeRename != nil {
+		beforeRename()
+	}
 	if err := os.Rename(tmp, dst); err != nil {
-		// Another process got there first: a second daemon adopting the
-		// same directory, or one saving the first user note. Its user
-		// memory stands; if it is this same adoption, the marker is
-		// right, and if not, a marker naming a directory that holds
-		// other notes still means these are not recalled twice.
-		if _, serr := os.Lstat(dst); serr == nil {
+		// Another process got there first. If it was the same adoption,
+		// from a second daemon started in the same place, the marker is
+		// right and these notes are user memory. If it was anything
+		// else, a first user note saved somewhere, these notes are not
+		// in it: the marker goes, and they stay this directory's.
+		if adoptedFrom(dst) == filepath.Clean(src) {
 			return false, nil
 		}
 		os.Remove(marker)
+		if _, serr := os.Lstat(dst); serr == nil {
+			return false, fmt.Errorf("user memory was created by another process during the copy; %s stays where it is", src)
+		}
 		return false, err
 	}
 	return true, nil
+}
+
+// beforeRename is test-only: it runs between the copy and the rename,
+// which is where a race with another process lands.
+var beforeRename func()
+
+// adoptedFromFile, in user memory, names the directory it was copied from.
+const adoptedFromFile = ".adopted-from"
+
+// adoptedFrom is the directory a user memory directory was adopted from,
+// or "".
+func adoptedFrom(dst string) string {
+	data, _, err := readRegular(filepath.Join(dst, adoptedFromFile), 4096)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(data)
 }
 
 // removeStaleAdoptions deletes what an adoption that crashed left beside
@@ -191,8 +220,11 @@ func (s Store) Adopted() bool {
 	if dst == "" {
 		return false
 	}
-	info, err := os.Lstat(dst)
-	return err == nil && info.IsDir()
+	// Both halves of the link: the marker names a directory, and that
+	// directory says it was copied from here. Any other directory, or
+	// none, and these notes were never delivered, so they are not
+	// hidden.
+	return adoptedFrom(dst) == filepath.Clean(s.Dir)
 }
 
 // IsFilesystemRoot reports whether dir is the root of its volume: "/" or

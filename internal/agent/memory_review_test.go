@@ -303,3 +303,101 @@ func TestARetirementNoticeWaitsForItsProject(t *testing.T) {
 		t.Errorf("back in project A, the retirement is not announced:\n%s", idx)
 	}
 }
+
+// The question a user-scope save asks says how far the note reaches, and
+// the description of any other scope does not claim every project.
+func TestTheSaveDescriptionNamesTheScopesReach(t *testing.T) {
+	for scope, want := range map[string]string{
+		"user":    "every project",
+		"project": "later sessions in this project",
+		"session": "this conversation only",
+	} {
+		out := MemorySaveTool{}.Describe(json.RawMessage(`{"scope":"` + scope + `","name":"n","content":"c"}`))
+		if !strings.Contains(out, want) || (scope != "user" && strings.Contains(out, "every project")) {
+			t.Errorf("%s: %s", scope, out)
+		}
+	}
+}
+
+// Failed forgets give their allowance back exactly: after ten of them the
+// turn still forgets ten notes, and not an eleventh.
+func TestFailedForgetsLeaveExactlyTheLimit(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	withMemory(t, loop)
+	for i := 0; i <= maxForgetsPerTurn; i++ {
+		mustMem(t, loop, sid, MemorySaveTool{loop}, fmt.Sprintf(`{"scope":"project","name":"n-%d","content":"fact %d"}`, i, i))
+	}
+	for i := 0; i < maxForgetsPerTurn; i++ {
+		if _, isErr := memCall(t, loop, sid, MemoryForgetTool{loop}, `{"name":"no-such-note"}`); !isErr {
+			t.Fatal("forgetting a missing note succeeded")
+		}
+	}
+	for i := 0; i < maxForgetsPerTurn; i++ {
+		mustMem(t, loop, sid, MemoryForgetTool{loop}, fmt.Sprintf(`{"name":"n-%d"}`, i))
+	}
+	if out, isErr := memCall(t, loop, sid, MemoryForgetTool{loop}, fmt.Sprintf(`{"name":"n-%d"}`, maxForgetsPerTurn)); !isErr {
+		t.Errorf("an eleventh forget was allowed: %s", out)
+	}
+}
+
+// A session that moves workspace in the middle of a turn reads the new
+// project's memory, and a citation counts there, not in the project it
+// left.
+func TestCitationsFollowAWorkspaceMove(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	cfg := withMemory(t, loop)
+	cfg.ProjectDir = ""
+	dirA, dirB := t.TempDir(), t.TempDir()
+	if _, err := loop.Store.SetWorkspace(sid, dirA); err != nil {
+		t.Fatal(err)
+	}
+	mustMem(t, loop, sid, MemorySaveTool{loop}, `{"scope":"project","name":"alpha-note","content":"a"}`)
+	loop.memoryIndexFor(sid)
+	if _, err := loop.Store.SetWorkspace(sid, dirB); err != nil {
+		t.Fatal(err)
+	}
+	mustMem(t, loop, sid, MemorySaveTool{loop}, `{"scope":"project","name":"beta-note","content":"b"}`)
+	later := cfg.now().Add(time.Hour)
+	cfg.Now = func() time.Time { return later }
+	loop.memoryIndexFor(sid)
+	loop.noteMemoryCitations(sid, []provider.Block{provider.TextBlock("Following beta-note, and alpha-note.")})
+	if u := mustUsage(loop.projectStore(sid))["beta-note"]; !u.LastUsed.Equal(later) {
+		t.Errorf("beta-note's citation was not counted in B: %+v", u)
+	}
+	stA := memory.Store{Dir: memory.Dir(dirA, cfg.Home), Scope: memory.ScopeProject, Limits: memory.ProjectLimits}
+	if u := mustUsage(stA)["alpha-note"]; u.LastUsed.Equal(later) {
+		t.Errorf("alpha-note's citation was counted in A after the move: %+v", u)
+	}
+}
+
+func mustUsage(st memory.Store) map[string]memory.Usage {
+	use, _, _ := st.UsageOf()
+	return use
+}
+
+// A note named after the session moved to another project in the middle
+// of a turn is the new project's: the old snapshot is read again first.
+func TestACitationAfterAMoveCountsInTheNewProject(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	cfg := withMemory(t, loop)
+	cfg.ProjectDir = ""
+	dirA, dirB := t.TempDir(), t.TempDir()
+	loop.Store.SetWorkspace(sid, dirA)
+	mustMem(t, loop, sid, MemorySaveTool{loop}, `{"scope":"project","name":"note-in-a","content":"a"}`)
+	loop.memoryIndexFor(sid)
+	loop.Store.SetWorkspace(sid, dirB)
+	stB := loop.projectStore(sid)
+	if _, err := stB.Save(memory.Entry{Name: "note-in-b", Type: memory.TypeProject, Body: "b"}, nil, cfg.now()); err != nil {
+		t.Fatal(err)
+	}
+	later := cfg.now().Add(time.Hour)
+	cfg.Now = func() time.Time { return later }
+	loop.noteMemoryCitations(sid, []provider.Block{provider.TextBlock("Going by note-in-b and note-in-a.")})
+	if u := mustUsage(stB)["note-in-b"]; !u.LastUsed.Equal(later) {
+		t.Errorf("note-in-b: %+v", u)
+	}
+	stA := memory.Store{Dir: memory.Dir(dirA, cfg.Home)}
+	if u := mustUsage(stA)["note-in-a"]; u.LastUsed.Equal(later) {
+		t.Errorf("note-in-a was credited in A after the move: %+v", u)
+	}
+}
