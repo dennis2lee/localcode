@@ -451,3 +451,38 @@ func TestARetirementIsAnnouncedWhenTheIndexCannotBeRewritten(t *testing.T) {
 		t.Errorf("the retirement was not announced:\n%s", idx[:min(len(idx), 600)])
 	}
 }
+
+// The text a save replaced is reachable through the tools: search names
+// the archived copy, memory_read with archived shows it, and saving it
+// again brings it back.
+func TestReplacedTextIsReadBackThroughTheTools(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	cfg := withMemory(t, loop)
+	now := cfg.now()
+	cfg.Now = func() time.Time { now = now.Add(time.Second); return now }
+	mustMem(t, loop, sid, MemorySaveTool{loop}, `{"scope":"project","name":"deploy-plan","description":"Deployment decision","content":"The old endpoint is cobalt.internal; keep it until the migration ends."}`)
+	saved := mustMem(t, loop, sid, MemorySaveTool{loop}, `{"scope":"project","name":"deploy-plan","description":"Deployment decision","content":"The endpoint is amber.internal."}`)
+	if !strings.Contains(saved, "memory_read with archived true") {
+		t.Errorf("the save does not say where the earlier text went: %s", saved)
+	}
+	search := mustMem(t, loop, sid, MemorySearchTool{loop}, `{"scope":"project","query":"cobalt"}`)
+	if !strings.Contains(search, "deploy-plan (archived; memory_read with archived true shows it)") {
+		t.Errorf("search: %s", search)
+	}
+	old := mustMem(t, loop, sid, MemoryReadTool{loop}, `{"name":"deploy-plan","archived":true}`)
+	if !strings.Contains(old, "cobalt.internal") || !strings.Contains(old, "archived project note deploy-plan") {
+		t.Errorf("archived read: %s", old)
+	}
+	if out, isErr := memCall(t, loop, sid, MemoryForgetTool{loop}, `{"name":"deploy-plan","restore":true}`); !isErr || !strings.Contains(out, "memory_read with archived true") {
+		t.Errorf("restore over a live note: %v %s", isErr, out)
+	}
+	if out, isErr := memCall(t, loop, sid, MemoryReadTool{loop}, `{"name":"no-such","archived":true}`); !isErr || !strings.Contains(out, "no archived note") {
+		t.Errorf("a missing archived note: %v %s", isErr, out)
+	}
+	// Reading an archived copy is not a use of the live note.
+	before := mustUsage(loop.projectStore(sid))["deploy-plan"].Uses
+	mustMem(t, loop, sid, MemoryReadTool{loop}, `{"name":"deploy-plan","archived":true}`)
+	if after := mustUsage(loop.projectStore(sid))["deploy-plan"].Uses; after != before {
+		t.Errorf("an archived read counted as a use: %d -> %d", before, after)
+	}
+}

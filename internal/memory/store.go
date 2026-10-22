@@ -345,6 +345,30 @@ func (s Store) ArchivedNotes() ([]Archived, error) {
 	return out, nil
 }
 
+// ReadArchived returns the most recently archived copy of a note, and
+// how many older copies the archive holds. It is how the text a save
+// replaced, or a note forgotten, is read back through the tools: restore
+// brings a forgotten note back, and a replaced note's earlier text is
+// read here and saved again if it was the right one.
+func (s Store) ReadArchived(name string) (Archived, int, error) {
+	list, err := s.ArchivedNotes()
+	if err != nil {
+		return Archived{}, 0, err
+	}
+	norm, nerr := NormalizeName(name)
+	want := strings.TrimSuffix(strings.TrimSpace(name), ".md")
+	var found []Archived
+	for _, a := range list {
+		if strings.EqualFold(a.Entry.Name, want) || (nerr == nil && a.Entry.Name == norm) {
+			found = append(found, a)
+		}
+	}
+	if len(found) == 0 {
+		return Archived{}, 0, ErrNotFound
+	}
+	return found[0], len(found) - 1, nil
+}
+
 // find resolves a name to a note file in dir: the normalized name first,
 // then a case-insensitive match on a legacy file's own name, which may
 // not be normalized ("Build_Notes.md").
@@ -733,7 +757,7 @@ func (s Store) Restore(name string, now time.Time) (string, error) {
 			return fmt.Errorf("an archived copy named %q cannot be restored under that name; read it with memory_search and save its text under another name", pick.Entry.Name)
 		}
 		if _, err := os.Lstat(filepath.Join(s.Dir, file)); err == nil {
-			return fmt.Errorf("a note named %s exists; forget it first, or save the archived text under another name", pick.Entry.Name)
+			return fmt.Errorf("a note named %s exists, so the archived copy cannot take its place. memory_read with archived true shows the archived text; saving that text under this name replaces the current note, whose text then goes to the archive in turn", pick.Entry.Name)
 		}
 		existing, err := noteFiles(s.Dir)
 		if err != nil {

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.168.1
+
+Replaced memory text readable again through the memory tools, and hand-written index lines kept when they say more than a link.
+
+**Fixed**
+
+* The text a save replaced reachable only on disk: `memory_read` with `archived` shows the most recent archived copy, and search, save and restore point to it
+* Adopting or forgetting a legacy note deleting a hand-written index line that also held another link or a fact of its own; only a bare link with a short hook is removed
+* An index that is one line longer than its whole budget cut without the notice that says so
+
 ## v0.168.0
 
 Auto memory rebuilt: notes for a conversation, a project and the person, saved with tools of their own, indexed by type, kept within budgets, and retired to an archive when unused.

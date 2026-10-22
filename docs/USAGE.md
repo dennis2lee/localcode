@@ -1087,7 +1087,7 @@ A rule that everyone working on the repository should follow belongs in `AGENTS.
 * A project or user note is one file, `<name>.md`, with a frontmatter header: `name`, `description`, and under `metadata` its `type`, `created`, `modified` and, when set, `keep`.
 * Types: `user` (about the person), `feedback` (a correction or a confirmed way of working, with a "Why:" and a "How to apply:" line), `project` (a fact about the work), `reference` (where something outside the repository lives).
 * `MEMORY.md` is the index. The memory tools own one block in it, generated from the note files: one line per note, `- [name](name.md): description`, grouped by type in that order, most recently used first. Everything outside the block is kept byte for byte, its line endings and a byte-order mark included; the block itself uses CRLF when the file has any CRLF line. The block is written at the top, and the conversation's first turn rewrites it when it no longer matches the note files, after a crash or a hand edit.
-* What reaches the prompt is the block, then the rest of `MEMORY.md`. Project memory loads 200 lines or 25KB, user memory 80 lines or 8KB. When something does not fit, the last line says how many lines were left out; `memory_search` reaches them, the hand-written lines included.
+* What reaches the prompt is the block, then the rest of `MEMORY.md`. Project memory loads 200 lines or 25KB, user memory 80 lines or 8KB. When something does not fit, the last line says how many lines were left out, or that a line longer than the whole budget was cut short; `memory_search` reaches them, the hand-written lines included.
 * Limits: 150 project notes, 60 user notes, 4KB per note. Session memory holds 30 notes, 8KB in all, 2KB each. A save past a limit is refused with what to do instead.
 * The project directory comes from the git repository of the conversation's own workspace, so it follows a conversation that moves. Subdirectories and linked worktrees of one repository share it. Outside a repository, the workspace directory is used.
 * A directory is created the first time something is saved in it.
@@ -1098,8 +1098,8 @@ A rule that everyone working on the repository should follow belongs in `AGENTS.
 * User and feedback notes are never retired: their index line is usually the whole note, used without being opened. Neither is a note saved with `keep`, which the model sets when the person asked it to remember something.
 * The model is asked to name a note it relied on. A name in an answer counts as a use, as does opening the note with `memory_read` or `read_file`.
 * Only a conversation's first turn counts toward the 30. A task, a scheduled run and `localcode run` do not count.
-* The conversation in which notes retire is told which ones. Retirement moves; it never deletes. `memory_search` still finds an archived note, and `memory_forget` with `restore` brings it back.
-* A save that replaces a note also keeps the previous text in the archive. The archive keeps the 300 most recent copies.
+* The conversation in which notes retire is told which ones. Retirement moves; it never deletes. `memory_search` still finds an archived note, `memory_read` with `archived` shows its text, and `memory_forget` with `restore` brings it back.
+* A save that replaces a note also keeps the previous text in the archive, where `memory_read` with `archived` shows it; saving that text again brings it back. The archive keeps the 300 most recent copies.
 * `memory_retire_days` changes the 90; `0` turns retirement off.
 
 **Trust**
@@ -1113,7 +1113,7 @@ A rule that everyone working on the repository should follow belongs in `AGENTS.
 
 **Compatibility**
 
-* An existing `MEMORY.md` and its topic files keep loading as before. Topic files without a frontmatter header are listed as `legacy`, never retired, and never rewritten. Saving a note under a legacy file's name, the same name in another case, or a name it normalizes to (`build-notes` for `Build_Notes.md`), adopts every such file: each goes to the archive whole, and the hand-written index lines that only linked to them are removed.
+* An existing `MEMORY.md` and its topic files keep loading as before. Topic files without a frontmatter header are listed as `legacy`, never retired, and never rewritten. Saving a note under a legacy file's name, the same name in another case, or a name it normalizes to (`build-notes` for `Build_Notes.md`), adopts every such file: each goes to the archive whole, and a hand-written index line that is nothing but a link to it and a hook of up to 150 characters is removed. A line with another link in it, or more text than a hook, stays.
 * The prompt reads each conversation's index at its first turn and keeps it until the conversation saves or forgets a note, is compacted, or is cleared. Earlier versions read one index when the daemon started and never again.
 * A daemon started outside a repository (the desktop app started from Finder runs in `/`) used one memory directory for every project. Its notes are copied once into user memory, so they still reach every project. The old directory is left in place, marked with a `.adopted` file, and a conversation working in that directory has no project memory, so the notes are not recalled twice.
 * A workspace that is a filesystem root has no project memory either. Project saves there are refused with the reason; session and user memory work as anywhere else.
@@ -2186,7 +2186,7 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
 | `Verdict` | No | Report a review's result as a boolean plus findings. Offered only to a reviewer inside a debate. See [Debate](#debate). |
 | `memory_save` | Only for `user` scope | Save a note in `session`, `project` or `user` memory, or replace the note of that name. Refuses a credential. A sub agent may save session notes only. Registered while `auto_memory_enabled` is on. See [Auto memory](#auto-memory). |
-| `memory_read` | No | Read one note in full, by name. Counts as a use. |
+| `memory_read` | No | Read one note in full, by name. Counts as a use. With `archived`, read the most recent archived copy instead: the text a save replaced, or a note forgotten or retired. |
 | `memory_search` | No | Find notes containing every word of a query, in every scope, archived notes and hand-written `MEMORY.md` lines included. With no query, list every note, up to 200 a scope. |
 | `memory_forget` | Only for `user` scope | Move a note to the archive, or bring one back with `restore`. At most 10 per turn in project scope and 10 in user scope. |
 | `update_plan` | No | Write or update the checklist for work the model is doing itself, shown in the transcript. Exactly one step may be `in_progress`, and one-step plans are refused. The model is also told never to move a step from `pending` straight to `completed`, but that is guidance in the tool description rather than a refusal: the tool records the list it is given and does not compare it with the last one. Offered only with [Smart Agent](#smart-agent) on. Distinct from `Orchestrate`, which delegates stages to other agents. |

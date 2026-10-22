@@ -42,6 +42,7 @@ type memoryArgs struct {
 	Keep        *bool  `json:"keep"`
 	Query       string `json:"query"`
 	Restore     bool   `json:"restore"`
+	Archived    bool   `json:"archived"`
 }
 
 func parseMemoryArgs(input json.RawMessage) (memoryArgs, error) {
@@ -238,7 +239,7 @@ func (t MemorySaveTool) Execute(ctx context.Context, input json.RawMessage) tool
 	var b strings.Builder
 	fmt.Fprintf(&b, "Saved %s note %s (type %s).", scope, res.Name, typ)
 	if res.Replaced != nil {
-		b.WriteString(" It replaced the note of that name; what it said before is in the archive.")
+		b.WriteString(" It replaced the note of that name; what it said before is in the archive, and memory_read with archived true shows it.")
 	}
 	if name != strings.TrimSpace(a.Name) {
 		fmt.Fprintf(&b, " Its name is %s.", name)
@@ -300,13 +301,15 @@ func (MemoryReadTool) Name() string { return memoryReadTool }
 
 func (MemoryReadTool) Description() string {
 	return "Read one memory note in full, by the name the index shows. Without a scope, the conversation's own notes are " +
-		"looked at first, then the project's, then the person's."
+		"looked at first, then the project's, then the person's. With archived set, read the most recent archived copy " +
+		"instead: the text a save replaced, or a note that was forgotten or retired."
 }
 
 func (MemoryReadTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` +
 		`"name":{"type":"string","description":"The note's name, as the index or memory_search shows it."},` +
-		`"scope":{"type":"string","enum":["session","project","user"],"description":"Where to look. Optional."}` +
+		`"scope":{"type":"string","enum":["session","project","user"],"description":"Where to look. Optional."},` +
+		`"archived":{"type":"boolean","description":"Read the most recent archived copy of a project or user note: what a save replaced, or what was forgotten. Optional."}` +
 		`},"required":["name"],"additionalProperties":false}`)
 }
 
@@ -334,6 +337,9 @@ func (t MemoryReadTool) Execute(ctx context.Context, input json.RawMessage) tool
 		scopes = []memory.Scope{scope}
 	}
 	now := l.Memory.now()
+	if a.Archived {
+		return l.readArchived(sessionID, a.Name, scopes)
+	}
 	for _, scope := range scopes {
 		if scope == memory.ScopeSession {
 			norm, _ := memory.NormalizeName(a.Name)
@@ -374,6 +380,46 @@ func (t MemoryReadTool) Execute(ctx context.Context, input json.RawMessage) tool
 		return tools.Result{Content: b.String()}
 	}
 	return memoryErr("no note named %q. memory_search finds notes by any word in them, archived ones included.", a.Name)
+}
+
+// readArchived answers memory_read with archived set: the newest archived
+// copy of the name in the first durable scope that has one. Not a use of
+// anything: what is read is not a live note.
+func (l *Loop) readArchived(sessionID, name string, scopes []memory.Scope) tools.Result {
+	for _, scope := range scopes {
+		if scope == memory.ScopeSession {
+			continue
+		}
+		if scope == memory.ScopeProject && l.noProjectMemory(sessionID) != "" {
+			continue
+		}
+		a, older, err := l.durableStore(sessionID, scope).ReadArchived(name)
+		if errors.Is(err, memory.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return memoryErr("%v", err)
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "archived %s note %s (type %s", scope, a.Entry.Name, a.Entry.Type)
+		if !a.At.IsZero() {
+			fmt.Fprintf(&b, ", archived %s", describeAge(a.At, l.Memory.now()))
+		}
+		if older > 0 {
+			fmt.Fprintf(&b, "; %d older copies", older)
+		}
+		b.WriteString(")\n")
+		if a.Entry.Description != "" {
+			b.WriteString(memory.Neutralize(a.Entry.Description) + "\n\n")
+		}
+		b.WriteString(memory.Neutralize(a.Entry.Body))
+		b.WriteString("\n\nThis is not a live note. To bring it back: memory_forget with restore when no note of this name exists, or memory_save this text under the name, which archives the current text in turn.")
+		return tools.Result{Content: b.String()}
+	}
+	if len(scopes) == 1 && scopes[0] == memory.ScopeSession {
+		return memoryErr("session notes are not archived")
+	}
+	return memoryErr("no archived note named %q", name)
 }
 
 // MemorySearchTool finds notes, or lists them all.
@@ -460,7 +506,7 @@ func (t MemorySearchTool) Execute(ctx context.Context, input json.RawMessage) to
 			case h.IndexLine != "":
 				fmt.Fprintf(&b, "- %s MEMORY.md line: %s\n", scope, h.IndexLine)
 			case h.Archived:
-				fmt.Fprintf(&b, "- %s %s (archived; memory_forget with restore brings it back): %s\n", scope, h.Entry.Name, memory.Neutralize(h.Entry.Description))
+				fmt.Fprintf(&b, "- %s %s (archived; memory_read with archived true shows it): %s\n", scope, h.Entry.Name, memory.Neutralize(h.Entry.Description))
 			default:
 				fmt.Fprintf(&b, "- %s %s (%s): %s\n", scope, h.Entry.Name, h.Entry.Type, memory.Neutralize(h.Entry.Description))
 			}

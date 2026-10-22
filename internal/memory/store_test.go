@@ -2086,3 +2086,60 @@ func TestForgetAndRestoreSucceedOnceTheNoteHasMoved(t *testing.T) {
 		t.Errorf("after restore: %+v %v", e, err)
 	}
 }
+
+// A hand-written line that says more than the link and its hook (another
+// link, a constraint of its own) is the person's text and survives the
+// adoption of the file it links; only bare link lines are dropped.
+func TestAnIndexLineThatSaysMoreSurvivesAdoption(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(s.Dir, 0o755)
+	more := "- [Build](build.md); production deploys need approval from [Release owners](https://example.com/release-owners).\n"
+	long := "- [Old](old.md) - " + strings.Repeat("a fact of its own ", 10) + "\n"
+	bare := "- [Gone](gone.md) - how it was done\n"
+	os.WriteFile(IndexPath(s.Dir), []byte(more+long+bare), 0o600)
+	for _, f := range []string{"build.md", "old.md", "gone.md"} {
+		os.WriteFile(filepath.Join(s.Dir, f), []byte("x\n"), 0o600)
+	}
+	save(t, s, "build", TypeProject, "Build procedure", "make build", t0)
+	s.Forget("old", t0)
+	s.Forget("gone", t0)
+	got := readFile(t, IndexPath(s.Dir))
+	if !strings.Contains(got, more) || !strings.Contains(got, long) {
+		t.Errorf("a line that says more was dropped:\n%s", got)
+	}
+	if strings.Contains(got, "gone.md") {
+		t.Errorf("a bare link line to a forgotten note was kept:\n%s", got)
+	}
+}
+
+// An index that is one line longer than the whole budget is cut, and the
+// cut is said, as dropped lines are.
+func TestALongSingleLineIndexSaysItWasCut(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(s.Dir, 0o755)
+	os.WriteFile(IndexPath(s.Dir), []byte(strings.Repeat("deployment context ", 1800)), 0o600)
+	text, stats := s.Load()
+	if stats.Omitted == 0 || !strings.Contains(text, "cut short") || len(text) > s.Limits.IndexBytes {
+		t.Errorf("stats %+v, %d bytes, ends %q", stats, len(text), text[max(0, len(text)-160):])
+	}
+	// And with more lines after it.
+	os.WriteFile(IndexPath(s.Dir), []byte(strings.Repeat("deployment context ", 1800)+"\nsecond\nthird\n"), 0o600)
+	text, stats = s.Load()
+	if stats.Omitted != 2 || !strings.Contains(text, "cut short, and 2 more index lines") {
+		t.Errorf("stats %+v, ends %q", stats, text[max(0, len(text)-160):])
+	}
+}
+
+func TestReadArchivedTakesTheNewestCopy(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "n", TypeProject, "", "one", t0)
+	save(t, s, "n", TypeProject, "", "two", t0.Add(time.Minute))
+	save(t, s, "n", TypeProject, "", "three", t0.Add(2*time.Minute))
+	a, older, err := s.ReadArchived("N")
+	if err != nil || a.Entry.Body != "two" || older != 1 {
+		t.Errorf("newest archived %q, older %d, %v", a.Entry.Body, older, err)
+	}
+	if _, _, err := s.ReadArchived("missing"); err != ErrNotFound {
+		t.Errorf("missing: %v", err)
+	}
+}

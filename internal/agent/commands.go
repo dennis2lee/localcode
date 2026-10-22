@@ -308,7 +308,7 @@ const memoryTidyPrompt = `Tidy your memory. Use memory_search with no query to l
 3. Forget a note that no longer helps: one about work that is finished, or one that only repeats what the code, the git history or AGENTS.md already record.
 4. Move a note that is in the wrong scope or has the wrong type: save it where it belongs, then forget the old one. A user note is about the person in every project; a project note is about this repository.
 5. Shorten a note that has grown long, keeping its fact and its reason.
-Leave alone any note that is right where it is. Change one note per call and never rewrite them all at once. A forgotten or replaced note goes to the archive, so a mistake can be undone with memory_forget restore. Finish with a short list of what you changed and why.`
+Leave alone any note that is right where it is. Change one note per call and never rewrite them all at once. A forgotten or replaced note goes to the archive, so a mistake can be undone: memory_read with archived true shows the earlier text, which you can save again, and memory_forget with restore brings back a note you forgot. Finish with a short list of what you changed and why.`
 
 // memoryOffText is the answer when auto memory is switched off.
 const memoryOffText = "Auto memory is disabled (config.json's \"auto_memory_enabled\": false)."

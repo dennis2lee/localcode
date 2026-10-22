@@ -279,15 +279,36 @@ func (s Store) regenerate(u *usage) (IndexStats, error) {
 	return stats, nil
 }
 
-// legacyLink matches a hand-written index line that is nothing but a link
-// to one file, with or without a hook after it.
+// legacyLink matches a hand-written index line that starts with a link
+// to one file. Whether the line is nothing but that link and its hook is
+// onlyLinks's to say.
 func legacyLink(file string) *regexp.Regexp {
-	return regexp.MustCompile(`(?m)^[ \t]*[-*][ \t]+\[[^\]\n]*\]\(` + regexp.QuoteMeta(file) + `\)[^\n]*\n?`)
+	return regexp.MustCompile(`(?m)^[ \t]*[-*][ \t]+\[[^\]\n]*\]\(` + regexp.QuoteMeta(file) + `\)([^\n]*)\n?`)
+}
+
+// maxHook is the longest text after the link that is still taken for the
+// note's one-line hook, which the generated block's description replaces.
+const maxHook = 150
+
+// dropOnlyLinks removes from text the lines legacyLink finds that say
+// nothing but the link and a short hook: no other link, nothing long
+// enough to be a fact of its own. A line that says more is the person's
+// and stays, a duplicate of the generated line rather than a loss.
+func dropOnlyLinks(re *regexp.Regexp, text string) string {
+	return re.ReplaceAllStringFunc(text, func(line string) string {
+		m := re.FindStringSubmatch(line)
+		after := strings.TrimRight(m[1], "\r")
+		if strings.Contains(after, "](") || len([]rune(after)) > maxHook {
+			return line
+		}
+		return ""
+	})
 }
 
 // dropLegacyLine takes out of the person's part of MEMORY.md the line that
 // only pointed at file, once the tool manages that file or it has been
-// forgotten. Lines that say more than a link, or link elsewhere, stay.
+// forgotten. Lines that say more than a link and its hook, or link
+// elsewhere too, stay.
 func dropLegacyLine(dir, file string) error {
 	if err := indexTooLarge(dir); err != nil {
 		return err
@@ -307,10 +328,10 @@ func dropLegacyLine(dir, file string) error {
 	}
 	var out string
 	if block == "" || start < 0 {
-		out = re.ReplaceAllString(content, "")
+		out = dropOnlyLinks(re, content)
 	} else {
 		before, after := content[:start], content[start+len(block):]
-		out = re.ReplaceAllString(before, "") + block + re.ReplaceAllString(after, "")
+		out = dropOnlyLinks(re, before) + block + dropOnlyLinks(re, after)
 	}
 	return writeIndex(dir, f, out)
 }
@@ -343,18 +364,31 @@ func (s Store) load(entries []Entry, u *usage) (string, IndexStats) {
 		return "", stats
 	}
 	all := strings.Split(text, "\n")
-	kept, _ := capLines(all, s.Limits)
-	if len(kept) < len(all) {
+	kept, _, cut := capLines(all, s.Limits)
+	if len(kept) < len(all) || cut {
 		// Room for the line that says so, inside the same limits: the
 		// limits are what the prompt pays, and a note about the budget
 		// should not be what breaks it.
 		lim := s.Limits
 		lim.IndexLines = max(lim.IndexLines-1, 0)
 		lim.IndexBytes = max(lim.IndexBytes-omittedNoteReserve, 0)
-		kept, _ = capLines(all, lim)
+		kept, _, cut = capLines(all, lim)
 		omitted := len(all) - len(kept)
+		var notice string
+		switch {
+		case cut && omitted == 0:
+			// One line longer than the whole budget: a pasted paragraph
+			// or record. What was cut is a line's end, not whole lines,
+			// and it is said all the same.
+			notice = "(the line above is longer than the index's budget and was cut short. memory_search reaches every note, and with no query lists them all.)"
+			omitted = 1
+		case cut:
+			notice = fmt.Sprintf("(the line above was cut short, and %d more index lines did not fit and are not shown. memory_search reaches every note, and with no query lists them all.)", omitted)
+		default:
+			notice = fmt.Sprintf("(%d more index lines did not fit and are not shown. memory_search reaches every note, and with no query lists them all.)", omitted)
+		}
 		stats.Omitted = omitted
-		kept = append(kept, fmt.Sprintf("(%d more index lines did not fit and are not shown. memory_search reaches every note, and with no query lists them all.)", omitted))
+		kept = append(kept, notice)
 	}
 	out := strings.Join(kept, "\n")
 	stats.Lines, stats.Bytes = len(kept), len(out)
@@ -369,9 +403,7 @@ const omittedNoteReserve = 160
 // single line longer than the byte budget is cut at a rune boundary
 // rather than dropped, so an index that is one long paragraph still loads
 // its beginning, as it always has.
-func capLines(lines []string, lim Limits) ([]string, int) {
-	var kept []string
-	size := 0
+func capLines(lines []string, lim Limits) (kept []string, size int, cut bool) {
 	for _, l := range lines {
 		if len(kept) >= lim.IndexLines {
 			break
@@ -382,17 +414,18 @@ func capLines(lines []string, lim Limits) ([]string, int) {
 		}
 		if size+need > lim.IndexBytes {
 			if len(kept) == 0 && lim.IndexBytes > 0 {
-				cut := l[:lim.IndexBytes]
-				for len(cut) > 0 && !utf8.ValidString(cut) {
-					cut = cut[:len(cut)-1]
+				part := l[:lim.IndexBytes]
+				for len(part) > 0 && !utf8.ValidString(part) {
+					part = part[:len(part)-1]
 				}
-				kept = append(kept, cut)
-				size = len(cut)
+				kept = append(kept, part)
+				size = len(part)
+				cut = true
 			}
 			break
 		}
 		kept = append(kept, l)
 		size += need
 	}
-	return kept, size
+	return kept, size, cut
 }
