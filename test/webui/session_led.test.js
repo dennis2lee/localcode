@@ -281,3 +281,59 @@ test('without motion the light under the prompt is a ring too', () => {
   assert.ok(ring, 'the light under the prompt pulses where the panel shows a ring');
   assert.match(ring, /animation:\s*none/);
 });
+
+// Two list requests in flight: the older answer arriving second described
+// an earlier moment than the one already drawn, and is not applied.
+test('an older list answered after a newer one is not drawn', async () => {
+  const pending = [];
+  let hold = false;
+  const here = { id: 'sess-1', title: 'here', agent: 'general-purpose', workspace: '/w' };
+  const app = await load({
+    routes: {
+      'GET /api/sessions': () => {
+        if (!hold) return [here, { id: 's2', title: 'elsewhere', agent: 'general-purpose', workspace: '/w' }];
+        return new Promise((resolve) => pending.push(resolve));
+      },
+    },
+  });
+  hold = true;
+  app.sse.emit({ type: 'session.renamed', data: {} });
+  app.sse.emit({ type: 'session.renamed', data: {} });
+  await app.settle();
+  assert.equal(pending.length, 2, 'two requests were not in flight');
+  pending[1]([here, { id: 's2', title: 'elsewhere', agent: 'general-purpose', workspace: '/w', tasks: 0 }]);
+  await app.settle();
+  pending[0]([here, { id: 's2', title: 'elsewhere', agent: 'general-purpose', workspace: '/w', tasks: 1 }]);
+  await app.settle();
+  assert.deepEqual(leds(app), ['idle', 'idle'], 'the older answer was drawn over the newer one');
+});
+
+// A question raised after a list was asked for survives the list's late
+// answer, as a running task does.
+test('a session waiting since the list was asked for stays amber', async () => {
+  let answer;
+  let hold = false;
+  const rows = () => [{ id: 'sess-1', title: 'here', agent: 'general-purpose', workspace: '/w' }, { id: 's2', title: 'elsewhere', agent: 'general-purpose', workspace: '/w', busy: true }];
+  const app = await load({
+    routes: { 'GET /api/sessions': () => (hold ? new Promise((resolve) => { answer = resolve; }) : rows()) },
+  });
+  hold = true;
+  app.sse.emit({ type: 'session.renamed', data: {} });
+  await app.settle();
+  app.sse.emit({ type: 'session.activity', data: { session: 's2', busy: true, tasks: 0, asking: true } });
+  answer(rows());
+  await app.settle();
+  assert.deepEqual(leds(app), ['idle', 'asking']);
+});
+
+// The light under the prompt says which of the two it is waiting on.
+test('the light under the prompt names a permission request as one', async () => {
+  const app = await load();
+  app.applyEvent({
+    type: 'permission.request',
+    data: { id: 'p1', tool: 'bash', description: 'run make', rule: 'bash:make', can_always: false },
+  });
+  const dot = app.el('comm-dot');
+  assert.ok(dot.className.includes('asking'), dot.className);
+  assert.match(dot.title, /answer a permission request/);
+});

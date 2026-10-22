@@ -12,8 +12,8 @@ Session and scheduled-task lights blink while work goes on, turn amber while it 
 * A light left wrong by activity sent while the event stream was down, or by a session list answered after a newer event; the list is read again on reconnect, and newer events are kept over a late list
 * A conversation whose task the replaced daemon was still finishing during an update drawn as idle; it is working until the old daemon lets go
 * With animation effects off in Windows, or less motion asked for elsewhere, a working session drawn the same as a finished one; it is a green ring, in the panel and under the prompt
-* A repeating scheduled task whose first result had been read drawn every later result as read, in the right panel and after a restart, where clicking it then recorded nothing; each run's result is unread until read
-* A scheduled run waiting on a permission request or a question drawn as running; its row is amber while it waits
+* A repeating scheduled task whose first result had been read drawn every later result as read, in the right panel, after a restart and at the end of a series, where clicking it then recorded nothing; each run's result is unread until read
+* A scheduled run waiting on a permission request drawn as running; its row is amber while it waits
 * With less motion asked for, a scheduled run still going drawn as a dimmed copy of a finished one; it is a green ring, as an MCP server that is degraded is
 
 **Changed**

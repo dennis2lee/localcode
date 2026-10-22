@@ -12,6 +12,13 @@ import { askText, askConfirm } from './prompt.js';
 import { loadSchedules } from './schedules.js';
 import { permissionRequest } from './modals.js';
 
+// listAsked numbers the session-list requests, and listShown is the one
+// whose answer the panel holds. Two can be in flight at once (a rename
+// and a reconnect, say), and the older answer arriving second described
+// an earlier moment than the one already drawn.
+let listAsked = 0;
+let listShown = 0;
+
 export async function loadSessions() {
   // A listing that was asked for before a drop was saved describes the
   // panel as it was before the drop, and painting it would undo the drop
@@ -25,6 +32,7 @@ export async function loadSessions() {
     started = savesStarted;
     groupsAreCurrent = false;
     const askedAt = app.activityTick;
+    const mine = ++listAsked;
     let listing;
     try {
       listing = await apiClient.getSessions();
@@ -37,13 +45,17 @@ export async function loadSessions() {
     // Held in a local until it is known to be current: a drop that began
     // meanwhile has already rewritten app.sessions, and its request sends
     // that list, so overwriting it here would save the old order.
-    if (started === savesStarted) app.sessions = listing;
+    const newest = mine > listShown;
+    if (started === savesStarted && newest) {
+      app.sessions = listing;
+      listShown = mine;
+    }
     try {
       const res = await apiClient.getGroups();
       if (res && Array.isArray(res.names)) {
         // Held back for the reason the listing is: a group drop that began
         // meanwhile has already rewritten this list.
-        if (started === savesStarted) app.sessionGroups = res.names;
+        if (started === savesStarted && newest) app.sessionGroups = res.names;
         groupsAreCurrent = true;
       }
     } catch {

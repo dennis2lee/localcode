@@ -371,3 +371,50 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// The last run of a series is news like every other: its answer is unread
+// until it is read, although the run before it had been. The daemon
+// cleared its read mark only when a repeat re-armed, and a series that
+// ends does not re-arm, so MarkSeen, which writes nothing for a booking
+// already read, never recorded reading the last answer and the row stayed
+// solid green.
+func TestTheLastRunOfASeriesIsUnreadUntilRead(t *testing.T) {
+	sched, _, sid, id := repeatingSetup(t, RepeatOptions{
+		Rule: when.Repeat{Every: 1, Unit: when.UnitHour}, StopAfter: 2, Keep: -1,
+	})
+	sched.fire(sid, id)
+	if !sched.MarkSeen(sid, id) {
+		t.Fatal("reading the first run recorded nothing")
+	}
+	sched.fire(sid, id)
+	e, ok := sched.Get(sid, id)
+	if !ok || e.Status != ScheduleDone || e.Runs != 2 {
+		t.Fatalf("after the last run: %+v", e)
+	}
+	if e.Seen {
+		t.Error("the last run's answer is marked read")
+	}
+	if !sched.MarkSeen(sid, id) {
+		t.Error("reading the last run's answer recorded nothing")
+	}
+}
+
+// Each way a booking's status is written clears its read mark on its own:
+// a run starting, and a series being stopped.
+func TestEveryStatusWriterClearsTheReadMark(t *testing.T) {
+	sched, _, sid, id := repeatingSetup(t, RepeatOptions{
+		Rule: when.Repeat{Every: 1, Unit: when.UnitHour}, Keep: -1,
+	})
+	for name, write := range map[string]func(){
+		"status": func() { sched.status(sid, id, ScheduleRunning, sid+"-run", "") },
+		"stop":   func() { sched.stop(sid, id, ScheduleDone, "") },
+	} {
+		if !sched.MarkSeen(sid, id) {
+			t.Fatalf("%s: marking it read recorded nothing", name)
+		}
+		write()
+		if e, _ := sched.Get(sid, id); e.Seen {
+			t.Errorf("%s left the booking marked read", name)
+		}
+	}
+}

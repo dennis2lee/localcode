@@ -170,6 +170,10 @@ test('a run waiting for you is amber until it is answered', async () => {
 
   app.applyEvent({ type: 'session.activity', data: { session: 's1-run', busy: false, tasks: 0, asking: true } });
   assert.match(app.el('schedules').innerHTML, /led-asking/, 'a run waiting for an answer did not say so');
+  // A running status repeated while it waits (a reload replaying the log)
+  // does not forget the wait.
+  app.applyEvent({ type: 'schedule.status', data: { id: 's1', status: 'running', run_session: 's1-run' } });
+  assert.match(app.el('schedules').innerHTML, /led-asking/, 'a repeated running status forgot the wait');
   app.applyEvent({ type: 'session.activity', data: { session: 'another-run', busy: false, tasks: 0, asking: false } });
   assert.match(app.el('schedules').innerHTML, /led-asking/, 'another session\'s news reached this row');
 

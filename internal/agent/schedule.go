@@ -586,6 +586,7 @@ func (s *Scheduler) stop(sessionID, id, status, errText string) {
 		return
 	}
 	entry.Status = status
+	entry.Seen = false
 	if errText != "" {
 		entry.Error = errText
 	}
@@ -649,6 +650,12 @@ func (s *Scheduler) status(sessionID, id, status, runID, errText string) {
 		return
 	}
 	entry.Status = status
+	// News about a run is unread until it is read, as every status event
+	// says to the client. Cleared only when a repeat re-armed, a series'
+	// last run was left read from the run before it, and MarkSeen, which
+	// writes nothing for a booking already read, then never recorded that
+	// its answer had been read.
+	entry.Seen = false
 	if runID != "" {
 		entry.RunSession = runID
 	}

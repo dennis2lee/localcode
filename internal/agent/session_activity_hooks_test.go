@@ -136,23 +136,36 @@ func TestAScheduledRunCountsForTheConversationThatBookedIt(t *testing.T) {
 	if _, err := loop.Store.CreateSession(sid, "", "explore", true); err != nil {
 		t.Fatal(err)
 	}
+	var mu sync.Mutex
+	var told []int
+	tasks.OnTasksChanged(func(id string) {
+		if id == sid {
+			mu.Lock()
+			told = append(told, tasks.RunningFor(sid))
+			mu.Unlock()
+		}
+	})
 	sched := NewScheduler(context.Background(), loop)
 	entry, err := sched.Add(sid, "explore", "take your time", time.Now().Add(20*time.Millisecond), RepeatOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := waitForStatus(t, sched, sid, entry.ID, ScheduleRunning)
-	waitUntil(t, 5*time.Second, func() bool {
-		evs, _ := loop.Store.Events(e.RunSession, 0)
-		return len(evs) > 1
-	}, "the scheduled run never started its turn")
-	if n := tasks.RunningFor(sid); n != 1 {
-		t.Errorf("RunningFor(%s) = %d while its scheduled run is going, want 1", sid, n)
-	}
+	waitForStatus(t, sched, sid, entry.ID, ScheduleRunning)
+	// Counted from the running status on, before the run's turn has
+	// started: waited for as that, rather than for the turn, whose start
+	// depends on the model and on how busy the machine is.
+	waitUntil(t, 5*time.Second, func() bool { return tasks.RunningFor(sid) == 1 },
+		"the scheduled run is not counted for the conversation that booked it")
 
 	close(release)
 	waitForStatus(t, sched, sid, entry.ID, ScheduleDone)
 	waitUntil(t, 5*time.Second, func() bool { return tasks.RunningFor(sid) == 0 }, "the finished run still counts")
+	// And the conversation was told both times, so its light moves.
+	waitUntil(t, 5*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(told) == 2 && told[0] == 1 && told[1] == 0
+	}, "the conversation was not told the run started and ended")
 }
 
 // Through Spawn itself: a task spawned by a task counts for the
