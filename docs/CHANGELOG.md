@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.168.3
+
+Memory tool text a local model can follow to the letter, and archived copies of adopted notes found by the name that adopted them.
+
+**Fixed**
+
+* An adopted legacy note's archived text (Build_Notes.md, adopted as build-notes) not found by `memory_read` or restore under the name that adopted it
+* A model told to pass a "copy id" sending `copy_id`, which was ignored, so the newest copy was read or restored instead; `copy_id` is taken, and search and the archived read now give the exact call to make
+* A restore with no scope that found nothing not saying that a user note needs scope user
+* The policy and the save tool disagreeing about which notes take a "Why:" and a "How to apply:" line, and the search tool promising a type and an archive in a list that shows neither
+
 ## v0.168.2
 
 The archived copy a memory search finds is the one that is read and restored, and a fork keeps what a redone turn did.

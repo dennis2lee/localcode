@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"localcode/internal/events"
 	"localcode/internal/memory"
 	"localcode/internal/provider"
 	"localcode/internal/tools"
@@ -466,14 +467,14 @@ func TestReplacedTextIsReadBackThroughTheTools(t *testing.T) {
 		t.Errorf("the save does not say where the earlier text went: %s", saved)
 	}
 	search := mustMem(t, loop, sid, MemorySearchTool{loop}, `{"scope":"project","query":"cobalt"}`)
-	if !strings.Contains(search, "deploy-plan (archived copy ") || !strings.Contains(search, "memory_read with archived true and this copy shows it") {
+	if !strings.Contains(search, `deploy-plan (archived; memory_read with {"name": "deploy-plan", "scope": "project", "archived": true, "copy": "`) {
 		t.Errorf("search: %s", search)
 	}
 	old := mustMem(t, loop, sid, MemoryReadTool{loop}, `{"name":"deploy-plan","archived":true}`)
 	if !strings.Contains(old, "cobalt.internal") || !strings.Contains(old, "archived project note deploy-plan") {
 		t.Errorf("archived read: %s", old)
 	}
-	if out, isErr := memCall(t, loop, sid, MemoryForgetTool{loop}, `{"name":"deploy-plan","restore":true}`); !isErr || !strings.Contains(out, "memory_read with archived true") {
+	if out, isErr := memCall(t, loop, sid, MemoryForgetTool{loop}, `{"name":"deploy-plan","restore":true}`); !isErr || !strings.Contains(out, "memory_read with archived set to true") {
 		t.Errorf("restore over a live note: %v %s", isErr, out)
 	}
 	if out, isErr := memCall(t, loop, sid, MemoryReadTool{loop}, `{"name":"no-such","archived":true}`); !isErr || !strings.Contains(out, "no archived note") {
@@ -499,12 +500,13 @@ func TestTheArchivedCopyASearchFindsIsTheOneRead(t *testing.T) {
 		mustMem(t, loop, sid, MemorySaveTool{loop}, `{"scope":"project","name":"deployment","description":"Deployment endpoint","content":"`+body+`"}`)
 	}
 	search := mustMem(t, loop, sid, MemorySearchTool{loop}, `{"scope":"project","query":"cobalt"}`)
-	i := strings.Index(search, "archived copy ")
+	// The search hands the model the exact call to make, copy included.
+	i := strings.Index(search, `"copy": "`)
 	if i < 0 {
 		t.Fatalf("search: %s", search)
 	}
-	copyID := strings.Fields(search[i+len("archived copy "):])[0]
-	copyID = strings.TrimSuffix(copyID, ";")
+	copyID := search[i+len(`"copy": "`):]
+	copyID = copyID[:strings.Index(copyID, `"`)]
 	read := mustMem(t, loop, sid, MemoryReadTool{loop}, `{"name":"deployment","archived":true,"copy":"`+copyID+`"}`)
 	if !strings.Contains(read, "cobalt.internal") {
 		t.Errorf("read of copy %s: %s", copyID, read)
@@ -561,5 +563,156 @@ func TestSeqMapMapsAGapToTheNextCopiedEvent(t *testing.T) {
 		if got := m.Map(old); got != want {
 			t.Errorf("Map(%d) = %d, want %d", old, got, want)
 		}
+	}
+}
+
+// A fork of a fork keeps a turn that was rewound and redone in the first source.
+func TestAForkOfAForkKeepsTheRedoneTurn(t *testing.T) {
+	loop, sid, _ := memoryScriptedLoop(t,
+		toolTurn("c1", memorySaveTool, `{"scope":"session","name":"plan-b","content":"try the second approach"}`),
+		textTurn("noted"),
+	)
+	loop.Store.SetTitle(sid, "renamed once")
+	if err := loop.SendMessage(t.Context(), sid, "general-purpose", "remember plan b"); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range []string{"/rewind", "/redo"} {
+		if err := loop.SendMessage(t.Context(), sid, "general-purpose", cmd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// First fork
+	reviewedFork(t, loop, sid, "fork1")
+	loop.RehydrateSession("fork1")
+	if notes := loop.sessionNotesOf("fork1"); len(notes) != 1 || notes[0].Name != "plan-b" {
+		t.Fatalf("fork1 notes: %+v", notes)
+	}
+
+	// Fork of a fork
+	reviewedFork(t, loop, "fork1", "fork2")
+	loop.RehydrateSession("fork2")
+	if notes := loop.sessionNotesOf("fork2"); len(notes) != 1 || notes[0].Name != "plan-b" {
+		t.Fatalf("fork2 notes: %+v", notes)
+	}
+}
+
+// A rewind that was never redone stays a rewind in the fork: its turn stays undone.
+func TestAForkKeepsARewindThatWasNeverRedone(t *testing.T) {
+	loop, sid, _ := memoryScriptedLoop(t,
+		toolTurn("c1", memorySaveTool, `{"scope":"session","name":"plan-b","content":"try the second approach"}`),
+		textTurn("noted"),
+	)
+	if err := loop.SendMessage(t.Context(), sid, "general-purpose", "remember plan b"); err != nil {
+		t.Fatal(err)
+	}
+	// Only /rewind, never redone
+	if err := loop.SendMessage(t.Context(), sid, "general-purpose", "/rewind"); err != nil {
+		t.Fatal(err)
+	}
+	if len(loop.sessionNotesOf(sid)) != 0 {
+		t.Fatalf("source notes after rewind: %+v", loop.sessionNotesOf(sid))
+	}
+
+	reviewedFork(t, loop, sid, "fork-unredone")
+	loop.RehydrateSession("fork-unredone")
+	if len(loop.sessionNotesOf("fork-unredone")) != 0 {
+		t.Fatalf("fork notes after rewind: %+v", loop.sessionNotesOf("fork-unredone"))
+	}
+}
+
+// A rewind whose from_seq names an event the fork did not copy maps to the next event it did.
+func TestAForkMapsARewindFromAnEventItDidNotCopy(t *testing.T) {
+	// A rewind whose from_seq names an event the fork did not copy (e.g. a rename)
+	loop, sid := testLoop(t, "")
+	// Create events manually:
+	// seq 1: user message
+	// seq 2: renamed
+	// seq 3: session note
+	// seq 4: rewound with from_seq = 2 (the renamed event, not copied)
+	loop.Store.Append(sid, events.TypeUserMessage, map[string]any{"text": "hello"})
+	renamed, _ := loop.Store.Append(sid, events.TypeSessionRenamed, map[string]any{"title": "title"})
+	loop.Store.Append(sid, events.TypeMemorySession, map[string]any{"name": "temp-note", "content": "xyz"})
+	loop.Store.Append(sid, events.TypeRewound, map[string]any{"from_seq": renamed.Seq})
+
+	reviewedFork(t, loop, sid, "fork-gap")
+	loop.RehydrateSession("fork-gap")
+	// The note at seq 3 should be dropped because from_seq was mapped to the first copied event at or after seq 2 (which is seq 3)
+	if len(loop.sessionNotesOf("fork-gap")) != 0 {
+		t.Fatalf("expected note to be dropped, got: %+v", loop.sessionNotesOf("fork-gap"))
+	}
+}
+
+// Rewinds and redos made in the fork after the copy work on the fork's own numbers.
+func TestRewindsAndRedosInAForkWorkOnItsOwnNumbers(t *testing.T) {
+	loop, sid, _ := memoryScriptedLoop(t,
+		toolTurn("c1", memorySaveTool, `{"scope":"session","name":"note-a","content":"first"}`),
+		textTurn("noted a"),
+		toolTurn("c2", memorySaveTool, `{"scope":"session","name":"note-b","content":"second"}`),
+		textTurn("noted b"),
+	)
+	if err := loop.SendMessage(t.Context(), sid, "general-purpose", "start turn 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.SendMessage(t.Context(), sid, "general-purpose", "start turn 2"); err != nil {
+		t.Fatal(err)
+	}
+	if len(loop.sessionNotesOf(sid)) != 2 {
+		t.Fatalf("source notes: %+v", loop.sessionNotesOf(sid))
+	}
+	// Rewind turn 2
+	if err := loop.SendMessage(t.Context(), sid, "general-purpose", "/rewind"); err != nil {
+		t.Fatal(err)
+	}
+	if len(loop.sessionNotesOf(sid)) != 1 {
+		t.Fatalf("source notes after rewind: %+v", loop.sessionNotesOf(sid))
+	}
+
+	// Fork while turn 2 is rewound
+	reviewedFork(t, loop, sid, "fork-multi")
+	loop.RehydrateSession("fork-multi")
+	if notes := loop.sessionNotesOf("fork-multi"); len(notes) != 1 || notes[0].Name != "note-a" {
+		t.Fatalf("fork notes before redo: %+v", notes)
+	}
+
+	// In the fork, run /redo to put back turn 2!
+	if err := loop.SendMessage(t.Context(), "fork-multi", "general-purpose", "/redo"); err != nil {
+		t.Fatal(err)
+	}
+	if notes := loop.sessionNotesOf("fork-multi"); len(notes) != 2 {
+		t.Fatalf("fork notes after redo: %+v", notes)
+	}
+}
+
+// The copy id is taken under the name the tools' own words suggest, and a
+// restore with no scope that finds nothing says a user note needs one.
+func TestAModelsGuessesAtTheArchiveFieldsAreUnderstood(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	cfg := withMemory(t, loop)
+	now := cfg.now()
+	cfg.Now = func() time.Time { now = now.Add(time.Second); return now }
+	for _, body := range []string{"first text", "second text", "third text"} {
+		mustMem(t, loop, sid, MemorySaveTool{loop}, `{"scope":"project","name":"n","content":"`+body+`"}`)
+	}
+	st := loop.projectStore(sid)
+	list, _ := st.ArchivedNotes()
+	oldest := list[len(list)-1]
+	read := mustMem(t, loop, sid, MemoryReadTool{loop}, `{"name":"n","archived":true,"copy_id":"`+oldest.Copy()+`"}`)
+	if !strings.Contains(read, "first text") {
+		t.Errorf("copy_id was not taken: %s", read)
+	}
+	if !strings.Contains(read, `"restore": true, "copy": "`+oldest.Copy()+`"`) {
+		t.Errorf("the read does not give the exact restore call: %s", read)
+	}
+	if err := os.MkdirAll(memory.UserDir(cfg.Home), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.userStore().Save(memory.Entry{Name: "u", Type: memory.TypeUser, Body: "x"}, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.userStore().Forget("u", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if out, isErr := memCall(t, loop, sid, MemoryForgetTool{loop}, `{"name":"u","restore":true}`); !isErr || !strings.Contains(out, "a user note needs scope user") {
+		t.Errorf("a scopeless restore of a user note: %v %s", isErr, out)
 	}
 }

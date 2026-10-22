@@ -44,6 +44,11 @@ type memoryArgs struct {
 	Restore     bool   `json:"restore"`
 	Archived    bool   `json:"archived"`
 	Copy        string `json:"copy"`
+	// CopyID is copy under the name a model guesses from the words "copy
+	// id" in the tools' own text. Taken rather than silently dropped,
+	// which would read or restore the newest copy instead of the one
+	// asked for.
+	CopyID string `json:"copy_id"`
 }
 
 func parseMemoryArgs(input json.RawMessage) (memoryArgs, error) {
@@ -52,6 +57,9 @@ func parseMemoryArgs(input json.RawMessage) (memoryArgs, error) {
 		return a, nil
 	}
 	err := json.Unmarshal(input, &a)
+	if a.Copy == "" {
+		a.Copy = a.CopyID
+	}
 	return a, err
 }
 
@@ -143,7 +151,7 @@ func (MemorySaveTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` +
 		`"scope":{"type":"string","enum":["session","project","user"],"description":"` + strings.ReplaceAll(memoryScopeHelp, `"`, `\"`) + `"},` +
 		`"name":{"type":"string","description":"Short kebab-case name, such as gateway-needs-team-key. Saving under an existing name replaces that note."},` +
-		`"content":{"type":"string","description":"The note. For feedback or project notes, the fact, then a line starting Why: and a line starting How to apply:."},` +
+		`"content":{"type":"string","description":"The note. In a feedback or project note, the fact first, then a line starting Why: and a line starting How to apply:."},` +
 		`"type":{"type":"string","enum":["user","feedback","project","reference"],"description":"Project and user scope only. user: about the person. feedback: a correction or a confirmed way of working. project: a fact about the work. reference: where something outside the repository lives. Defaults to project in project scope and user in user scope."},` +
 		`"description":{"type":"string","description":"Project and user scope only. One line saying what the note is about; it is what the index shows. Defaults to the first line of content."},` +
 		`"keep":{"type":"boolean","description":"Project and user scope only. True when the person asked you to remember this: the note is never retired for being unused."}` +
@@ -418,7 +426,7 @@ func (l *Loop) readArchived(sessionID, name, copy string, scopes []memory.Scope)
 			b.WriteString(memory.Neutralize(a.Entry.Description) + "\n\n")
 		}
 		b.WriteString(memory.Neutralize(a.Entry.Body))
-		b.WriteString("\n\nThis is not a live note. To bring it back: memory_forget with restore (and this copy id) when no note of this name exists, or memory_save this text under the name, which archives the current text in turn.")
+		fmt.Fprintf(&b, "\n\nThis is not a live note. To bring it back when no note of this name exists, call memory_forget with {\"name\": %q, \"scope\": %q, \"restore\": true, \"copy\": %q}. When one does, memory_save this text under the name instead; the current text goes to the archive in turn.", a.Entry.Name, scope, a.Copy())
 		return tools.Result{Content: b.String()}
 	}
 	if len(scopes) == 1 && scopes[0] == memory.ScopeSession {
@@ -434,8 +442,9 @@ func (MemorySearchTool) Name() string { return memorySearchTool }
 
 func (MemorySearchTool) Description() string {
 	return "Search memory for notes containing every word of query, in every scope, archived notes included and marked. " +
-		"With no query, list every note (up to 200 a scope): name, type, description and when it was last used. Use it before saving, to update " +
-		"a note that already covers the fact instead of adding another."
+		"With no query, list the live notes of each scope (up to 200 a scope): a project or user note with its type, description " +
+		"and when it was last used, a session note with its first line; archived notes are not listed, only found by a query. " +
+		"Use it before saving, to update a note that already covers the fact instead of adding another."
 }
 
 func (MemorySearchTool) InputSchema() json.RawMessage {
@@ -511,7 +520,7 @@ func (t MemorySearchTool) Execute(ctx context.Context, input json.RawMessage) to
 			case h.IndexLine != "":
 				fmt.Fprintf(&b, "- %s MEMORY.md line: %s\n", scope, h.IndexLine)
 			case h.Archived:
-				fmt.Fprintf(&b, "- %s %s (archived copy %s; memory_read with archived true and this copy shows it): %s\n", scope, h.Entry.Name, h.Copy, memory.Neutralize(h.Entry.Description))
+				fmt.Fprintf(&b, "- %s %s (archived; memory_read with {\"name\": %q, \"scope\": %q, \"archived\": true, \"copy\": %q} shows it): %s\n", scope, h.Entry.Name, h.Entry.Name, scope, h.Copy, memory.Neutralize(h.Entry.Description))
 			default:
 				fmt.Fprintf(&b, "- %s %s (%s): %s\n", scope, h.Entry.Name, h.Entry.Type, memory.Neutralize(h.Entry.Description))
 			}
@@ -666,7 +675,11 @@ func (t MemoryForgetTool) Execute(ctx context.Context, input json.RawMessage) to
 		name, err := l.durableStore(sessionID, scope).Restore(a.Name, a.Copy, now)
 		if err != nil {
 			if errors.Is(err, memory.ErrNotFound) {
-				return memoryErr("no archived %s note named %q", scope, a.Name)
+				hint := ""
+				if a.Scope == "" {
+					hint = " Without a scope, restore looks in project memory; a user note needs scope user."
+				}
+				return memoryErr("no archived %s note named %q.%s", scope, a.Name, hint)
 			}
 			if errors.Is(err, memory.ErrNoSuchCopy) {
 				return memoryErr("%s note %s has no archived copy %q", scope, a.Name, a.Copy)

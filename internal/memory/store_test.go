@@ -2164,3 +2164,23 @@ func TestEveryFormOfAnotherLinkKeepsTheLine(t *testing.T) {
 		}
 	}
 }
+
+// A legacy file adopted under a normalized name is found in the archive
+// by that name, though its archived copy keeps its own.
+func TestAnAdoptedFilesArchivedCopyIsFoundByTheNameThatAdoptedIt(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(s.Dir, 0o755)
+	os.WriteFile(filepath.Join(s.Dir, "Build_Notes.md"), []byte("the old build notes\n"), 0o600)
+	save(t, s, "build-notes", TypeProject, "", "new", t0)
+	a, _, err := s.ReadArchived("build-notes", "")
+	if err != nil || a.Entry.Body != "the old build notes" {
+		t.Fatalf("read archived: %+v %v", a, err)
+	}
+	s.Forget("build-notes", t0.Add(time.Hour))
+	if _, err := s.Restore("build-notes", a.Copy(), t0.Add(2*time.Hour)); err != nil {
+		t.Fatalf("restore the adopted copy: %v", err)
+	}
+	if e, _, _ := s.Read("build-notes", t0); e.Body != "the old build notes" {
+		t.Errorf("restored %q", e.Body)
+	}
+}

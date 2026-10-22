@@ -386,7 +386,11 @@ func (s Store) archivedCopies(name string) ([]Archived, error) {
 	want := strings.TrimSuffix(strings.TrimSpace(name), ".md")
 	var found []Archived
 	for _, a := range list {
-		if strings.EqualFold(a.Entry.Name, want) || (nerr == nil && a.Entry.Name == norm) {
+		// A file adopted under a normalized name keeps its own in the
+		// archive (Build_Notes for build-notes), so both sides are
+		// normalized: the name it was adopted by finds it.
+		an, aerr := NormalizeName(a.Entry.Name)
+		if strings.EqualFold(a.Entry.Name, want) || (nerr == nil && aerr == nil && an == norm) {
 			found = append(found, a)
 		}
 	}
@@ -795,7 +799,7 @@ func (s Store) Restore(name, copy string, now time.Time) (string, error) {
 			return fmt.Errorf("an archived copy named %q cannot be restored under that name; read it with memory_search and save its text under another name", pick.Entry.Name)
 		}
 		if _, err := os.Lstat(filepath.Join(s.Dir, file)); err == nil {
-			return fmt.Errorf("a note named %s exists, so the archived copy cannot take its place. memory_read with archived true (and its copy id, from memory_search) shows the archived text; saving that text under this name replaces the current note, whose text then goes to the archive in turn", pick.Entry.Name)
+			return fmt.Errorf("a note named %s exists, so the archived copy cannot take its place. memory_read with archived set to true, and copy set to the id memory_search showed, shows the archived text; saving that text under this name replaces the current note, whose text then goes to the archive in turn", pick.Entry.Name)
 		}
 		existing, err := noteFiles(s.Dir)
 		if err != nil {

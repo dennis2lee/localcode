@@ -133,7 +133,7 @@ func TestLoadIndexByteCapKeepsValidUTF8(t *testing.T) {
 // instruction let a previous turn's text inherit the policy's authority.
 func TestPolicyNamesTheToolAndEveryScopeAndNoPath(t *testing.T) {
 	p := Policy()
-	for _, want := range []string{"memory_save", "memory_read", "memory_search", "memory_forget", "session:", "project:", "user:", "feedback", "reference", "AGENTS.md", "secret", "still exists", "mention it by name"} {
+	for _, want := range []string{"memory_save", "memory_read", "memory_search", "memory_forget", "session:", "project:", "user:", "feedback", "reference", "AGENTS.md", "secret", "still exists", "mention it by name", "In a feedback or project note"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("the policy does not mention %q", want)
 		}
