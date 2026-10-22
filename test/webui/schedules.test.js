@@ -148,17 +148,6 @@ test('delete carries the shared danger class', async () => {
   assert.ok(del.classList.contains('danger-btn'));
 });
 
-// Without motion, a booking still waiting or running is a ring, not a
-// dimmed copy of the solid light a finished one has. Windows asks for
-// less motion whenever its animation effects are off.
-test('without motion a waiting or running booking is a ring', () => {
-  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../internal/daemon/static/style.css'), 'utf8');
-  const blocks = css.split('@media (prefers-reduced-motion: reduce)').slice(1);
-  const ring = blocks.find((b) => /\.led-degraded\s*\{[^}]*box-shadow:\s*inset 0 0 0 2px var\(--ok\)/.test(b));
-  assert.ok(ring, 'a running booking looks like a finished one when motion is reduced');
-  assert.match(ring, /\.led-degraded\s*\{[^}]*background:\s*transparent/);
-});
-
 // A run stopped on a permission request or a question is waiting for a
 // person, and its row is amber for as long as it waits. Run sessions are
 // not in the session list, so the row that opens one is where it shows.

@@ -1352,15 +1352,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Last, so it wins over .active: a session holding a question is often
    also mid-turn, and the question is the part that needs answering. */
 .comm-dot.connected.asking { background: var(--warn); animation: none; }
-/* Without motion, work under the prompt is the same green ring as in the
-   session panel, rather than a pulse there and a ring beside it. */
-@media (prefers-reduced-motion: reduce) {
-  .comm-dot.connected.active:not(.asking) {
-    animation: none;
-    background: transparent;
-    box-shadow: inset 0 0 0 2px var(--ok);
-  }
-}
+/* The status lights blink whatever the system's motion setting: here,
+   in the session panel (.session-led.running) and in the right panel
+   (.led-degraded). The blink is not decoration on them, it is the one
+   difference between "working" and "finished", and the user wants it
+   seen. Windows reports less motion whenever its animation effects are
+   off, which remote desktops and managed machines set for everyone
+   without anybody asking, and there the light stood still: steady, it
+   read as finished, and the green ring drawn instead in v0.166.0 was
+   not read as working either. Other motion in the page still follows the
+   setting. */
 /* The status row's controls: each is a small outlined pill that names
    its own current state, so the row reads as a sentence about the
    session rather than a strip of icons to be decoded. */
@@ -1670,18 +1671,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 @keyframes led-blink {
   50% { opacity: 0.15; }
 }
-/* Someone who has asked for less motion should not get a light pulsing at
-   them in the corner all session. The blinking light is a green ring
-   instead: dimmed, it was a green dot hardly apart from the steady one,
-   and a scheduled run still going read as one that had finished. The
-   same ring as a working session's in the session list. */
-@media (prefers-reduced-motion: reduce) {
-  .led-degraded {
-    animation: none;
-    background: transparent;
-    box-shadow: inset 0 0 0 2px var(--ok);
-  }
-}
+/* Blinks with less motion asked for too, as every status light does:
+   see .comm-dot above. */
 
 /* The per-session activity dot in the left panel. Same idea as the
    status-bar light, one per conversation: the status line under the
@@ -1731,19 +1722,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   50% { opacity: 0.25; }
 }
 
-/* Someone who has asked for less motion gets no blinking, and running is
-   then drawn as a green ring instead: steady, and still told apart from
-   unread's solid dot. Steady alone made the two the same light, and a
-   session with work going on read as one that had finished. Windows
-   reports less motion whenever its animation effects are off, which
-   remote desktops and managed machines often set for everyone. */
-@media (prefers-reduced-motion: reduce) {
-  .session-led.running {
-    animation: none;
-    background: transparent;
-    box-shadow: inset 0 0 0 2px var(--ok);
-  }
-}
+/* Blinks with less motion asked for too, as every status light does:
+   see .comm-dot. */
 
 /* The settings window. Same box as the other modals; the additions are
    the section heading and the per-field grouping, which exist so that

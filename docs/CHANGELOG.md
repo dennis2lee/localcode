@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.167.0
+
+The status lights blink while work goes on, whatever the system's motion setting.
+
+**Changed**
+
+* The session panel's light, the light under the prompt and the right panel's lights blink while work goes on even when the system asks for less motion, as Windows does with its animation effects off; v0.166.0 drew a steady green ring there, which did not read as working
+
 ## v0.166.0
 
 Session and scheduled-task lights blink while work goes on, turn amber while it waits for you, and stay told apart without animation.

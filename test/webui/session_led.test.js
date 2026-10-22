@@ -187,17 +187,6 @@ test('a folded group shows a session whose tasks are running as working', async 
   assert.equal(led.className, 'session-led running');
 });
 
-// Without motion, working is a ring rather than a blink, so it is still
-// told apart from the solid dot of a finished session. Windows asks for
-// less motion whenever its animation effects are off.
-test('without motion a working session is a ring, not the finished dot', () => {
-  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../internal/daemon/static/style.css'), 'utf8');
-  const blocks = css.split('@media (prefers-reduced-motion: reduce)').slice(1);
-  const ring = blocks.find((b) => /\.session-led\.running\s*\{[^}]*box-shadow:\s*inset 0 0 0 2px var\(--ok\)/.test(b));
-  assert.ok(ring, 'a working session looks like a finished one when motion is reduced');
-  assert.match(ring, /\.session-led\.running\s*\{[^}]*background:\s*transparent/);
-});
-
 // The light under the prompt says what the panel says about the session
 // on screen: amber for a question the model asked, as for a permission
 // request.
@@ -273,15 +262,6 @@ test('an older daemon\'s activity event leaves a waiting session waiting', async
   assert.deepEqual(leds(app), ['idle', 'asking']);
 });
 
-// Without motion, work under the prompt is the same ring as in the panel.
-test('without motion the light under the prompt is a ring too', () => {
-  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../internal/daemon/static/style.css'), 'utf8');
-  const blocks = css.split('@media (prefers-reduced-motion: reduce)').slice(1);
-  const ring = blocks.find((b) => /\.comm-dot\.connected\.active:not\(\.asking\)\s*\{[^}]*box-shadow:\s*inset 0 0 0 2px var\(--ok\)/.test(b));
-  assert.ok(ring, 'the light under the prompt pulses where the panel shows a ring');
-  assert.match(ring, /animation:\s*none/);
-});
-
 // Two list requests in flight: the older answer arriving second described
 // an earlier moment than the one already drawn, and is not applied.
 test('an older list answered after a newer one is not drawn', async () => {
@@ -337,3 +317,27 @@ test('the light under the prompt names a permission request as one', async () =>
   assert.ok(dot.className.includes('asking'), dot.className);
   assert.match(dot.title, /answer a permission request/);
 });
+
+// Reported from real use: with Windows' animation effects off, which
+// remote desktops and managed machines set for everyone, the page is asked
+// for less motion, and the working light stood still: a steady dot read as
+// finished, and the green ring drawn instead was not read as working
+// either. The status lights blink whatever the setting, since the blink is
+// what says "working".
+test('the status lights blink with less motion asked for too', () => {
+  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../internal/daemon/static/style.css'), 'utf8');
+  const reduced = css.split('@media (prefers-reduced-motion: reduce)').slice(1)
+    .map((b) => b.slice(0, b.indexOf('\n}') + 2));
+  for (const [selector, keyframes] of [
+    ['.session-led.running', 'session-led-pulse'],
+    ['.comm-dot.connected.active', 'pulse'],
+    ['.led-degraded', 'led-blink'],
+  ]) {
+    const esc = selector.replace(/[.]/g, '\\.');
+    assert.match(css, new RegExp(`${esc}\\s*\\{[^}]*animation:\\s*${keyframes}\\b`), `${selector} does not blink`);
+    for (const block of reduced) {
+      assert.ok(!block.includes(selector), `${selector} is stopped when less motion is asked for:\n${block}`);
+    }
+  }
+});
+

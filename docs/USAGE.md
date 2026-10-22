@@ -1918,7 +1918,7 @@ Every session on the daemon, newest first. Each card shows:
 
 | Line | Contents |
 |---|---|
-| Title | Title or session ID. Indicator: grey for idle; blinking green while the model is working, in a turn, a background task the session started (including one let go of with Ctrl+B), or a scheduled run it booked; steady green for a reply you have not read, set when the turn and its last task have ended while another session was on screen; steady amber while it waits for you, on a permission request or a question the model asked. Waiting takes precedence. With less motion asked for (on Windows, animation effects off), working is a green ring instead of a blink. The light changes as it happens, in every session, without reloading the list, and is read again from the daemon when the event stream reconnects. |
+| Title | Title or session ID. Indicator: grey for idle; blinking green while the model is working, in a turn, a background task the session started (including one let go of with Ctrl+B), or a scheduled run it booked; steady green for a reply you have not read, set when the turn and its last task have ended while another session was on screen; steady amber while it waits for you, on a permission request or a question the model asked. Waiting takes precedence. It blinks whatever the system's motion setting, Windows with animation effects off included, since the blink is what tells working from finished. The light changes as it happens, in every session, without reloading the list, and is read again from the daemon when the event stream reconnects. |
 | Workspace | Current directory, shortened from the front. Tooltip shows the full path. |
 | Created | Local date and time |
 
@@ -2021,7 +2021,7 @@ One line directly below the input box:
 | Agent and model | Agent for the next message, and its model. A model chosen with `/model` for this agent is shown first. Without one, the provider-reported ID of the last reply is shown. Before any reply, the model from the agent's profile is shown. |
 | Context use | Yellow past 70%, red past 90% |
 | TPS | Generation rate across the full turn, excluding prefill and queue time. `~` marks a live stream estimate; the final count replaces it. Single-chunk replies show no rate. Controlled by `show_tps`. |
-| Activity light | Grey: disconnected from daemon. Solid green: connected and idle. Blinking green: turn or background work active. Steady amber: waiting for you, on a permission request or a question the model asked. With less motion asked for, blinking is a green ring. Uses daemon state and reconnects automatically. Tooltip distinguishes turns from tasks, and permission requests from questions. |
+| Activity light | Grey: disconnected from daemon. Solid green: connected and idle. Blinking green: turn or background work active. Steady amber: waiting for you, on a permission request or a question the model asked. It blinks whatever the system's motion setting. Uses daemon state and reconnects automatically. Tooltip distinguishes turns from tasks, and permission requests from questions. |
 | Stop button | Cancels the active turn, including a turn started by another client, and the tool it is inside. Equivalent to Esc. See [What stop reaches](#what-stop-reaches). |
 | Let go button | **let go**. Shown whenever a turn is running. When the turn is waiting on a sub agent, the turn carries on without the answer and the sub agent keeps working. Otherwise the transcript says there was nothing to let go of. The Stop button is the other answer to the same moment and ends both. The TUI has this on **Ctrl+B**. |
 | Auto-delegate pill | Opens target-agent and pattern settings. See [Auto delegation](#auto-delegation). |
@@ -2953,7 +2953,7 @@ Scheduled permission requests appear in the booking conversation and expire afte
 | Where | What you get |
 |---|---|
 | **schedule** button | Separate time and task fields with parsed-time preview. |
-| Right panel | Task rows: blinking green while waiting or running, amber while a run waits on a permission request (an unattended run asks no questions), solid green for an unread result, grey after reading. Each run's result is unread until read, so a repeat's later run turns its row solid green again. With less motion asked for (on Windows, animation effects off), blinking is a green ring. Click for results; double-click for booking details. Rename changes the label. Delete removes the booking and run transcript. |
+| Right panel | Task rows: blinking green while waiting or running, amber while a run waits on a permission request (an unattended run asks no questions), solid green for an unread result, grey after reading. Each run's result is unread until read, so a repeat's later run turns its row solid green again. Blinking does not stop when the system asks for less motion. Click for results; double-click for booking details. Rename changes the label. Delete removes the booking and run transcript. |
 | `/show-scheduled-task` | The same list as text, for the TUI. |
 | `/schedule cancel <id>` | Removes one. Ids are short and belong to the conversation: `s1`, `s2`. |
 | `/schedule rename <id> <name>` | Labels one; an empty name clears it. |
