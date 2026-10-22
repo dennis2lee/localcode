@@ -27,8 +27,8 @@ import { openTaskView } from './taskview.js';
 // wants attention.
 //
 // The classes are the ones the MCP indicator already uses, so blinking
-// green means the same thing in both places and the reduced-motion rule
-// that stops the blink covers this too.
+// green means the same thing in both places, and blinks whatever the
+// system's motion setting, as every status light does (see style.css).
 function ledClass(s) {
   // A repeat that stopped itself is the one state that wants a person:
   // amber means "this one is yours" everywhere else in the product, and

@@ -324,19 +324,35 @@ test('the light under the prompt names a permission request as one', async () =>
 // finished, and the green ring drawn instead was not read as working
 // either. The status lights blink whatever the setting, since the blink is
 // what says "working".
+//
+// Checked against every rule that applies to the light, wherever it sits
+// and however its selector is spelled, rather than against one spelling:
+// a rule applies when the classes of the selector's last compound are all
+// classes the light carries, and every such rule that sets animation must
+// keep the blink.
 test('the status lights blink with less motion asked for too', () => {
-  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../internal/daemon/static/style.css'), 'utf8');
-  const reduced = css.split('@media (prefers-reduced-motion: reduce)').slice(1)
-    .map((b) => b.slice(0, b.indexOf('\n}') + 2));
-  for (const [selector, keyframes] of [
-    ['.session-led.running', 'session-led-pulse'],
-    ['.comm-dot.connected.active', 'pulse'],
-    ['.led-degraded', 'led-blink'],
+  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../internal/daemon/static/style.css'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ selectors: m[1], body: m[2] }));
+  const classesOf = (selector) => {
+    const last = selector.trim().replace(/:not\([^)]*\)/g, '').split(/[\s>+~]+/).pop();
+    return [...last.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]);
+  };
+  for (const [carries, keyframes] of [
+    [['session-led', 'running'], 'session-led-pulse'],
+    [['comm-dot', 'connected', 'active'], 'pulse'],
+    [['led', 'led-degraded'], 'led-blink'],
   ]) {
-    const esc = selector.replace(/[.]/g, '\\.');
-    assert.match(css, new RegExp(`${esc}\\s*\\{[^}]*animation:\\s*${keyframes}\\b`), `${selector} does not blink`);
-    for (const block of reduced) {
-      assert.ok(!block.includes(selector), `${selector} is stopped when less motion is asked for:\n${block}`);
+    const applying = rules.filter((r) => r.selectors.split(',').some((sel) => {
+      const cls = classesOf(sel);
+      return cls.length > 0 && cls.every((c) => carries.includes(c));
+    }));
+    const animating = applying.filter((r) => /animation(-name|-play-state)?\s*:/.test(r.body));
+    assert.ok(animating.length > 0, `${carries.join('.')} has no animation`);
+    for (const r of animating) {
+      assert.match(r.body, new RegExp(`animation(-name)?\\s*:\\s*${keyframes}\\b`),
+        `${carries.join('.')} loses its blink to: ${r.selectors.trim()} { ${r.body.trim()} }`);
+      assert.ok(!/animation-play-state\s*:\s*paused/.test(r.body), `${carries.join('.')} is paused by ${r.selectors.trim()}`);
     }
   }
 });
