@@ -28,7 +28,7 @@ type sessionActivity struct {
 
 func (d *Daemon) activityOf(id string) sessionActivity {
 	a := sessionActivity{
-		Busy:  len(d.turns.anyBusy([]string{id})) > 0 || d.ownedElsewhere(id),
+		Busy:  len(d.turns.anyBusy([]string{id})) > 0 || d.ownedElsewhereFor(id),
 		Tasks: d.Tasks.RunningFor(id),
 	}
 	a.Asking = d.Broker.Asking()[id]
@@ -51,4 +51,18 @@ func (d *Daemon) announceActivity(id string) {
 		Type: events.TypeSessionActivity,
 		Data: map[string]any{"session": id, "busy": a.Busy, "tasks": a.Tasks, "asking": a.Asking},
 	})
+}
+
+// ownedElsewhereFor reports whether the daemon this one replaced is still
+// working for session id: in it, or in a task or a scheduled run under it.
+// Its manifest names the sessions it is writing, which for a task is the
+// task's own, and the conversation the task works for drew as idle here
+// while the old daemon finished it.
+func (d *Daemon) ownedElsewhereFor(id string) bool {
+	for owned := range d.sessionsOwnedElsewhere() {
+		if owned == id || (d.Loop != nil && d.Loop.TopLevelSession(owned) == id) {
+			return true
+		}
+	}
+	return false
 }

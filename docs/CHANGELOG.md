@@ -6,10 +6,12 @@ Session and scheduled-task lights blink while work goes on, turn amber while it 
 
 **Fixed**
 
-* A session whose turn had ended with a background task still working drawn with the steady green of a finished session; it blinks until its last task ends, at any depth, a child let go of with Ctrl+B included
+* A session whose turn had ended with a background task still working drawn with the steady green of a finished session; it blinks until its last task ends, at any depth, a child let go of with Ctrl+B included, and while a scheduled run it booked is going
 * A permission request or a question in another session turning its light amber only when the session list was next loaded; the light changes as it happens
-* A question the model asks you (`ask_user`) not counted as waiting for you; it draws amber, as a permission request does
-* With animation effects off in Windows, or less motion asked for elsewhere, a working session drawn the same as a finished one; it is a green ring
+* A question the model asks you (`ask_user`) not counted as waiting for you; it draws amber, as a permission request does, in the session panel and under the prompt
+* A light left wrong by activity sent while the event stream was down, or by a session list answered after a newer event; the list is read again on reconnect, and newer events are kept over a late list
+* A conversation whose task the replaced daemon was still finishing during an update drawn as idle; it is working until the old daemon lets go
+* With animation effects off in Windows, or less motion asked for elsewhere, a working session drawn the same as a finished one; it is a green ring, in the panel and under the prompt
 * A repeating scheduled task whose first result had been read drawn every later result as read, in the right panel and after a restart, where clicking it then recorded nothing; each run's result is unread until read
 * A scheduled run waiting on a permission request or a question drawn as running; its row is amber while it waits
 * With less motion asked for, a scheduled run still going drawn as a dimmed copy of a finished one; it is a green ring, as an MCP server that is degraded is

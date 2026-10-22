@@ -45,14 +45,18 @@ export function setInputLocked(locked, hint) {
 export function renderCommDot() {
   const turn = turnInFlight();
   const tasks = tasksInFlight();
-  const asking = !!session.pendingPermissionID;
+  // A question the model asked waits for you as a permission request
+  // does, and the session panel draws both amber.
+  const asking = !!session.pendingPermissionID || !!session.pendingAsk;
   commDotEl.classList.toggle('connected', session.connected);
   commDotEl.classList.toggle('active', session.connected && (turn || tasks));
   commDotEl.classList.toggle('asking', session.connected && asking);
   if (!session.connected) {
     commDotEl.title = 'not connected to the model (event stream is down)';
   } else if (asking) {
-    commDotEl.title = 'waiting for you to answer a permission request';
+    commDotEl.title = session.pendingPermissionID
+      ? 'waiting for you to answer a permission request'
+      : 'waiting for you to answer a question';
   } else if (turn) {
     commDotEl.title = 'model is running your prompt';
   } else if (tasks) {

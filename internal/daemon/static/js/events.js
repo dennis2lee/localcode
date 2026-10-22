@@ -1,5 +1,5 @@
 import { inputEl } from './dom.js';
-import { app, session, sessionWorking } from './state.js';
+import { app, session, sessionWorking, noteActivity } from './state.js';
 import {
   appendUser, appendTool, appendAsk, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
@@ -559,6 +559,7 @@ const handlers = {
   // for a person. A daemon from before tasks and questions were in it
   // sends the turn alone, and what it does not say is left as it was.
   'session.activity': (d) => {
+    noteActivity(d);
     applyRunActivity(d.session, d.asking);
     const s = (app.sessions || []).find(x => x.id === d.session);
     if (!s) return;
@@ -805,6 +806,11 @@ async function resyncAfterReconnect() {
   const check = inProgress();
   const id = session.sessionID;
   const sends = app.turnSends;
+  // The lights as well: daemon-wide events sent while the stream was down
+  // are in no log and are not replayed, so a task that ended or a question
+  // answered meanwhile left a light wrong until something reloaded the
+  // list. Not awaited, so the turn check below keeps its own timing.
+  loadSessions();
   await loadAgents();
   if (!check) return;
   // Each await gives the stream a chance to deliver the backlog the

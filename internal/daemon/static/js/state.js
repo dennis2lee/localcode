@@ -38,6 +38,13 @@ export const app = {
   // the session. Not persisted: "unread" means since this page loaded,
   // which is the only span in which it can be true of *you*.
   unreadSessions: new Set(),
+  // What session.activity has said about each session, and when, by a
+  // counter rather than a clock. A session list asked for before an event
+  // and answered after it describes the moment it was asked, and painting
+  // it whole would undo the event: loadSessions lays the newer fields back
+  // over it. See noteActivity.
+  activityTick: 0,
+  liveActivity: new Map(),
   autoCompactEnabled: true,
   showTPS: true,
   autoDelegate: false,
@@ -175,6 +182,27 @@ export const session = freshSessionState(null);
 // still working drew as finished.
 export function sessionWorking(s) {
   return !!(s && (s.busy || s.tasks > 0));
+}
+
+// noteActivity records what a session.activity said, field by field, for
+// loadSessions to lay over a list that was asked for before it.
+export function noteActivity(d) {
+  app.activityTick++;
+  const cur = app.liveActivity.get(d.session) || {};
+  const next = { ...cur, tick: app.activityTick, busy: !!d.busy };
+  if (typeof d.tasks === 'number') next.tasks = d.tasks;
+  if (typeof d.asking === 'boolean') next.asking = d.asking;
+  app.liveActivity.set(d.session, next);
+}
+
+// overlayActivity puts onto a freshly listed session what an activity
+// event said about it after the list was asked for.
+export function overlayActivity(s, askedAt) {
+  const live = app.liveActivity.get(s.id);
+  if (!live || live.tick <= askedAt) return;
+  s.busy = live.busy;
+  if (typeof live.tasks === 'number') s.tasks = live.tasks;
+  if (typeof live.asking === 'boolean') s.asking = live.asking;
 }
 
 export function currentSessionBusy() {

@@ -111,8 +111,8 @@ test('a session whose tasks are still running is drawn as working', async () => 
   });
   assert.deepEqual(leds(app), ['running', 'running']);
   const titles = app.el('session-list').children.map((row) => row.querySelector('.session-led').title);
-  assert.match(titles[0], /2 background tasks still running/);
-  assert.match(titles[1], /a turn is running in this session, and 1 background task/);
+  assert.match(titles[0], /2 tasks still running/);
+  assert.match(titles[1], /a turn is running in this session, and 1 task$/);
 });
 
 // The activity event is the session's whole state. The turn ending while
@@ -196,4 +196,88 @@ test('without motion a working session is a ring, not the finished dot', () => {
   const ring = blocks.find((b) => /\.session-led\.running\s*\{[^}]*box-shadow:\s*inset 0 0 0 2px var\(--ok\)/.test(b));
   assert.ok(ring, 'a working session looks like a finished one when motion is reduced');
   assert.match(ring, /\.session-led\.running\s*\{[^}]*background:\s*transparent/);
+});
+
+// The light under the prompt says what the panel says about the session
+// on screen: amber for a question the model asked, as for a permission
+// request.
+test('the light under the prompt is amber while the model waits on your answer', async () => {
+  const app = await load({
+    routes: { 'GET /api/sessions': [{ id: 'sess-1', title: 'here', agent: 'general-purpose', workspace: '/w', busy: true }] },
+  });
+  app.applyEvent({ type: 'input.request', data: { id: 'q1', question: 'which one?', options: ['a', 'b'] } });
+  const dot = app.el('comm-dot');
+  assert.ok(dot.className.includes('asking'), dot.className);
+  assert.match(dot.title, /answer a question/);
+  app.applyEvent({ type: 'input.resolved', data: { id: 'q1', answer: 'a' } });
+  assert.ok(!dot.className.includes('asking'), dot.className);
+});
+
+// A list asked for before an activity event and answered after it
+// describes the moment it was asked, and does not undo the event.
+test('a list answered after a newer activity event keeps the event', async () => {
+  let hold = false;
+  let answer;
+  const app = await load({
+    routes: {
+      'GET /api/sessions': () => {
+        if (!hold) return [{ id: 'sess-1', title: 'here', agent: 'general-purpose', workspace: '/w' }, { id: 's2', title: 'elsewhere', agent: 'general-purpose', workspace: '/w' }];
+        return new Promise((resolve) => { answer = resolve; });
+      },
+    },
+  });
+  hold = true;
+  app.sse.emit({ type: 'session.renamed', data: { title: 'x' } });
+  await app.settle();
+  assert.ok(answer, 'the list was not asked for again');
+  app.sse.emit({ type: 'session.activity', data: { session: 's2', busy: false, tasks: 1, asking: false } });
+  answer([{ id: 'sess-1', title: 'here', agent: 'general-purpose', workspace: '/w' }, { id: 's2', title: 'elsewhere', agent: 'general-purpose', workspace: '/w', tasks: 0 }]);
+  await app.settle();
+  assert.deepEqual(leds(app), ['idle', 'running'], 'the late list drew a working session as idle');
+});
+
+// Daemon-wide events sent while the stream was down are in no log, so the
+// list is read again when it comes back.
+test('after the stream comes back the lights are read again', async () => {
+  let tasks = 1;
+  const app = await load({
+    routes: {
+      'GET /api/sessions': () => [{ id: 'sess-1', title: 'here', agent: 'general-purpose', workspace: '/w' }, { id: 's2', title: 'elsewhere', agent: 'general-purpose', workspace: '/w', tasks }],
+    },
+  });
+  assert.deepEqual(leds(app), ['idle', 'running']);
+  // An event from before the list was asked for is older than the list,
+  // and is not laid over it.
+  app.sse.emit({ type: 'session.activity', data: { session: 's2', busy: false, tasks: 1, asking: false } });
+  app.sse.fail();
+  await app.settle();
+  tasks = 0;
+  app.sse.reopen();
+  await app.settle();
+  await app.wait(1200);
+  assert.deepEqual(leds(app), ['idle', 'idle'], 'the light still says a task ended long ago is running');
+});
+
+// An older daemon's event leaves the question it does not mention as it
+// was, as it does the tasks.
+test('an older daemon\'s activity event leaves a waiting session waiting', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/sessions': [
+        { id: 'sess-1', title: 'here', agent: 'general-purpose', workspace: '/w' },
+        { id: 's2', title: 'elsewhere', agent: 'general-purpose', workspace: '/w', busy: true, asking: true },
+      ],
+    },
+  });
+  app.sse.emit({ type: 'session.activity', data: { session: 's2', busy: true } });
+  assert.deepEqual(leds(app), ['idle', 'asking']);
+});
+
+// Without motion, work under the prompt is the same ring as in the panel.
+test('without motion the light under the prompt is a ring too', () => {
+  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../internal/daemon/static/style.css'), 'utf8');
+  const blocks = css.split('@media (prefers-reduced-motion: reduce)').slice(1);
+  const ring = blocks.find((b) => /\.comm-dot\.connected\.active:not\(\.asking\)\s*\{[^}]*box-shadow:\s*inset 0 0 0 2px var\(--ok\)/.test(b));
+  assert.ok(ring, 'the light under the prompt pulses where the panel shows a ring');
+  assert.match(ring, /animation:\s*none/);
 });

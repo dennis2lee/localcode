@@ -284,6 +284,9 @@ func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	// turn was lost, while the old one was still writing the answer.
 	for id := range d.sessionsOwnedElsewhere() {
 		busy[id] = true
+		// And the conversation it works for, when it is a task's: see
+		// ownedElsewhereFor.
+		busy[d.Loop.TopLevelSession(id)] = true
 	}
 	// Asking is the other half of "what is this session doing". Busy says
 	// the model is working; asking says it stopped and is waiting for a

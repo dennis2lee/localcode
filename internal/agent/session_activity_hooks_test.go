@@ -123,3 +123,58 @@ func TestTheBrokersSayWhoIsWaitingForAnAnswer(t *testing.T) {
 		t.Error("a missing input broker reports a question")
 	}
 }
+
+// A scheduled run is work the booking conversation started, in a session
+// of its own that neither the task manager nor the daemon's turn tracker
+// ran. It counts for the conversation while it runs, so the session list
+// draws it as working, and stops counting when the run ends.
+func TestAScheduledRunCountsForTheConversationThatBookedIt(t *testing.T) {
+	release := make(chan struct{})
+	srv := slowServer(t, release)
+	loop, tasks := newBackgroundLoop(t, srv.URL)
+	const sid = "booked-in"
+	if _, err := loop.Store.CreateSession(sid, "", "explore", true); err != nil {
+		t.Fatal(err)
+	}
+	sched := NewScheduler(context.Background(), loop)
+	entry, err := sched.Add(sid, "explore", "take your time", time.Now().Add(20*time.Millisecond), RepeatOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := waitForStatus(t, sched, sid, entry.ID, ScheduleRunning)
+	waitUntil(t, 5*time.Second, func() bool {
+		evs, _ := loop.Store.Events(e.RunSession, 0)
+		return len(evs) > 1
+	}, "the scheduled run never started its turn")
+	if n := tasks.RunningFor(sid); n != 1 {
+		t.Errorf("RunningFor(%s) = %d while its scheduled run is going, want 1", sid, n)
+	}
+
+	close(release)
+	waitForStatus(t, sched, sid, entry.ID, ScheduleDone)
+	waitUntil(t, 5*time.Second, func() bool { return tasks.RunningFor(sid) == 0 }, "the finished run still counts")
+}
+
+// Through Spawn itself: a task spawned by a task counts for the
+// conversation at the top, not for the task that spawned it.
+func TestASpawnedGrandchildCountsForTheTopConversation(t *testing.T) {
+	release := make(chan struct{})
+	srv := slowServer(t, release)
+	defer close(release)
+	loop, tasks := newBackgroundLoop(t, srv.URL)
+	if _, err := loop.Store.CreateSession("top", "", "explore", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.Store.CreateSessionIn("child", "top", "explore", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tasks.Spawn("child", "explore", "slow work"); err != nil {
+		t.Fatal(err)
+	}
+	if n := tasks.RunningFor("top"); n != 1 {
+		t.Errorf("RunningFor(top) = %d, want the grandchild counted for it", n)
+	}
+	if n := tasks.RunningFor("child"); n != 0 {
+		t.Errorf("RunningFor(child) = %d; the task's parent is not a listed conversation", n)
+	}
+}

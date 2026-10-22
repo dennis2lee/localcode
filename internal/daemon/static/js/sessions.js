@@ -1,5 +1,5 @@
 import { sessionListEl, sessionIdEl, archiveToggleEl, archiveListEl, inputEl } from './dom.js';
-import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft, sessionWorking } from './state.js';
+import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft, sessionWorking, overlayActivity } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, appendTool, clearTranscript } from './transcript.js';
 import { formatTime, shortenPath } from './format.js';
@@ -24,12 +24,16 @@ export async function loadSessions() {
     while (savesInFlight.size) await Promise.allSettled([...savesInFlight]);
     started = savesStarted;
     groupsAreCurrent = false;
+    const askedAt = app.activityTick;
     let listing;
     try {
       listing = await apiClient.getSessions();
     } catch (err) {
       listing = [];
     }
+    // What the lights said after the list was asked for is newer than the
+    // list, and is kept.
+    for (const s of listing) overlayActivity(s, askedAt);
     // Held in a local until it is known to be current: a drop that began
     // meanwhile has already rewritten app.sessions, and its request sends
     // that list, so overwriting it here would save the old order.
@@ -158,10 +162,11 @@ export function forgetCollapsedGroups(groups) {
   return collapsed;
 }
 
-// runningTitle says what is working in a session whose light blinks.
+// runningTitle says what is working in a session whose light blinks: its
+// turn, and the tasks and scheduled runs it started that are still going.
 function runningTitle(s) {
   const n = s.tasks > 0 ? s.tasks : 0;
-  const tasks = `${n} background task${n === 1 ? '' : 's'}`;
+  const tasks = `${n} task${n === 1 ? '' : 's'}`;
   if (s.busy && n > 0) return `a turn is running in this session, and ${tasks}`;
   if (n > 0) return `${tasks} still running in this session`;
   return 'a turn is running in this session';

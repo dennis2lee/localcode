@@ -244,13 +244,36 @@ func (tm *TaskManager) tasksChanged(sessionID string) {
 	}
 }
 
-// topLevel is the session at the root of id's chain of parents: the
-// conversation a task's work belongs to, which a nested task's own
-// parent, another task, is not. Bounded, so a parent chain that loops
-// cannot hang a spawn.
+// track counts work this manager does not run as running for
+// parentSessionID's conversation, until the returned function is called:
+// a scheduled run, which the scheduler runs itself in a session of its
+// own. Started by the conversation that booked it, and as much its work
+// as a task it spawned.
+func (tm *TaskManager) track(id, parentSessionID string) func() {
+	owner := tm.topLevel(parentSessionID)
+	tm.mu.Lock()
+	tm.owner[id] = owner
+	tm.mu.Unlock()
+	tm.tasksChanged(owner)
+	return func() {
+		tm.mu.Lock()
+		delete(tm.owner, id)
+		tm.mu.Unlock()
+		tm.tasksChanged(owner)
+	}
+}
+
 func (tm *TaskManager) topLevel(id string) string {
+	return tm.loop.TopLevelSession(id)
+}
+
+// TopLevelSession is the session at the root of id's chain of parents:
+// the conversation a task's or a scheduled run's work belongs to, which a
+// nested task's own parent, another task, is not. Bounded, so a parent
+// chain that loops cannot hang a caller.
+func (l *Loop) TopLevelSession(id string) string {
 	for i := 0; i < 32; i++ {
-		s, err := tm.loop.Store.Get(id)
+		s, err := l.Store.Get(id)
 		if err != nil || s.ParentID == "" {
 			return id
 		}

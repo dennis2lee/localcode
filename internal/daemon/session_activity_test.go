@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"localcode/internal/agent"
 	"localcode/internal/events"
+	"localcode/internal/tools"
 )
 
 // activityFor waits for a session.activity about sessionID that want
@@ -120,4 +122,55 @@ func TestAQuestionForThePersonMarksItsSessionAsking(t *testing.T) {
 	if row := listedSession(t, srv.URL, "s1"); row.Asking {
 		t.Errorf("listed as %+v after the question was withdrawn", row)
 	}
+}
+
+// The daemon this one replaced names the sessions it is still writing,
+// which for a task is the task's own. The conversation the task works for
+// is working too, here and in the list, until the old daemon lets go.
+func TestATaskStillRunningInTheOldDaemonKeepsItsConversationWorking(t *testing.T) {
+	d, store, dir := handoffDaemon(t)
+	if _, err := store.CreateSession("parent", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSessionIn("parent-task", "parent", "general-purpose", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSession("other", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	writeManifest(t, dir, "parent-task")
+
+	if a := d.activityOf("parent"); !a.Busy {
+		t.Errorf("activityOf(parent) = %+v while the old daemon finishes its task", a)
+	}
+	if a := d.activityOf("other"); a.Busy {
+		t.Errorf("activityOf(other) = %+v; nothing of it is in the old daemon", a)
+	}
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+	if row := listedSession(t, srv.URL, "parent"); !row.Busy {
+		t.Errorf("listed as %+v while the old daemon finishes its task", row)
+	}
+}
+
+// A permission request is a session waiting for a person, announced as
+// it is raised and again when it ends however it ends.
+func TestAPermissionRequestIsAnnouncedAsWaiting(t *testing.T) {
+	d := newTestDaemon(t, "http://127.0.0.1:1")
+	if _, err := d.Loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	announced, unsub := d.daemonEvents.subscribe()
+	defer unsub()
+
+	ctx, cancel := context.WithCancel(agent.WithSessionID(context.Background(), "s1"))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = d.Broker.Func()(ctx, tools.Ask{Tool: "bash", Description: "run a command", Subject: "make"})
+	}()
+	activityFor(t, announced, "s1", func(d map[string]any) bool { return d["asking"] == true })
+	cancel()
+	<-done
+	activityFor(t, announced, "s1", func(d map[string]any) bool { return d["asking"] == false })
 }

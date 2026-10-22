@@ -468,6 +468,12 @@ func (s *Scheduler) fire(sessionID, id string) {
 		return
 	}
 	s.status(sessionID, id, ScheduleRunning, runID, "")
+	// Working until the run ends, counted for the conversation that booked
+	// it, as a task it spawned would be: that is what a session list marks
+	// as working. Released after the run's last status.
+	if s.loop.Tasks != nil {
+		defer s.loop.Tasks.track(runID, sessionID)()
+	}
 	// At the head of the run's own transcript, before the prompt: opened
 	// on its own, a run session is a conversation that starts with an
 	// instruction nobody in it typed. The same thing session.forked does
