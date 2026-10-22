@@ -86,9 +86,17 @@ type memState struct {
 	snaps   map[string]*memSnapshot
 	notes   map[string][]sessionNote
 	begun   map[string]bool
-	retired map[string][]string
+	retired map[string][]retiredNote
 	forgets map[string]int
 	dirs    map[string]string
+}
+
+// retiredNote is a note a session's first turn retired, kept to tell
+// that session so: once, and only while it is working in the directory
+// the note was retired from.
+type retiredNote struct {
+	dir  string
+	text string
 }
 
 func (s *memState) init() {
@@ -96,7 +104,7 @@ func (s *memState) init() {
 		s.snaps = map[string]*memSnapshot{}
 		s.notes = map[string][]sessionNote{}
 		s.begun = map[string]bool{}
-		s.retired = map[string][]string{}
+		s.retired = map[string][]retiredNote{}
 		s.forgets = map[string]int{}
 		s.dirs = map[string]string{}
 	}
@@ -194,14 +202,14 @@ func (l *Loop) beginMemory(sessionID string) {
 	}
 	l.memory.mu.Unlock()
 	now := l.Memory.now()
-	var retired []string
+	var retired []retiredNote
 	for _, st := range todo {
 		names, err := st.BeginSession(sessionID, now, l.Memory.RetireDays)
 		if err != nil {
 			continue
 		}
 		for _, n := range names {
-			retired = append(retired, string(st.Scope)+" note "+n)
+			retired = append(retired, retiredNote{dir: st.Dir, text: string(st.Scope) + " note " + n})
 		}
 	}
 	if len(retired) > 0 {
@@ -249,7 +257,14 @@ func (l *Loop) memoryIndexFor(sessionID string) string {
 	l.memory.mu.Lock()
 	l.memory.init()
 	snap := l.memory.snaps[sessionID]
-	retired := append([]string(nil), l.memory.retired[sessionID]...)
+	var retired []string
+	for _, r := range l.memory.retired[sessionID] {
+		// A user note's retirement is news in any workspace; a project
+		// note's only in the project it was retired from.
+		if r.dir == pdir || r.dir == l.userStore().Dir {
+			retired = append(retired, r.text)
+		}
+	}
 	l.memory.mu.Unlock()
 	if snap != nil && snap.projectDir == pdir {
 		return snap.text
@@ -326,7 +341,17 @@ func (l *Loop) noteMemoryCitations(sessionID string, blocks []provider.Block) {
 	snap := l.memory.snaps[sessionID]
 	l.memory.mu.Unlock()
 	if snap == nil {
-		return
+		// This turn saved or forgot a note, which lets go of the
+		// snapshot so the next turn reads memory again. The names an
+		// answer may cite are read now instead, or a note named right
+		// after a save would not count.
+		l.memoryIndexFor(sessionID)
+		l.memory.mu.Lock()
+		snap = l.memory.snaps[sessionID]
+		l.memory.mu.Unlock()
+		if snap == nil {
+			return
+		}
 	}
 	now := l.Memory.now()
 	if cited := memory.Cited(text.String(), snap.project); len(cited) > 0 {

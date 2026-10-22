@@ -241,7 +241,7 @@ func (t MemorySaveTool) Execute(ctx context.Context, input json.RawMessage) tool
 	if len(res.Similar) > 0 {
 		b.WriteString("\nThese notes look like the same fact:")
 		for _, s := range res.Similar {
-			fmt.Fprintf(&b, "\n- %s: %s", s.Name, s.Description)
+			fmt.Fprintf(&b, "\n- %s: %s", s.Name, memory.Neutralize(s.Description))
 		}
 		b.WriteString("\nIf one of them says the same thing, merge: save the combined note under one name, then memory_forget the other.")
 	}
@@ -351,7 +351,7 @@ func (t MemoryReadTool) Execute(ctx context.Context, input json.RawMessage) tool
 		}
 		b.WriteString(")\n")
 		if e.Description != "" {
-			b.WriteString(e.Description + "\n\n")
+			b.WriteString(memory.Neutralize(e.Description) + "\n\n")
 		}
 		b.WriteString(memory.Neutralize(e.Body))
 		if cut {
@@ -447,9 +447,9 @@ func (t MemorySearchTool) Execute(ctx context.Context, input json.RawMessage) to
 			case h.IndexLine != "":
 				fmt.Fprintf(&b, "- %s MEMORY.md line: %s\n", scope, h.IndexLine)
 			case h.Archived:
-				fmt.Fprintf(&b, "- %s %s (archived; memory_forget with restore brings it back): %s\n", scope, h.Entry.Name, h.Entry.Description)
+				fmt.Fprintf(&b, "- %s %s (archived; memory_forget with restore brings it back): %s\n", scope, h.Entry.Name, memory.Neutralize(h.Entry.Description))
 			default:
-				fmt.Fprintf(&b, "- %s %s (%s): %s\n", scope, h.Entry.Name, h.Entry.Type, h.Entry.Description)
+				fmt.Fprintf(&b, "- %s %s (%s): %s\n", scope, h.Entry.Name, h.Entry.Type, memory.Neutralize(h.Entry.Description))
 			}
 		}
 	}
@@ -512,7 +512,7 @@ func (l *Loop) listMemory(sessionID string, scopes []memory.Scope) string {
 			if e.Keep {
 				line += ", kept"
 			}
-			fmt.Fprintf(&b, "%s): %s\n", line, e.Description)
+			fmt.Fprintf(&b, "%s): %s\n", line, memory.Neutralize(e.Description))
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -631,6 +631,8 @@ func (t MemoryForgetTool) Execute(ctx context.Context, input json.RawMessage) to
 	if r := projectRefused(l, sessionID, scope); r != nil {
 		return *r
 	}
+	// Taken before the forget and given back if it fails, so two calls
+	// at once cannot both pass a check made before either counted.
 	key := sessionID + "\x00" + string(scope)
 	l.memory.mu.Lock()
 	l.memory.init()
@@ -638,9 +640,13 @@ func (t MemoryForgetTool) Execute(ctx context.Context, input json.RawMessage) to
 		l.memory.mu.Unlock()
 		return memoryErr("this turn has already forgotten %d %s notes, the most one turn may. Finish this pass and say what was forgotten; another turn can continue.", maxForgetsPerTurn, scope)
 	}
+	l.memory.forgets[key]++
 	l.memory.mu.Unlock()
 	name, err := l.durableStore(sessionID, scope).Forget(a.Name, now)
 	if err != nil {
+		l.memory.mu.Lock()
+		l.memory.forgets[key]--
+		l.memory.mu.Unlock()
 		if errors.Is(err, memory.ErrNotFound) {
 			hint := ""
 			if a.Scope == "" {
@@ -650,9 +656,6 @@ func (t MemoryForgetTool) Execute(ctx context.Context, input json.RawMessage) to
 		}
 		return memoryErr("not forgotten: %v", err)
 	}
-	l.memory.mu.Lock()
-	l.memory.forgets[key]++
-	l.memory.mu.Unlock()
 	l.forgetMemorySnapshot(sessionID)
 	return tools.Result{Content: fmt.Sprintf("Forgot %s note %s; it is in the archive, and memory_forget with restore brings it back.", scope, name)}
 }

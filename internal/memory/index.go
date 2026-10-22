@@ -59,15 +59,57 @@ func splitIndex(content string) (block, rest string) {
 	return content[start:end], content[:start] + content[end:]
 }
 
-// readIndexFile reads MEMORY.md, refusing anything but a regular file for
-// the same reason a note is refused: a link planted at the index would
-// put whatever it points at into every session's prompt.
-func readIndexFile(dir string) string {
+// indexFile is MEMORY.md as read: its text with a byte-order mark taken
+// off and line endings made "\n", which is what everything here works
+// on, and how it was written, so a rewrite gives the person's part back
+// the way they wrote it: CRLF stays CRLF, and a BOM stays at the start of
+// the file rather than ending up behind the generated block.
+type indexFile struct {
+	text string
+	crlf bool
+	bom  bool
+}
+
+// readIndex reads MEMORY.md, refusing anything but a regular file for the
+// same reason a note is refused: a link planted at the index would put
+// whatever it points at into every session's prompt.
+func readIndex(dir string) indexFile {
 	data, _, err := readRegular(IndexPath(dir), maxIndexFileBytes)
 	if err != nil {
-		return ""
+		return indexFile{}
 	}
-	return strings.ReplaceAll(data, "\r\n", "\n")
+	f := indexFile{crlf: strings.Contains(data, "\r\n")}
+	if strings.HasPrefix(data, "\ufeff") {
+		f.bom = true
+		data = strings.TrimPrefix(data, "\ufeff")
+	}
+	f.text = strings.ReplaceAll(data, "\r\n", "\n")
+	return f
+}
+
+// encode is text written the way the file was.
+func (f indexFile) encode(text string) []byte {
+	if f.crlf {
+		text = strings.ReplaceAll(text, "\n", "\r\n")
+	}
+	if f.bom {
+		text = "\ufeff" + text
+	}
+	return []byte(text)
+}
+
+func readIndexFile(dir string) string { return readIndex(dir).text }
+
+// writeIndex replaces MEMORY.md with text, encoded as f was, unless that
+// is what it already holds: a rewrite that changes nothing should not
+// touch the file, and BeginSession regenerates every time it runs.
+func writeIndex(dir string, f indexFile, text string) error {
+	if text == f.text {
+		if _, err := os.Lstat(IndexPath(dir)); err == nil {
+			return nil
+		}
+	}
+	return writeAtomic(IndexPath(dir), f.encode(text))
 }
 
 // indexTooLarge reports a MEMORY.md the tool will not rewrite, because it
@@ -129,7 +171,8 @@ func (s Store) regenerate(u *usage) (IndexStats, error) {
 	if err := indexTooLarge(s.Dir); err != nil {
 		return IndexStats{}, err
 	}
-	_, rest := splitIndex(readIndexFile(s.Dir))
+	f := readIndex(s.Dir)
+	_, rest := splitIndex(f.text)
 	rest = strings.Trim(rest, "\n")
 	lines := blockLines(entries, u, rest)
 	var b strings.Builder
@@ -148,7 +191,7 @@ func (s Store) regenerate(u *usage) (IndexStats, error) {
 		if err := os.Remove(IndexPath(s.Dir)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return IndexStats{}, err
 		}
-	} else if err := writeAtomic(IndexPath(s.Dir), []byte(b.String())); err != nil {
+	} else if err := writeIndex(s.Dir, f, b.String()); err != nil {
 		return IndexStats{}, err
 	}
 	_, stats := s.load(entries, u)
@@ -168,7 +211,8 @@ func dropLegacyLine(dir, file string) error {
 	if err := indexTooLarge(dir); err != nil {
 		return err
 	}
-	content := readIndexFile(dir)
+	f := readIndex(dir)
+	content := f.text
 	if content == "" {
 		return nil
 	}
@@ -185,7 +229,7 @@ func dropLegacyLine(dir, file string) error {
 		before, after := content[:start], content[start+len(block):]
 		out = re.ReplaceAllString(before, "") + block + re.ReplaceAllString(after, "")
 	}
-	return writeAtomic(IndexPath(dir), []byte(out))
+	return writeIndex(dir, f, out)
 }
 
 // Load is the index as the prompt receives it: the generated block, then
@@ -222,12 +266,12 @@ func (s Store) load(entries []Entry, u *usage) (string, IndexStats) {
 		// limits are what the prompt pays, and a note about the budget
 		// should not be what breaks it.
 		lim := s.Limits
-		lim.IndexLines--
-		lim.IndexBytes -= omittedNoteReserve
+		lim.IndexLines = max(lim.IndexLines-1, 0)
+		lim.IndexBytes = max(lim.IndexBytes-omittedNoteReserve, 0)
 		kept, _ = capLines(all, lim)
 		omitted := len(all) - len(kept)
 		stats.Omitted = omitted
-		kept = append(kept, fmt.Sprintf("(%d more index lines did not fit and are not shown. The memory tool's list and search actions reach every note.)", omitted))
+		kept = append(kept, fmt.Sprintf("(%d more index lines did not fit and are not shown. memory_search reaches every note, and with no query lists them all.)", omitted))
 	}
 	out := strings.Join(kept, "\n")
 	stats.Lines, stats.Bytes = len(kept), len(out)
@@ -254,7 +298,7 @@ func capLines(lines []string, lim Limits) ([]string, int) {
 			need++
 		}
 		if size+need > lim.IndexBytes {
-			if len(kept) == 0 {
+			if len(kept) == 0 && lim.IndexBytes > 0 {
 				cut := l[:lim.IndexBytes]
 				for len(cut) > 0 && !utf8.ValidString(cut) {
 					cut = cut[:len(cut)-1]

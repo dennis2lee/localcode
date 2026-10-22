@@ -303,7 +303,7 @@ func (l *Loop) showMemoryInfo(sessionID, displayText string) error {
 	notes := l.sessionNotesOf(sessionID)
 	fmt.Fprintf(&b, "Session memory (this conversation): %d of %d notes, %.1fKB of %dKB\n", len(notes), maxSessionNotes, float64(notesSize(notes))/1024, maxSessionNotesSize/1024)
 	for _, n := range notes {
-		fmt.Fprintf(&b, "  - %s: %s\n", n.Name, firstLineOf(n.Content))
+		fmt.Fprintf(&b, "  - %s: %s\n", n.Name, firstLineOf(memory.Neutralize(n.Content)))
 	}
 	if why := l.noProjectMemory(sessionID); why != "" {
 		fmt.Fprintf(&b, "Project memory: none here; %s\n", why)

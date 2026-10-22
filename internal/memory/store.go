@@ -217,6 +217,12 @@ func readRegular(path string, limit int64) (string, bool, error) {
 	return string(data), cut, nil
 }
 
+// isNoteName reports whether a file name is a note's: a *.md file that is
+// neither the index nor a dot file.
+func isNoteName(n string) bool {
+	return !strings.HasPrefix(n, ".") && strings.EqualFold(filepath.Ext(n), ".md") && !strings.EqualFold(n, indexFileName)
+}
+
 // noteFiles lists the note files in dir: regular *.md files other than
 // the index, dot files excluded. A missing directory has none.
 func noteFiles(dir string) ([]string, error) {
@@ -230,10 +236,7 @@ func noteFiles(dir string) ([]string, error) {
 	var out []string
 	for _, d := range list {
 		n := d.Name()
-		if strings.HasPrefix(n, ".") || !d.Type().IsRegular() || !strings.EqualFold(filepath.Ext(n), ".md") {
-			continue
-		}
-		if strings.EqualFold(n, indexFileName) {
+		if !d.Type().IsRegular() || !isNoteName(n) {
 			continue
 		}
 		out = append(out, n)
@@ -385,8 +388,12 @@ func (s Store) Read(name string, now time.Time) (e Entry, cut bool, err error) {
 	return e, cut, nil
 }
 
-// Has reports whether a note file of this name is in the directory.
+// Has reports whether a note file of this name is in the directory. The
+// index and the usage record are files there too, and are not notes.
 func (s Store) Has(file string) bool {
+	if !isNoteName(file) {
+		return false
+	}
 	info, err := os.Lstat(filepath.Join(s.Dir, file))
 	return err == nil && info.Mode().IsRegular()
 }
@@ -461,6 +468,20 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 				replaced = &existing[i]
 			}
 		}
+		// A hand-written file whose own name normalizes to this one
+		// ("Build_Notes.md" for build-notes) is the same note: the save
+		// adopts it rather than writing a second file beside it.
+		adoptFrom := ""
+		if replaced == nil {
+			if f, err := find(s.Dir, e.Name); err == nil && f != e.File() {
+				for i := range existing {
+					if existing[i].File() == f || existing[i].Name == stem(f) {
+						replaced = &existing[i]
+						adoptFrom = f
+					}
+				}
+			}
+		}
 		if replaced == nil && len(existing) >= s.Limits.Entries {
 			return fmt.Errorf("%s memory already holds %d notes, its limit. Merge notes that say the same thing, or forget ones that no longer help, then save again", s.Scope, len(existing))
 		}
@@ -475,7 +496,7 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 			if keep == nil {
 				e.Keep = replaced.Keep
 			}
-			if replaced.Body != e.Body || replaced.Description != e.Description || replaced.Type != e.Type {
+			if adoptFrom == "" && (replaced.Body != e.Body || replaced.Description != e.Description || replaced.Type != e.Type) {
 				// What the note said before goes to the archive: a save
 				// that merges two notes into one, done badly, is the
 				// way a memory loses a fact, and it should be a fact
@@ -487,6 +508,16 @@ func (s Store) Save(e Entry, keep *bool, now time.Time) (SaveResult, error) {
 		}
 		if err := writeAtomic(filepath.Join(s.Dir, e.File()), []byte(e.Format())); err != nil {
 			return err
+		}
+		if adoptFrom != "" {
+			// The old file goes to the archive whole, under its own
+			// name, and its hand-written index line with it.
+			if err := s.archiveFile(adoptFrom, now, true); err != nil {
+				return err
+			}
+			if err := dropLegacyLine(s.Dir, adoptFrom); err != nil {
+				return err
+			}
 		}
 		u := readUsage(s.Dir)
 		u.use(e.File(), now)
@@ -622,6 +653,13 @@ func (s Store) Restore(name string, now time.Time) (string, error) {
 			return ErrNotFound
 		}
 		file := pick.Entry.Name + ".md"
+		// A name the store cannot hold as a note: "memory.md" is the
+		// index itself on a disk that ignores case, and a Windows device
+		// name cannot be created. Put into the archive by hand, never
+		// by the store.
+		if !isNoteName(file) || reservedNames[strings.ToLower(pick.Entry.Name)] || strings.ContainsAny(pick.Entry.Name, `/\`) {
+			return fmt.Errorf("an archived copy named %q cannot be restored under that name; read it with memory_search and save its text under another name", pick.Entry.Name)
+		}
 		if _, err := os.Lstat(filepath.Join(s.Dir, file)); err == nil {
 			return fmt.Errorf("a note named %s exists; forget it first, or save the archived text under another name", pick.Entry.Name)
 		}
@@ -697,12 +735,42 @@ func (s Store) BeginSession(sessionID string, now time.Time, retireDays int) ([]
 		if err := u.write(s.Dir); err != nil {
 			return err
 		}
-		if len(retired) > 0 {
-			_, err = s.regenerate(u)
-		}
+		s.removeStaleTemps(now)
+		// Every time, not only after a retirement: a crash between a
+		// note's write and the index's leaves MEMORY.md describing what
+		// was there before, and this is where it is put right. A
+		// regeneration that changes nothing writes nothing.
+		_, err = s.regenerate(u)
 		return err
 	})
 	return retired, err
+}
+
+// staleTemp is how old a temporary file has to be before it is taken for
+// one a crash left behind rather than one another writer is filling.
+const staleTemp = time.Hour
+
+// removeStaleTemps deletes the temporary files a crashed write left, in
+// the directory and its archive. Called holding the lock.
+func (s Store) removeStaleTemps(now time.Time) {
+	dirs := []string{s.Dir}
+	if archive, err := s.archiveDir(false); err == nil && archive != "" {
+		dirs = append(dirs, archive)
+	}
+	for _, dir := range dirs {
+		list, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, d := range list {
+			if !strings.HasPrefix(d.Name(), ".tmp-") || !d.Type().IsRegular() {
+				continue
+			}
+			if info, err := d.Info(); err == nil && now.Sub(info.ModTime()) > staleTemp {
+				os.Remove(filepath.Join(dir, d.Name()))
+			}
+		}
+	}
 }
 
 // Hit is one search result: a note, an archived copy of one, or a line of
@@ -807,8 +875,10 @@ func (s Store) UsageOf() (map[string]Usage, []string, int) {
 }
 
 // minCitedName is the shortest note name that counts as cited when it
-// appears in an answer. Shorter names are ordinary words.
-const minCitedName = 4
+// appears in an answer. A one- or two-letter name is a word in every
+// answer; a three-letter one (api, sql) can be one too, and a false
+// match costs only a later retirement.
+const minCitedName = 3
 
 // Cited returns the names in names that text mentions as a whole word:
 // the note's name with no letter, digit or hyphen on either side. This is

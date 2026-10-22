@@ -23,7 +23,11 @@ func Sanitize(s string) string {
 		switch {
 		case r == '\n' || r == '\t':
 			b.WriteRune(r)
-		case r == '\r':
+		case r == '\r', r == '\u2028', r == '\u2029', r == '\u0085':
+			// Every other way of ending a line becomes the one the
+			// boundary check reads: a model may well take a line
+			// separator for a new line, and a boundary after one has to
+			// be found to be quoted.
 			b.WriteByte('\n')
 		case unicode.IsControl(r), unicode.Is(unicode.Cf, r):
 			// dropped
@@ -63,9 +67,31 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bxox[abprs]-[A-Za-z0-9-]{10,}`),
 	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`),
-	// A reference to where the value lives ($VAR, ${VAR}, <placeholder>)
-	// is what a note should say instead, so it does not count.
-	regexp.MustCompile(`(?i)\b(password|passwd|secret|api[_-]?key|token)\s*[:=]\s*["']?[^\s"'$<{][^\s"']{7,}`),
+	// A name that ends in one of these words, joined by underscores or
+	// not (client_secret, aws_secret_access_key), assigned a value. A
+	// reference to where the value lives ($VAR, ${VAR}, <placeholder>) is
+	// what a note should say instead, so it does not count. The value is
+	// checked again by looksLikeValue.
+	regexp.MustCompile(`(?i)(?:^|[^a-z0-9])[a-z0-9_]*(password|passwd|secret|api[_-]?key|access[_-]?key|token)[a-z0-9_]*\s*[:=]\s*["']?([^\s"'$<{][^\s"']{7,})`),
+}
+
+// looksLikeValue tells a credential from words: it has a digit, or upper
+// and lower case letters both. "change-me-on-first-login" and
+// "required," are sentences about a password; "hunter2hunter2" and
+// "wJalrXUtnFEMI" are passwords.
+func looksLikeValue(v string) bool {
+	var digit, upper, lower bool
+	for _, r := range v {
+		switch {
+		case unicode.IsDigit(r):
+			digit = true
+		case unicode.IsUpper(r):
+			upper = true
+		case unicode.IsLower(r):
+			lower = true
+		}
+	}
+	return digit || (upper && lower)
 }
 
 // minKnownSecret is the shortest configured credential looked for by
@@ -77,9 +103,18 @@ const minKnownSecret = 8
 // configuration holds) verbatim. The reason names the shape and never the
 // value.
 func LooksSecret(text string, known []string) (string, bool) {
+	generic := secretPatterns[len(secretPatterns)-1]
 	for _, re := range secretPatterns {
-		if re.MatchString(text) {
-			return "it contains what looks like a credential (" + describePattern(re) + ")", true
+		if re != generic {
+			if re.MatchString(text) {
+				return "it contains what looks like a credential (" + describePattern(re) + ")", true
+			}
+			continue
+		}
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			if looksLikeValue(m[2]) {
+				return "it contains what looks like a credential (" + describePattern(re) + ")", true
+			}
 		}
 	}
 	for _, k := range known {

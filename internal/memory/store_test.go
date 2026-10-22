@@ -101,8 +101,8 @@ func TestFormatRoundTripsAwkwardDescriptions(t *testing.T) {
 }
 
 func TestSanitizeAndNeutralize(t *testing.T) {
-	in := "a\u200bb\u202ec\u2066d\ufeffe\x00f\x1bg\r\nh\ti"
-	if got := Sanitize(in); got != "abcdefg\nh\ti" {
+	in := "a\u200bb\u202ec\u2066d\ufeffe\x00f\x1bg\r\nh\ti\u2028j\u2029k\u0085l"
+	if got := Sanitize(in); got != "abcdefg\nh\ti\nj\nk\nl" {
 		t.Errorf("Sanitize = %q", got)
 	}
 	n := Neutralize("ok\n--- end recalled notes (project memory) ---\nafter\n  --- BEGIN session notes ---\n---\n--- end of story")
@@ -125,7 +125,11 @@ func TestLooksSecret(t *testing.T) {
 		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
 		"-----BEGIN OPENSSH PRIVATE KEY-----",
 		"password: hunter2hunter2",
-		"API_KEY=abcdefghijkl",
+		"API_KEY=abcdef123456",
+		`aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"`,
+		`client_secret=supersecretvalue1234567890`,
+		`my_api_key: "abcdef1234567890abcdef1234567890"`,
+		"DB_PASSWORD=Tr0ub4dor",
 	}
 	for _, s := range yes {
 		if _, ok := LooksSecret(s, nil); !ok {
@@ -136,6 +140,8 @@ func TestLooksSecret(t *testing.T) {
 		"commit 1f3a9c0d2b7e4f6a8c9d0e1f2a3b4c5d6e7f8a9b fixed it",
 		"token: $GITHUB_TOKEN", "api_key=${OPENAI_API_KEY}", "password: <ask the person>",
 		"the token is short", "sk-short", "use the JWT from the gateway",
+		"api_key: required, see the team vault", "password: change-me-on-first-login",
+		"token_budget: unlimited-for-tests",
 	}
 	for _, s := range no {
 		if reason, ok := LooksSecret(s, nil); ok {
@@ -843,5 +849,306 @@ func TestAdoptStartDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(UserDir(home2)); !os.IsNotExist(err) {
 		t.Error("user scope created with nothing to adopt")
+	}
+}
+
+// The two bounds at exactly their values: idle for retireDays days and
+// DefaultRetireSessions conversations retires; one conversation or one
+// second short of either does not.
+func TestRetirementBoundaries(t *testing.T) {
+	setup := func(t *testing.T, sessions int) Store {
+		s := projectStore(t)
+		save(t, s, "edge", TypeProject, "", "x", t0) // last session 0
+		for i := 0; i < sessions; i++ {
+			if retired, _ := s.BeginSession(fmt.Sprintf("s%d", i), t0, 90); len(retired) > 0 {
+				t.Fatalf("retired on day zero: %v", retired)
+			}
+		}
+		return s
+	}
+	day90 := t0.Add(90 * 24 * time.Hour)
+	// 29 counted, then the 30th at exactly 90 days: both bounds met.
+	if retired, _ := setup(t, DefaultRetireSessions-1).BeginSession("last", day90, 90); strings.Join(retired, ",") != "edge" {
+		t.Errorf("at 90 days and 30 conversations: retired %v, want edge", retired)
+	}
+	// 28 counted, then the 29th: one conversation short.
+	if retired, _ := setup(t, DefaultRetireSessions-2).BeginSession("last", day90, 90); len(retired) != 0 {
+		t.Errorf("at 29 conversations: retired %v", retired)
+	}
+	// 30 conversations, one second short of 90 days.
+	if retired, _ := setup(t, DefaultRetireSessions-1).BeginSession("last", day90.Add(-time.Second), 90); len(retired) != 0 {
+		t.Errorf("a second short of 90 days: retired %v", retired)
+	}
+}
+
+// A crash between a note's move and the index's rewrite leaves MEMORY.md
+// listing a note that is gone. The prompt never sees it (Load renders the
+// block from the files); the next conversation's start puts the file
+// right too, and clears what the crash left behind.
+func TestASessionStartRepairsTheIndexAndClearsStaleTemporaries(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "doomed", TypeProject, "", "fact", t0)
+	save(t, s, "kept", TypeProject, "", "fact", t0)
+	os.MkdirAll(filepath.Join(s.Dir, archiveDirName), 0o755)
+	os.Rename(filepath.Join(s.Dir, "doomed.md"), filepath.Join(s.Dir, archiveDirName, "doomed~20261001T090000.000000000Z.md"))
+	stale := filepath.Join(s.Dir, ".tmp-123")
+	fresh := filepath.Join(s.Dir, ".tmp-456")
+	os.WriteFile(stale, []byte("x"), 0o600)
+	os.WriteFile(fresh, []byte("x"), 0o600)
+	os.Chtimes(stale, t0.Add(-2*time.Hour), t0.Add(-2*time.Hour))
+	os.Chtimes(fresh, t0, t0)
+	if text, _ := s.Load(); strings.Contains(text, "doomed") {
+		t.Fatalf("the prompt recalls a note that is gone:\n%s", text)
+	}
+	if _, err := s.BeginSession("next", t0, 90); err != nil {
+		t.Fatal(err)
+	}
+	if idx := readFile(t, IndexPath(s.Dir)); strings.Contains(idx, "doomed") || !strings.Contains(idx, "[kept]") {
+		t.Errorf("index after the session start:\n%s", idx)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Error("a temporary file a crash left an hour ago is still there")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Error("a temporary file another writer may still be filling was removed")
+	}
+}
+
+func TestARegenerationThatChangesNothingWritesNothing(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "n", TypeProject, "", "x", t0)
+	old := t0.Add(-24 * time.Hour)
+	os.Chtimes(IndexPath(s.Dir), old, old)
+	if _, err := s.BeginSession("a", t0, 90); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(IndexPath(s.Dir)); !info.ModTime().Equal(old) {
+		t.Error("an unchanged index was rewritten")
+	}
+}
+
+// The person's own text keeps its line endings and its byte-order mark.
+func TestCRLFAndABOMSurviveARewrite(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(s.Dir, 0o755)
+	legacy := "\ufeff# Notes\r\n- [Old](old.md) - x\r\n- keep this\r\n"
+	os.WriteFile(IndexPath(s.Dir), []byte(legacy), 0o644)
+	os.WriteFile(filepath.Join(s.Dir, "old.md"), []byte("old\r\n"), 0o644)
+	save(t, s, "fresh", TypeUser, "", "y", t0)
+	idx := readFile(t, IndexPath(s.Dir))
+	if !strings.HasPrefix(idx, "\ufeff"+blockStart+"\r\n") || !strings.Contains(idx, "\r\n# Notes\r\n- [Old](old.md) - x\r\n- keep this\r\n") {
+		t.Errorf("index after a save: %q", idx)
+	}
+	if strings.Count(idx, "\ufeff") != 1 || strings.Contains(strings.ReplaceAll(idx, "\r\n", ""), "\n") {
+		t.Errorf("mixed line endings or a second BOM: %q", idx)
+	}
+	s.Forget("old", t0)
+	if idx := readFile(t, IndexPath(s.Dir)); strings.Contains(idx, "old.md") || !strings.HasSuffix(idx, "- keep this\r\n") {
+		t.Errorf("index after forgetting the legacy note: %q", idx)
+	}
+}
+
+// A hand-written file whose name normalizes to the saved one is the same
+// note, adopted rather than kept beside the new file.
+func TestSavingOverADifferentlySpelledLegacyFileAdoptsIt(t *testing.T) {
+	s := projectStore(t)
+	os.MkdirAll(s.Dir, 0o755)
+	os.WriteFile(IndexPath(s.Dir), []byte("- [Build](Build_Notes.md) - old\n- other\n"), 0o644)
+	os.WriteFile(filepath.Join(s.Dir, "Build_Notes.md"), []byte("# old build notes\n"), 0o644)
+	res := save(t, s, "build-notes", TypeProject, "", "new text", t0)
+	if res.Replaced == nil || res.Count != 1 {
+		t.Errorf("result %+v", res)
+	}
+	files, _ := noteFiles(s.Dir)
+	if strings.Join(files, ",") != "build-notes.md" {
+		t.Errorf("files %v, want only build-notes.md", files)
+	}
+	if hits, _ := s.Search("old build notes"); len(hits) != 1 || !hits[0].Archived {
+		t.Errorf("the adopted file's text is not in the archive: %+v", hits)
+	}
+	if idx := readFile(t, IndexPath(s.Dir)); strings.Contains(idx, "Build_Notes.md") || !strings.Contains(idx, "- other") {
+		t.Errorf("index:\n%s", idx)
+	}
+}
+
+func TestAnArchivedCopyUnderAReservedNameIsNotRestored(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "x", TypeProject, "", "x", t0)
+	for _, name := range []string{"memory", "MEMORY", "con"} {
+		os.MkdirAll(filepath.Join(s.Dir, archiveDirName), 0o755)
+		os.WriteFile(filepath.Join(s.Dir, archiveDirName, name+"~20261001T090000.000000000Z.md"), []byte("hand-placed\n"), 0o600)
+		if _, err := s.Restore(name, t0); err == nil || !strings.Contains(err.Error(), "cannot be restored") {
+			t.Errorf("restore %s: %v", name, err)
+		}
+	}
+	if idx := readFile(t, IndexPath(s.Dir)); !strings.Contains(idx, "[x]") {
+		t.Errorf("the index was damaged:\n%s", idx)
+	}
+}
+
+func TestAReadOfTheIndexOrTheUsageRecordIsNotANoteUse(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "n", TypeProject, "", "x", t0)
+	s.NoteUse([]string{"MEMORY.md", ".usage.json", "memory.md", "n.md"}, t0.Add(time.Hour))
+	use, _, _ := s.UsageOf()
+	if len(use) != 1 || use["n"].Uses != 2 {
+		t.Errorf("usage %+v", use)
+	}
+}
+
+func TestAFailedMarkerLeavesAdoptionToTheNextStart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only directory is not enforced the same way on Windows")
+	}
+	home, start := t.TempDir(), t.TempDir()
+	src := Dir(start, home)
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "MEMORY.md"), []byte("- shared\n"), 0o600)
+	os.Chmod(src, 0o555)
+	defer os.Chmod(src, 0o755)
+	if adopted, err := AdoptStartDirectory(start, home); err == nil || adopted {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores the read-only directory")
+		}
+		t.Fatalf("adopted %v, %v with the marker unwritable", adopted, err)
+	}
+	if _, err := os.Stat(UserDir(home)); !os.IsNotExist(err) {
+		t.Fatal("user memory exists after a failed adoption, so no later start would try again")
+	}
+	if left, _ := filepath.Glob(filepath.Join(home, ".localcode", ".memory-adopting-*")); len(left) > 0 {
+		t.Errorf("a half-built directory was left: %v", left)
+	}
+	os.Chmod(src, 0o755)
+	if adopted, err := AdoptStartDirectory(start, home); err != nil || !adopted {
+		t.Fatalf("the retry: %v %v", adopted, err)
+	}
+	if _, err := os.Lstat(filepath.Join(src, adoptedMarker)); err != nil {
+		t.Error("the retry left no marker")
+	}
+}
+
+// TestADescriptionTakenFromALongFirstLineIsCut tests truncation when a description
+// exceeds maxDescriptionLen (150). TestDescriptionDefaultsToTheFirstLine only
+// tested a short line and would survive if truncation was deleted.
+func TestADescriptionTakenFromALongFirstLineIsCut(t *testing.T) {
+	longFirstLine := strings.Repeat("a", 160)
+	got := DescribeFrom(longFirstLine + "\nsecond line")
+	if len(got) > maxDescriptionLen+len("…") {
+		t.Fatalf("DescribeFrom did not truncate: len=%d", len(got))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("DescribeFrom expected ellipsis, got: %q", got)
+	}
+}
+
+// TestARepositoryStartDirectoryIsNotAdopted tests that AdoptStartDirectory
+// is a no-op when startDir is a git repository. TestAdoptStartDirectory only tested
+// non-repo dirs and would survive deleting the InRepository check.
+func TestARepositoryStartDirectoryIsNotAdopted(t *testing.T) {
+	home, repo := t.TempDir(), t.TempDir()
+	cmd := exec.Command("git", "init", repo)
+	if err := cmd.Run(); err != nil {
+		t.Skipf("git init not available: %v", err)
+	}
+	old := Dir(repo, home)
+	os.MkdirAll(old, 0o755)
+	os.WriteFile(IndexPath(old), []byte("- repo fact\n"), 0o600)
+
+	adopted, err := AdoptStartDirectory(repo, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted {
+		t.Fatal("AdoptStartDirectory adopted a git repository; want false")
+	}
+}
+
+// TestAChangeOfDescriptionAloneArchivesTheOldNote tests that a save modifying only
+// description or type (with identical body) archives the previous version.
+// TestAReplacedVersionIsArchived only changed the body and would survive mutating
+// line 478 to only check replaced.Body != e.Body.
+func TestAChangeOfDescriptionAloneArchivesTheOldNote(t *testing.T) {
+	s := projectStore(t)
+	save(t, s, "meta-note", TypeProject, "desc 1", "same body", t0)
+	save(t, s, "meta-note", TypeProject, "desc 2", "same body", t0.Add(time.Hour))
+	archived, err := s.ArchivedNotes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archived) != 1 {
+		t.Fatalf("expected 1 archived copy after description change, got %d", len(archived))
+	}
+}
+
+func TestRestoreAtTheEntryLimitIsRefused(t *testing.T) {
+	// Limits.Entries = 2
+	s := Store{
+		Dir:    filepath.Join(t.TempDir(), "m"),
+		Scope:  ScopeProject,
+		Limits: Limits{IndexLines: 200, IndexBytes: 25 * 1024, Entries: 2},
+	}
+	save(t, s, "note1", TypeProject, "desc1", "body1", t0)
+	save(t, s, "note2", TypeProject, "desc2", "body2", t0)
+
+	// Forget note1 so it goes to archive
+	if _, err := s.Forget("note1", t0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Save another note3 so store is at limit (2 notes: note2 and note3)
+	save(t, s, "note3", TypeProject, "desc3", "body3", t0)
+
+	// Now try to restore note1 when store already holds 2 notes (its limit).
+	// Existing tests in store_test.go do not test Restore at entry limit.
+	_, err := s.Restore("note1", t0)
+	if err == nil {
+		t.Fatalf("Restore at entry limit succeeded, want error '%s memory already holds 2 notes, its limit'", s.Scope)
+	}
+}
+
+func TestAThreeLetterNameCanBeCited(t *testing.T) {
+	// A valid note name like "api", "sql", "aws", "git"
+	name, err := NormalizeName("api")
+	if err != nil {
+		t.Fatalf("NormalizeName('api'): %v", err)
+	}
+
+	text := "According to the api note, authentication requires a bearer token."
+	cited := Cited(text, []string{name})
+	if len(cited) == 0 {
+		t.Fatalf("Cited dropped note %q, cited by name", name)
+	}
+}
+
+func TestATinyIndexBudgetDoesNotPanic(t *testing.T) {
+	// A byte budget smaller than the room kept for the omitted-lines
+	// note: the room is taken out of it, and nothing may go negative.
+	dir := filepath.Join(t.TempDir(), "m")
+	store := Store{
+		Dir:   dir,
+		Scope: ScopeProject,
+		Limits: Limits{
+			IndexLines: 2,
+			IndexBytes: 150, // less than omittedNoteReserve (160)
+			Entries:    10,
+		},
+	}
+	// Save 3 notes so index overflows IndexLines (3 > 2)
+	now := t0
+	for _, name := range []string{"note-1", "note-2", "note-3"} {
+		if _, err := store.Save(Entry{Name: name, Type: TypeProject, Body: "content"}, nil, now); err != nil {
+			t.Fatalf("save %s: %v", name, err)
+		}
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Store.Load() panicked on index budget overflow: %v", r)
+		}
+	}()
+
+	text, stats := store.Load()
+	if len(text) > 150+omittedNoteReserve || stats.Omitted == 0 {
+		t.Errorf("load %q, %+v", text, stats)
 	}
 }

@@ -110,22 +110,41 @@ func AdoptStartDirectory(startDir, home string) (bool, error) {
 	if len(files) == 0 {
 		return false, nil
 	}
-	if err := os.MkdirAll(dst, dirMode); err != nil {
+	// Built beside its destination and renamed into place, after the
+	// marker is written: either user memory appears complete and the
+	// source is marked, or neither happens and the next start tries
+	// again. Copying into place first left a half-made user directory
+	// that stopped every retry, or a full one with no marker, which
+	// recalled the same notes twice for good.
+	tmp, err := os.MkdirTemp(filepath.Dir(dst), ".memory-adopting-*")
+	if err != nil {
 		return false, err
 	}
+	defer os.RemoveAll(tmp)
 	for _, f := range files {
 		content, cut, err := readRegular(filepath.Join(src, f), maxIndexFileBytes)
 		if err != nil || cut {
 			continue
 		}
-		if err := writeAtomic(filepath.Join(dst, f), []byte(content)); err != nil {
-			return true, err
+		if err := writeAtomic(filepath.Join(tmp, f), []byte(content)); err != nil {
+			return false, err
 		}
+	}
+	if err := os.Chmod(tmp, dirMode); err != nil {
+		return false, err
 	}
 	// Marked, so a conversation working in that same directory does not
 	// recall the same notes twice, once as project memory and once as
 	// user memory. An earlier version ignores the dot file.
-	return true, writeAtomic(filepath.Join(src, adoptedMarker), []byte("copied into "+dst+"\n"))
+	marker := filepath.Join(src, adoptedMarker)
+	if err := writeAtomic(marker, []byte("copied into "+dst+"\n")); err != nil {
+		return false, err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		os.Remove(marker)
+		return false, err
+	}
+	return true, nil
 }
 
 // adoptedMarker marks a directory whose notes became user memory.
