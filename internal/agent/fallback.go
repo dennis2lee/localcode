@@ -661,8 +661,9 @@ func (l *Loop) activationFor(ctx context.Context, sessionID, resolveAgent string
 		Values: map[string]string{
 			valBaseSystem:   l.SystemPrompt,
 			valSkillsIndex:  l.SkillIndex(),
-			valMemoryPolicy: l.MemoryPolicy,
-			valMemoryIndex:  l.MemorySection,
+			valMemoryPolicy: l.memoryPolicy(),
+			valMemoryIndex:  l.memoryIndexFor(sessionID),
+			valSessionNotes: l.sessionNotesSection(sessionID),
 			valProjectRules: rules,
 			valAgentPrompt:  agentCfg.Prompt,
 			valOrchestrator: l.orchestrationFor(ctx, sessionID, resolveAgent, profile.Model),

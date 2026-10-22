@@ -240,6 +240,7 @@ func TestMergeFieldsGuard(t *testing.T) {
 		"MaxConcurrentTasks": true,
 		"MCPServers":         true,
 		"AutoMemoryEnabled":  true,
+		"MemoryRetireDays":   true,
 		"Permissions":        true,
 		"AutoCompactEnabled": true,
 		"AutoUpdate":         true,

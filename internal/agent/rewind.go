@@ -258,7 +258,9 @@ func (l *Loop) routeRewind(ctx context.Context, sessionID, text string) (bool, e
 		after = append(evs, events.Event{Seq: ^uint64(0), Type: events.TypeRewound,
 			Data: map[string]any{"from_seq": from}})
 	}
-	l.setHistory(sessionID, rehydrateHistory(applyRewinds(after)))
+	live := applyRewinds(after)
+	l.setHistory(sessionID, rehydrateHistory(live))
+	l.setSessionNotes(sessionID, reduceSessionNotes(live))
 
 	return true, l.replyText(sessionID, rewindReport(first, restored, removed, skipped))
 }

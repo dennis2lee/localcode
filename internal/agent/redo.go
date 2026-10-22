@@ -74,7 +74,9 @@ func (l *Loop) routeRedo(ctx context.Context, sessionID, text string) (bool, err
 	if err != nil {
 		after = evs
 	}
-	l.setHistory(sessionID, rehydrateHistory(applyRewinds(after)))
+	live := applyRewinds(after)
+	l.setHistory(sessionID, rehydrateHistory(live))
+	l.setSessionNotes(sessionID, reduceSessionNotes(live))
 
 	return true, l.replyText(sessionID, redoReport(dataString(marker.Data, "turn_text"), written, skipped))
 }

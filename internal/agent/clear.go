@@ -51,6 +51,11 @@ func (l *Loop) routeClear(sessionID, text string) (bool, error) {
 	// until the next turn replaced it, which is the one moment somebody
 	// is looking at it. See setHistory.
 	l.setHistory(sessionID, nil)
+	// The conversation's memory notes start over with its history, as a
+	// replay of the log would rebuild them; project and user memory are
+	// read again on the next turn.
+	l.setSessionNotes(sessionID, nil)
+	l.forgetMemorySnapshot(sessionID)
 
 	var b strings.Builder
 	b.WriteString("Cleared. The model starts the next message with no history.\n")

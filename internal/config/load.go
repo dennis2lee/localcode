@@ -389,6 +389,9 @@ func (c *Config) merge(other *Config) {
 	if other.AutoMemoryEnabled != nil {
 		c.AutoMemoryEnabled = other.AutoMemoryEnabled
 	}
+	if other.MemoryRetireDays != nil {
+		c.MemoryRetireDays = other.MemoryRetireDays
+	}
 	if other.AutoCompactEnabled != nil {
 		c.AutoCompactEnabled = other.AutoCompactEnabled
 	}

@@ -47,7 +47,7 @@ func TestStartupLoadsSkillsFromTheWorkspaceNotTheStartDirectory(t *testing.T) {
 	home := t.TempDir()
 
 	registry := startupTestRegistry(t)
-	section, _, _, skillList, _, _, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
+	section, skillList, _, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestStartupLoadsCommandsFromTheWorkspaceNotTheStartDirectory(t *testing.T) 
 		"---\ndescription: daily standup\n---\n\nWhat did I do yesterday?\n")
 
 	registry := startupTestRegistry(t)
-	_, _, _, _, cmdList, _, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
+	_, _, cmdList, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestStartupMergesSkillsAndCommands(t *testing.T) {
 	write(t, filepath.Join(workspace, ".opencode", "commands", "from-opencode.md"), "yes\n")
 
 	registry := startupTestRegistry(t)
-	_, _, _, skillList, cmdList, _, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
+	_, skillList, cmdList, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestStartupProjectSkillOverridesGlobal(t *testing.T) {
 		"---\nname: lint\ndescription: the project linter\n---\n\nproject body\n")
 
 	registry := startupTestRegistry(t)
-	_, _, _, skillList, _, _, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
+	_, skillList, _, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestStartupSurvivesAMalformedSkill(t *testing.T) {
 	home := t.TempDir()
 
 	registry := startupTestRegistry(t)
-	_, _, _, skillList, _, _, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
+	_, skillList, _, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
 	if err != nil {
 		t.Fatalf("a malformed skill must not fail startup: %v", err)
 	}

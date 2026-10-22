@@ -62,6 +62,13 @@ type Config struct {
 	// unset, which defaults to enabled.
 	AutoMemoryEnabled *bool `json:"auto_memory_enabled,omitempty"`
 
+	// MemoryRetireDays is how long a project or reference note may go
+	// unused, alongside 30 conversations, before it is moved to the
+	// memory archive. A pointer so that 0, which turns retirement off,
+	// is a value a project file can set rather than the same thing as
+	// leaving it out. Nil means memory.DefaultRetireDays.
+	MemoryRetireDays *int `json:"memory_retire_days,omitempty"`
+
 	// Permissions holds opencode-style fine-grained allow/ask/deny rules,
 	// keyed by tool name (or "*" for a fallback applied to every tool).
 	// See ResolvePermission.
@@ -459,6 +466,19 @@ func (a *AutoDelegateConfig) MatchesPrompt(text string) bool {
 // AutoMemoryEnabled is unset.
 func (c *Config) MemoryEnabled() bool {
 	return c.AutoMemoryEnabled == nil || *c.AutoMemoryEnabled
+}
+
+// DefaultMemoryRetireDays is MemoryRetireDays when unset. The same number
+// as memory.DefaultRetireDays, which this package cannot import.
+const DefaultMemoryRetireDays = 90
+
+// MemoryRetireAfterDays is MemoryRetireDays with its default applied: 0
+// means retirement is off.
+func (c *Config) MemoryRetireAfterDays() int {
+	if c.MemoryRetireDays == nil {
+		return DefaultMemoryRetireDays
+	}
+	return *c.MemoryRetireDays
 }
 
 // CompactEnabled reports whether auto-compaction is on — the default
@@ -1073,6 +1093,10 @@ func (c *Config) Validate() error {
 
 	if c.SubagentDepth != nil && *c.SubagentDepth < 0 {
 		return fmt.Errorf("subagent_depth is %d, which is negative", *c.SubagentDepth)
+	}
+
+	if c.MemoryRetireDays != nil && *c.MemoryRetireDays < 0 {
+		return fmt.Errorf("memory_retire_days is %d, which is negative (0 turns retirement off)", *c.MemoryRetireDays)
 	}
 
 	for _, inst := range c.Instructions {

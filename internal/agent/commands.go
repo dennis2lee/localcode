@@ -190,7 +190,7 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 	return []func() (bool, error){
 		func() (bool, error) { return l.routeSkillCommand(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeInit(ctx, sessionID, agentName, text) },
-		func() (bool, error) { return l.routeMemory(sessionID, text) },
+		func() (bool, error) { return l.routeMemory(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeConfig(sessionID, text) },
 		func() (bool, error) { return l.routeSmartAgent(sessionID, text) },
 		func() (bool, error) { return l.routeOrchestrate(sessionID, text) },
@@ -276,12 +276,42 @@ func (l *Loop) routeInit(ctx context.Context, sessionID, agentName, text string)
 		messageOrigin{source: "command.init"})
 }
 
-func (l *Loop) routeMemory(sessionID, text string) (bool, error) {
-	if strings.TrimSpace(text) != "/memory" {
+// routeMemory answers "/memory" and "/memory tidy".
+func (l *Loop) routeMemory(ctx context.Context, sessionID, agentName, text string) (bool, error) {
+	arg, ok := matchToggleCommand(text, "/memory")
+	if !ok {
 		return false, nil
 	}
-	return true, l.showMemoryInfo(sessionID, text)
+	switch strings.ToLower(arg) {
+	case "":
+		return true, l.showMemoryInfo(sessionID, text)
+	case "tidy":
+		if !l.memoryOn() {
+			return true, l.replyLocal(sessionID, text, memoryOffText)
+		}
+		return true, l.sendWithModelText(ctx, sessionID, agentName, text, memoryTidyPrompt, "", "",
+			messageOrigin{source: "command.memory_tidy"})
+	default:
+		return true, l.replyLocal(sessionID, text, fmt.Sprintf(
+			"/memory does not take %q. It takes nothing, to show what memory holds, or tidy, to have the model merge, correct and retire notes. The line was not sent to the model.", arg))
+	}
 }
+
+// memoryTidyPrompt is what "/memory tidy" sends. Note by note, never the
+// whole memory rewritten in one pass: the research systems that let a
+// model rewrite its memory wholesale watched it shrink a playbook of
+// eighteen thousand tokens to a hundred and lose what it knew. Every
+// change here goes through a tool that keeps the old text.
+const memoryTidyPrompt = `Tidy your memory. Use memory_search with no query to list every note in session, project and user scope, and memory_read for any note whose text you need to judge it. Then, one note at a time:
+1. Merge notes that record the same fact: save the combined note under one name, keeping every fact both had, then memory_forget the other.
+2. Correct a note the code now contradicts, after checking the code: save the corrected text under the same name. Do not change a note about something outside this repository on a guess.
+3. Forget a note that no longer helps: one about work that is finished, or one that only repeats what the code, the git history or AGENTS.md already record.
+4. Move a note that is in the wrong scope or has the wrong type: save it where it belongs, then forget the old one. A user note is about the person in every project; a project note is about this repository.
+5. Shorten a note that has grown long, keeping its fact and its reason.
+Leave alone any note that is right where it is. Change one note per call and never rewrite them all at once. A forgotten or replaced note goes to the archive, so a mistake can be undone with memory_forget restore. Finish with a short list of what you changed and why.`
+
+// memoryOffText is the answer when auto memory is switched off.
+const memoryOffText = "Auto memory is disabled (config.json's \"auto_memory_enabled\": false)."
 
 func (l *Loop) routeConfig(sessionID, text string) (bool, error) {
 	arg, ok := parseConfigCommand(text)

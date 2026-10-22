@@ -624,7 +624,6 @@ func TestTheSettingsAndTheCommandListKeepTheirShape(t *testing.T) {
 
 	// Commands that take no arguments
 	noArgCommands := map[string]bool{
-		"memory":              true,
 		"show-scheduled-task": true,
 		"debug-log":           true,
 		"update":              true,

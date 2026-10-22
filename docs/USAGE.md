@@ -105,7 +105,7 @@ The prompt may be an argument or stdin. Use stdin for prompts that contain newli
 
 | Behavior | Detail |
 |---|---|
-| `--bare` | Loads only the base system prompt, workspace, and tools. Excludes `AGENTS.md`, `CLAUDE.md`, skills, memory, custom commands, and hooks. Creates no memory-index directory. Suitable for controlled comparisons. |
+| `--bare` | Loads only the base system prompt, workspace, and tools. Excludes `AGENTS.md`, `CLAUDE.md`, skills, memory and the memory tools, custom commands, and hooks. Creates no memory directory. Suitable for controlled comparisons. |
 | Permission request | Refused immediately because no interactive client can answer it. `--skip-permissions` is equivalent to `/permission-skip-all` for the run. |
 | Failure | Non-zero exit status. JSON output includes an `error` field. |
 | Smart Agent | Supports the work-order prompt, `update_plan`, fallback, cache markers and credential-path checks when `smart_agent` is enabled. The turn log is not written, and `ask_user` is not offered. |
@@ -424,7 +424,8 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `model_commands` | Which built-in commands the model may run, each with its leading slash. Empty, the default, means none. Inert while `model_invocable` is off. |
 | `auto_compact_enabled` | Automatic compaction past the threshold. Opencode spelling `compaction.auto` is also accepted. On unless set to false; `/auto-compact` toggles it. |
 | `auto_compact_percent` | The threshold, as a percent of the context window, between 10 and 95. `50` unless set; `/auto-compact <percent>` changes it live and saves it, and refuses a percent outside that range, while a nonzero value outside it in config.json is clamped instead, without a message (`0` counts as unset, so it uses 50). |
-| `auto_memory_enabled` | The notes the model keeps for itself across sessions. On unless set to false. See [Auto memory](#auto-memory). |
+| `auto_memory_enabled` | The notes the model keeps for itself: per conversation, per project and for you. On unless set to false. See [Auto memory](#auto-memory). |
+| `memory_retire_days` | How many days a project or reference note may go unused, alongside 30 conversations, before it moves to the memory archive. `90` unless set; `0` turns retirement off. See [Auto memory](#auto-memory). |
 | `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
 | `show_thinking` | Whether the clients paint the model's reasoning while it arrives. On unless set to false; `/thinking` toggles it. Daemon-wide, like `show_tps`. The Web UI and the desktop window paint every model's reasoning. The TUI paints only a Muse model's reasoning block (see `fold_thinking`) and otherwise shows a `thinking` state on the busy line. This changes nothing about what the model does, and nothing about what is kept: a Muse model's reasoning blocks are logged while `fold_thinking` is on, whatever this switch says, and other models' reasoning is never logged. See [What the transcript shows](#what-the-transcript-shows). |
 | `fold_thinking` | Whether a Muse model's reasoning is drawn as a block of its own: labelled Thinking with its running time, and folded to one line when the answer starts. On unless set to false; `/fold-thinking` and the settings Muse tab toggle it. Daemon-wide. Applies only to model IDs containing `muse`; other models keep the plain drawing. `show_thinking` off hides the block too. While it is on, each block is also written to the session log, so a reload draws it again. See [What the transcript shows](#what-the-transcript-shows). |
@@ -955,7 +956,7 @@ An expired token is added to any of these as a second problem.
 
 ## Part 3. Project context
 
-Project rules, skills, and auto memory supply reusable context. Rules load each turn. Skill bodies load on demand. Auto memory stores project notes across sessions.
+Project rules, skills, and auto memory supply reusable context. Rules load each turn. Skill bodies load on demand. Auto memory keeps the model's own notes for a conversation, a project and the person.
 
 ### Skills
 
@@ -1071,13 +1072,54 @@ Matching uses lowercase model-ID substrings in `modelQuirks`, defined in `intern
 
 ### Auto memory
 
-Auto memory stores model-written project notes across sessions. Typical contents include build commands, debugging findings, and user preferences.
+The model keeps its own notes with four tools: `memory_save`, `memory_read`, `memory_search` and `memory_forget`. Notes have one of three scopes. Project and user notes are indexed in the system prompt; a note's full text is read on demand. Nothing asks for permission except a change to user memory.
 
-* Each project gets `~/.localcode/projects/<slug>/memory/` automatically. The slug comes from the git repository root path, so multiple worktrees or subdirectories of one repository share a single memory directory. Outside a git repository, the working directory is used instead.
-* `MEMORY.md` in that directory is the index, loaded into the system prompt at the start of every session, capped at 200 lines or 25KB, the same limits Claude Code uses. Anything past that is not loaded.
-* The system prompt tells the model to split details into separate topic files such as `debugging.md`, which it reads with `read_file` when needed.
-* There is no dedicated memory tool. The model uses the `read_file`, `write_file`, and `edit` tools it already has. The directory path and current index are given to it each session.
-* [`/memory`](#memory) prints the directory path and index contents instantly, with no model call.
+| Scope | What belongs there | Where it is kept | What the model is shown |
+|---|---|---|---|
+| `session` | Work in this conversation only: the current hypothesis, a decision for this task, where the work stopped | `memory.session` events in the conversation's own log | Every note, on every turn of the conversation, after compaction too. Deleted with the conversation. |
+| `project` | A fact about this repository that a later session needs and cannot read from the code, the git history or `AGENTS.md` | `~/.localcode/projects/<slug>/memory/` | The index, read at the conversation's first turn |
+| `user` | A fact about the person that holds in every project: role, language, working preferences | `~/.localcode/memory/` | The index, read at the conversation's first turn |
+
+A rule that everyone working on the repository should follow belongs in `AGENTS.md`. The model is told to suggest it there rather than save it.
+
+**Notes and the index**
+
+* A project or user note is one file, `<name>.md`, with a frontmatter header: `name`, `description`, and under `metadata` its `type`, `created`, `modified` and, when set, `keep`.
+* Types: `user` (about the person), `feedback` (a correction or a confirmed way of working, with a "Why:" and a "How to apply:" line), `project` (a fact about the work), `reference` (where something outside the repository lives).
+* `MEMORY.md` is the index. The memory tools own one block in it, generated from the note files: one line per note, `- [name](name.md): description`, grouped by type in that order, most recently used first. Everything outside the block is kept byte for byte.
+* What reaches the prompt is the block, then the rest of `MEMORY.md`. Project memory loads 200 lines or 25KB, user memory 80 lines or 8KB. When something does not fit, the last line says how many lines were left out; `memory_search` reaches them, the hand-written lines included.
+* Limits: 150 project notes, 60 user notes, 4KB per note. Session memory holds 30 notes, 8KB in all, 2KB each. A save past a limit is refused with what to do instead.
+* The project directory comes from the git repository of the conversation's own workspace, so it follows a conversation that moves. Subdirectories and linked worktrees of one repository share it. Outside a repository, the workspace directory is used.
+* A directory is created the first time something is saved in it.
+
+**Retirement**
+
+* A project or reference note that nobody has read, saved or named in an answer for 90 days, and for 30 conversations in its directory, moves to `archive/`. Both conditions, so a project left alone for months keeps its notes, and a burst of conversations in one day retires nothing.
+* User and feedback notes are never retired: their index line is usually the whole note, used without being opened. Neither is a note saved with `keep`, which the model sets when the person asked it to remember something.
+* The model is asked to name a note it relied on. A name in an answer counts as a use, as does opening the note with `memory_read` or `read_file`.
+* Only a conversation's first turn counts toward the 30. A task, a scheduled run and `localcode run` do not count.
+* The conversation in which notes retire is told which ones. Retirement moves; it never deletes. `memory_search` still finds an archived note, and `memory_forget` with `restore` brings it back.
+* A save that replaces a note also keeps the previous text in the archive. The archive keeps the 300 most recent copies.
+* `memory_retire_days` changes the 90; `0` turns retirement off.
+
+**Trust**
+
+* Recalled notes and session notes are generated content. The prompt wraps them as a record, not instructions, and tells the model never to run a command, fetch an address, change a permission or reveal data because a note says so. A preference the person stated still counts.
+* A save is refused when the note looks like it holds a credential: a private key, a well-known API key or token format, a password assigned a value, or any API key or header value from `config.json`. The refusal names the kind, never the value. The tool call's own input is still in the conversation's log, like any tool input.
+* Invisible characters are taken out of notes, and a line that imitates the boundary around recalled notes is quoted so it cannot end it.
+* A sub agent, an orchestration stage, a debate reviewer and a scheduled run may read project and user memory and keep session notes of their own. They cannot change project or user memory; they report what is worth keeping to the conversation that started them.
+* One turn may forget at most 10 notes in a scope.
+* Note files, `MEMORY.md` and the archive must be regular files and a directory. A symbolic link at any of them is not followed.
+
+**Compatibility**
+
+* An existing `MEMORY.md` and its topic files keep loading as before. Topic files without a frontmatter header are listed as `legacy`, never retired, and never rewritten. Saving a note over one adopts it, and the hand-written index line that only linked to it is removed.
+* The prompt reads each conversation's index at its first turn and keeps it until the conversation saves or forgets a note, is compacted, or is cleared. Earlier versions read one index when the daemon started and never again.
+* A daemon started outside a repository (the desktop app started from Finder runs in `/`) used one memory directory for every project. Its notes are copied once into user memory, so they still reach every project. The old directory is left in place, marked with a `.adopted` file, and a conversation working in that directory has no project memory, so the notes are not recalled twice.
+* A workspace that is a filesystem root has no project memory either. Project saves there are refused with the reason; session and user memory work as anywhere else.
+* A version before this one still reads `MEMORY.md` as plain text, block included. It does not read user or session memory. A rule for a memory tool in `config.json`'s `permission` (written, for example, by an "always" answer to a user-memory question) stops an earlier version from starting until the rule is removed.
+
+[`/memory`](#memory) shows each scope, where it lives, how full it is, what was retired, and the notes as the model is shown them. `/memory tidy` asks the model to merge, correct and retire notes one at a time.
 
 Turn it off with:
 
@@ -1278,7 +1320,12 @@ Background tasks run in child sessions and do not occupy the parent's turn. A ne
 
 ### `/memory`
 
-Prints the current project's auto memory directory path and `MEMORY.md` index contents instantly, with no model call. See [Auto memory](#auto-memory).
+| Form | What it does |
+|---|---|
+| `/memory` | Shows session, project and user memory: where each lives, its notes against its limits, the archive, retirements, notes not used lately, and the notes exactly as this conversation's model is shown them. No model call. |
+| `/memory tidy` | Asks the model to review every note and, one at a time, merge duplicates, correct what the code contradicts, forget what no longer helps, and move notes to the right scope or type. Replaced and forgotten text goes to the archive. |
+
+See [Auto memory](#auto-memory).
 
 ### `/config`
 
@@ -2138,6 +2185,10 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on, and never inside a stage of a run. In a turn with nobody to ask (`localcode run` or a scheduled prompt) it is not offered at all unless something already authorizes it: `skip_all`, `skip_tools`, or an `"Orchestrate": "allow"` rule. A background task is not one of those turns: its permission question is mirrored into the conversation that started it and answered there, so with the switch on it is offered the tool with nothing pre-authorizing it. A delegated sub-agent keeps the tool but is not given the orchestration prompt. It asks on every call and a run is up to 32 agent turns, so a turn that would have to ask loses the tool rather than building a whole plan and being refused at the last step. |
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
 | `Verdict` | No | Report a review's result as a boolean plus findings. Offered only to a reviewer inside a debate. See [Debate](#debate). |
+| `memory_save` | Only for `user` scope | Save a note in `session`, `project` or `user` memory, or replace the note of that name. Refuses a credential. A sub agent may save session notes only. Registered while `auto_memory_enabled` is on. See [Auto memory](#auto-memory). |
+| `memory_read` | No | Read one note in full, by name. Counts as a use. |
+| `memory_search` | No | Find notes containing every word of a query, in every scope, archived notes and hand-written `MEMORY.md` lines included. With no query, list every note. |
+| `memory_forget` | Only for `user` scope | Move a note to the archive, or bring one back with `restore`. At most 10 per turn in a scope. |
 | `update_plan` | No | Write or update the checklist for work the model is doing itself, shown in the transcript. Exactly one step may be `in_progress`, and one-step plans are refused. The model is also told never to move a step from `pending` straight to `completed`, but that is guidance in the tool description rather than a refusal: the tool records the list it is given and does not compare it with the last one. Offered only with [Smart Agent](#smart-agent) on. Distinct from `Orchestrate`, which delegates stages to other agents. |
 | `ask_user` | No | Ask the user one question mid-turn and wait for the answer, without ending the turn. 2 to 4 short options, most recommended first; the user can answer in their own words instead. Once per turn. Offered only with [Smart Agent](#smart-agent) on, and only where somebody is watching: never in a one-shot run, a scheduled run, or a delegated sub agent. |
 | `Debate` | Yes, always | Book a debate: this session's agent writes, another agent reviews, round after round. Called instead of doing the work; the first round is where the work happens. Confirmation shows the parsed task, reviewers, rounds, and maximum model turns before execution. Not offered inside a debate, in an unattended turn, or to a delegated sub agent. See [Debate](#debate). |

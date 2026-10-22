@@ -318,6 +318,10 @@ var RegisteredToolNames = []string{
 	"Debate",
 	"update_plan",
 	"ask_user",
+	"memory_save",
+	"memory_read",
+	"memory_search",
+	"memory_forget",
 }
 
 // IgnoredOpencodeTools lists opencode tools that localcode does not

@@ -291,26 +291,74 @@ func (l *Loop) listSkills(sessionID, displayText string) error {
 	return l.replyLocal(sessionID, displayText, text)
 }
 
-// showMemoryInfo answers "/memory" locally — no model call — with the
-// auto-memory directory path and current MEMORY.md index content, the
-// same information Claude Code's "/memory" command surfaces.
+// showMemoryInfo answers "/memory" locally, with no model call: each
+// scope, where it lives, how full it is against its limits, what was
+// retired, and then the notes exactly as this conversation's model is
+// shown them.
 func (l *Loop) showMemoryInfo(sessionID, displayText string) error {
-	var text string
-	if l.MemoryDir == "" {
-		text = "Auto memory is disabled (config.json's \"auto_memory_enabled\": false)."
-	} else {
-		index := memory.LoadIndex(l.MemoryDir)
-		var b strings.Builder
-		fmt.Fprintf(&b, "Auto memory directory: %s\n", l.MemoryDir)
-		fmt.Fprintf(&b, "Index file: %s\n\n", memory.IndexPath(l.MemoryDir))
-		if index == "" {
-			b.WriteString("No memory saved yet.")
-		} else {
-			b.WriteString(index)
-		}
-		text = b.String()
+	if !l.memoryOn() {
+		return l.replyLocal(sessionID, displayText, memoryOffText)
 	}
-	return l.replyLocal(sessionID, displayText, text)
+	var b strings.Builder
+	notes := l.sessionNotesOf(sessionID)
+	fmt.Fprintf(&b, "Session memory (this conversation): %d of %d notes, %.1fKB of %dKB\n", len(notes), maxSessionNotes, float64(notesSize(notes))/1024, maxSessionNotesSize/1024)
+	for _, n := range notes {
+		fmt.Fprintf(&b, "  - %s: %s\n", n.Name, firstLineOf(n.Content))
+	}
+	if why := l.noProjectMemory(sessionID); why != "" {
+		fmt.Fprintf(&b, "Project memory: none here; %s\n", why)
+	} else {
+		l.describeStore(&b, l.projectStore(sessionID))
+	}
+	l.describeStore(&b, l.userStore())
+	if days := l.Memory.RetireDays; days > 0 {
+		fmt.Fprintf(&b, "\nRetirement: a project or reference note nobody has read, saved or named for %d days and %d conversations moves to the archive. User and feedback notes, and notes saved with keep, stay until forgotten. memory_retire_days in config.json changes it; 0 turns it off.\n", days, memory.DefaultRetireSessions)
+	} else {
+		b.WriteString("\nRetirement is off (memory_retire_days is 0).\n")
+	}
+	b.WriteString("/memory tidy asks the model to merge duplicates, correct what the code contradicts and forget what no longer helps.\n\n")
+	if index := l.memoryIndexFor(sessionID); strings.TrimSpace(index) != "" {
+		b.WriteString("What this conversation's model is shown:")
+		b.WriteString(index)
+	} else {
+		b.WriteString("No memory saved yet.")
+	}
+	return l.replyLocal(sessionID, displayText, b.String())
+}
+
+// describeStore writes one durable scope's summary for /memory.
+func (l *Loop) describeStore(b *strings.Builder, st memory.Store) {
+	label := map[memory.Scope]string{memory.ScopeProject: "Project memory", memory.ScopeUser: "User memory"}[st.Scope]
+	fmt.Fprintf(b, "%s: %s\n", label, st.Dir)
+	entries, err := st.Entries()
+	if err != nil {
+		fmt.Fprintf(b, "  unreadable: %v\n", err)
+		return
+	}
+	_, stats := st.Load()
+	archived, _ := st.ArchivedNotes()
+	use, retired, sessions := st.UsageOf()
+	fmt.Fprintf(b, "  %d of %d notes, %d archived copies; index %.1fKB of %.0fKB, %d of %d lines", len(entries), st.Limits.Entries, len(archived),
+		float64(stats.Bytes)/1024, float64(st.Limits.IndexBytes)/1024, stats.Lines, st.Limits.IndexLines)
+	if stats.Omitted > 0 {
+		fmt.Fprintf(b, " (%d lines do not fit and are not shown to the model)", stats.Omitted)
+	}
+	b.WriteString("\n")
+	if sessions > 0 {
+		fmt.Fprintf(b, "  %d conversations counted\n", sessions)
+	}
+	if len(retired) > 0 {
+		fmt.Fprintf(b, "  Retired recently: %s\n", strings.Join(retired, ", "))
+	}
+	var idle []string
+	for _, e := range entries {
+		if u, ok := use[e.Name]; ok && u.SessionsUnused >= memory.DefaultRetireSessions/2 {
+			idle = append(idle, fmt.Sprintf("%s (%s, %d conversations)", e.Name, e.Type, u.SessionsUnused))
+		}
+	}
+	if len(idle) > 0 {
+		fmt.Fprintf(b, "  Not used lately: %s\n", strings.Join(idle, ", "))
+	}
 }
 
 func (l *Loop) findSkill(name string) (skills.Skill, bool) {

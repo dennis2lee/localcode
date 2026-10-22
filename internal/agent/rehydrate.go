@@ -67,7 +67,12 @@ func (l *Loop) RehydrateSession(sessionID string) {
 	// below reads the unfiltered log on purpose, because a rewound turn's
 	// tokens were still spent and a total that forgets them is wrong in
 	// the direction nobody checks.
-	l.setHistory(sessionID, rehydrateHistory(applyRewinds(evs)))
+	live := applyRewinds(evs)
+	l.setHistory(sessionID, rehydrateHistory(live))
+	// The conversation's own memory notes, from the same filtered log:
+	// a rewound turn's notes go with it. See reduceSessionNotes.
+	l.setSessionNotes(sessionID, reduceSessionNotes(live))
+	l.forgetMemorySnapshot(sessionID)
 
 	latest, haveUsage, cum := rehydrateUsage(evs)
 	if haveUsage && latest.Measured > 0 {

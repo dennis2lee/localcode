@@ -32,7 +32,7 @@ Every prompt string shipped in the binary is authored in this repository and is 
 * `internal/agent/verify_policy.go`: the verify policy and the sentence on remaining context.
 * `internal/agent/quirks.go`: the per-model family notes.
 * `internal/agent/compact.go`: the summarizing instruction and the summary provenance header.
-* `internal/memory/memory.go`: the auto-memory policy and the recalled-notes boundary.
+* `internal/memory/memory.go`: the auto-memory policy and the recalled-notes boundary. `internal/agent/memory.go` and `memory_tools.go`: the session-notes block and the memory tools' descriptions.
 * `internal/tools/*.go`: every built-in tool's own description.
 
 Where a behavior existed in localcode before this work, it was reused rather than reimplemented, which is both the guidance's instruction and the reason the asset count is what it is.

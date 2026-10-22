@@ -139,9 +139,19 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	projectDir := e.cwd
 
 	progress("loading skills and commands")
-	skillsSection, memoryPolicy, memorySection, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, projectDir, e.home)
+	skillsSection, skillList, cmdList, err := buildSystemPrompt(cfg, registry, projectDir, e.home)
 	if err != nil {
 		return nil, nil, err
+	}
+	if cfg.MemoryEnabled() {
+		// Notes an earlier version kept for a start directory that is
+		// not a repository were every project's notes, so they become
+		// user memory, once. See memory.AdoptStartDirectory.
+		if adopted, err := memory.AdoptStartDirectory(projectDir, e.home); err != nil {
+			log.Printf("memory: carrying the notes of %s into user memory: %v", memory.Dir(projectDir, e.home), err)
+		} else if adopted {
+			log.Printf("memory: the notes of %s are now user memory too, in %s", memory.Dir(projectDir, e.home), memory.UserDir(e.home))
+		}
 	}
 
 	cleanup := func() {}
@@ -186,13 +196,11 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 
 	loop := agent.New(store, registry, providers, cfg)
 	loop.SkillsSection = skillsSection
-	loop.MemoryPolicy = memoryPolicy
-	loop.MemorySection = memorySection
 	loop.Skills = skillList
 	loop.Commands = cmdList
 	loop.ProjectDir = projectDir
 	loop.ConfigPath = configFilePath
-	loop.MemoryDir = memDir
+	loop.Memory = memoryConfig(cfg, e.home, true)
 	loop.Version = version
 	loop.Input = input
 	// "/rewind" needs a copy of a file as it was before the turn changed
@@ -296,6 +304,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	registry.Register(agent.NewDebateTool(loop))
 	registry.Register(agent.NewUpdatePlanTool(loop))
 	registry.Register(agent.NewAskUserTool(loop))
+	registerMemoryTools(loop, registry)
 
 	// The delegation tools. Registered unconditionally, and hidden per
 	// turn instead — see Loop.hiddenTools. They used to be
@@ -518,7 +527,7 @@ func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker, store *se
 // default workspace at startup, the live one on every reload — passed in
 // rather than re-derived from the process, so a daemon started in one
 // directory and working in another reads the project it works in.
-func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, projectDir, home string) (skillsSection, memoryPolicy, memorySection string, skillList []skills.Skill, cmdList []commands.Command, memDir string, err error) {
+func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, projectDir, home string) (skillsSection string, skillList []skills.Skill, cmdList []commands.Command, err error) {
 	// Said whenever a directory outside .localcode is in play: that is the
 	// case where "where did this skill come from" has an answer worth
 	// giving, and on a machine with only .localcode it would be a line
@@ -538,29 +547,64 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, projectDir,
 
 	skillList, err = loadSkills(projectDir, home)
 	if err != nil {
-		return "", "", "", nil, nil, "", err
+		return "", nil, nil, err
 	}
 	skillsSection = setSkillAssets(nil, registry, skillList)
 
 	cmdList, err = loadCommands(projectDir, home)
 	if err != nil {
-		return "", "", "", nil, nil, "", err
+		return "", nil, nil, err
 	}
 
 	// Project rules are deliberately NOT folded in here. They depend on
 	// which directory a turn runs in, and this prompt is built once for the
 	// whole daemon — see Loop.WorkspaceRules.
 
-	if cfg.MemoryEnabled() {
-		memDir = memory.Dir(projectDir, home)
-		if err := os.MkdirAll(memDir, 0o755); err != nil {
-			return "", "", "", nil, nil, "", fmt.Errorf("create memory dir: %w", err)
-		}
-		memoryPolicy = memory.PolicySection(memDir)
-		memorySection = memory.IndexSection(memory.LoadIndex(memDir))
-	}
+	// Memory is not here any more. Each session reads its own, from its
+	// own workspace, at its first turn; see agent.MemoryConfig and
+	// memoryConfig below.
 
-	return skillsSection, memoryPolicy, memorySection, skillList, cmdList, memDir, nil
+	return skillsSection, skillList, cmdList, nil
+}
+
+// memoryConfig turns auto memory on for a loop, or returns nil when the
+// config turns it off. countSessions is false for a one-shot run, whose
+// turns do not count toward retirement.
+func memoryConfig(cfg *config.Config, home string, countSessions bool) *agent.MemoryConfig {
+	if !cfg.MemoryEnabled() {
+		return nil
+	}
+	return &agent.MemoryConfig{
+		Home:          home,
+		RetireDays:    cfg.MemoryRetireAfterDays(),
+		CountSessions: countSessions,
+		KnownSecrets:  func() []string { return configuredSecrets(cfg) },
+	}
+}
+
+// configuredSecrets are the credentials the config holds, which a memory
+// note must never copy: every provider's API key and header values.
+func configuredSecrets(cfg *config.Config) []string {
+	var out []string
+	for _, p := range cfg.Providers {
+		if p.APIKey != "" {
+			out = append(out, p.APIKey)
+		}
+		for _, v := range p.Headers {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// registerMemoryTools offers the memory tools to a loop with memory on.
+func registerMemoryTools(loop *agent.Loop, registry *tools.Registry) {
+	if loop.Memory == nil {
+		return
+	}
+	for _, t := range agent.NewMemoryTools(loop) {
+		registry.Register(t)
+	}
 }
 
 // loadSkills reads the skills of every root under the project and under the

@@ -377,7 +377,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "skill", Description: "list installed skills", Usage: "[<name> [args]]"},
 		{Name: "init", Description: "scan the repository and write or improve AGENTS.md", Usage: "[what to focus on]"},
 		{Name: "review", Description: "read what changed and say what is wrong with it; nothing is modified", Usage: "[staged|head|<revision>|<range>|<path>]"},
-		{Name: "memory", Description: "show the auto-memory directory and index"},
+		{Name: "memory", Description: "show what memory holds and where; tidy asks the model to merge, correct and retire notes", Usage: "[tidy]"},
 		{Name: "config", Description: "show settings, or change one with /config <name> on|off", Usage: "[<name> on|off]"},
 		{Name: "smart-agent", Description: "turn the Smart Agent bundle on or off", Usage: "[on|off]"},
 		{Name: "orchestrate", Description: "turn delegation on or off: the specialists, Task, TaskBackground, TaskCollect and Orchestrate", Usage: "[on|off]"},

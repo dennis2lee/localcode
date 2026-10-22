@@ -463,6 +463,11 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 			Source: compactSummarySource,
 		}},
 	}})
+	// The cached prefix starts over here anyway, so this is the moment to
+	// read project and user memory again: notes saved by other sessions
+	// since, and this one's own saves, whose tool results the summary
+	// has just folded away.
+	l.forgetMemorySnapshot(sessionID)
 	// "summary" (not just its length) and the compaction call's own usage
 	// are what rehydrateHistory/RehydrateSession need to reconstruct this
 	// exact post-compaction state after a restart — see loop_rehydrate.go.

@@ -266,6 +266,18 @@ const (
 	// pending says so in the transcript, and says it after a restart.
 	TypePlanUpdated Type = "plan.updated"
 
+	// TypeMemorySession is a note the model saved for this conversation
+	// alone, with memory_save in session scope: {"name","content"}, or
+	// {"name","forgotten":true} when memory_forget took it back.
+	//
+	// Logged, because the log is where a conversation's state lives:
+	// replaying it rebuilds the notes after a restart, a rewind takes back
+	// the notes of the turns it undoes, a fork keeps them, and /clear
+	// starts the notes over with the history. Forgetting one takes it out
+	// of what the model is shown; the event that saved it stays in the
+	// log like every other event.
+	TypeMemorySession Type = "memory.session"
+
 	TypeDebateStarted Type = "debate.started"
 	TypeDebateReview  Type = "debate.review"
 	TypeDebateEnded   Type = "debate.ended"

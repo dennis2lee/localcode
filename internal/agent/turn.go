@@ -113,6 +113,11 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// each is derived from this rather than from the one before.
 	turnTools := allowedTools
 
+	// Before the prompt is built from it: a conversation's first turn
+	// counts toward the memory retirement clock and may retire notes,
+	// and the prompt should not recall a note that has just gone.
+	l.startMemoryTurn(sessionID)
+
 	run, err := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, profileName, profile, modelOverride, 0, advertised)
 	if err != nil {
 		return err
@@ -632,6 +637,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		}
 		if len(assistantBlocks) > 0 {
 			l.appendHistory(sessionID, provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})
+			// A memory note the reply names is a note it used. See
+			// noteMemoryCitations.
+			l.noteMemoryCitations(sessionID, assistantBlocks)
 		}
 		if len(notRun) > 0 {
 			l.answerCallsNotRun(sessionID, notRun, notRunWhy)
@@ -1043,6 +1051,9 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		// tool that spent four minutes waiting on a permission prompt
 		// reads as four minutes. That is where the time went.
 		l.traceTool(ctx, trace.ID(ctx), sessionID, name, time.Since(started), res.IsError, firstLine(res.Content))
+		// A note opened with read_file is a note used, as one opened
+		// with memory_read is.
+		l.noteMemoryFileRead(ctx, sessionID, name, input, res)
 		// Capped here, before it becomes either a stored event or a
 		// message — a tool result is the one part of a conversation whose
 		// size nobody chose, and one `cat` of a log file could exceed the

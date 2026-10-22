@@ -367,11 +367,12 @@ type Loop struct {
 	// tree and deleting one. See lifecycle.go.
 	lifecycle *lifecycle
 
-	// MemoryDir is this project's auto-memory directory (see
-	// internal/memory) — "" if auto memory is disabled. Backs the
-	// "/memory" local command; the actual read/write of memory files
-	// happens via the model's ordinary file tools, not here.
-	MemoryDir string
+	// Memory turns auto memory on: the memory tools, the policy, each
+	// session's recalled notes and its session notes. Nil is off. See
+	// memory.go.
+	Memory *MemoryConfig
+	// memory is the per-session bookkeeping behind it.
+	memory memState
 
 	// mu guards per-session state: conversation history and both usage
 	// views (see usage.go), plus ProjectDir. Process-global runtime
@@ -408,19 +409,13 @@ type Loop struct {
 	// asked again on every turn.
 	probedWindows map[string]int
 
-	// SkillsSection and MemorySection are the startup-loaded halves of
-	// the prompt that used to be folded into SystemPrompt before the
-	// Loop ever saw them. Separate fields because they are separate
-	// assets: a skill index is user-installed procedure, a memory index
-	// is text the model wrote for itself, and an inventory that lists
-	// them as "the base prompt" cannot answer questions about either.
+	// SkillsSection is the startup-loaded half of the prompt that used
+	// to be folded into SystemPrompt before the Loop ever saw it. A field
+	// of its own because it is an asset of its own: a skill index is
+	// user-installed procedure, and an inventory that lists it as "the
+	// base prompt" cannot answer questions about it. The memory sections
+	// that once sat beside it are per session now; see memory.go.
 	SkillsSection string
-	// MemoryPolicy is the product's own description of the auto-memory
-	// convention; MemorySection is the model's own notes read back.
-	// Separate fields because they are separate trust classes: the
-	// policy instructs, and a note a previous turn wrote does not.
-	MemoryPolicy  string
-	MemorySection string
 
 	// Manifests is where assembly manifests are kept so a trace line's
 	// manifest id can still be resolved after the call: identities,
@@ -471,6 +466,7 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 // (conversation history, usage snapshot, cumulative per-model totals) —
 // called when a session is deleted, so its memory isn't retained forever.
 func (l *Loop) ClearSessionState(sessionID string) {
+	l.dropSessionMemory(sessionID)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.messages, sessionID)
@@ -872,6 +868,7 @@ func (l *Loop) ClaimSessionTree(sessionID string) ([]string, func()) {
 // Everything dropped here comes back from the event log if the
 // conversation is ever retrieved. See RehydrateSession.
 func (l *Loop) ReleaseSessionMemory(sessionID string) {
+	l.dropSessionMemory(sessionID)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.messages, sessionID)

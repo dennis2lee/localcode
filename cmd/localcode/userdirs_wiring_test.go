@@ -311,7 +311,7 @@ func TestStartupNamesTheCommandsItReadsAndSurvivesALeftover(t *testing.T) {
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-	if _, _, _, _, _, _, err := buildSystemPrompt(startupTestConfig(), startupTestRegistry(t), workspace, home); err != nil {
+	if _, _, _, err := buildSystemPrompt(startupTestConfig(), startupTestRegistry(t), workspace, home); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(logs.String(), "commands: reading") {
@@ -323,7 +323,7 @@ func TestStartupNamesTheCommandsItReadsAndSurvivesALeftover(t *testing.T) {
 	leftover := filepath.Join(home, ".opencode", "commands")
 	write(t, leftover, "a file, not a directory\n")
 	logs.Reset()
-	_, _, _, _, cmdList, _, err := buildSystemPrompt(startupTestConfig(), startupTestRegistry(t), workspace, home)
+	_, _, cmdList, err := buildSystemPrompt(startupTestConfig(), startupTestRegistry(t), workspace, home)
 	if err != nil {
 		t.Fatalf("a file where a commands directory should be stopped startup: %v", err)
 	}

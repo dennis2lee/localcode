@@ -77,21 +77,26 @@ var tuiIgnoredEventTypes = map[string]string{
 	"workspace.changed":    "session directory switch; consumed by Web UI workspace picker, whereas TUI runs within the current terminal directory",
 	"config.changed":       "session configuration change; TUI handles /config commands directly in the client rather than consuming broadcast config changes",
 	"permissions.changed":  "session permission flags snapshot; consumed by Web UI permission modal, whereas TUI handles permissions via request modals and local commands",
+	"memory.session":       "a session memory note; the memory_save tool call that wrote it is already in the transcript, and the note itself is model context, not display",
 }
 
 // Allowlist of event types deliberately not handled in internal/daemon/static/js/events.js.
 //
 // The Web UI handles almost all event types across its transcript, status bar,
-// modals, schedules panel, and multi-session sidebar. Only 2 event types are
+// modals, schedules panel, and multi-session sidebar. Only 3 event types are
 // deliberately unhandled because they are purely server-side persistence records:
 //   - checkpoint: filesystem snapshot recorded before file modifications for
 //     /rewind restore; read only by the backend, with no UI representation.
 //   - permission.forgotten: server-side log entry recorded when outside
 //     permissions are forgotten (/read-outside mem-clear); outside paths are
 //     rebuilt by the daemon and active permissions arrive via permissions.changed.
+//   - memory.session: a session memory note, model context rebuilt by the
+//     daemon from the log; the memory_save call that wrote it is drawn as a
+//     tool call like any other.
 var webUIIgnoredEventTypes = map[string]string{
 	"checkpoint":           "filesystem snapshot recorded before write/edit for /rewind restoration; read only by the daemon on rewind and never displayed in the Web UI",
 	"permission.forgotten": "daemon persistence marker recording when outside permissions are cleared; outside paths are rebuilt by the daemon and active permissions arrive via permissions.changed",
+	"memory.session":       "session memory note rebuilt by the daemon into the model's prompt; the memory_save tool call that wrote it is already drawn in the transcript",
 }
 
 // Allowlist of event types deliberately not handled in internal/daemon/static/js/taskview.js.
@@ -100,7 +105,7 @@ var webUIIgnoredEventTypes = map[string]string{
 // event stream (/api/sessions/{taskID}/events?tail=200). It renders transcript lines
 // and tool executions for that subtask.
 //
-// 33 of the 50 event types are deliberately not handled in taskview:
+// 34 of the 51 event types are deliberately not handled in taskview:
 //   - checkpoint: daemon-internal file rewind snapshot; never displayed in subtask transcript modal.
 //   - permission.forgotten: daemon-internal permission reset marker; subtasks do not run interactive permission resets.
 //   - mcp.status: daemon-wide MCP server status; not relevant to a single background task view.
@@ -134,6 +139,7 @@ var webUIIgnoredEventTypes = map[string]string{
 //   - debate.ended: debate conclusion banner; subtasks do not engage in debate sessions.
 //   - daemon.replaced: daemon binary takeover notice; handled globally by the main events stream.
 //   - redone: interactive /redo turn restoration; subtasks run unattended without interactive undo/redo.
+//   - memory.session: a session memory note; the memory_save tool call is already shown as a tool execution.
 var taskViewIgnoredEventTypes = map[string]string{
 	"checkpoint":           "daemon-internal file rewind snapshot; never displayed in subtask transcript modal",
 	"permission.forgotten": "daemon-internal permission reset marker; subtasks do not run interactive permission resets",
@@ -168,6 +174,7 @@ var taskViewIgnoredEventTypes = map[string]string{
 	"debate.ended":         "debate conclusion banner; subtasks do not engage in debate sessions",
 	"daemon.replaced":      "daemon binary takeover notice; handled globally by the main events stream",
 	"redone":               "interactive /redo turn restoration; subtasks run unattended without interactive undo/redo",
+	"memory.session":       "a session memory note; the memory_save tool call that wrote it is already shown as a tool execution",
 }
 
 // Allowlist of event types deliberately not handled in internal/agent/rehydrate.go.
@@ -177,13 +184,15 @@ var taskViewIgnoredEventTypes = map[string]string{
 // model (user messages, completed assistant text, tool calls, tool results,
 // compaction/cleared boundaries, and collapsed debate blocks) belong in this history.
 //
-// 42 of the 50 event types are intentionally ignored here:
+// 43 of the 51 event types are intentionally ignored here:
 //   - UI/display events (thinking, effort, delegated, plan, error, input.request/resolved)
 //   - Intermediate stream chunks (message.part.delta)
 //   - Daemon/session lifecycle events (session.*, mcp.status, daemon.replaced)
 //   - Task management and progress (task.*, schedule.*)
 //   - Configuration and settings (settings.changed, config.changed, workspace.changed, permissions.*)
 //   - Metrics and file snapshots (usage, checkpoint, rewound, redone)
+//   - Session memory notes (memory.session), rebuilt beside the history
+//     rather than into it
 var rehydrateIgnoredEventTypes = map[string]string{
 	"message.part.delta":   "streaming text delta; final assistant message content is captured at message.part.end",
 	"thinking.delta":       "model reasoning tokens; transient broadcast never sent back to LLM providers",
@@ -226,6 +235,7 @@ var rehydrateIgnoredEventTypes = map[string]string{
 	"delegated":            "subagent delegation note; UI display marker not included in LLM history",
 	"turn.done":            "turn completion marker; not part of LLM conversation history",
 	"turn.cancelled":       "turn cancellation marker; not part of LLM conversation history",
+	"memory.session":       "session memory note; rebuilt by reduceSessionNotes (memory.go) from the same filtered log into the session's notes, which reach the model in the system prompt rather than as history messages",
 }
 
 // Every event type declared in internal/events/events.go must be explicitly

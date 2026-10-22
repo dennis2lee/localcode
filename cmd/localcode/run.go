@@ -368,16 +368,19 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 		// is no client to name another one later, so the start directory
 		// is both the default workspace and the project the assets come
 		// from.
-		skillsSection, memoryPolicy, memorySection, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, e.cwd, e.home)
+		skillsSection, skillList, cmdList, err := buildSystemPrompt(cfg, registry, e.cwd, e.home)
 		if err != nil {
 			return nil, "", nil, nil, err
 		}
 		loop.SkillsSection = skillsSection
-		loop.MemoryPolicy = memoryPolicy
-		loop.MemorySection = memorySection
 		loop.Skills = skillList
 		loop.Commands = cmdList
-		loop.MemoryDir = memDir
+		// Memory, read and written like the daemon's, except that a run
+		// does not count as somebody coming back to the project: a script
+		// running localcode in a loop would otherwise retire notes for
+		// nothing.
+		loop.Memory = memoryConfig(cfg, e.home, false)
+		registerMemoryTools(loop, registry)
 		loop.Version = version
 	}
 	// The run does not end before the work it started does. A background

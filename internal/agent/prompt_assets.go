@@ -92,10 +92,14 @@ const (
 	// AssetMemoryPolicy is the product's description of the auto-memory
 	// convention: where notes live and what belongs in them.
 	AssetMemoryPolicy = "memory.policy"
-	// AssetMemoryIndex is the model's own cross-session notes: text the
-	// model wrote for itself, reloaded each start. Generated content,
-	// never instruction.
+	// AssetMemoryIndex is the model's own cross-session notes: the
+	// project's and the person's, as the session read them at its first
+	// turn. Generated content, never instruction.
 	AssetMemoryIndex = "memory.index"
+	// AssetMemorySession is the model's notes for this conversation
+	// alone, saved with memory_save in session scope. Generated, and
+	// turn-dynamic: a save changes it between one turn and the next.
+	AssetMemorySession = "memory.session"
 	// AssetCompactPrompt is the summarizing call's instruction. A
 	// utility asset: it belongs to a different call than the
 	// conversation, and listing it here is what keeps the inventory the
@@ -121,6 +125,7 @@ const (
 	valSkillsIndex  = "skills_index"
 	valMemoryPolicy = "memory_policy"
 	valMemoryIndex  = "memory_index"
+	valSessionNotes = "session_notes"
 )
 
 // promptRegistry is the inventory, built once. The Order values are the
@@ -192,10 +197,18 @@ func promptRegistry() *prompt.Registry {
 		Placement:  prompt.PlaceSystem,
 		Cache:      prompt.CacheDurableReload,
 		Order:      15,
-		Version:    "1",
+		// 2: the memory tools and the three scopes, and no directory
+		// in the text, so it is the same in every workspace.
+		Version: "2",
 		Active: func(a prompt.ActivationContext) (bool, string) {
 			if a.Value(valMemoryPolicy) == "" {
 				return false, "auto memory is off"
+			}
+			// The policy is about the tools: told to save with a tool it
+			// was not offered, a specialist with a narrow roster calls
+			// one that does not exist. Its recalled notes still come.
+			if !a.HasTool(memorySaveTool) {
+				return false, "the memory tools are not offered to this turn"
 			}
 			return true, "how to keep notes across sessions"
 		},
@@ -207,9 +220,16 @@ func promptRegistry() *prompt.Registry {
 		Provenance: prompt.FromGeneratedSummary,
 		Trust:      prompt.TrustGenerated,
 		Placement:  prompt.PlaceSystem,
-		Cache:      prompt.CacheDurableReload,
-		Order:      16,
-		Version:    "2",
+		// Session-dynamic: read per session, from the session's own
+		// workspace, and fixed until that session changes memory or
+		// starts its history over. It was durable_reload when one
+		// daemon-wide copy was read at startup, which also put it after
+		// the session-dynamic workspace asset and warned on every turn.
+		Cache: prompt.CacheSessionDynamic,
+		Order: 16,
+		// 3: per session, project and user scope in their own records,
+		// each saying how full it is.
+		Version: "3",
 		Active: func(a prompt.ActivationContext) (bool, string) {
 			if a.Value(valMemoryIndex) == "" {
 				return false, "auto memory is off or this project has none"
@@ -448,6 +468,29 @@ func promptRegistry() *prompt.Registry {
 			return true, "the note written for " + a.Model
 		},
 		Render: func(a prompt.ActivationContext) string { return a.Value(valModelQuirk) },
+	})
+
+	// The conversation's own notes. Generated, like the recalled index:
+	// the model wrote them, sometimes after reading something it should
+	// not believe. Turn-dynamic and late in the order, after every
+	// session-dynamic asset, because a save changes it from one turn to
+	// the next and whatever comes after it pays for that change.
+	r.Add(prompt.Asset{
+		ID:         AssetMemorySession,
+		Kind:       prompt.KindExternalContent,
+		Provenance: prompt.FromGeneratedSummary,
+		Trust:      prompt.TrustGenerated,
+		Placement:  prompt.PlaceSystem,
+		Cache:      prompt.CacheTurnDynamic,
+		Order:      80,
+		Version:    "1",
+		Active: func(a prompt.ActivationContext) (bool, string) {
+			if a.Value(valSessionNotes) == "" {
+				return false, "this conversation has no session notes"
+			}
+			return true, "notes the model saved for this conversation"
+		},
+		Render: func(a prompt.ActivationContext) string { return a.Value(valSessionNotes) },
 	})
 
 	// How much room is left, said in the units the model reasons about.

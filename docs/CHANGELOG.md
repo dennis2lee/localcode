@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.168.0
+
+Auto memory rebuilt: notes for a conversation, a project and the person, saved with tools of their own, indexed by type, kept within budgets, and retired to an archive when unused.
+
+**Added**
+
+* `memory_save`, `memory_read`, `memory_search` and `memory_forget`: the model's own way to keep notes, with no permission question except for user memory
+* Three scopes: session notes that stay through compaction and end with the conversation, project notes for one repository, and user notes for every project in `~/.localcode/memory/`
+* Typed notes (`user`, `feedback`, `project`, `reference`) with a one-line description, and a `MEMORY.md` index generated from them, grouped by type, most recently used first
+* Retirement of project and reference notes unused for 90 days and 30 conversations, to an archive that `memory_search` still reaches and `memory_forget restore` brings back; `memory_retire_days` changes it
+* Use counted when a note is read, saved, opened with `read_file`, or named in an answer
+* `/memory tidy`, which has the model merge, correct and retire notes one at a time
+* Budgets: 150 project notes, 60 user notes, 4KB a note, 30 session notes in 8KB, and an index that says how much did not fit
+* A save refused when the note holds a credential, and a replaced note's earlier text kept in the archive
+
+**Fixed**
+
+* Memory that the model never saved, because writing it meant an outside-workspace permission question every time
+* A note saved in one conversation reaching no other until the daemon restarted
+* A conversation that moved to another workspace still recalling the project the daemon was started in
+* The desktop app started from Finder sharing one memory directory across every project; those notes are copied once into user memory
+* Linked worktrees of one repository each getting a memory of their own
+* An index past its 200 lines dropping its newest notes rather than its oldest
+* An empty memory directory created at every start, for every directory a daemon was started in
+* The recalled index sorted after the workspace block, which warned about the prompt cache on every turn
+
+**Changed**
+
+* `/memory` shows session, project and user memory, their limits, the archive and retirements; `/memory tidy` is its one argument
+* A sub agent, stage, reviewer or scheduled run reads project and user memory but cannot change it
+* A rule for a memory tool in `config.json` stops a version before v0.168.0 from starting until it is removed
+
 ## v0.167.0
 
 The status lights blink while work goes on, whatever the system's motion setting.
