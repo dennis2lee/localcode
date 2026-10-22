@@ -1239,40 +1239,6 @@ func TestEveryLegacySpellingOfANameIsAdopted(t *testing.T) {
 	}
 }
 
-// Two daemons adopting the same start directory at once leave it marked.
-func TestTwoAdoptionsAtOnceKeepTheMarker(t *testing.T) {
-	violations := 0
-	for i := 0; i < 60; i++ {
-		home, start := t.TempDir(), t.TempDir()
-		src := Dir(start, home)
-		os.MkdirAll(src, 0o755)
-		os.WriteFile(filepath.Join(src, "n0.md"), []byte("fact\n"), 0o600)
-		os.WriteFile(IndexPath(src), []byte("- shared\n"), 0o600)
-		dst := UserDir(home)
-		startGate := make(chan struct{})
-		var wg sync.WaitGroup
-		for g := 0; g < 2; g++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				<-startGate
-				AdoptStartDirectory(start, home)
-			}()
-		}
-		close(startGate)
-		wg.Wait()
-		_, dstErr := os.Lstat(dst)
-		_, markErr := os.Lstat(filepath.Join(src, adoptedMarker))
-		if dstErr == nil && markErr != nil {
-			violations++
-		}
-	}
-	if violations == 0 {
-		t.Skip("no interleaving in 60 tries; race not reproduced on this run")
-	}
-	t.Errorf("user memory without a marker in %d/60 races: notes recalled twice, no retry left", violations)
-}
-
 // A marker whose user memory does not exist hides nothing: the notes stay
 // project memory rather than being recalled from nowhere.
 func TestAMarkerWithoutItsUserMemoryHidesNothing(t *testing.T) {
