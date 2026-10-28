@@ -164,6 +164,9 @@ type stageReport struct {
 	// whether its field came back true. Zero on every other stage.
 	rounds  int
 	settled bool
+	// pipelined marks a stage that started on items while the stage before
+	// it was still running.
+	pipelined bool
 	// dry marks a repeat_until_dry stage, and ranDry says whether it
 	// stopped because its rounds stopped finding anything new rather than
 	// because it ran out of rounds.
@@ -199,10 +202,23 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 	report := runReport{}
 	results := map[string][]outcome{}
 
-	for _, stage := range p.Stages {
+	for i := 0; i < len(p.Stages); i++ {
+		stage := p.Stages[i]
 		if err := ctx.Err(); err != nil {
 			report.stopped = "the run was cancelled or ran out of time before " + stage.Name
 			return report
+		}
+
+		// A fanout followed by pipelined stages runs as one group: each
+		// pipelined stage starts on an item as soon as the unit that found
+		// it, and every unit launched before that one, has finished.
+		if group := pipelineGroup(p.Stages, i); len(group) > 1 {
+			if stopped := l.runPipeline(ctx, sessionID, runID, p, group, results, &report); stopped != "" {
+				report.stopped = stopped
+				return report
+			}
+			i += len(group) - 1
+			continue
 		}
 
 		items, merged := l.stageItems(stage, results)

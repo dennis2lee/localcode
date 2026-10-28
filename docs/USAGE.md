@@ -2318,7 +2318,7 @@ Stage agents receive neither the orchestration policy nor the `Orchestrate` tool
 | Field | Meaning |
 |---|---|
 | `goal` | Run objective supplied to every stage agent. Stage agents do not receive the parent conversation. |
-| `stages` | Ordered stages. Each completes before the next starts. |
+| `stages` | Ordered stages. Each completes before the next starts, except a stage marked `pipeline`. |
 
 A stage is one of three kinds:
 
@@ -2340,6 +2340,7 @@ A stage is one of three kinds:
 | `keep` | One returned field. Results where it is false or empty are dropped. |
 | `unanswered` | What to do when an agent does not answer in the declared shape: `skip` (default), `keep`, `fail`. |
 | `repeat_until` | One returned field. While it is false or empty the stage runs again, up to `max_rounds`. A rerun carries the earlier rounds in `{{input}}`. Step and fanout stages only: a barrier with `repeat_until` is refused. |
+| `pipeline` | Fanout only, and only over `$prev.field` of the fanout immediately before it. The stage starts on an item as soon as the agent that found it, and every agent launched before that one in the same stage, has finished, instead of waiting for the whole stage. A fast agent's items wait for slower agents launched earlier, so the items, their order and the report are the same on every run. The prompt cannot use `{{input}}`, which is still being written when the stage starts, and neither this stage nor the one before it may repeat. A free slot goes to the earlier stage first. A stage before it that stops the run with `unanswered: fail` also stops the pipelined agents already running. Chains are allowed: a pipelined stage can feed another. |
 | `repeat_until_dry` | One returned `strings` field. The stage runs again while its rounds keep finding values not returned before (case and spacing ignored), and stops after `dry_rounds` rounds in a row add nothing. Every round's kept results carry forward, and a rerun carries all of them in `{{input}}`. A round in which no agent answered does not count as dry. Step and fanout stages only, and not together with `repeat_until`. |
 | `dry_rounds` | With `repeat_until_dry`: how many rounds in a row without anything new end the loop. 1 to 3, default 1. `max_rounds` must be larger. |
 | `max_rounds` | Required with `repeat_until` or `repeat_until_dry`. How many times the stage may run in total, at least 2. Counted against the run ceiling like any other launches. |
@@ -2379,7 +2380,7 @@ A stage is one of three kinds:
 | The report | Generated from execution records by LocalCode, not model summarization. |
 | Nesting | Nested orchestration is refused. |
 
-Unsupported: per-item pipelining between stages, resuming runs, and saved plans.
+Unsupported: resuming runs, and saved plans.
 
 #### What the roster needs from your config
 

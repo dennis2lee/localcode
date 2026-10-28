@@ -44,6 +44,8 @@ A stage is one of three kinds. "step" runs its agent once. "fanout" runs it once
 
 A stage that declares returns gets an Answer tool in that exact shape, and only what it declares can be referred to or filtered on later. keep names one returned field and drops every result where it is false or empty: a stage of skeptics declaring {"survives":"bool"} and keeping "survives" is an adversarial filter with no expression language involved. unanswered says what to do when an agent does not answer in the declared shape: skip (the default), keep, or fail.
 
+A fanout over $prev.field of the fanout just before it can set pipeline: it then starts on each item as soon as the unit that found it, and every unit launched before that one, is done, instead of waiting for the whole stage.
+
 A step or fanout can repeat. repeat_until names a returned field and runs the stage again while it is false or empty. repeat_until_dry names a returned strings field and runs the stage again while its rounds keep finding values not seen before, stopping after dry_rounds rounds in a row add nothing; every round's results carry forward. Both need max_rounds, and every round counts against the ceiling.
 
 Prompts take three substitutions and no others: {{task}}, {{item}} inside a fanout, and {{input}} for what earlier stages kept.
@@ -79,6 +81,7 @@ func (t *OrchestrateTool) InputSchemaFor(ctx context.Context) json.RawMessage {
  "returns":{"type":"object","additionalProperties":{"type":"string","enum":%s},"description":"field name to type; what this stage must answer with"},
  "keep":{"type":"string","description":"one returned field; results where it is false or empty are dropped"},
  "repeat_until":{"type":"string","description":"one returned field; while it is false or empty the stage runs again, up to max_rounds"},
+ "pipeline":{"type":"boolean","description":"fanout only, over $prev.field of the fanout just before it: start on each item as soon as the unit that found it (and every unit launched before that one) is done. No {{input}}, and neither stage may repeat"},
  "repeat_until_dry":{"type":"string","description":"one returned strings field; the stage runs again while its rounds keep finding new values, up to max_rounds. Not with repeat_until"},
  "dry_rounds":{"type":"integer","description":"with repeat_until_dry: how many rounds in a row without anything new end the loop, 1 to 3, default 1"},
  "max_rounds":{"type":"integer","description":"required with repeat_until or repeat_until_dry: how many times the stage may run in total, at least 2"},
@@ -216,6 +219,9 @@ func (r runReport) String() string {
 	fmt.Fprintf(&b, "Orchestration finished: %d agent turns across %d stages.\n\n", r.launched, len(r.stages))
 	for _, s := range r.stages {
 		fmt.Fprintf(&b, "## %s (%s, %s): %d launched, %d kept", s.name, s.kind, s.agent, s.launched, s.kept)
+		if s.pipelined {
+			b.WriteString(", pipelined")
+		}
 		if s.unanswered > 0 {
 			fmt.Fprintf(&b, ", %d did not answer in the declared shape", s.unanswered)
 		}

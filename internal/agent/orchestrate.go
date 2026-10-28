@@ -157,6 +157,21 @@ type Stage struct {
 	// launches. A loop without a bound is a plan that cannot be priced.
 	MaxRounds int `json:"max_rounds,omitempty"`
 
+	// Pipeline starts this fanout on an item as soon as the unit of the
+	// stage before it that found the item is done, instead of waiting for
+	// that whole stage. Only on a fanout over $prev.field where prev is the
+	// fanout immediately before it.
+	//
+	// Ordered rather than as-completed: a unit's items are released when it
+	// and every unit launched before it have finished. A fast unit waits
+	// for slower earlier ones, which costs a little of the overlap and buys
+	// the property every other stage has: the same items, in the same
+	// order, on every run. Neither side may repeat, since a repeating stage
+	// is not finished until its last round, and a pipelined prompt cannot
+	// use {{input}}, which is "everything the stages before kept" and is
+	// still being written when it starts.
+	Pipeline bool `json:"pipeline,omitempty"`
+
 	// RepeatUntilDry is the other stopping rule: run this stage again
 	// while its rounds keep turning up something new, and stop once
 	// DryRounds rounds in a row have added nothing. The field must be a
@@ -341,6 +356,26 @@ func (p Plan) Validate(l Limits) error {
 		}
 		if s.Unanswered != "" && !unanswered[s.Unanswered] {
 			return fmt.Errorf("%s: unanswered is %q, and must be one of skip, keep, fail", where, s.Unanswered)
+		}
+		if s.Pipeline {
+			if s.Kind != "fanout" {
+				return fmt.Errorf("%s: pipeline belongs to a fanout, and this stage is a %s", where, s.Kind)
+			}
+			ref, isRef := planRef(s.Over)
+			from, _, ok := splitRef(ref)
+			if !isRef || !ok || i == 0 || from != p.Stages[i-1].Name {
+				return fmt.Errorf("%s: a pipelined stage spreads over $stage.field of the stage just before it", where)
+			}
+			prev := p.Stages[i-1]
+			if prev.Kind != "fanout" {
+				return fmt.Errorf("%s: pipelining starts after a fanout; %q is a %s, a single unit with nothing to overlap", where, prev.Name, prev.Kind)
+			}
+			if prev.repeats() || s.repeats() {
+				return fmt.Errorf("%s: neither a pipelined stage nor the stage before it may have repeats: a stage that repeats is not finished until its last round", where)
+			}
+			if strings.Contains(s.Prompt, "{{input}}") {
+				return fmt.Errorf("%s: a pipelined stage cannot use {{input}}: the stages before it are still running when it starts, so what it would be given would depend on timing", where)
+			}
 		}
 		if s.RepeatUntil != "" && s.RepeatUntilDry != "" {
 			return fmt.Errorf("%s: a stage has one stopping rule; it names both repeat_until and repeat_until_dry", where)
