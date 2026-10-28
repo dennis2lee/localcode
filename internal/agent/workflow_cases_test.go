@@ -45,7 +45,9 @@ func TestDeletingAUserWorkflowFromTheHomeWorkspaceStaysInItsDirectory(t *testing
 	// With no home directory at all, --user names nothing, and both
 	// writes refuse rather than resolve a bare file name.
 	loop.Memory = &MemoryConfig{}
+	// Both: os.UserHomeDir reads USERPROFILE on Windows and HOME elsewhere.
 	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
 	for _, line := range []string{"/workflow delete notes --user", "/workflow save notes --user"} {
 		loop.SendMessage(context.Background(), "main", "oracle", line)
 		if out := lastAssistantText(loop.Store, "main"); !strings.Contains(out, "no home directory") && !strings.Contains(out, "nothing to save") {
