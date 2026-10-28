@@ -164,6 +164,11 @@ type stageReport struct {
 	// whether its field came back true. Zero on every other stage.
 	rounds  int
 	settled bool
+	// dry marks a repeat_until_dry stage, and ranDry says whether it
+	// stopped because its rounds stopped finding anything new rather than
+	// because it ran out of rounds.
+	dry    bool
+	ranDry bool
 	// answers is what a stage produced, in launch order.
 	answers []outcome
 }
@@ -256,7 +261,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 		// before, while a repeated stage labels every round including the
 		// first, so identical answers do not print as identical lines.
 		first := 0
-		if stage.RepeatUntil != "" {
+		if stage.repeats() {
 			first = 1
 		}
 		kept, stopped := applyStageOutcome(stage, first, got, &sr)
@@ -267,13 +272,32 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 		}
 		sr.kept = len(kept)
 
+		// What the stage hands on. One round's kept results for every
+		// stage but a dry loop, which hands on every round's: its later
+		// rounds exist for what they add. seen and empty are the dry
+		// loop's own count of what it has found and of how many rounds in
+		// a row have added nothing; the first round counts too, since an
+		// answered round that finds nothing is a search that ran dry.
+		carried := kept
+		seen := map[string]bool{}
+		empty := 0
+		if stage.RepeatUntilDry != "" {
+			empty = dryCount(stage, got, kept, seen, empty)
+		}
+		finished := func() bool {
+			if stage.RepeatUntilDry != "" {
+				return empty >= stage.dryRounds()
+			}
+			return repeatSettled(stage, kept)
+		}
+
 		// A repeat_until stage runs again while its field is false or
 		// empty. Each round reruns the same units with the rounds so far
 		// carried in {{input}}, inside the same agent ceiling and the same
 		// run deadline. The report says which round settled it, because a
 		// loop that does not name its stopping round cannot be debugged.
 		round := 1
-		for stage.RepeatUntil != "" && round < stage.MaxRounds && !repeatSettled(stage, kept) {
+		for stage.repeats() && round < stage.MaxRounds && !finished() {
 			if err := ctx.Err(); err != nil {
 				report.stages = append(report.stages, sr)
 				report.stopped = "the run was cancelled or ran out of time before " + stage.Name + " finished its repeats"
@@ -294,7 +318,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 				"agents":  len(units),
 				"round":   round,
 			})
-			brief = l.carriedInput(p, stage, resultsWith(results, stage.Name, kept))
+			brief = l.carriedInput(p, stage, resultsWith(results, stage.Name, carried))
 			got = l.runStage(ctx, sessionID, runID, p, stage, units, brief)
 			report.launched += len(units)
 			sr.launched += len(units)
@@ -305,12 +329,18 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 				report.stopped = stopped
 				return report
 			}
-			sr.kept = len(kept)
+			if stage.RepeatUntilDry != "" {
+				empty = dryCount(stage, got, kept, seen, empty)
+				carried = append(carried, kept...)
+			} else {
+				carried = kept
+			}
+			sr.kept = len(carried)
 			l.Store.Append(l.progressSession(sessionID, runID), events.TypeTaskStatus, map[string]any{
 				"task_id": "orchestrate:" + stage.Name,
 				"status":  "completed",
 				"stage":   stage.Name,
-				"kept":    len(kept),
+				"kept":    len(carried),
 				"round":   round,
 			})
 		}
@@ -318,14 +348,19 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 			sr.rounds = round
 			sr.settled = repeatSettled(stage, kept)
 		}
+		if stage.RepeatUntilDry != "" {
+			sr.rounds = round
+			sr.dry = true
+			sr.ranDry = empty >= stage.dryRounds()
+		}
 		report.stages = append(report.stages, sr)
-		results[stage.Name] = kept
+		results[stage.Name] = carried
 
 		l.Store.Append(l.progressSession(sessionID, runID), events.TypeTaskStatus, map[string]any{
 			"task_id": "orchestrate:" + stage.Name,
 			"status":  "completed",
 			"stage":   stage.Name,
-			"kept":    len(kept),
+			"kept":    len(carried),
 		})
 	}
 	return report

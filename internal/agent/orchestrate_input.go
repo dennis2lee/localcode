@@ -34,7 +34,7 @@ func (l *Loop) stageItems(stage Stage, results map[string][]outcome) ([]string, 
 	merged := 0
 	for _, o := range results[from] {
 		for _, v := range asStrings(o.data[field]) {
-			key := strings.ToLower(strings.Join(strings.Fields(v), " "))
+			key := itemKey(v)
 			if seen[key] {
 				merged++
 				continue
@@ -49,6 +49,13 @@ func (l *Loop) stageItems(stage Stage, results map[string][]outcome) ([]string, 
 	return items, merged
 }
 
+// itemKey is the form two items are compared in: case and spacing
+// ignored. One function, so a fanout's merge and a dry loop's idea of
+// "new" can never disagree about whether two findings are the same.
+func itemKey(v string) string {
+	return strings.ToLower(strings.Join(strings.Fields(v), " "))
+}
+
 // carriedInput is what {{input}} expands to: every kept result so far,
 // labelled by the stage that produced it.
 //
@@ -58,7 +65,7 @@ func (l *Loop) stageItems(stage Stage, results map[string][]outcome) ([]string, 
 // prompt never asked for {{input}}: without that the next round works
 // blind, repeating whatever the last one tried.
 func (l *Loop) carriedInput(p Plan, stage Stage, results map[string][]outcome) string {
-	repeat := stage.RepeatUntil != "" && len(results[stage.Name]) > 0
+	repeat := stage.repeats() && len(results[stage.Name]) > 0
 	if !strings.Contains(stage.Prompt, "{{input}}") && stage.Kind != "barrier" && !repeat {
 		return ""
 	}

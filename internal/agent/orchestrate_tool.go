@@ -44,6 +44,8 @@ A stage is one of three kinds. "step" runs its agent once. "fanout" runs it once
 
 A stage that declares returns gets an Answer tool in that exact shape, and only what it declares can be referred to or filtered on later. keep names one returned field and drops every result where it is false or empty: a stage of skeptics declaring {"survives":"bool"} and keeping "survives" is an adversarial filter with no expression language involved. unanswered says what to do when an agent does not answer in the declared shape: skip (the default), keep, or fail.
 
+A step or fanout can repeat. repeat_until names a returned field and runs the stage again while it is false or empty. repeat_until_dry names a returned strings field and runs the stage again while its rounds keep finding values not seen before, stopping after dry_rounds rounds in a row add nothing; every round's results carry forward. Both need max_rounds, and every round counts against the ceiling.
+
 Prompts take three substitutions and no others: {{task}}, {{item}} inside a fanout, and {{input}} for what earlier stages kept.
 
 Ceilings: %d stages, %d items per fanout, %d copies, %d agents in a whole run, %d declared fields per stage. A plan past one is refused before anything runs. The one exception is a fanout over $earlierstage.field, whose width is known only once that stage has answered: it takes the first %d distinct items, items that would pass the run's %d agents are dropped and counted in the report, and a stage that would pass it stops the run. Each agent turn gets %s and the run gets %s. The run is one task of this conversation, with every agent it launches under it. It runs while you wait and Esc stops all of it; the person can let it go instead, and then it finishes on its own and its report is in the task.`,
@@ -77,7 +79,9 @@ func (t *OrchestrateTool) InputSchemaFor(ctx context.Context) json.RawMessage {
  "returns":{"type":"object","additionalProperties":{"type":"string","enum":%s},"description":"field name to type; what this stage must answer with"},
  "keep":{"type":"string","description":"one returned field; results where it is false or empty are dropped"},
  "repeat_until":{"type":"string","description":"one returned field; while it is false or empty the stage runs again, up to max_rounds"},
- "max_rounds":{"type":"integer","description":"required with repeat_until: how many times the stage may run in total, at least 2"},
+ "repeat_until_dry":{"type":"string","description":"one returned strings field; the stage runs again while its rounds keep finding new values, up to max_rounds. Not with repeat_until"},
+ "dry_rounds":{"type":"integer","description":"with repeat_until_dry: how many rounds in a row without anything new end the loop, 1 to 3, default 1"},
+ "max_rounds":{"type":"integer","description":"required with repeat_until or repeat_until_dry: how many times the stage may run in total, at least 2"},
  "unanswered":{"type":"string","enum":%s}
 },
 "required":["name","kind","agent","prompt"]
@@ -224,7 +228,13 @@ func (r runReport) String() string {
 		if s.dropped > 0 {
 			fmt.Fprintf(&b, ", %d item(s) not run because the run's %d-agent ceiling was reached", s.dropped, maxRunAgents)
 		}
-		if s.rounds > 0 {
+		if s.rounds > 0 && s.dry {
+			if s.ranDry {
+				fmt.Fprintf(&b, ", ran dry after %d round(s)", s.rounds)
+			} else {
+				fmt.Fprintf(&b, ", %d round(s) without running dry", s.rounds)
+			}
+		} else if s.rounds > 0 {
 			if s.settled {
 				fmt.Fprintf(&b, ", settled after %d round(s)", s.rounds)
 			} else {

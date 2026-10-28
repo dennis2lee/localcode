@@ -156,6 +156,44 @@ type Stage struct {
 	// least 2, and counted against the run's agent ceiling like any other
 	// launches. A loop without a bound is a plan that cannot be priced.
 	MaxRounds int `json:"max_rounds,omitempty"`
+
+	// RepeatUntilDry is the other stopping rule: run this stage again
+	// while its rounds keep turning up something new, and stop once
+	// DryRounds rounds in a row have added nothing. The field must be a
+	// strings field the stage returns. A value is new when its normalised
+	// form (case and spacing ignored, as stageItems merges items) was not
+	// returned by an earlier round of this stage.
+	//
+	// The rule a search wants: "keep looking until nothing new appears" is
+	// the instruction a model abandons by the third round, and the
+	// opposite of repeat_until, where the agent says when it is done.
+	// Every round's kept results carry forward, not only the last one's,
+	// because the point of the later rounds is what they add.
+	RepeatUntilDry string `json:"repeat_until_dry,omitempty"`
+
+	// DryRounds is how many consecutive rounds without anything new end a
+	// RepeatUntilDry stage: 1 by default, at most maxDryRounds. A round in
+	// which no unit answered does not count: it found nothing because
+	// nobody looked.
+	DryRounds int `json:"dry_rounds,omitempty"`
+}
+
+// maxDryRounds bounds DryRounds. Three empty rounds in a row is already
+// more patience than a search earns.
+const maxDryRounds = 3
+
+// repeats reports whether the stage runs more than once: under either
+// stopping rule.
+func (s Stage) repeats() bool {
+	return s.RepeatUntil != "" || s.RepeatUntilDry != ""
+}
+
+// dryRounds is DryRounds with its default.
+func (s Stage) dryRounds() int {
+	if s.DryRounds == 0 {
+		return 1
+	}
+	return s.DryRounds
 }
 
 var (
@@ -304,19 +342,48 @@ func (p Plan) Validate(l Limits) error {
 		if s.Unanswered != "" && !unanswered[s.Unanswered] {
 			return fmt.Errorf("%s: unanswered is %q, and must be one of skip, keep, fail", where, s.Unanswered)
 		}
+		if s.RepeatUntil != "" && s.RepeatUntilDry != "" {
+			return fmt.Errorf("%s: a stage has one stopping rule; it names both repeat_until and repeat_until_dry", where)
+		}
 		if s.RepeatUntil != "" {
 			if _, ok := s.Returns[s.RepeatUntil]; !ok {
 				return fmt.Errorf("%s: repeat_until names %q, which this stage does not return (it returns %s)",
 					where, s.RepeatUntil, fieldList(s.Returns))
 			}
+		}
+		if s.RepeatUntilDry != "" {
+			typ, ok := s.Returns[s.RepeatUntilDry]
+			if !ok {
+				return fmt.Errorf("%s: repeat_until_dry names %q, which this stage does not return (it returns %s)",
+					where, s.RepeatUntilDry, fieldList(s.Returns))
+			}
+			if typ != "strings" {
+				return fmt.Errorf("%s: %s is a %s; repeat_until_dry needs a strings field, so a round can be said to have found something new",
+					where, s.RepeatUntilDry, typ)
+			}
+			if s.DryRounds < 0 || s.DryRounds > maxDryRounds {
+				return fmt.Errorf("%s: dry_rounds is %d, and must be between 1 and %d", where, s.DryRounds, maxDryRounds)
+			}
+		} else if s.DryRounds != 0 {
+			return fmt.Errorf("%s: dry_rounds without repeat_until_dry counts nothing", where)
+		}
+		if s.repeats() {
+			rule := "repeat_until"
+			if s.RepeatUntilDry != "" {
+				rule = "repeat_until_dry"
+			}
 			if s.MaxRounds < 2 {
-				return fmt.Errorf("%s: repeat_until needs max_rounds of at least 2, got %d", where, s.MaxRounds)
+				return fmt.Errorf("%s: %s needs max_rounds of at least 2, got %d", where, rule, s.MaxRounds)
+			}
+			if s.RepeatUntilDry != "" && s.MaxRounds <= s.dryRounds() {
+				return fmt.Errorf("%s: max_rounds is %d; it must be more than dry_rounds (%d), or the stage can never run dry",
+					where, s.MaxRounds, s.dryRounds())
 			}
 			if s.Kind == "barrier" {
-				return fmt.Errorf("%s: repeat_until belongs to a step or a fanout, and this stage is a barrier", where)
+				return fmt.Errorf("%s: %s belongs to a step or a fanout, and this stage is a barrier", where, rule)
 			}
 		} else if s.MaxRounds != 0 {
-			return fmt.Errorf("%s: max_rounds without repeat_until repeats nothing", where)
+			return fmt.Errorf("%s: max_rounds without repeat_until or repeat_until_dry repeats nothing", where)
 		}
 
 		known[s.Name] = s
@@ -338,7 +405,7 @@ func launchesCap(stages []Stage, refFanout int) int {
 	launches := 0
 	for _, s := range stages {
 		n := stageLaunches(s, refFanout)
-		if s.RepeatUntil != "" {
+		if s.repeats() {
 			n *= s.MaxRounds
 		}
 		launches += n

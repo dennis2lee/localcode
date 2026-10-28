@@ -62,3 +62,29 @@ func resultsWith(results map[string][]outcome, stage string, kept []outcome) map
 	out[stage] = kept
 	return out
 }
+
+// dryCount is a dry loop's count of rounds in a row that found nothing new,
+// after one more round: reset by a round that added a value not seen
+// before, raised by an answered round that added nothing, and left alone
+// by a round in which nobody answered, which found nothing because nobody
+// looked. seen collects every normalised value so far.
+func dryCount(stage Stage, got, kept []outcome, seen map[string]bool, empty int) int {
+	fresh := 0
+	for _, o := range kept {
+		for _, v := range asStrings(o.data[stage.RepeatUntilDry]) {
+			if k := itemKey(v); !seen[k] {
+				seen[k] = true
+				fresh++
+			}
+		}
+	}
+	if fresh > 0 {
+		return 0
+	}
+	for _, o := range got {
+		if o.err == nil && o.data != nil {
+			return empty + 1
+		}
+	}
+	return empty
+}

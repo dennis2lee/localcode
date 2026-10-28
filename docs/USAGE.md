@@ -2340,7 +2340,9 @@ A stage is one of three kinds:
 | `keep` | One returned field. Results where it is false or empty are dropped. |
 | `unanswered` | What to do when an agent does not answer in the declared shape: `skip` (default), `keep`, `fail`. |
 | `repeat_until` | One returned field. While it is false or empty the stage runs again, up to `max_rounds`. A rerun carries the earlier rounds in `{{input}}`. Step and fanout stages only: a barrier with `repeat_until` is refused. |
-| `max_rounds` | Required with `repeat_until`. How many times the stage may run in total, at least 2. Counted against the run ceiling like any other launches. |
+| `repeat_until_dry` | One returned `strings` field. The stage runs again while its rounds keep finding values not returned before (case and spacing ignored), and stops after `dry_rounds` rounds in a row add nothing. Every round's kept results carry forward, and a rerun carries all of them in `{{input}}`. A round in which no agent answered does not count as dry. Step and fanout stages only, and not together with `repeat_until`. |
+| `dry_rounds` | With `repeat_until_dry`: how many rounds in a row without anything new end the loop. 1 to 3, default 1. `max_rounds` must be larger. |
+| `max_rounds` | Required with `repeat_until` or `repeat_until_dry`. How many times the stage may run in total, at least 2. Counted against the run ceiling like any other launches. |
 
 `keep` filters results by one returned field. It supports no expression language. For example, `{"survives":"bool"}` with `keep: "survives"` retains true results.
 
@@ -2373,7 +2375,7 @@ A stage is one of three kinds:
 | Cancellation | The turn waits on the run, so Esc stops the whole run including the stage in flight. Deleting the run's row does the same. |
 | Letting go | Let go (Ctrl+B in the terminal, the "let go" button in the browser) releases the whole run, not one of its agents. The turn gets its prompt back, the run finishes on its own, and its report is the last entry in the run's task. Its stage progress moves from the conversation into the run. |
 | Permission | Confirmation before each run. Shows maximum limits because referenced fanout sizes are unknown until earlier stages complete. |
-| Repeats | Fanout items from prior results are deduplicated after case and whitespace normalization. The report includes the duplicate count. A `repeat_until` stage reruns until its field holds true on every kept result, and the report says after how many rounds it settled, or that it did not. |
+| Repeats | Fanout items from prior results are deduplicated after case and whitespace normalization. The report includes the duplicate count. A `repeat_until` stage reruns until its field holds true on every kept result, and the report says after how many rounds it settled, or that it did not. A `repeat_until_dry` stage's report says after how many rounds it ran dry, or that it used every round without running dry. |
 | The report | Generated from execution records by LocalCode, not model summarization. |
 | Nesting | Nested orchestration is refused. |
 
