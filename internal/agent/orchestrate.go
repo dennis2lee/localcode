@@ -68,6 +68,12 @@ type Plan struct {
 	// clock and costs a per-item state machine, and it is deliberately not
 	// in this version. See docs/USAGE.md.
 	Stages []Stage `json:"stages"`
+
+	// args and workflow are set when the plan came from a saved workflow:
+	// the arguments it was run with, which {{args}} expands to. Never part
+	// of the plan a model writes.
+	args     string
+	workflow bool
 }
 
 // Stage is one step of a plan.
@@ -224,6 +230,9 @@ var (
 // a validator that re-read it would accept a plan the runner then refuses.
 type Limits struct {
 	Agents []string
+	// Args allows what only a saved workflow may use: {{args}} in the goal
+	// and prompts, and over: ["$args"] on a fanout.
+	Args bool
 }
 
 // Validate reports every reason this plan cannot run, or nil.
@@ -277,7 +286,7 @@ func (p Plan) Validate(l Limits) error {
 		if strings.TrimSpace(s.Prompt) == "" {
 			return fmt.Errorf("%s: no prompt. The agent cannot see this conversation, so the prompt has to stand on its own", where)
 		}
-		if err := checkTemplate(where, s.Prompt, s.Kind == "fanout"); err != nil {
+		if err := checkTemplate(where, s.Prompt, s.Kind == "fanout", l.Args); err != nil {
 			return err
 		}
 
@@ -294,7 +303,11 @@ func (p Plan) Validate(l Limits) error {
 			if len(s.Over) == 0 {
 				return fmt.Errorf("%s: a fanout needs over: either a list of items, or one $stage.field naming an earlier stage's results", where)
 			}
-			if ref, isRef := planRef(s.Over); isRef {
+			if l.Args && isArgsOver(s.Over) {
+				// The arguments, whose number is known only when the
+				// workflow is run: priced like a reference here, and
+				// checked against the item ceiling once they are in.
+			} else if ref, isRef := planRef(s.Over); isRef {
 				from, field, ok := splitRef(ref)
 				if !ok {
 					return fmt.Errorf("%s: over is %q; a reference is written $stage.field", where, ref)
@@ -505,7 +518,7 @@ func splitRef(ref string) (stage, field string, ok bool) {
 // checkTemplate refuses a prompt carrying anything but the three
 // substitutions, so a plan cannot smuggle in an expansion this does not
 // implement and cannot quietly interpolate nothing.
-func checkTemplate(where, prompt string, fanout bool) error {
+func checkTemplate(where, prompt string, fanout, args bool) error {
 	rest := prompt
 	for {
 		i := strings.Index(rest, "{{")
@@ -522,6 +535,10 @@ func checkTemplate(where, prompt string, fanout bool) error {
 		case "item":
 			if !fanout {
 				return fmt.Errorf("%s: {{item}} is only meaningful in a fanout", where)
+			}
+		case "args":
+			if !args {
+				return fmt.Errorf("%s: {{args}} belongs to a saved workflow, which is run with arguments; a plan written here has none", where)
 			}
 		default:
 			return fmt.Errorf("%s: {{%s}} is not a substitution. The three are {{task}}, {{item}} and {{input}}", where, name)

@@ -569,6 +569,15 @@ func heldUntilIdle(text string) string {
 		// replacement of the history either way, so the held marker
 		// names the command and not the argument.
 		return "/compact"
+	case "/workflow":
+		// The forms that write: a run appends its line and its report
+		// to the history outside any turn, as "!" does, and save and
+		// delete write the workspace a running turn may be editing.
+		// Listing and showing only read.
+		switch sub, _, _ := strings.Cut(strings.TrimSpace(rest), " "); sub {
+		case "run", "save", "delete":
+			return "/workflow"
+		}
 	case "/workspace":
 		// Only the form that moves it. Bare "/workspace" reads the
 		// directory back, and refusing a read because a turn is running

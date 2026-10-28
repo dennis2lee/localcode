@@ -2380,7 +2380,44 @@ A stage is one of three kinds:
 | The report | Generated from execution records by LocalCode, not model summarization. |
 | Nesting | Nested orchestration is refused. |
 
-Unsupported: resuming runs, and saved plans.
+Unsupported: resuming runs.
+
+#### Saved workflows
+
+A plan can be kept in a file and run again by name. `/workflow run <name> [args]` runs it with no model turn: the plan that runs is the file.
+
+| Command | What it does |
+|---|---|
+| `/workflow` or `/workflow list` | Every workflow this conversation can run, with its description, its arguments, and why it cannot run here when it cannot. |
+| `/workflow show <name>` | The file, where it is, whether it validates here, and the plan. |
+| `/workflow run <name> [args]` | Runs it. The line and localcode's report become a turn of the conversation, so the model reads the report on its next turn. The run is one task, like any other run: Esc stops it and let go moves it to the background. |
+| `/workflow save <name> [--user] [--force] [description]` | Saves the last plan that ran in this conversation, to the project or, with `--user`, to the home directory. Shows what it saved. Will not replace a file without `--force`. |
+| `/workflow delete <name> [--user]` | Deletes the project's file, or the home directory's with `--user`. |
+
+Workflows are read from `<workspace>/.localcode/workflows/<name>.json`, then `~/.localcode/workflows/<name>.json`, on every use. A project file wins over a home file of the same name.
+
+| Field | Meaning |
+|---|---|
+| `name` | How it is run. Lowercase letters, digits and hyphens, and the same as the file's name. |
+| `description` | What it is for, shown by `/workflow`. |
+| `args` | What to pass after the name. Empty means it takes no arguments, and passing some is refused. A workflow whose plan uses its arguments must say here what they are. |
+| `plan` | A plan, as above. `{{args}}` may appear in its goal and any prompt, and a fanout may spread over the arguments with `over: ["$args"]`. |
+
+How arguments are used:
+
+* `{{args}}` is replaced by the arguments exactly as typed, in the same single pass as the other substitutions. Nothing in the arguments is read as a template, so an argument containing `{{input}}` is text.
+* `over: ["$args"]` makes one item per argument: separated by spaces, tabs or line breaks, with single or double quotes keeping one together, and a repeat (case and spacing ignored) dropped. At most 16. A single argument starting with `$` is refused, because it would read as a reference to a stage.
+* A workflow that takes arguments is refused without them.
+
+Who is asked:
+
+* A workflow in the home directory runs when you type it.
+* A project's workflow asks first, because it arrives with a clone and any agent that can write the project can edit it. The question names the workflow and a hash of the file, and says which agents and roles it uses and its ceilings. "Always" approves that exact file; an edited file asks again.
+* A deny rule for `Orchestrate` refuses both.
+* It is not run in a scheduled turn, from a command the model booked, inside a run or inside a debate, and orchestration must be on.
+* `/workflow run`, `save` and `delete` typed while a turn is running wait for it to end. Listing and showing do not.
+
+The model does not run saved workflows itself in this version.
 
 #### What the roster needs from your config
 

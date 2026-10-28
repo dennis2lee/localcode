@@ -475,66 +475,8 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		subject = ps.Subject(input)
 	}
 
-	outcome := Outcome{Decision: DecisionAsk}
-	if !t.RequiresPermission(input) {
-		outcome.Decision = DecisionAllow
-	}
-	if r.Resolver != nil {
-		outcome = r.Resolver(ctx, Query{
-			Tool:    name,
-			Subject: subject,
-			Static:  t.RequiresPermission(input),
-			// Asked of the tool, so a tool that touches paths cannot be
-			// left out of the boundary by forgetting to list it here.
-			Class: ClassOf(t),
-		})
-	}
-
-	switch outcome.Decision {
-	case DecisionDeny:
-		return Result{Content: fmt.Sprintf("tool %q is denied by permission policy", name), IsError: true, Refused: true}
-
-	case DecisionAsk:
-		if r.permission == nil {
-			return Result{Content: fmt.Sprintf("tool %q requires permission but no permission handler is configured", name), IsError: true}
-		}
-		if describe == "" {
-			if d, ok := t.(Describer); ok {
-				describe = d.Describe(input)
-			} else {
-				describe = fmt.Sprintf("%s %s", name, string(input))
-			}
-		}
-		allowed, err := r.permission(ctx, Ask{
-			Tool:        name,
-			Subject:     subject,
-			Description: describe,
-			Outside:     outcome.Outside,
-			Dir:         outcome.Dir,
-			Workspace:   outcome.Workspace,
-		})
-		var refused *RefusedError
-		if errors.As(err, &refused) {
-			// A refusal that knows why it happened. Marked Refused like
-			// any other, so the carry-on nudge treats it as a stop
-			// rather than as work still to do.
-			return Result{Content: refused.Reason, IsError: true, Refused: true}
-		}
-		if err != nil {
-			return Result{Content: fmt.Sprintf("permission check failed: %v", err), IsError: true}
-		}
-		if !allowed {
-			return Result{Content: "denied by user", IsError: true, Refused: true}
-		}
-	case DecisionAllow:
-		// Proceeds to execution below the switch.
-	default:
-		// Fail closed: a decision nobody taught the registry (a typo'd
-		// rule that survived load and API validation, e.g. "denied")
-		// refuses rather than falling through to execution. Deny rather
-		// than ask, because ask is downgraded to allow by
-		// skip_permissions, which would reopen the hole.
-		return Result{Content: fmt.Sprintf("tool %q has unknown permission decision %q (want one of %s)", name, outcome.Decision, DecisionNames()), IsError: true, Refused: true}
+	if refusal := r.gate(ctx, name, t, input, subject, describe); refusal != nil {
+		return *refusal
 	}
 
 	// The last moment at which the file is still as it was. Everything
@@ -560,6 +502,97 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 	}
 
 	return result
+}
+
+// gate is the permission half of Call: allow, deny or ask, for one call of
+// t with input. Nil means go ahead; otherwise the result is the refusal to
+// return in place of running the tool.
+func (r *Registry) gate(ctx context.Context, name string, t Tool, input json.RawMessage, subject, describe string) *Result {
+	outcome := Outcome{Decision: DecisionAsk}
+	if !t.RequiresPermission(input) {
+		outcome.Decision = DecisionAllow
+	}
+	if r.Resolver != nil {
+		outcome = r.Resolver(ctx, Query{
+			Tool:    name,
+			Subject: subject,
+			Static:  t.RequiresPermission(input),
+			// Asked of the tool, so a tool that touches paths cannot be
+			// left out of the boundary by forgetting to list it here.
+			Class: ClassOf(t),
+		})
+	}
+
+	switch outcome.Decision {
+	case DecisionDeny:
+		return &Result{Content: fmt.Sprintf("tool %q is denied by permission policy", name), IsError: true, Refused: true}
+
+	case DecisionAsk:
+		if r.permission == nil {
+			return &Result{Content: fmt.Sprintf("tool %q requires permission but no permission handler is configured", name), IsError: true}
+		}
+		if describe == "" {
+			if d, ok := t.(Describer); ok {
+				describe = d.Describe(input)
+			} else {
+				describe = fmt.Sprintf("%s %s", name, string(input))
+			}
+		}
+		allowed, err := r.permission(ctx, Ask{
+			Tool:        name,
+			Subject:     subject,
+			Description: describe,
+			Outside:     outcome.Outside,
+			Dir:         outcome.Dir,
+			Workspace:   outcome.Workspace,
+		})
+		var refused *RefusedError
+		if errors.As(err, &refused) {
+			// A refusal that knows why it happened. Marked Refused like
+			// any other, so the carry-on nudge treats it as a stop
+			// rather than as work still to do.
+			return &Result{Content: refused.Reason, IsError: true, Refused: true}
+		}
+		if err != nil {
+			return &Result{Content: fmt.Sprintf("permission check failed: %v", err), IsError: true}
+		}
+		if !allowed {
+			return &Result{Content: "denied by user", IsError: true, Refused: true}
+		}
+	case DecisionAllow:
+		// Proceeds to execution.
+	default:
+		// Fail closed: a decision nobody taught the registry (a typo'd
+		// rule that survived load and API validation, e.g. "denied")
+		// refuses rather than falling through to execution. Deny rather
+		// than ask, because ask is downgraded to allow by
+		// skip_permissions, which would reopen the hole.
+		return &Result{Content: fmt.Sprintf("tool %q has unknown permission decision %q (want one of %s)", name, outcome.Decision, DecisionNames()), IsError: true, Refused: true}
+	}
+	return nil
+}
+
+// Permit asks the permission question for one use of the named tool that
+// the registry will not execute itself: the same rules, the same prompt,
+// the same session and always approvals, with subject naming exactly what
+// is being approved and describe the question shown. It returns whether to
+// go ahead and, when not, why.
+//
+// For work started by a person rather than by a model's tool call, which
+// still spends what the tool would: a saved workflow from a project file
+// runs the same plan the Orchestrate tool would, and the question it asks
+// has to be the one a rule or an earlier "always" already answers.
+func (r *Registry) Permit(ctx context.Context, name, subject, describe string) (bool, string) {
+	r.mu.RLock()
+	t, ok := r.tools[name]
+	r.mu.RUnlock()
+	if !ok {
+		return false, fmt.Sprintf("unknown tool %q", name)
+	}
+	if refusal := r.gate(ctx, name, t, nil, subject, describe); refusal != nil {
+		return false, refusal.Content
+	}
+	return true, ""
 }
 
 func schema(properties string, required ...string) json.RawMessage {

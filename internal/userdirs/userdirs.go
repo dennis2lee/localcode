@@ -124,6 +124,19 @@ func CommandDirs(projectDir, home string) []string {
 	return out
 }
 
+// WorkflowDirs is where saved orchestration workflows are read from, highest
+// first: the project's .localcode/workflows, then the home's. A project
+// file wins over a home file of the same name. Only .localcode: a workflow
+// is a localcode plan, and no other tool's directory holds one. The home
+// is left out when it is the project.
+func WorkflowDirs(projectDir, home string) []string {
+	out := []string{filepath.Join(projectDir, ".localcode", "workflows")}
+	if home != "" && !SameDirectory(projectDir, home) {
+		out = append(out, filepath.Join(home, ".localcode", "workflows"))
+	}
+	return out
+}
+
 // mergedRoots is the seven roots skills and commands are read from, highest
 // first: MergedOrder under the project, then under the home, then
 // opencode's own global directory.

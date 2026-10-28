@@ -1,0 +1,348 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"localcode/internal/config"
+	"localcode/internal/events"
+	"localcode/internal/tools"
+)
+
+// /workflow: list, show, save, delete and run saved workflows.
+//
+// "/workflow run <name> [args]" runs a saved plan without a model turn. It
+// is recorded the way an auto-delegated prompt is: the person's line, then
+// localcode's reply, both in the history the model sees next, and the
+// reply written on every way out, a refusal or a stop included, so the
+// rebuilt history never holds a question with no answer.
+//
+// A workflow in the home directory is the person's own file and runs when
+// they type its name. A project's arrives with a clone and can be edited by
+// any agent that can write the project, so it asks first, with the
+// question bound to the file's content: an "always" for it answers only
+// that exact file, and an edited file asks again.
+
+const workflowUsage = "usage: /workflow [list] | show <name> | run <name> [args] | save <name> [--user] [--force] [description] | delete <name> [--user]"
+
+func (l *Loop) routeWorkflow(ctx context.Context, sessionID, text string) (bool, error) {
+	trimmed := strings.TrimSpace(text)
+	first, rest, _ := strings.Cut(trimmed, " ")
+	if first != "/workflow" {
+		first, rest, _ = strings.Cut(trimmed, "\n")
+		if first != "/workflow" {
+			return false, nil
+		}
+	}
+	rest = strings.TrimSpace(rest)
+	sub, rest := cutWord(rest)
+
+	switch sub {
+	case "", "list":
+		return true, l.replyLocal(sessionID, text, l.workflowList(ctx, sessionID))
+	case "show":
+		return true, l.replyLocal(sessionID, text, l.workflowShow(ctx, sessionID, strings.TrimSpace(rest)))
+	case "save":
+		return true, l.replyLocal(sessionID, text, l.workflowSave(sessionID, rest))
+	case "delete":
+		return true, l.replyLocal(sessionID, text, l.workflowDelete(sessionID, rest))
+	case "run":
+		return true, l.runWorkflowCommand(ctx, sessionID, text, rest)
+	default:
+		return true, l.replyLocal(sessionID, text, workflowUsage)
+	}
+}
+
+// cutWord splits off the first whitespace-separated word.
+func cutWord(s string) (string, string) {
+	s = strings.TrimLeft(s, " \t\r\n")
+	i := strings.IndexAny(s, " \t\r\n")
+	if i < 0 {
+		return s, ""
+	}
+	return s[:i], s[i+1:]
+}
+
+func (l *Loop) delegatableNames(ctx context.Context) []string {
+	var names []string
+	for name := range l.DelegatableAgents(ctx) {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (l *Loop) workflowList(ctx context.Context, sessionID string) string {
+	all := l.workflows(sessionID)
+	if len(all) == 0 {
+		dirs := l.workflowDirs(sessionID)
+		var where []string
+		for _, d := range dirs {
+			where = append(where, d.dir)
+		}
+		return "No saved workflows. They are read from " + strings.Join(where, " and ") +
+			". \"/workflow save <name>\" saves the last plan Orchestrate ran in this conversation."
+	}
+	agents := l.delegatableNames(ctx)
+	var b strings.Builder
+	b.WriteString("Saved workflows:\n")
+	for _, wf := range all {
+		fmt.Fprintf(&b, "* %s (%s)", wf.Name, wf.scope)
+		if wf.Description != "" {
+			fmt.Fprintf(&b, ": %s", oneLine(wf.Description))
+		}
+		if wf.Args != "" {
+			fmt.Fprintf(&b, " [args: %s]", oneLine(wf.Args))
+		}
+		if err := wf.check(agents); err != nil {
+			fmt.Fprintf(&b, " (cannot run here: %v)", err)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Run one with \"/workflow run <name> [args]\".")
+	return b.String()
+}
+
+func (l *Loop) workflowShow(ctx context.Context, sessionID, name string) string {
+	if name == "" {
+		return workflowUsage
+	}
+	wf, err := l.findWorkflow(sessionID, name)
+	if err != nil {
+		return err.Error()
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s (%s), %s\n", wf.Name, wf.scope, wf.path)
+	if wf.Description != "" {
+		fmt.Fprintf(&b, "%s\n", wf.Description)
+	}
+	if wf.Args != "" {
+		fmt.Fprintf(&b, "args: %s\n", wf.Args)
+	} else {
+		b.WriteString("takes no arguments\n")
+	}
+	if err := wf.check(l.delegatableNames(ctx)); err != nil {
+		fmt.Fprintf(&b, "cannot run here: %v\n", err)
+	}
+	plan, _ := json.MarshalIndent(wf.Plan, "", "  ")
+	fmt.Fprintf(&b, "```json\n%s\n```", plan)
+	return b.String()
+}
+
+// workflowFlags pulls --user and --force out of the words after a name.
+func workflowFlags(rest string) (name string, user, force bool, words []string) {
+	for _, w := range strings.Fields(rest) {
+		switch {
+		case w == "--user":
+			user = true
+		case w == "--force":
+			force = true
+		case name == "":
+			name = w
+		default:
+			words = append(words, w)
+		}
+	}
+	return name, user, force, words
+}
+
+func (l *Loop) workflowDirFor(sessionID string, user bool) string {
+	for _, d := range l.workflowDirs(sessionID) {
+		if (d.scope == scopeUser) == user {
+			return d.dir
+		}
+	}
+	return ""
+}
+
+func (l *Loop) workflowSave(sessionID, rest string) string {
+	name, user, force, words := workflowFlags(rest)
+	if !workflowNamePattern.MatchString(name) {
+		return "say what to call it: /workflow save <name> [--user] [--force] [description], a name of lowercase letters, digits and hyphens"
+	}
+	plan, from, ok := l.lastRunPlan(sessionID)
+	if !ok {
+		return "nothing to save: no orchestration plan has run in this conversation yet"
+	}
+	if from != "" {
+		// Its prompts still say {{args}}, and the arguments it was run
+		// with are not part of it: saved as it stands it would be a
+		// workflow that cannot run.
+		return fmt.Sprintf("the last plan that ran was the saved workflow %q, which is a file already: \"/workflow show %s\" says where", from, from)
+	}
+	dir := l.workflowDirFor(sessionID, user)
+	if dir == "" {
+		return "there is no home directory to save a --user workflow in"
+	}
+	path := filepath.Join(dir, name+".json")
+	if _, err := os.Lstat(path); err == nil && !force {
+		return fmt.Sprintf("%s already exists; add --force to replace it", path)
+	}
+	wf := Workflow{Name: name, Description: strings.Join(words, " "), Plan: plan}
+	data, _ := json.MarshalIndent(wf, "", "  ")
+	data = append(data, '\n')
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Sprintf("could not save: %v", err)
+	}
+	tmp, err := os.CreateTemp(dir, ".tmp-"+name+"-*")
+	if err != nil {
+		return fmt.Sprintf("could not save: %v", err)
+	}
+	if _, err := tmp.Write(data); err == nil {
+		err = tmp.Close()
+	} else {
+		tmp.Close()
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return fmt.Sprintf("could not save: %v", err)
+	}
+	return fmt.Sprintf("Saved %s. It runs with \"/workflow run %s\". To give it arguments, write {{args}} where they go (or over: [\"$args\"] on a fanout) and say what to pass in \"args\".\n```json\n%s```",
+		path, name, data)
+}
+
+// lastRunPlan is the plan of the last orchestration run this conversation
+// started, read from the run's own task record, and the saved workflow it
+// came from, if it did.
+func (l *Loop) lastRunPlan(sessionID string) (Plan, string, bool) {
+	evs, err := l.Store.Events(sessionID, 0)
+	if err != nil {
+		return Plan{}, "", false
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		e := evs[i]
+		if e.Type != events.TypeTaskSpawned || e.Data["agent"] != runSessionAgent {
+			continue
+		}
+		raw, err := json.Marshal(e.Data["plan"])
+		if err != nil {
+			continue
+		}
+		var p Plan
+		if json.Unmarshal(raw, &p) == nil && len(p.Stages) > 0 {
+			from, _ := e.Data["workflow"].(string)
+			return p, from, true
+		}
+	}
+	return Plan{}, "", false
+}
+
+func (l *Loop) workflowDelete(sessionID, rest string) string {
+	name, user, _, _ := workflowFlags(rest)
+	if !workflowNamePattern.MatchString(name) {
+		return "say which: /workflow delete <name> [--user]"
+	}
+	dir := l.workflowDirFor(sessionID, user)
+	path := filepath.Join(dir, name+".json")
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			where := "this project"
+			if user {
+				where = "your home directory"
+			}
+			return fmt.Sprintf("there is no workflow %q in %s", name, where)
+		}
+		return fmt.Sprintf("could not delete %s: %v", path, err)
+	}
+	return "Deleted " + path + "."
+}
+
+// runWorkflowRefusal is why a person's /workflow run cannot start here, or "".
+func (l *Loop) runWorkflowRefusal(ctx context.Context) string {
+	switch {
+	case Unattended(ctx):
+		return "a saved workflow is not run in a turn nobody is watching; run it yourself"
+	case inCommandRun(ctx):
+		return "a saved workflow is run by a person typing it, not by a command the model booked"
+	case inOrchestration(ctx):
+		return "a plan cannot run a plan"
+	case inDebate(ctx):
+		return "not inside a debate"
+	case !config.OrchestrateFor(ctx, l.Config):
+		return "orchestration is off. Turn it on with \"/orchestrate on\", or in the settings window."
+	case l.Tasks == nil:
+		return "this build cannot delegate, so there is nothing to orchestrate"
+	case len(l.DelegatableAgents(ctx)) < 2:
+		return "there is nobody to delegate a stage to: the built-in specialists need a profile in config.json to run on"
+	}
+	if l.Tools != nil && l.Tools.Decide(ctx, orchestrateToolName) == tools.DecisionDeny {
+		return "Orchestrate is denied by a permission rule"
+	}
+	return ""
+}
+
+func (l *Loop) runWorkflowCommand(ctx context.Context, sessionID, line, rest string) error {
+	name, args := cutWord(rest)
+	if name == "" {
+		return l.replyLocal(sessionID, line, workflowUsage)
+	}
+	if why := l.runWorkflowRefusal(ctx); why != "" {
+		return l.replyLocal(sessionID, line, "Not run: "+why+".")
+	}
+	wf, err := l.findWorkflow(sessionID, name)
+	if err != nil {
+		return l.replyLocal(sessionID, line, "Not run: "+err.Error())
+	}
+	agents := l.delegatableNames(ctx)
+	if err := wf.check(agents); err != nil {
+		return l.replyLocal(sessionID, line, "Not run: "+err.Error())
+	}
+	plan, err := wf.expand(args)
+	if err != nil {
+		return l.replyLocal(sessionID, line, "Not run: "+err.Error())
+	}
+	if err := plan.Validate(Limits{Agents: agents, Args: true}); err != nil {
+		return l.replyLocal(sessionID, line, "Not run: the plan was refused before anything ran: "+err.Error())
+	}
+
+	if wf.scope == scopeProject {
+		ok, why := l.Tools.Permit(WithSessionID(ctx, sessionID), orchestrateToolName,
+			"workflow:"+wf.Name+"@"+wf.hash, describeWorkflowRun(wf, plan))
+		if !ok {
+			return l.replyLocal(sessionID, line, "Not run: "+why+".")
+		}
+	}
+
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": line})
+	runID, out, err := l.Tasks.SpawnRun(ctx, sessionID, plan.renderedGoal(),
+		map[string]any{"plan": plan, "workflow": wf.Name, "args": plan.args}, l.planWork(sessionID, plan))
+	var reply string
+	switch {
+	case err != nil && runID == "":
+		reply = fmt.Sprintf("Workflow %s did not start: %v", wf.Name, err)
+	case err != nil:
+		reply = fmt.Sprintf("Workflow %s stopped (run %s): %v\n\n%s", wf.Name, runID, err, out)
+	default:
+		reply = fmt.Sprintf("Workflow %s (run %s). localcode wrote this report from what the stages' agents answered:\n\n%s", wf.Name, runID, out)
+	}
+	reply = capToolResult(reply, 0)
+	l.appendDelegatedTurn(sessionID, line, reply)
+	return l.replyText(sessionID, reply)
+}
+
+// describeWorkflowRun is the permission question for a project workflow:
+// what it will run, under which roles, at what ceiling.
+func describeWorkflowRun(wf Workflow, p Plan) string {
+	agents := map[string]bool{}
+	roles := map[string]bool{}
+	for _, s := range p.Stages {
+		agents[s.Agent] = true
+		role := s.Role
+		if role == "" {
+			role = "readonly"
+		}
+		roles[role] = true
+	}
+	return fmt.Sprintf("run the project workflow %q from %s (%s): %d stages by %s, as %s, at most %d agent turns, %s per agent turn and %s for the run",
+		wf.Name, wf.path, firstLine(p.renderedGoal()), len(p.Stages),
+		strings.Join(sortedKeys(agents, len(agents)), ", "), strings.Join(sortedKeys(roles, len(roles)), ", "),
+		p.Launches(), stageTimeout, runTimeout)
+}

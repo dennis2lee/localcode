@@ -68,20 +68,27 @@ func (l *Loop) runUnit(ctx context.Context, sessionID, runID string, p Plan, sta
 	return o
 }
 
-// stagePrompt is the three substitutions and nothing else.
+// stagePrompt is the three substitutions, and {{args}} in a saved
+// workflow, and nothing else. One pass: a value put in is never read again
+// as a template, so arguments or findings that contain "{{input}}" are
+// text.
 func stagePrompt(p Plan, stage Stage, item, carried string) string {
-	r := strings.NewReplacer(
-		"{{task}}", p.Goal,
+	goal := p.renderedGoal()
+	pairs := []string{
+		"{{task}}", goal,
 		"{{item}}", item,
 		"{{input}}", carried,
-	)
-	body := r.Replace(stage.Prompt)
+	}
+	if p.workflow {
+		pairs = append(pairs, "{{args}}", p.args)
+	}
+	body := strings.NewReplacer(pairs...).Replace(stage.Prompt)
 	// The goal travels even when the prompt did not ask for it: a
 	// sub-agent cannot see this conversation, and a stage prompt written
 	// without {{task}} is one whose author forgot that rather than one who
 	// meant the agent to work blind.
 	if !strings.Contains(stage.Prompt, "{{task}}") {
-		body = "The run's goal: " + p.Goal + "\n\n" + body
+		body = "The run's goal: " + goal + "\n\n" + body
 	}
 	// A rerun carries the rounds so far even when the prompt never asked
 	// for {{input}}, for the same reason: without them the next round
@@ -90,4 +97,12 @@ func stagePrompt(p Plan, stage Stage, item, carried string) string {
 		body += "\n\nEarlier rounds:\n" + carried
 	}
 	return body
+}
+
+// renderedGoal is the goal with a saved workflow's arguments in it.
+func (p Plan) renderedGoal() string {
+	if !p.workflow {
+		return p.Goal
+	}
+	return strings.ReplaceAll(p.Goal, "{{args}}", p.args)
 }
