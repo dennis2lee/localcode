@@ -63,10 +63,11 @@ type Plan struct {
 	// brief, because a sub-agent cannot see this conversation.
 	Goal string `json:"goal"`
 
-	// Stages run in order. Every stage is a barrier for the one after it:
-	// pipelining an item through the remaining stages on its own buys wall
-	// clock and costs a per-item state machine, and it is deliberately not
-	// in this version. See docs/USAGE.md.
+	// Stages run in order, and each is a barrier for the one after it,
+	// except a fanout marked pipeline: it starts on the items of the
+	// fanout just before it as they arrive. Only that one shape is
+	// pipelined, because it is the one whose items are known one answer
+	// at a time; see orchestrate_pipeline.go and docs/USAGE.md.
 	Stages []Stage `json:"stages"`
 
 	// args and workflow are set when the plan came from a saved workflow:

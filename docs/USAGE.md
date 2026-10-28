@@ -1205,7 +1205,7 @@ Messages sent during a turn appear immediately and are delivered at the next too
 
 Slash commands are refused while a turn is running. Wait for completion or press Esc to cancel. TUI `exit` and `:q` remain available.
 
-The daemon refuses `/clear`, `/rewind`, `/redo`, `/compact`, `/workspace <path>` and a `!` shell escape while a turn runs, and the refusal is shown. Each changes the history or the working tree the running turn depends on, so none of them is handed to that turn or queued.
+The daemon refuses `/clear`, `/rewind`, `/redo`, `/compact`, `/workspace <path>`, `/workflow run`, `resume`, `save` and `delete`, and a `!` shell escape while a turn runs, and the refusal is shown. Each changes the history or the working tree the running turn depends on, so none of them is handed to that turn or queued.
 
 A message beginning with `/` is read as a command and is never sent to the model. One that matches no built-in command, custom command or skill is answered with an error naming the closest match, because the alternative is worse: a model reading an unknown command as an instruction acts on what the word means, and it has a shell. A first word with a second slash or a dot in it — `/etc/hosts`, `/tmp/build.log` — is a path, and still reaches the model.
 
@@ -2374,7 +2374,7 @@ A stage is one of three kinds:
 | Timeouts | 10 minutes per agent turn; 30 minutes per run. |
 | The run | One task of the conversation, shown as an `orchestration run` row. Every agent it launches is a task under that row, not under the conversation. While it runs, the row names the stage and how many of its agents have finished, for example `look: 2 of 4 finished`. The terminal shows the same on the busy line when it is the only task running, and in `/tasks`. |
 | Cancellation | The turn waits on the run, so Esc stops the whole run including the stage in flight. Deleting the run's row does the same. |
-| Letting go | Let go (Ctrl+B in the terminal, the "let go" button in the browser) releases the whole run, not one of its agents. The turn gets its prompt back, the run finishes on its own, and its report is the last entry in the run's task. Its stage progress moves from the conversation into the run. |
+| Letting go | Let go (Ctrl+B in the terminal, the "let go" button in the browser) releases the whole run, not one of its agents. The turn gets its prompt back, the run finishes on its own, and its report is the last entry in the run's task. Its stage progress moves from the conversation into the run. Letting go from inside the run's own session releases the run too. |
 | Permission | Confirmation before each run. Shows maximum limits because referenced fanout sizes are unknown until earlier stages complete. |
 | Repeats | Fanout items from prior results are deduplicated after case and whitespace normalization. The report includes the duplicate count. A `repeat_until` stage reruns until its field holds true on every kept result, and the report says after how many rounds it settled, or that it did not. A `repeat_until_dry` stage's report says after how many rounds it ran dry, or that it used every round without running dry. |
 | The report | Generated from execution records by LocalCode, not model summarization. |
@@ -2382,11 +2382,11 @@ A stage is one of three kinds:
 
 #### Resuming a run
 
-`/workflow resume [run]` runs a stopped run again and reuses every agent turn that finished. With no run named, it resumes the last run of this conversation. A run's id is in the reply that reported it, and `/tasks` lists it.
+`/workflow resume [run]` runs a stopped run again and reuses every agent turn that finished. With no run named, it resumes the last run of this conversation. A run that `/rewind` took back is not resumed. A run's id is in the reply that reported it, and `/tasks` lists it.
 
 * Reused: a unit that completed, with its declared fields when the stage declares `returns`. Its answer is read from the run's own record. No model is called.
 * Run again: a unit that failed, timed out, was cancelled, never started, or did not give its declared fields. A unit whose prompt changed, because an earlier stage's kept results changed, also runs again.
-* A unit matches by its stage, its agent, the agent's profile, provider and model, its tool allowlist, its full prompt, its declared fields, and its copy and round. A changed config therefore runs the affected units again.
+* A unit matches by its stage, its agent, the agent's profile, provider and model, its tool allowlist, its full prompt, its declared fields, its item, copy and round, and the directory the run works in. A changed config therefore runs the affected units again, and after `/workspace` moves the conversation every unit runs again.
 * The plan is the one the run recorded, not the current file. A saved workflow edited since does not change what a resume runs.
 * The resume is a new run, and the report says how many answers it reused. Reused answers count toward the 32 agent turn ceiling. A resume of a resume reuses the answers the first resume reused.
 
@@ -2394,7 +2394,7 @@ Refused when:
 
 * The run is still running.
 * The run belongs to another conversation, for example in a fork's copy of the record.
-* A resume of the same run is already running.
+* A resume of the same run is already running, including one that was let go.
 * The plan no longer validates against the current agents.
 * The same conditions as `/workflow run`: a scheduled turn, a booked command, inside a run or a debate, or orchestration off.
 
@@ -2408,9 +2408,9 @@ A plan can be kept in a file and run again by name. `/workflow run <name> [args]
 |---|---|
 | `/workflow` or `/workflow list` | Every workflow this conversation can run, with its description, its arguments, and why it cannot run here when it cannot. |
 | `/workflow show <name>` | The file, where it is, whether it validates here, and the plan. |
-| `/workflow run <name> [args]` | Runs it. The line and localcode's report become a turn of the conversation, so the model reads the report on its next turn. The run is one task, like any other run: Esc stops it and let go moves it to the background. |
+| `/workflow run <name> [args]` | Runs it. The line and localcode's report become a turn of the conversation, so the model reads the report on its next turn. The run is one task, like any other run: Esc stops it and let go moves it to the background. A run that is let go replies with where its report will be. |
 | `/workflow resume [run]` | Resumes a run that stopped, reusing what finished. See [Resuming a run](#resuming-a-run). |
-| `/workflow save <name> [--user] [--force] [description]` | Saves the last plan that ran in this conversation, to the project or, with `--user`, to the home directory. Shows what it saved. Will not replace a file without `--force`. |
+| `/workflow save <name> [--user] [--force] [description]` | Saves the last plan that ran in this conversation and was not taken back by `/rewind`, to the project or, with `--user`, to the home directory. Shows what it saved. Will not replace a file without `--force`. |
 | `/workflow delete <name> [--user]` | Deletes the project's file, or the home directory's with `--user`. |
 
 Workflows are read from `<workspace>/.localcode/workflows/<name>.json`, then `~/.localcode/workflows/<name>.json`, on every use. A project file wins over a home file of the same name.
@@ -2434,7 +2434,7 @@ Who is asked:
 * A project's workflow asks first, because it arrives with a clone and any agent that can write the project can edit it. The question names the workflow and a hash of the file, and says which agents and roles it uses and its ceilings. "Always" approves that exact file; an edited file asks again.
 * A deny rule for `Orchestrate` refuses both.
 * It is not run in a scheduled turn, from a command the model booked, inside a run or inside a debate, and orchestration must be on.
-* `/workflow run`, `resume`, `save` and `delete` typed while a turn is running wait for it to end. Listing and showing do not.
+* `/workflow run`, `resume`, `save` and `delete` are refused while a turn is running. Send them again once it ends. Listing and showing are not refused.
 
 The model does not run saved workflows itself in this version.
 

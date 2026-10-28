@@ -7,11 +7,12 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
+	"unicode"
 
 	"localcode/internal/events"
 	"localcode/internal/provider"
-	"strings"
 )
 
 // turnTracker records which sessions currently have a turn in flight and
@@ -555,7 +556,13 @@ func heldUntilIdle(text string) string {
 	if strings.HasPrefix(trimmed, "!") {
 		return "!"
 	}
-	first, rest, _ := strings.Cut(trimmed, " ")
+	// At the first whitespace of any kind: the router takes "/workflow"
+	// followed by a line break as the command, so this must too, or the
+	// line is injected into the turn it should have waited for.
+	first, rest := trimmed, ""
+	if i := strings.IndexFunc(trimmed, unicode.IsSpace); i >= 0 {
+		first, rest = trimmed[:i], trimmed[i:]
+	}
 	switch first {
 	case "/clear":
 		return "/clear"
@@ -574,9 +581,11 @@ func heldUntilIdle(text string) string {
 		// to the history outside any turn, as "!" does, and save and
 		// delete write the workspace a running turn may be editing.
 		// Listing and showing only read.
-		switch sub, _, _ := strings.Cut(strings.TrimSpace(rest), " "); sub {
-		case "run", "resume", "save", "delete":
-			return "/workflow"
+		if words := strings.Fields(rest); len(words) > 0 {
+			switch words[0] {
+			case "run", "resume", "save", "delete":
+				return "/workflow"
+			}
 		}
 	case "/workspace":
 		// Only the form that moves it. Bare "/workspace" reads the

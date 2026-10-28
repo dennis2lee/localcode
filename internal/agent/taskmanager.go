@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -525,8 +526,20 @@ func (tm *TaskManager) SpawnSyncInto(ctx context.Context, parentSessionID, child
 }
 
 func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, agentName, prompt string) (string, string, error) {
-	return tm.spawnSyncWork(ctx, parentSessionID, childID, agentName, prompt, nil, nil, nil)
+	id, text, err := tm.spawnSyncWork(ctx, parentSessionID, childID, agentName, prompt, nil, nil, nil)
+	if errors.Is(err, errLetGo) {
+		// A delegating turn is told in words, and goes on: the note is
+		// its answer.
+		err = nil
+	}
+	return id, text, err
 }
+
+// errLetGo is what a synchronous child returns when its turn let go of it:
+// not a failure, and not an answer either. The note that comes with it
+// says what happened. Callers that write a reply of their own (a run a
+// person started) need to tell the two apart; the Task tool does not.
+var errLetGo = errors.New("let go: it goes on in the background")
 
 // SpawnUnit is a synchronous sub-agent whose own records carry more: spawned
 // is added to its task.spawned record in the parent, and what finished
@@ -776,7 +789,7 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
 			"task_id": taskID, "status": "detached",
 		})
-		return taskID, detachedNote(taskID, agentName), nil
+		return taskID, detachedNote(taskID, agentName), errLetGo
 	}
 }
 
@@ -838,6 +851,13 @@ func (tm *TaskManager) LetGo(taskID string) bool {
 // asked: the id was printed on a line that has scrolled away, and the
 // question a person has is "give me my turn back".
 func (tm *TaskManager) DetachChildOf(parentSessionID string) (string, bool) {
+	// Asked from inside an orchestration run, it is the run that is let
+	// go. Its units are let go with it or not at all: one let go on its
+	// own outlives Esc and the run's deadline, and a resume would start it
+	// again beside itself.
+	if s, err := tm.loop.Store.Get(parentSessionID); err == nil && s.Agent == runSessionAgent {
+		return parentSessionID, tm.Detach(parentSessionID)
+	}
 	tm.mu.Lock()
 	var taskID string
 	for id, parent := range tm.syncParent {

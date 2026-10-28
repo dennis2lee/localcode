@@ -25,9 +25,12 @@ import (
 // unit and nothing else. The key is what the unit was asked (its fully
 // rendered prompt, which carries everything earlier stages kept), who was
 // asked (agent, resolved profile and model, tool allowlist), where it sits
-// (stage index and name, copy, pass) and the answer it had to give. A
-// changed upstream answer changes every downstream prompt, and so every
-// downstream key.
+// (stage index and name, item, copy, pass), the directory it worked in,
+// and the answer it had to give. A changed upstream answer changes every
+// downstream prompt, and so every downstream key. The item is there even
+// though the prompt usually carries it, because a fanout prompt need not
+// say {{item}}; the directory, because an answer about one checkout says
+// nothing about another.
 //
 // The journal is in the run session rather than the conversation, which a
 // rewind filters and a fork copies; and the answer is in the journal
@@ -74,7 +77,8 @@ func (l *Loop) unitKey(ctx context.Context, runID string, p Plan, stage Stage, u
 	sort.Strings(tools)
 	raw, _ := json.Marshal([]any{
 		index, stage.Name, stage.Agent, profile, provider, model, tools,
-		prompt, string(stage.answerSchema()), u.copy, u.pass,
+		prompt, string(stage.answerSchema()), u.item, u.copy, u.pass,
+		l.SessionDir(runID),
 	})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:16])

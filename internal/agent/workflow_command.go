@@ -13,6 +13,7 @@ import (
 	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/tools"
+	"localcode/internal/userdirs"
 )
 
 // /workflow: list, show, save, delete and run saved workflows.
@@ -154,11 +155,19 @@ func workflowFlags(rest string) (name string, user, force bool, words []string) 
 	return name, user, force, words
 }
 
+// workflowDirFor is the directory save and delete write in: the
+// project's, or with --user the home's. When the workspace is the home
+// directory the two are one directory, listed once as the project's, and
+// --user means that one. "" when there is no home to write in.
 func (l *Loop) workflowDirFor(sessionID string, user bool) string {
-	for _, d := range l.workflowDirs(sessionID) {
-		if (d.scope == scopeUser) == user {
-			return d.dir
-		}
+	dirs := l.workflowDirs(sessionID)
+	switch {
+	case !user:
+		return dirs[0].dir
+	case len(dirs) > 1:
+		return dirs[1].dir
+	case l.homeDir() != "" && userdirs.SameDirectory(l.SessionDir(sessionID), l.homeDir()):
+		return dirs[0].dir
 	}
 	return ""
 }
@@ -220,6 +229,8 @@ func (l *Loop) lastRunPlan(sessionID string) (Plan, string, bool) {
 	if err != nil {
 		return Plan{}, "", false
 	}
+	// A run a /rewind took back is not this conversation's any more.
+	evs = applyRewinds(evs)
 	for i := len(evs) - 1; i >= 0; i-- {
 		e := evs[i]
 		if e.Type != events.TypeTaskSpawned || e.Data["agent"] != runSessionAgent {
@@ -244,6 +255,9 @@ func (l *Loop) workflowDelete(sessionID, rest string) string {
 		return "say which: /workflow delete <name> [--user]"
 	}
 	dir := l.workflowDirFor(sessionID, user)
+	if dir == "" {
+		return "there is no home directory to delete a --user workflow from"
+	}
 	path := filepath.Join(dir, name+".json")
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
@@ -319,6 +333,8 @@ func (l *Loop) runWorkflowCommand(ctx context.Context, sessionID, line, rest str
 		map[string]any{"plan": plan, "workflow": wf.Name, "args": plan.args}, l.planWork(sessionID, plan))
 	var reply string
 	switch {
+	case errors.Is(err, errLetGo):
+		reply = letGoReply(fmt.Sprintf("Workflow %s (run %s)", wf.Name, runID), runID)
 	case err != nil && runID == "":
 		reply = fmt.Sprintf("Workflow %s did not start: %v", wf.Name, err)
 	case err != nil:
@@ -329,6 +345,12 @@ func (l *Loop) runWorkflowCommand(ctx context.Context, sessionID, line, rest str
 	reply = capToolResult(reply, 0)
 	l.appendDelegatedTurn(sessionID, line, reply)
 	return l.replyText(sessionID, reply)
+}
+
+// letGoReply is what a person's run says when it was let go: where the
+// report will be, since there is none yet to show.
+func letGoReply(what, runID string) string {
+	return fmt.Sprintf("%s was let go and goes on in the background. Its report will be the last entry of the run's task: \"/tasks %s\". Do not start it again.", what, runID)
 }
 
 // describeWorkflowRun is the permission question for a project workflow:
@@ -366,6 +388,9 @@ func (l *Loop) findRun(sessionID, id string) (runRecord, error) {
 	if err != nil {
 		return runRecord{}, err
 	}
+	// Not one a /rewind took back: rewinding a run that edited files puts
+	// the files back, and resuming it would make those edits again.
+	evs = applyRewinds(evs)
 	for i := len(evs) - 1; i >= 0; i-- {
 		e := evs[i]
 		if e.Type != events.TypeTaskSpawned || e.Data["agent"] != runSessionAgent {
@@ -397,6 +422,28 @@ func (l *Loop) findRun(sessionID, id string) (runRecord, error) {
 	return runRecord{}, errors.New("no orchestration has run in this conversation")
 }
 
+// liveRunOf is runID itself if it is still running, or a resume of it
+// that is, or "".
+func (l *Loop) liveRunOf(sessionID, runID string) string {
+	running := map[string]bool{}
+	for _, id := range l.Tasks.Running() {
+		running[id] = true
+	}
+	if running[runID] {
+		return runID
+	}
+	evs, _ := l.Store.Events(sessionID, 0)
+	for _, e := range evs {
+		if e.Type != events.TypeTaskSpawned || e.Data["resumed_from"] != runID {
+			continue
+		}
+		if id, _ := e.Data["task_id"].(string); running[id] {
+			return id
+		}
+	}
+	return ""
+}
+
 // writingStages names the stages of p that can change the workspace.
 func writingStages(p Plan) []string {
 	var out []string
@@ -424,10 +471,12 @@ func (l *Loop) resumeWorkflowCommand(ctx context.Context, sessionID, line, id st
 		// units belong to the conversation it was forked from.
 		return notResumed(fmt.Sprintf("run %s belongs to another conversation", rec.id))
 	}
-	for _, running := range l.Tasks.Running() {
-		if running == rec.id {
-			return notResumed(fmt.Sprintf("run %s is still running", rec.id))
-		}
+	if live := l.liveRunOf(sessionID, rec.id); live == rec.id {
+		return notResumed(fmt.Sprintf("run %s is still running", rec.id))
+	} else if live != "" {
+		// A resume that was let go is still running units of this run;
+		// a second would run the ones it has not finished again.
+		return notResumed(fmt.Sprintf("run %s is being resumed already, as run %s", rec.id, live))
 	}
 	l.mu.Lock()
 	if l.resuming[rec.id] {
@@ -470,6 +519,8 @@ func (l *Loop) resumeWorkflowCommand(ctx context.Context, sessionID, line, id st
 	runID, out, err := l.Tasks.SpawnRun(withResume(ctx, cache), sessionID, rec.plan.renderedGoal(), spawned, l.planWork(sessionID, rec.plan))
 	var reply string
 	switch {
+	case errors.Is(err, errLetGo):
+		reply = letGoReply(fmt.Sprintf("The resume of run %s (run %s)", rec.id, runID), runID)
 	case err != nil && runID == "":
 		reply = fmt.Sprintf("Resuming run %s did not start: %v", rec.id, err)
 	case err != nil:

@@ -220,6 +220,23 @@ func (l *Loop) runPipeline(ctx context.Context, sessionID, runID string, p Plan,
 		stop = "the run was cancelled or ran out of time in " + group[0].Name
 	}
 	for _, st := range ps {
+		// Units were counted when they were given their place, so the
+		// ceiling held for items still arriving; the ones a stop left
+		// unlaunched never ran, and the report counts what did.
+		unlaunched := len(st.units) - st.queued
+		st.sr.launched -= unlaunched
+		report.launched -= unlaunched
+	}
+	for _, st := range ps[1:] {
+		// As in an ordinary stage: a stage none of whose items could run
+		// stops the run, rather than handing the stages after it results
+		// with a whole stage missing.
+		if stop == "" && st.items == 0 && st.sr.dropped > 0 {
+			stop = fmt.Sprintf("stopped at %s: the run had already launched %d of its %d agents, so none of its %d items could run",
+				st.stage.Name, report.launched, maxRunAgents, st.sr.dropped)
+		}
+	}
+	for _, st := range ps {
 		st.sr.kept = len(st.kept)
 		results[st.stage.Name] = st.kept
 		report.stages = append(report.stages, st.sr)

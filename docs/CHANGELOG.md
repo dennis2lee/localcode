@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.169.0
+
+Orchestration plans saved as workflows and run by name, stopped runs resumed without paying again for what finished, and each run one task that shows how far it has got.
+
+**Added**
+
+* `/workflow list`, `show`, `run`, `save` and `delete`: an orchestration plan kept in `.localcode/workflows/` or `~/.localcode/workflows/` and run by name with no model turn, with arguments through `{{args}}` and `over: ["$args"]`; a project's workflow asks first, bound to a hash of the file
+* `/workflow resume [run]`: a stopped run run again, reusing every agent turn that finished and rerunning what failed, was cancelled or did not answer; a run with builder or runner stages asks first
+* `repeat_until_dry` and `dry_rounds`: a stage repeated until its rounds stop finding new values
+* `pipeline: true`: a fanout that starts on the items of the fanout before it as they arrive, with results released in order
+* Run progress on the run's task row (`look: 2 of 4 finished`), and task progress on the terminal's busy line and in `/tasks`
+
+**Changed**
+
+* Each orchestration run is one task of the conversation with its agents under it; letting go releases the whole run, and its stage lines move into the run once let go
+
+**Fixed**
+
+* Letting go during an orchestration run releasing one of its agents at random while the turn stayed blocked on the rest
+* A finished task's row in the browser still showing what it was last doing
+
 ## v0.168.3
 
 Memory tool text a local model can follow to the letter, and archived copies of adopted notes found by the name that adopted them.

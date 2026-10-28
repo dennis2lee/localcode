@@ -298,3 +298,65 @@ func TestResumingAReadonlyRunDoesNotAsk(t *testing.T) {
 		t.Errorf("a readonly resume asked: %+v", asks.asks)
 	}
 }
+
+// A run a /rewind took back is not found by resume or save: the person
+// undid it, and a resume of a run that wrote would write it again.
+func TestARewoundRunIsNotResumedOrSaved(t *testing.T) {
+	m := &scriptedModel{reply: func(string) (string, map[string]any) { return "ok", nil }}
+	loop := orchestrateLoop(t, m.server(t).URL)
+	executeOrchestrate(context.Background(), loop, `{"goal":"kept","stages":[{"name":"a","kind":"step","agent":"oracle","prompt":"x"}]}`)
+
+	turn, _ := loop.Store.Append("main", events.TypeUserMessage, map[string]any{"text": "do it again differently"})
+	executeOrchestrate(context.Background(), loop, `{"goal":"undone","stages":[{"name":"a","kind":"step","agent":"oracle","prompt":"y"}]}`)
+	loop.Store.Append("main", events.TypeRewound, map[string]any{"from_seq": turn.Seq})
+
+	if rec, err := loop.findRun("main", ""); err != nil || rec.plan.Goal != "kept" {
+		t.Errorf("resume found %q (%v), want the run before the rewound turn", rec.plan.Goal, err)
+	}
+	if p, _, ok := loop.lastRunPlan("main"); !ok || p.Goal != "kept" {
+		t.Errorf("save found %q, want the run before the rewound turn", p.Goal)
+	}
+}
+
+// A resume that was let go is still running the run's units, so the run
+// is not resumed a second time by its id.
+func TestALetGoResumeKeepsTheRunFromBeingResumedAgain(t *testing.T) {
+	var slow atomic.Bool
+	var started atomic.Int32
+	release := make(chan struct{})
+	m := &scriptedModel{reply: func(p string) (string, map[string]any) {
+		if strings.HasSuffix(p, "second") && slow.Load() {
+			started.Add(1)
+			select {
+			case <-release:
+			case <-time.After(5 * time.Second):
+			}
+		}
+		return "ok", nil
+	}}
+	fail := &sync.Map{}
+	fail.Store("second", true)
+	loop := orchestrateLoop(t, failingModel(t, m, fail))
+	executeOrchestrate(context.Background(), loop, `{"goal":"g","stages":[
+	  {"name":"a","kind":"step","agent":"oracle","prompt":"first"},
+	  {"name":"b","kind":"step","agent":"oracle","prompt":"second"}]}`)
+	run := runIDs(loop, "main")[0]
+
+	fail.Delete("second")
+	slow.Store(true)
+	resumed := make(chan string, 1)
+	go func() { resumed <- resume(t, loop, "main", run) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for started.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, ok := loop.Tasks.DetachChildOf("main"); !ok {
+		t.Fatal("nothing to let go of while the resume ran")
+	}
+	<-resumed
+
+	if out := resume(t, loop, "main", run); !strings.Contains(out, "is being resumed already, as run task-") {
+		t.Errorf("a second resume of a run whose resume was let go:\n%s", out)
+	}
+	close(release)
+}

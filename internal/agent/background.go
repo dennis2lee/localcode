@@ -29,9 +29,10 @@ import (
 // once, and a single tool that sometimes blocks and sometimes does not is
 // harder to describe than two that each do one thing.
 //
-// Both are Smart Agent tools: they are hidden unless it is on. Work
-// running unattended in a session nobody is looking at is the part of this
-// a user should be opting into rather than discovering.
+// Both come with delegation ("/orchestrate on"), with Task and
+// Orchestrate, and are hidden while it is off. Work running unattended in
+// a session nobody is looking at is the part of this a user should be
+// opting into rather than discovering.
 
 // maxBackgroundTasks bounds how many launched-and-uncollected tasks one
 // session may have.

@@ -278,3 +278,41 @@ func TestAPipelinedRunsRowCountsBothStages(t *testing.T) {
 		}
 	}
 }
+
+// Letting go from inside a run lets go of the run, never of one of its
+// units: a unit let go on its own outlives Esc and the run's deadline,
+// and a resume would start it again beside itself. Asked with the run's
+// id (the terminal sends whatever session it shows), it is the run.
+func TestLettingGoFromInsideARunLetsGoOfTheRun(t *testing.T) {
+	var started int32
+	m := &scriptedModel{reply: func(string) (string, map[string]any) {
+		atomic.AddInt32(&started, 1)
+		time.Sleep(800 * time.Millisecond)
+		return "looked", nil
+	}}
+	loop := orchestrateLoop(t, m.server(t).URL)
+	done := make(chan tools.Result, 1)
+	go func() { done <- executeOrchestrate(context.Background(), loop, slowFanout) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for atomic.LoadInt32(&started) < 4 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	run := loop.Store.Children("main")[0].ID
+
+	let, ok := loop.Tasks.DetachChildOf(run)
+	if !ok || let != run {
+		t.Fatalf("letting go inside run %s let go of %q (%v), want the run", run, let, ok)
+	}
+	select {
+	case res := <-done:
+		if res.IsError || !strings.Contains(res.Content, "still working") {
+			t.Errorf("the turn was not handed back with the let-go note:\n%s", res.Content)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("the turn was still waiting after the run was let go")
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for len(loop.Tasks.Running()) > 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+}

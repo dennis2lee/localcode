@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -173,6 +174,9 @@ func (t *OrchestrateTool) Execute(ctx context.Context, input json.RawMessage) to
 
 	sessionID, _ := SessionIDFromContext(ctx)
 	runID, text, err := t.loop.Tasks.SpawnRun(ctx, sessionID, p.Goal, map[string]any{"plan": p}, t.loop.planWork(sessionID, p))
+	if errors.Is(err, errLetGo) {
+		return tools.Result{Content: text}
+	}
 	if err != nil {
 		if text == "" {
 			return tools.Result{Content: fmt.Sprintf("the run did not start: %v", err), IsError: true}
@@ -187,7 +191,7 @@ func (t *OrchestrateTool) Execute(ctx context.Context, input json.RawMessage) to
 // the turn that started it is still waiting.
 func (l *Loop) planWork(sessionID string, p Plan) syncWork {
 	return func(ctx context.Context, runID string) (string, error) {
-		l.Store.Append(runID, events.TypeUserMessage, map[string]any{"text": p.Goal, "local": true})
+		l.Store.Append(runID, events.TypeUserMessage, map[string]any{"text": p.renderedGoal(), "local": true})
 		text := l.runPlan(ctx, sessionID, runID, p).String()
 		l.Store.Append(runID, events.TypeMessagePartEnd, map[string]any{"text": text})
 		return text, ctx.Err()

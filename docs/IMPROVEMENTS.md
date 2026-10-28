@@ -6,7 +6,7 @@ Open and partial work remains in orchestration, client behavior, and desktop win
 
 | Area | Recorded remaining work |
 |---|---|
-| Orchestration | Resuming a run (item 36) |
+| Orchestration | Child-session retention and concurrent permission display (item 36) |
 | Client behavior | The open UI ideas below |
 | Coverage | Links and drags in the macOS window are unverified (item 64) |
 
@@ -333,11 +333,12 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Re-verified still shipped, not rebuilt: each stage announces itself running and completed on the task channel (`internal/agent/orchestrate_run.go`), so progress events already fire; every unit's structured answer is recovered from its own child's durable log (`internal/agent/answer_tool.go`) rather than carried in memory, so per-unit results are already durable and reconstructable; stage children run in sessions of their own that no list shows, and deleting the parent takes them with it (`internal/session/session.go`) — the deletion machinery exists, and only the retention policy (when an old child goes) is missing.
     * Re-verified still done, not rebuilt: direct specialist selection (item 37, `handleListAgents` returns `DelegatableAgents` with the six specialists while the switch is on); `/compact` overlapping a running turn (item 2, `heldUntilIdle` in `internal/daemon/turns.go` holds `/compact` until the turn ends).
     * Declined again, not rebuilt: per-item pipelining (item 63, `internal/agent/orchestrate.go:66-69`), child-session retention policy (item 63, mechanism exists, nobody chose the number), concurrent permission display (broker exists, client presentation unspecified).
+    * Done in v0.169.0: resume (`/workflow resume`), pipelining for a fanout over the fanout just before it (`pipeline: true`), `repeat_until_dry`, saved workflows with arguments (`/workflow`), and one task per run with its progress on the run's row. Files: `internal/agent/orchestrate_resume.go`, `orchestrate_pipeline.go`, `workflow.go`, `workflow_command.go`. Child-session retention and concurrent permission display remain open.
 
     | Missing capability | Required design |
     |---|---|
-    | Resume | Durable results keyed by stage, item, and copy. Write-step invalidation rules. An unchanged completed prefix could then be reused. Genuinely absent: nothing reuses a previous run today. |
-    | Pipeline | Per-item state tracking so a slow item does not block every later stage. This also requires phase visibility and a run ledger. Declined: stages run in order with every stage a barrier, stated as deliberate with the tradeoff at `internal/agent/orchestrate.go:66-69`. |
+    | Resume | Durable results keyed by stage, item, and copy. Write-step invalidation rules. An unchanged completed prefix could then be reused. Genuinely absent: nothing reuses a previous run today. Done in v0.169.0: each unit's key and answer are journaled in the run session, a resume reuses every completed unit whose key matches, and a run with builder or runner stages asks before it resumes. |
+    | Pipeline | Per-item state tracking so a slow item does not block every later stage. This also requires phase visibility and a run ledger. Declined: stages run in order with every stage a barrier, stated as deliberate with the tradeoff at `internal/agent/orchestrate.go:66-69`. Done in v0.169.0 for one shape: a fanout over `$prev.field` marked `pipeline: true`, with ordered release so the report does not depend on timing. |
     | Child-session retention | A 32-agent run creates 32 stored sessions and 32 `/tasks` rows. The sessions delete with the parent; what does not exist is a policy for when anything else cleans them up. Declined: the mechanism exists for a policy nobody has chosen. |
     | Concurrent permission display | The broker represents concurrent requests, but client presentation is unspecified. All four execution slots can wait while the user sees one request. Declined: the broker half exists, the presentation spec does not, and no owner chose it. |
 
@@ -590,6 +591,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * **A retention default for orchestration child sessions.** How many to keep. Declined, which leaves the sessions on disk and the deletion machinery unused — the mechanism exists for a policy nobody has chosen, and that is the state, written down.
     * **Turn-log compression.** Declined, and it was declined once already: `docs/SMART_AGENT_DEFERRED_ITEMS_IMPLEMENTATION_2026_08_26.md` records under its design decisions that "compression is not implemented. The recorded decision favored bounded line-JSON retention over maintaining another file format." The bound it was meant to provide exists. Re-asking a settled question and getting the same answer is worth recording once so it stops being asked.
     * **Per-item pipelining in Orchestrate.** Declined, and likewise already settled in the code itself: `internal/agent/orchestrate.go:66-69` states the tradeoff and the decision — "pipelining an item through the remaining stages on its own buys wall clock and costs a per-item state machine, and it is deliberately not in this version."
+      Reversed in v0.169.0 for one shape, a fanout over the fanout just before it, at the user's request. Other stages still run as barriers.
     * The pattern in the last two is worth naming: both were listed as open work in this file while the decision against them sat in a source comment and a design document. A record that does not know what the code already decided will keep proposing it.
 
 64. **Desktop window: links and drags on macOS are unverified. Open.**

@@ -145,6 +145,13 @@ func (l *Loop) findWorkflow(sessionID, name string) (Workflow, error) {
 // the plan that runs.
 func readWorkflow(path, scope string) Workflow {
 	wf := Workflow{path: path, scope: scope, Name: strings.TrimSuffix(filepath.Base(path), ".json")}
+	if !workflowNamePattern.MatchString(wf.Name) {
+		// Listed with the reason rather than offered: "/workflow run"
+		// refuses the name, so a list that showed it as runnable would
+		// be offering something that cannot be had.
+		wf.err = fmt.Errorf("%q is not a workflow name: lowercase letters, digits and hyphens; rename %s", wf.Name, path)
+		return wf
+	}
 	data, err := readBounded(path, workflowMaxBytes)
 	if err != nil {
 		wf.err = err
@@ -169,7 +176,16 @@ func readWorkflow(path, scope string) Workflow {
 }
 
 // readBounded reads a regular file of at most limit bytes.
+//
+// Checked before it is opened as well as after: opening a FIFO blocks
+// until something writes to it, and a command blocked in an open cannot
+// be cancelled.
 func readBounded(path string, limit int64) ([]byte, error) {
+	if info, err := os.Stat(path); err != nil {
+		return nil, err
+	} else if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

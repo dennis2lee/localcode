@@ -11,6 +11,12 @@ func TestWorkflowWritesWaitForTheTurnAndReadsDoNot(t *testing.T) {
 		{"/workflow run review src/", "/workflow"},
 		{"/workflow save mine --user", "/workflow"},
 		{"/workflow resume", "/workflow"},
+		// Any whitespace, as the router takes it.
+		{"/workflow\nrun review src/", "/workflow"},
+		{"/workflow run\nreview", "/workflow"},
+		{"/workflow save\tmine", "/workflow"},
+		{"/workflow resume\ntask-1", "/workflow"},
+		{"/workflow\tshow review", ""},
 		{"/workflow delete mine", "/workflow"},
 		{"/workflow", ""},
 		{"/workflow list", ""},
