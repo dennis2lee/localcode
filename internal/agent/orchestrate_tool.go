@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"localcode/internal/config"
+	"localcode/internal/events"
 	"localcode/internal/tools"
 )
 
@@ -45,7 +46,7 @@ A stage that declares returns gets an Answer tool in that exact shape, and only 
 
 Prompts take three substitutions and no others: {{task}}, {{item}} inside a fanout, and {{input}} for what earlier stages kept.
 
-Ceilings: %d stages, %d items per fanout, %d copies, %d agents in a whole run, %d declared fields per stage. A plan past one is refused before anything runs. The one exception is a fanout over $earlierstage.field, whose width is known only once that stage has answered: it takes the first %d distinct items, items that would pass the run's %d agents are dropped and counted in the report, and a stage that would pass it stops the run. Each agent turn gets %s and the run gets %s. Everything runs while you wait, and Esc stops all of it.`,
+Ceilings: %d stages, %d items per fanout, %d copies, %d agents in a whole run, %d declared fields per stage. A plan past one is refused before anything runs. The one exception is a fanout over $earlierstage.field, whose width is known only once that stage has answered: it takes the first %d distinct items, items that would pass the run's %d agents are dropped and counted in the report, and a stage that would pass it stops the run. Each agent turn gets %s and the run gets %s. The run is one task of this conversation, with every agent it launches under it. It runs while you wait and Esc stops all of it; the person can let it go instead, and then it finishes on its own and its report is in the task.`,
 		maxParallel,
 		maxStages, maxFanout, maxCopies, maxRunAgents, maxReturnFields,
 		maxFanout, maxRunAgents,
@@ -164,8 +165,26 @@ func (t *OrchestrateTool) Execute(ctx context.Context, input json.RawMessage) to
 	}
 
 	sessionID, _ := SessionIDFromContext(ctx)
-	report := t.loop.runPlan(ctx, sessionID, p)
-	return tools.Result{Content: report.String()}
+	runID, text, err := t.loop.Tasks.SpawnRun(ctx, sessionID, p.Goal, map[string]any{"plan": p}, t.loop.planWork(sessionID, p))
+	if err != nil {
+		if text == "" {
+			return tools.Result{Content: fmt.Sprintf("the run did not start: %v", err), IsError: true}
+		}
+		return tools.Result{Content: fmt.Sprintf("the run %s stopped: %v\n\n%s", runID, err, text), IsError: true}
+	}
+	return tools.Result{Content: text}
+}
+
+// planWork is what a run session does: the plan, then the report, written
+// into the run so it is there for /tasks and the task view whether or not
+// the turn that started it is still waiting.
+func (l *Loop) planWork(sessionID string, p Plan) syncWork {
+	return func(ctx context.Context, runID string) (string, error) {
+		l.Store.Append(runID, events.TypeUserMessage, map[string]any{"text": p.Goal, "local": true})
+		text := l.runPlan(ctx, sessionID, runID, p).String()
+		l.Store.Append(runID, events.TypeMessagePartEnd, map[string]any{"text": text})
+		return text, ctx.Err()
+	}
 }
 
 // refusal is why this call cannot proceed, or "".

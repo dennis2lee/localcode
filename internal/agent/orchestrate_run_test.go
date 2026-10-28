@@ -133,7 +133,7 @@ func runPlanJSON(t *testing.T, loop *Loop, body string) runReport {
 		t.Fatalf("the test plan is invalid: %v", err)
 	}
 	ctx := loop.pinSmart(context.Background())
-	return loop.runPlan(ctx, "main", p)
+	return loop.runPlan(ctx, "main", "main", p)
 }
 
 // The adversarial pattern, which is the reason the feature exists: find
@@ -335,7 +335,7 @@ func TestCancellingTheTurnStopsTheRun(t *testing.T) {
 	go func() { time.Sleep(150 * time.Millisecond); cancel() }()
 
 	began := time.Now()
-	report := loop.runPlan(ctx, "main", p)
+	report := loop.runPlan(ctx, "main", "main", p)
 	elapsed := time.Since(began)
 
 	if elapsed > 1500*time.Millisecond {

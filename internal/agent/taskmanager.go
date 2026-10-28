@@ -525,6 +525,29 @@ func (tm *TaskManager) SpawnSyncInto(ctx context.Context, parentSessionID, child
 }
 
 func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, agentName, prompt string) (string, string, error) {
+	return tm.spawnSyncWork(ctx, parentSessionID, childID, agentName, prompt, nil, nil)
+}
+
+// syncWork is what a synchronous child does in place of a model turn,
+// given its own context and its own task id. It returns the child's
+// answer, which on an error is whatever it got done before stopping.
+type syncWork func(ctx context.Context, taskID string) (string, error)
+
+// SpawnRun starts an orchestration run as a synchronous child of
+// parentSessionID: a session of its own, with work in place of a model
+// turn, and with every unit the run launches underneath it.
+//
+// A child rather than a loop inside the tool call, because everything
+// that stops, deletes, archives, drains or lets go of work here does it
+// by session id. A run that was only a loop was invisible to all of
+// them, and letting go during one let go of whichever of its units the
+// map happened to yield first. spawned is added to the parent's
+// task.spawned record.
+func (tm *TaskManager) SpawnRun(ctx context.Context, parentSessionID, prompt string, spawned map[string]any, work syncWork) (string, string, error) {
+	return tm.spawnSyncWork(ctx, parentSessionID, "", runSessionAgent, prompt, spawned, work)
+}
+
+func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, childID, agentName, prompt string, spawned map[string]any, work syncWork) (string, string, error) {
 	// Pinned here rather than relying on the caller, because the callers
 	// are not all turns: the Task tool arrives with its parent's pin and
 	// keeps it, but a direct SpawnSync from the API or from an embedding
@@ -534,8 +557,12 @@ func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, 
 	// it runs under.
 	ctx = tm.loop.pinSmart(ctx)
 
-	if blocked, reason := tm.loop.delegateBlocked(ctx, parentSessionID, agentName, prompt); blocked {
-		return "", "", fmt.Errorf("delegation to %q was refused: %s", agentName, reason)
+	// A run is not a delegation to an agent, and its units are each
+	// checked by this hook when they are spawned.
+	if work == nil {
+		if blocked, reason := tm.loop.delegateBlocked(ctx, parentSessionID, agentName, prompt); blocked {
+			return "", "", fmt.Errorf("delegation to %q was refused: %s", agentName, reason)
+		}
 	}
 
 	// Admission, the same window the background path takes, for the same
@@ -568,11 +595,15 @@ func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, 
 			tm.loop.lifecycle.admitted(parentSessionID)
 			return "", "", fmt.Errorf("create task session: %w", err)
 		}
-		if _, err := tm.loop.Store.Append(parentSessionID, events.TypeTaskSpawned, map[string]any{
+		record := map[string]any{
 			"task_id": taskID,
 			"agent":   agentName,
 			"prompt":  prompt,
-		}); err != nil {
+		}
+		for k, v := range spawned {
+			record[k] = v
+		}
+		if _, err := tm.loop.Store.Append(parentSessionID, events.TypeTaskSpawned, record); err != nil {
 			// Nothing is watching this child and nothing ever will be.
 			tm.loop.Store.Delete(taskID)
 			tm.loop.lifecycle.admitted(parentSessionID)
@@ -696,18 +727,27 @@ func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, 
 	answered := make(chan syncResult, 1)
 	go func() {
 		defer release()
-		// The task travels with the child's own turn, so the request that
-		// actually contains it is the one whose manifest names it.
-		err := tm.loop.SendMessage(withDelegatedTask(ctx, agentName, prompt), taskID, agentName, prompt)
+		var text string
+		var err error
+		if work != nil {
+			text, err = work(ctx, taskID)
+		} else {
+			// The task travels with the child's own turn, so the request
+			// that actually contains it is the one whose manifest names it.
+			err = tm.loop.SendMessage(withDelegatedTask(ctx, agentName, prompt), taskID, agentName, prompt)
+		}
 		if err != nil {
 			tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
 				"task_id": taskID, "status": "failed", "error": err.Error(),
 			})
-			answered <- syncResult{err: err}
+			answered <- syncResult{text: text, err: err}
 			return
 		}
 		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "completed"})
-		answered <- syncResult{text: lastAssistantText(tm.loop.Store, taskID)}
+		if work == nil {
+			text = lastAssistantText(tm.loop.Store, taskID)
+		}
+		answered <- syncResult{text: text}
 	}()
 
 	select {
@@ -756,6 +796,24 @@ func (tm *TaskManager) Detach(taskID string) bool {
 		close(ch)
 	}
 	return true
+}
+
+// LetGo reports whether a synchronous task has been let go: its parent turn
+// is no longer waiting on it. False for a task that is still attached, and
+// for one this manager does not know.
+func (tm *TaskManager) LetGo(taskID string) bool {
+	tm.mu.Lock()
+	ch, ok := tm.detach[taskID]
+	tm.mu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 // DetachChildOf lets go of whatever synchronous sub-agent is blocking one

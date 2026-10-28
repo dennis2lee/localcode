@@ -12,7 +12,7 @@ import (
 
 // runStage launches one stage's units, at most maxParallel at a time, and
 // returns their outcomes in launch order however they finished.
-func (l *Loop) runStage(ctx context.Context, sessionID string, p Plan, stage Stage, units []unit, carried string) []outcome {
+func (l *Loop) runStage(ctx context.Context, sessionID, runID string, p Plan, stage Stage, units []unit, carried string) []outcome {
 	out := make([]outcome, len(units))
 	allowed := l.toolsForRole(ctx, stage.Agent, stage.Role)
 	sem := make(chan struct{}, maxParallel)
@@ -29,16 +29,16 @@ func (l *Loop) runStage(ctx context.Context, sessionID string, p Plan, stage Sta
 				out[i] = outcome{unit: u, agent: stage.Agent, err: ctx.Err()}
 				return
 			}
-			out[i] = l.runUnit(ctx, sessionID, p, stage, u, carried, allowed)
+			out[i] = l.runUnit(ctx, sessionID, runID, p, stage, u, carried, allowed)
 		}()
 	}
 	wg.Wait()
 	return out
 }
 
-// runUnit is one agent turn: its own deadline, its own child session, and
-// its answer read back out of that child's log.
-func (l *Loop) runUnit(ctx context.Context, sessionID string, p Plan, stage Stage, u unit, carried string, allowed []string) outcome {
+// runUnit is one agent turn: its own deadline, its own child session under
+// the run, and its answer read back out of that child's log.
+func (l *Loop) runUnit(ctx context.Context, sessionID, runID string, p Plan, stage Stage, u unit, carried string, allowed []string) outcome {
 	o := outcome{unit: u, agent: stage.Agent}
 	if l.Tasks == nil {
 		o.err = fmt.Errorf("this build has no task manager, so nothing can be delegated to")
@@ -52,7 +52,7 @@ func (l *Loop) runUnit(ctx context.Context, sessionID string, p Plan, stage Stag
 	ctx = withStageAnswer(withReviewerTools(ctx, allowed), stage)
 
 	started := time.Now()
-	childID, text, err := l.Tasks.SpawnSyncInto(ctx, sessionID, "", stage.Agent, prompt)
+	childID, text, err := l.Tasks.SpawnSyncInto(ctx, runID, "", stage.Agent, prompt)
 	l.traceSpan(ctx, trace.ID(ctx), sessionID, trace.SpanDelegate, trace.Record{
 		Agent:  stage.Agent,
 		Detail: fmt.Sprintf("orchestrate %s/%s -> %s in %s", stage.Name, u.item, childID, time.Since(started).Round(time.Millisecond)),

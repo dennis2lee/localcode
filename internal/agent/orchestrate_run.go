@@ -14,20 +14,24 @@ import (
 // A plain Go loop over stages, the shape runDebate already established, and
 // three decisions worth stating because each was the alternative's failure.
 //
-// It runs INLINE, inside the tool call that asked for it, rather than
-// booking itself the way a debate does. A debate has to defer because it
-// appends to the conversation it was started from, and two writers on one
-// history is the problem pendingDebate exists to avoid. Every stage here
-// runs in a child session instead, so nothing else touches the parent's
-// history and there is nothing to defer.
+// It runs as a synchronous child of the tool call that asked for it: a run
+// session (SpawnRun), with every unit a child of the run rather than of the
+// conversation. Not booked the way a debate is: a debate has to defer
+// because it appends to the conversation it was started from, and two
+// writers on one history is the problem pendingDebate exists to avoid.
+// Every stage here runs in a session of its own instead, so nothing else
+// touches the parent's history and there is nothing to defer.
 //
-// Every launch is SYNCHRONOUS. That is what makes Esc work: spawnSync
-// derives the child's context from the caller's, so cancelling the turn
+// Every launch is SYNCHRONOUS. That is what makes Esc work: the turn waits
+// on the run and the run waits on its units, so cancelling the turn
 // cancels the whole run, down to the stage in flight. The background path
 // deliberately roots children in the daemon's context so they outlive their
-// turn, which is right for a task somebody comes back for and exactly wrong
-// here: it would leave a fan-out running, spending, and writing into the
-// workspace after the person who started it had stopped watching.
+// turn, which is right for a task somebody comes back for and wrong as a
+// default here: it would leave a fan-out running, spending, and writing
+// into the workspace after the person who started it had stopped watching.
+// So the only way a run outlives its turn is the person letting it go, the
+// same let-go every synchronous sub-agent has, and because the run is one
+// session that let-go takes all of it.
 //
 // The concurrency inside a fanout is the run's own, not the task manager's
 // semaphore. Synchronous delegation deliberately takes no global slot (see
@@ -87,6 +91,12 @@ func (l *Loop) toolsForRole(ctx context.Context, agentName, role string) []strin
 	}
 	return append(append([]string(nil), allowed...), answerToolName)
 }
+
+// runSessionAgent is the agent name a run session carries. Not an agent:
+// a run has no model turn of its own, and a message typed into one is
+// refused rather than handed to whatever agent shares the name. The space
+// keeps it out of the names a config or a slash command can use.
+const runSessionAgent = "orchestration run"
 
 // inOrchestrationKey marks every turn inside a run, so nothing in one can
 // start another. A plan that can run plans turns a 32-agent ceiling into
@@ -158,11 +168,26 @@ type stageReport struct {
 	answers []outcome
 }
 
+// progressSession is where a run's stage lines go: the conversation while
+// its turn is waiting on the run, and the run's own session once the
+// person has let it go. A run that carried on writing into the
+// conversation would interleave its progress with turns that have nothing
+// to do with it.
+func (l *Loop) progressSession(sessionID, runID string) string {
+	if runID != sessionID && l.Tasks != nil && l.Tasks.LetGo(runID) {
+		return runID
+	}
+	return sessionID
+}
+
 // runPlan executes a validated plan and returns the report.
 //
-// ctx is the tool call's, so Esc reaches every stage. The run's own
-// deadline is layered on top of it.
-func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport {
+// ctx is the run session's, which the turn that started the run cancels
+// for as long as it is waiting on it, so Esc reaches every stage. The
+// run's own deadline is layered on top of it. sessionID is the
+// conversation, where the stage progress lines go; runID is the run
+// session every unit is spawned under.
+func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) runReport {
 	ctx, cancel := context.WithTimeout(withInOrchestration(ctx), runTimeout)
 	defer cancel()
 
@@ -214,7 +239,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport 
 			return report
 		}
 
-		l.Store.Append(sessionID, events.TypeTaskStatus, map[string]any{
+		l.Store.Append(l.progressSession(sessionID, runID), events.TypeTaskStatus, map[string]any{
 			"task_id": "orchestrate:" + stage.Name,
 			"status":  "running",
 			"stage":   stage.Name,
@@ -222,7 +247,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport 
 		})
 
 		brief := l.carriedInput(p, stage, results)
-		got := l.runStage(ctx, sessionID, p, stage, units, brief)
+		got := l.runStage(ctx, sessionID, runID, p, stage, units, brief)
 		report.launched += len(units)
 
 		sr := stageReport{name: stage.Name, kind: stage.Kind, agent: stage.Agent, launched: len(units), dropped: dropped, merged: merged}
@@ -262,7 +287,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport 
 				return report
 			}
 			round++
-			l.Store.Append(sessionID, events.TypeTaskStatus, map[string]any{
+			l.Store.Append(l.progressSession(sessionID, runID), events.TypeTaskStatus, map[string]any{
 				"task_id": "orchestrate:" + stage.Name,
 				"status":  "running",
 				"stage":   stage.Name,
@@ -270,7 +295,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport 
 				"round":   round,
 			})
 			brief = l.carriedInput(p, stage, resultsWith(results, stage.Name, kept))
-			got = l.runStage(ctx, sessionID, p, stage, units, brief)
+			got = l.runStage(ctx, sessionID, runID, p, stage, units, brief)
 			report.launched += len(units)
 			sr.launched += len(units)
 			kept, stopped = applyStageOutcome(stage, round, got, &sr)
@@ -281,7 +306,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport 
 				return report
 			}
 			sr.kept = len(kept)
-			l.Store.Append(sessionID, events.TypeTaskStatus, map[string]any{
+			l.Store.Append(l.progressSession(sessionID, runID), events.TypeTaskStatus, map[string]any{
 				"task_id": "orchestrate:" + stage.Name,
 				"status":  "completed",
 				"stage":   stage.Name,
@@ -296,7 +321,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport 
 		report.stages = append(report.stages, sr)
 		results[stage.Name] = kept
 
-		l.Store.Append(sessionID, events.TypeTaskStatus, map[string]any{
+		l.Store.Append(l.progressSession(sessionID, runID), events.TypeTaskStatus, map[string]any{
 			"task_id": "orchestrate:" + stage.Name,
 			"status":  "completed",
 			"stage":   stage.Name,

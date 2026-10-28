@@ -48,6 +48,17 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 		}
 	}
 
+	// A run session is a plan being executed, not a conversation with a
+	// model: there is no agent for a message to reach, and the name it
+	// carries could be one a config also uses.
+	if sess, err := l.Store.Get(sessionID); err == nil && sess.Agent == runSessionAgent {
+		l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+		l.Store.Append(sessionID, events.TypeError, map[string]any{
+			"error": "this is an orchestration run, not a conversation, so it takes no messages. Its report is the last thing in it once it finishes.",
+		})
+		return nil
+	}
+
 	// The admission boundary for a top-level message, and therefore where
 	// the Smart Agent setting is pinned. Not in sendWithModelText, which
 	// is reached only after command routing and auto-delegation have had

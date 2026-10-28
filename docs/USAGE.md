@@ -2369,7 +2369,9 @@ A stage is one of three kinds:
 |---|---|
 | Ceilings | 8 stages, 16 items per fanout, 8 copies, 32 agent turns per run, 5 declared fields per stage, 4 agents at once. A plan that exceeds one is refused at validation. A fanout over `$stage.field` is the exception, because its width is unknown until the run. It takes the first 16 distinct items. Items past the ceiling of 32 agent turns do not run, and the report gives their count. A stage that would pass that ceiling stops the run, and the report names the stage. |
 | Timeouts | 10 minutes per agent turn; 30 minutes per run. |
-| Cancellation | Every stage is a synchronous child, so Esc stops the whole run including the stage in flight. |
+| The run | One task of the conversation, shown as an `orchestration run` row. Every agent it launches is a task under that row, not under the conversation. |
+| Cancellation | The turn waits on the run, so Esc stops the whole run including the stage in flight. Deleting the run's row does the same. |
+| Letting go | Let go (Ctrl+B in the terminal, the "let go" button in the browser) releases the whole run, not one of its agents. The turn gets its prompt back, the run finishes on its own, and its report is the last entry in the run's task. Its stage progress moves from the conversation into the run. |
 | Permission | Confirmation before each run. Shows maximum limits because referenced fanout sizes are unknown until earlier stages complete. |
 | Repeats | Fanout items from prior results are deduplicated after case and whitespace normalization. The report includes the duplicate count. A `repeat_until` stage reruns until its field holds true on every kept result, and the report says after how many rounds it settled, or that it did not. |
 | The report | Generated from execution records by LocalCode, not model summarization. |
