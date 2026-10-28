@@ -112,11 +112,13 @@ func inOrchestration(ctx context.Context) bool {
 	return on
 }
 
-// unit is one agent launch: which stage, over which item, which copy.
+// unit is one agent launch: which stage, over which item, which copy, and
+// in which pass of a repeating stage (0 for a stage that does not repeat).
 type unit struct {
 	stage string
 	item  string
 	copy  int
+	pass  int
 }
 
 // outcome is what one unit produced.
@@ -136,6 +138,9 @@ type outcome struct {
 	// at 1. Zero on every other stage, so reports of ordinary stages read
 	// exactly as before.
 	round int
+	// reused marks an outcome a resumed run took from the run it resumed
+	// rather than launching an agent for.
+	reused bool
 }
 
 // runReport is what the tool hands back to the orchestrating model. Written
@@ -164,6 +169,9 @@ type stageReport struct {
 	// whether its field came back true. Zero on every other stage.
 	rounds  int
 	settled bool
+	// reused is how many of this stage's outcomes a resumed run took from
+	// the run it resumed.
+	reused int
 	// pipelined marks a stage that started on items while the stage before
 	// it was still running.
 	pipelined bool
@@ -268,7 +276,11 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 		})
 
 		brief := l.carriedInput(p, stage, results)
-		got := l.runStage(ctx, sessionID, runID, p, stage, units, brief)
+		first := 0
+		if stage.repeats() {
+			first = 1
+		}
+		got := l.runStage(ctx, sessionID, runID, p, stage, units, brief, first)
 		report.launched += len(units)
 
 		sr := stageReport{name: stage.Name, kind: stage.Kind, agent: stage.Agent, launched: len(units), dropped: dropped, merged: merged}
@@ -276,10 +288,6 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 		// stage every outcome stays at round 0 and the report reads as
 		// before, while a repeated stage labels every round including the
 		// first, so identical answers do not print as identical lines.
-		first := 0
-		if stage.repeats() {
-			first = 1
-		}
 		kept, stopped := applyStageOutcome(stage, first, got, &sr)
 		if stopped != "" {
 			report.stages = append(report.stages, sr)
@@ -335,7 +343,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 				"round":   round,
 			})
 			brief = l.carriedInput(p, stage, resultsWith(results, stage.Name, carried))
-			got = l.runStage(ctx, sessionID, runID, p, stage, units, brief)
+			got = l.runStage(ctx, sessionID, runID, p, stage, units, brief, round)
 			report.launched += len(units)
 			sr.launched += len(units)
 			kept, stopped = applyStageOutcome(stage, round, got, &sr)

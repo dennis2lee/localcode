@@ -525,7 +525,16 @@ func (tm *TaskManager) SpawnSyncInto(ctx context.Context, parentSessionID, child
 }
 
 func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, agentName, prompt string) (string, string, error) {
-	return tm.spawnSyncWork(ctx, parentSessionID, childID, agentName, prompt, nil, nil)
+	return tm.spawnSyncWork(ctx, parentSessionID, childID, agentName, prompt, nil, nil, nil)
+}
+
+// SpawnUnit is a synchronous sub-agent whose own records carry more: spawned
+// is added to its task.spawned record in the parent, and what finished
+// returns to the status the parent records when it completes. An
+// orchestration run keeps its journal this way, in the run session's own
+// log, on the records every task already has.
+func (tm *TaskManager) SpawnUnit(ctx context.Context, parentSessionID, agentName, prompt string, spawned map[string]any, finished func(taskID string) map[string]any) (string, string, error) {
+	return tm.spawnSyncWork(ctx, parentSessionID, "", agentName, prompt, spawned, nil, finished)
 }
 
 // syncWork is what a synchronous child does in place of a model turn,
@@ -544,10 +553,10 @@ type syncWork func(ctx context.Context, taskID string) (string, error)
 // map happened to yield first. spawned is added to the parent's
 // task.spawned record.
 func (tm *TaskManager) SpawnRun(ctx context.Context, parentSessionID, prompt string, spawned map[string]any, work syncWork) (string, string, error) {
-	return tm.spawnSyncWork(ctx, parentSessionID, "", runSessionAgent, prompt, spawned, work)
+	return tm.spawnSyncWork(ctx, parentSessionID, "", runSessionAgent, prompt, spawned, work, nil)
 }
 
-func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, childID, agentName, prompt string, spawned map[string]any, work syncWork) (string, string, error) {
+func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, childID, agentName, prompt string, spawned map[string]any, work syncWork, finished func(taskID string) map[string]any) (string, string, error) {
 	// Pinned here rather than relying on the caller, because the callers
 	// are not all turns: the Task tool arrives with its parent's pin and
 	// keeps it, but a direct SpawnSync from the API or from an embedding
@@ -743,7 +752,13 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 			answered <- syncResult{text: text, err: err}
 			return
 		}
-		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "completed"})
+		done := map[string]any{"task_id": taskID, "status": "completed"}
+		if finished != nil {
+			for k, v := range finished(taskID) {
+				done[k] = v
+			}
+		}
+		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, done)
 		if work == nil {
 			text = lastAssistantText(tm.loop.Store, taskID)
 		}

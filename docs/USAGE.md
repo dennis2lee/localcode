@@ -2380,7 +2380,25 @@ A stage is one of three kinds:
 | The report | Generated from execution records by LocalCode, not model summarization. |
 | Nesting | Nested orchestration is refused. |
 
-Unsupported: resuming runs.
+#### Resuming a run
+
+`/workflow resume [run]` runs a stopped run again and reuses every agent turn that finished. With no run named, it resumes the last run of this conversation. A run's id is in the reply that reported it, and `/tasks` lists it.
+
+* Reused: a unit that completed, with its declared fields when the stage declares `returns`. Its answer is read from the run's own record. No model is called.
+* Run again: a unit that failed, timed out, was cancelled, never started, or did not give its declared fields. A unit whose prompt changed, because an earlier stage's kept results changed, also runs again.
+* A unit matches by its stage, its agent, the agent's profile, provider and model, its tool allowlist, its full prompt, its declared fields, and its copy and round. A changed config therefore runs the affected units again.
+* The plan is the one the run recorded, not the current file. A saved workflow edited since does not change what a resume runs.
+* The resume is a new run, and the report says how many answers it reused. Reused answers count toward the 32 agent turn ceiling. A resume of a resume reuses the answers the first resume reused.
+
+Refused when:
+
+* The run is still running.
+* The run belongs to another conversation, for example in a fork's copy of the record.
+* A resume of the same run is already running.
+* The plan no longer validates against the current agents.
+* The same conditions as `/workflow run`: a scheduled turn, a booked command, inside a run or a debate, or orchestration off.
+
+A run with a `builder` or `runner` stage asks before it resumes. A finished unit's edits may have been reverted since, and a cancelled unit may have stopped half way, so the question names the stages that can write. A readonly run resumes without asking.
 
 #### Saved workflows
 
@@ -2391,6 +2409,7 @@ A plan can be kept in a file and run again by name. `/workflow run <name> [args]
 | `/workflow` or `/workflow list` | Every workflow this conversation can run, with its description, its arguments, and why it cannot run here when it cannot. |
 | `/workflow show <name>` | The file, where it is, whether it validates here, and the plan. |
 | `/workflow run <name> [args]` | Runs it. The line and localcode's report become a turn of the conversation, so the model reads the report on its next turn. The run is one task, like any other run: Esc stops it and let go moves it to the background. |
+| `/workflow resume [run]` | Resumes a run that stopped, reusing what finished. See [Resuming a run](#resuming-a-run). |
 | `/workflow save <name> [--user] [--force] [description]` | Saves the last plan that ran in this conversation, to the project or, with `--user`, to the home directory. Shows what it saved. Will not replace a file without `--force`. |
 | `/workflow delete <name> [--user]` | Deletes the project's file, or the home directory's with `--user`. |
 
@@ -2415,7 +2434,7 @@ Who is asked:
 * A project's workflow asks first, because it arrives with a clone and any agent that can write the project can edit it. The question names the workflow and a hash of the file, and says which agents and roles it uses and its ceilings. "Always" approves that exact file; an edited file asks again.
 * A deny rule for `Orchestrate` refuses both.
 * It is not run in a scheduled turn, from a command the model booked, inside a run or inside a debate, and orchestration must be on.
-* `/workflow run`, `save` and `delete` typed while a turn is running wait for it to end. Listing and showing do not.
+* `/workflow run`, `resume`, `save` and `delete` typed while a turn is running wait for it to end. Listing and showing do not.
 
 The model does not run saved workflows itself in this version.
 

@@ -10,6 +10,7 @@ func TestWorkflowWritesWaitForTheTurnAndReadsDoNot(t *testing.T) {
 	for _, c := range []struct{ text, want string }{
 		{"/workflow run review src/", "/workflow"},
 		{"/workflow save mine --user", "/workflow"},
+		{"/workflow resume", "/workflow"},
 		{"/workflow delete mine", "/workflow"},
 		{"/workflow", ""},
 		{"/workflow list", ""},

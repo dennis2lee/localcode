@@ -12,6 +12,9 @@ func applyStageOutcome(stage Stage, round int, got []outcome, sr *stageReport) (
 	var kept []outcome
 	for _, o := range got {
 		o.round = round
+		if o.reused {
+			sr.reused++
+		}
 		switch {
 		case o.err != nil:
 			sr.failed++

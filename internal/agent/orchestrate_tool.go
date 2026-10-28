@@ -216,7 +216,15 @@ func (t *OrchestrateTool) refusal(ctx context.Context) string {
 // observed, and a summary of a summary is exactly how that happens.
 func (r runReport) String() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Orchestration finished: %d agent turns across %d stages.\n\n", r.launched, len(r.stages))
+	reused := 0
+	for _, s := range r.stages {
+		reused += s.reused
+	}
+	fmt.Fprintf(&b, "Orchestration finished: %d agent turns across %d stages", r.launched, len(r.stages))
+	if reused > 0 {
+		fmt.Fprintf(&b, ", %d of them answers reused from the run this one resumed", reused)
+	}
+	b.WriteString(".\n\n")
 	for _, s := range r.stages {
 		fmt.Fprintf(&b, "## %s (%s, %s): %d launched, %d kept", s.name, s.kind, s.agent, s.launched, s.kept)
 		if s.pipelined {
@@ -258,6 +266,9 @@ func (r runReport) String() string {
 			}
 			if o.round > 0 {
 				label += fmt.Sprintf(" (round %d)", o.round)
+			}
+			if o.reused {
+				label += " (reused)"
 			}
 			switch {
 			case o.err != nil:

@@ -390,6 +390,9 @@ type Loop struct {
 	// pendingCommand holds a command the Command tool asked for, until
 	// the turn that asked has finished. See command_run.go.
 	pendingCommand map[string]string
+	// resuming is the runs a /workflow resume is resuming right now, so two
+	// clients asking at once cannot run the same units twice.
+	resuming map[string]bool
 
 	// turnCheckpoints is which paths this turn has already taken a copy
 	// of, per session — the dedupe behind "one pre-image per path per

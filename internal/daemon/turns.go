@@ -575,7 +575,7 @@ func heldUntilIdle(text string) string {
 		// delete write the workspace a running turn may be editing.
 		// Listing and showing only read.
 		switch sub, _, _ := strings.Cut(strings.TrimSpace(rest), " "); sub {
-		case "run", "save", "delete":
+		case "run", "resume", "save", "delete":
 			return "/workflow"
 		}
 	case "/workspace":

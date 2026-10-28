@@ -12,13 +12,14 @@ import (
 
 // runStage launches one stage's units, at most maxParallel at a time, and
 // returns their outcomes in launch order however they finished.
-func (l *Loop) runStage(ctx context.Context, sessionID, runID string, p Plan, stage Stage, units []unit, carried string) []outcome {
+func (l *Loop) runStage(ctx context.Context, sessionID, runID string, p Plan, stage Stage, units []unit, carried string, pass int) []outcome {
 	out := make([]outcome, len(units))
 	allowed := l.toolsForRole(ctx, stage.Agent, stage.Role)
 	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
 
 	for i, u := range units {
+		u.pass = pass
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -49,10 +50,23 @@ func (l *Loop) runUnit(ctx context.Context, sessionID, runID string, p Plan, sta
 	defer cancel()
 
 	prompt := stagePrompt(p, stage, u.item, carried)
+	key := l.unitKey(ctx, runID, p, stage, u, prompt, allowed)
+	if c, ok := resumeFrom(ctx)[key]; ok && (len(stage.Returns) == 0 || c.data != nil) {
+		return l.reuseUnit(runID, stage, u, prompt, key, c, o)
+	}
 	ctx = withStageAnswer(withReviewerTools(ctx, allowed), stage)
 
 	started := time.Now()
-	childID, text, err := l.Tasks.SpawnSyncInto(ctx, runID, "", stage.Agent, prompt)
+	spawned := map[string]any{"key": key, "stage": stage.Name, "item": u.item, "copy": u.copy, "round": u.pass}
+	childID, text, err := l.Tasks.SpawnUnit(ctx, runID, stage.Agent, prompt, spawned, func(taskID string) map[string]any {
+		done := map[string]any{"reply": truncateMiddle(lastAssistantText(l.Store, taskID), journalReplyLimit, "the answer was longer than the journal keeps")}
+		if len(stage.Returns) > 0 {
+			if data := l.readAnswer(taskID, stage); data != nil {
+				done["answer"] = data
+			}
+		}
+		return done
+	})
 	l.traceSpan(ctx, trace.ID(ctx), sessionID, trace.SpanDelegate, trace.Record{
 		Agent:  stage.Agent,
 		Detail: fmt.Sprintf("orchestrate %s/%s -> %s in %s", stage.Name, u.item, childID, time.Since(started).Round(time.Millisecond)),

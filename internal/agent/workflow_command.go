@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ import (
 // question bound to the file's content: an "always" for it answers only
 // that exact file, and an edited file asks again.
 
-const workflowUsage = "usage: /workflow [list] | show <name> | run <name> [args] | save <name> [--user] [--force] [description] | delete <name> [--user]"
+const workflowUsage = "usage: /workflow [list] | show <name> | run <name> [args] | resume [run] | save <name> [--user] [--force] [description] | delete <name> [--user]"
 
 func (l *Loop) routeWorkflow(ctx context.Context, sessionID, text string) (bool, error) {
 	trimmed := strings.TrimSpace(text)
@@ -53,6 +54,8 @@ func (l *Loop) routeWorkflow(ctx context.Context, sessionID, text string) (bool,
 		return true, l.replyLocal(sessionID, text, l.workflowDelete(sessionID, rest))
 	case "run":
 		return true, l.runWorkflowCommand(ctx, sessionID, text, rest)
+	case "resume":
+		return true, l.resumeWorkflowCommand(ctx, sessionID, text, strings.TrimSpace(rest))
 	default:
 		return true, l.replyLocal(sessionID, text, workflowUsage)
 	}
@@ -345,4 +348,136 @@ func describeWorkflowRun(wf Workflow, p Plan) string {
 		wf.Name, wf.path, firstLine(p.renderedGoal()), len(p.Stages),
 		strings.Join(sortedKeys(agents, len(agents)), ", "), strings.Join(sortedKeys(roles, len(roles)), ", "),
 		p.Launches(), stageTimeout, runTimeout)
+}
+
+// runRecord is one orchestration run this conversation started, as its
+// task record holds it.
+type runRecord struct {
+	id       string
+	plan     Plan
+	workflow string
+}
+
+// findRun is the run to resume: the one named, or the last this
+// conversation started. Taken from the conversation's own record, so the
+// plan that is resumed is the plan that ran, not whatever a file says now.
+func (l *Loop) findRun(sessionID, id string) (runRecord, error) {
+	evs, err := l.Store.Events(sessionID, 0)
+	if err != nil {
+		return runRecord{}, err
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		e := evs[i]
+		if e.Type != events.TypeTaskSpawned || e.Data["agent"] != runSessionAgent {
+			continue
+		}
+		taskID, _ := e.Data["task_id"].(string)
+		if id != "" && taskID != id {
+			continue
+		}
+		raw, err := json.Marshal(e.Data["plan"])
+		if err != nil {
+			continue
+		}
+		var p Plan
+		if json.Unmarshal(raw, &p) != nil || len(p.Stages) == 0 {
+			continue
+		}
+		rec := runRecord{id: taskID, plan: p}
+		rec.workflow, _ = e.Data["workflow"].(string)
+		if rec.workflow != "" {
+			rec.plan.workflow = true
+			rec.plan.args, _ = e.Data["args"].(string)
+		}
+		return rec, nil
+	}
+	if id != "" {
+		return runRecord{}, fmt.Errorf("there is no run %s in this conversation", id)
+	}
+	return runRecord{}, errors.New("no orchestration has run in this conversation")
+}
+
+// writingStages names the stages of p that can change the workspace.
+func writingStages(p Plan) []string {
+	var out []string
+	for _, s := range p.Stages {
+		if s.Role == "builder" || s.Role == "runner" {
+			out = append(out, s.Name)
+		}
+	}
+	return out
+}
+
+func (l *Loop) resumeWorkflowCommand(ctx context.Context, sessionID, line, id string) error {
+	notResumed := func(why string) error {
+		return l.replyLocal(sessionID, line, "Not resumed: "+why)
+	}
+	if why := l.runWorkflowRefusal(ctx); why != "" {
+		return notResumed(why + ".")
+	}
+	rec, err := l.findRun(sessionID, id)
+	if err != nil {
+		return notResumed(err.Error())
+	}
+	if sess, err := l.Store.Get(rec.id); err == nil && sess.ParentID != sessionID {
+		// A fork copies the record and not the run: the run and its
+		// units belong to the conversation it was forked from.
+		return notResumed(fmt.Sprintf("run %s belongs to another conversation", rec.id))
+	}
+	for _, running := range l.Tasks.Running() {
+		if running == rec.id {
+			return notResumed(fmt.Sprintf("run %s is still running", rec.id))
+		}
+	}
+	l.mu.Lock()
+	if l.resuming[rec.id] {
+		l.mu.Unlock()
+		return notResumed(fmt.Sprintf("run %s is being resumed already", rec.id))
+	}
+	if l.resuming == nil {
+		l.resuming = map[string]bool{}
+	}
+	l.resuming[rec.id] = true
+	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		delete(l.resuming, rec.id)
+		l.mu.Unlock()
+	}()
+
+	if err := rec.plan.Validate(Limits{Agents: l.delegatableNames(ctx), Args: rec.plan.workflow}); err != nil {
+		return notResumed("the plan no longer validates here: " + err.Error())
+	}
+	cache := l.runJournal(rec.id)
+	if writes := writingStages(rec.plan); len(writes) > 0 {
+		// A unit that writes may have been cut off half way, and one that
+		// finished may have had its changes reverted since: reusing or
+		// rerunning either is a decision about this workspace now, so it
+		// is asked every time.
+		ok, why := l.Tools.Permit(WithSessionID(ctx, sessionID), orchestrateToolName, "resume:"+rec.id,
+			fmt.Sprintf("resume run %s (%s), whose stages %s can change the workspace: %d finished answers would be reused and everything else run again, at most %d agent turns",
+				rec.id, firstLine(rec.plan.renderedGoal()), strings.Join(writes, ", "), len(cache), rec.plan.Launches()))
+		if !ok {
+			return notResumed(why + ".")
+		}
+	}
+
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": line})
+	spawned := map[string]any{"plan": rec.plan, "resumed_from": rec.id}
+	if rec.workflow != "" {
+		spawned["workflow"], spawned["args"] = rec.workflow, rec.plan.args
+	}
+	runID, out, err := l.Tasks.SpawnRun(withResume(ctx, cache), sessionID, rec.plan.renderedGoal(), spawned, l.planWork(sessionID, rec.plan))
+	var reply string
+	switch {
+	case err != nil && runID == "":
+		reply = fmt.Sprintf("Resuming run %s did not start: %v", rec.id, err)
+	case err != nil:
+		reply = fmt.Sprintf("Resumed run %s as run %s, which stopped: %v\n\n%s", rec.id, runID, err, out)
+	default:
+		reply = fmt.Sprintf("Resumed run %s as run %s. localcode wrote this report from what the stages' agents answered, reused or new:\n\n%s", rec.id, runID, out)
+	}
+	reply = capToolResult(reply, 0)
+	l.appendDelegatedTurn(sessionID, line, reply)
+	return l.replyText(sessionID, reply)
 }
