@@ -324,8 +324,13 @@ const handlers = {
       appendTool(stageLine(d));
       return;
     }
-    if (session.tasks.has(d.task_id)) session.tasks.get(d.task_id).status = d.status;
-    else session.tasks.set(d.task_id, { agent: '', status: d.status });
+    if (session.tasks.has(d.task_id)) {
+      const t = session.tasks.get(d.task_id);
+      t.status = d.status;
+      // What it was doing is true only while it runs. Left in place, a
+      // finished run's row went on saying its last stage was half done.
+      if (!['spawned', 'running', 'detached'].includes(d.status)) t.doing = '';
+    } else session.tasks.set(d.task_id, { agent: '', status: d.status });
     renderTasks();
     refreshTaskViewStatus(d.task_id, d.status);
   },

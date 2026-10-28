@@ -17,6 +17,9 @@ func (l *Loop) runStage(ctx context.Context, sessionID, runID string, p Plan, st
 	allowed := l.toolsForRole(ctx, stage.Agent, stage.Role)
 	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+	finished := 0
+	l.runProgress(sessionID, runID, stage.Name, pass, 0, len(units))
 
 	for i, u := range units {
 		u.pass = pass
@@ -31,6 +34,10 @@ func (l *Loop) runStage(ctx context.Context, sessionID, runID string, p Plan, st
 				return
 			}
 			out[i] = l.runUnit(ctx, sessionID, runID, p, stage, u, carried, allowed)
+			mu.Lock()
+			finished++
+			l.runProgress(sessionID, runID, stage.Name, pass, finished, len(units))
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()

@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -199,5 +201,80 @@ func TestARunSessionTakesNoMessages(t *testing.T) {
 	last := evs[len(evs)-1]
 	if last.Type != events.TypeError {
 		t.Errorf("the run session's answer was a %s, want an error saying it takes no messages", last.Type)
+	}
+}
+
+// runProgressOf runs plan and returns every progress line the
+// conversation was sent for the run's row.
+func runProgressOf(t *testing.T, reply func(string) (string, map[string]any), plan string) []string {
+	t.Helper()
+	m := &scriptedModel{reply: reply}
+	loop := orchestrateLoop(t, m.server(t).URL)
+	ch, _, unsub, err := loop.Store.Subscribe("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var doing []string
+	var ids []string
+	collected := make(chan struct{})
+	go func() {
+		defer close(collected)
+		for ev := range ch {
+			if ev.Type != events.TypeTaskProgress {
+				continue
+			}
+			if ev.Seq != 0 {
+				t.Errorf("run progress was written to the log (seq %d)", ev.Seq)
+			}
+			mu.Lock()
+			doing = append(doing, ev.Data["doing"].(string))
+			ids = append(ids, ev.Data["task_id"].(string))
+			mu.Unlock()
+		}
+	}()
+	executeOrchestrate(context.Background(), loop, plan)
+	run := loop.Store.Children("main")[0].ID
+	unsub()
+	<-collected
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, id := range ids {
+		if id != run {
+			t.Errorf("progress for %s, want it on the run's row %s", id, run)
+		}
+	}
+	return doing
+}
+
+// A run's row says how far it has got: the stage, and how many of its
+// agents have finished, on the run's own row in the conversation.
+func TestARunsRowSaysHowFarItHasGot(t *testing.T) {
+	doing := runProgressOf(t, func(string) (string, map[string]any) { return "ok", nil }, `{"goal":"g","stages":[
+	  {"name":"look","kind":"fanout","agent":"oracle","over":["a","b"],"prompt":"look at {{item}}"},
+	  {"name":"sum","kind":"step","agent":"oracle","prompt":"sum up {{input}}"}]}`)
+	for _, want := range []string{"look: 0 of 2 finished", "look: 2 of 2 finished", "sum: 0 of 1 finished", "sum: 1 of 1 finished"} {
+		if !slices.Contains(doing, want) {
+			t.Errorf("the run's row never said %q; it said %q", want, doing)
+		}
+	}
+}
+
+// A pipelined stage counts against the units it has so far.
+func TestAPipelinedRunsRowCountsBothStages(t *testing.T) {
+	doing := runProgressOf(t, func(p string) (string, map[string]any) {
+		if strings.Contains(p, "find in") {
+			return "found", map[string]any{"found": []any{"x", "y"}}
+		}
+		return "checked", nil
+	}, `{"goal":"g","stages":[
+	  {"name":"find","kind":"fanout","agent":"oracle","over":["a"],"prompt":"find in {{item}}","returns":{"found":"strings"}},
+	  {"name":"check","kind":"fanout","agent":"oracle","over":["$find.found"],"pipeline":true,"prompt":"check {{item}}"}]}`)
+	for _, want := range []string{"find: 0 of 1 finished", "find: 1 of 1 finished", "check: 2 of 2 finished"} {
+		if !slices.Contains(doing, want) {
+			t.Errorf("the run's row never said %q; it said %q", want, doing)
+		}
 	}
 }

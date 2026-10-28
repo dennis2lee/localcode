@@ -26,6 +26,16 @@ test('the panel says what a running task is doing, not just that it is running',
   assert.match(app.el('tasks').innerHTML, /bash/, app.el('tasks').innerHTML);
 });
 
+test('a finished task stops saying what it was doing', async () => {
+  const app = await load();
+  spawnTask(app);
+  app.sse.emit({ type: 'task.progress', data: { task_id: 'task-1', doing: 'look: 2 of 4 finished' } });
+  assert.match(app.el('tasks').innerHTML, /2 of 4 finished/);
+
+  app.sse.emit({ seq: 3, type: 'task.status', data: { task_id: 'task-1', status: 'completed' } });
+  assert.doesNotMatch(app.el('tasks').innerHTML, /2 of 4 finished/, app.el('tasks').innerHTML);
+});
+
 test('clicking a task opens its own conversation', async () => {
   const app = await load();
   spawnTask(app);

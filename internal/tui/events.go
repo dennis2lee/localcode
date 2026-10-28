@@ -362,6 +362,16 @@ func (m *Model) applyEvent(ev events.Event) {
 		t := m.tasks[taskID]
 		t.status = status
 		m.tasks[taskID] = t
+	case events.TypeTaskProgress:
+		// Only for a task this client already has a row for: progress is
+		// broadcast, not logged, so it can arrive for a task whose spawn
+		// this client never saw, and a row made from it would have no
+		// agent and no prompt.
+		taskID, _ := ev.Data["task_id"].(string)
+		if t, ok := m.tasks[taskID]; ok {
+			t.doing, _ = ev.Data["doing"].(string)
+			m.tasks[taskID] = t
+		}
 	case events.TypeAgentSwitched:
 		// Just update the status line the footer already renders every
 		// frame — do NOT also write a transcript line here. This event

@@ -102,7 +102,17 @@ func (m Model) busyLine() string {
 		if n > 1 {
 			noun += "s"
 		}
-		parts = append(parts, fmt.Sprintf("%d %s (/tasks to inspect)", n, noun))
+		part := fmt.Sprintf("%d %s", n, noun)
+		// One task's progress fits on the line; several would not, and
+		// /tasks lists each.
+		if n == 1 {
+			for _, t := range m.tasks {
+				if t.active() && t.doing != "" {
+					part += ": " + t.doing
+				}
+			}
+		}
+		parts = append(parts, part+" (/tasks to inspect)")
 	}
 	return frame + " " + strings.Join(parts, "  ·  ")
 }

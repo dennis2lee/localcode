@@ -1308,7 +1308,7 @@ Background tasks produce no transcript lines. Inspect them here instead. These c
 
 | Command | Effect |
 |---|---|
-| `/tasks` | Lists every background task in this session with its status, agent, and prompt. Answered from client state, no model call. |
+| `/tasks` | Lists every background task in this session with its status, agent, and prompt, and what a running one is doing now. Answered from client state, no model call. |
 | `/tasks <id>` | Shows everything that task has produced so far. Works while it is still running, so it doubles as a progress view. |
 | `/tasks cancel <id>` | Stops a running task. The status line turns to `cancelled` once the stop reaches the task's next step. |
 
@@ -2372,7 +2372,7 @@ A stage is one of three kinds:
 |---|---|
 | Ceilings | 8 stages, 16 items per fanout, 8 copies, 32 agent turns per run, 5 declared fields per stage, 4 agents at once. A plan that exceeds one is refused at validation. A fanout over `$stage.field` is the exception, because its width is unknown until the run. It takes the first 16 distinct items. Items past the ceiling of 32 agent turns do not run, and the report gives their count. A stage that would pass that ceiling stops the run, and the report names the stage. |
 | Timeouts | 10 minutes per agent turn; 30 minutes per run. |
-| The run | One task of the conversation, shown as an `orchestration run` row. Every agent it launches is a task under that row, not under the conversation. |
+| The run | One task of the conversation, shown as an `orchestration run` row. Every agent it launches is a task under that row, not under the conversation. While it runs, the row names the stage and how many of its agents have finished, for example `look: 2 of 4 finished`. The terminal shows the same on the busy line when it is the only task running, and in `/tasks`. |
 | Cancellation | The turn waits on the run, so Esc stops the whole run including the stage in flight. Deleting the run's row does the same. |
 | Letting go | Let go (Ctrl+B in the terminal, the "let go" button in the browser) releases the whole run, not one of its agents. The turn gets its prompt back, the run finishes on its own, and its report is the last entry in the run's task. Its stage progress moves from the conversation into the run. |
 | Permission | Confirmation before each run. Shows maximum limits because referenced fanout sizes are unknown until earlier stages complete. |

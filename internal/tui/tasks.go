@@ -12,6 +12,10 @@ type taskState struct {
 	agent  string
 	status string // spawned | running | detached | completed | failed | cancelled
 	prompt string
+	// doing is what it is doing right now, from task.progress: the tool a
+	// background task is in, or how far an orchestration run has got.
+	// Shown only while the task is active, since it is true only then.
+	doing string
 }
 
 // active reports whether the task is still doing work. "detached" is a
@@ -72,6 +76,9 @@ func (m Model) tasksSummary() string {
 	for _, id := range ids {
 		t := m.tasks[id]
 		fmt.Fprintf(&b, "- %s [%s] %s: %s\n", id, t.status, t.agent, t.prompt)
+		if t.active() && t.doing != "" {
+			fmt.Fprintf(&b, "  now: %s\n", t.doing)
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

@@ -48,9 +48,6 @@ import (
 //     schedules panel, whereas TUI has no schedule UI.
 //   - schedule.removed: scheduled task deleted; consumed by Web UI schedules
 //     panel, whereas TUI has no schedule UI.
-//   - task.progress: transient tool progress ("doing") of background tasks;
-//     displayed in Web UI task indicator, whereas TUI task status only tracks
-//     spawned/status lifecycle.
 //   - workspace.changed: session directory switch; consumed by Web UI
 //     workspace picker, whereas TUI runs within the current terminal directory.
 //   - compacted: history compaction summary event; TUI compaction runs locally
@@ -73,7 +70,6 @@ var tuiIgnoredEventTypes = map[string]string{
 	"schedule.seen":        "scheduled task result acknowledged; consumed by Web UI schedules panel indicator, whereas TUI has no schedule UI",
 	"schedule.renamed":     "scheduled task title changed; consumed by Web UI schedules panel, whereas TUI has no schedule UI",
 	"schedule.removed":     "scheduled task deleted; consumed by Web UI schedules panel, whereas TUI has no schedule UI",
-	"task.progress":        "transient tool progress of background tasks; displayed in Web UI task indicator, whereas TUI task status only tracks spawned/status lifecycle",
 	"workspace.changed":    "session directory switch; consumed by Web UI workspace picker, whereas TUI runs within the current terminal directory",
 	"config.changed":       "session configuration change; TUI handles /config commands directly in the client rather than consuming broadcast config changes",
 	"permissions.changed":  "session permission flags snapshot; consumed by Web UI permission modal, whereas TUI handles permissions via request modals and local commands",

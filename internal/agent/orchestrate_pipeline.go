@@ -61,6 +61,7 @@ type pipeStage struct {
 	allowed []string
 	field   string // the field of the stage before that this one spreads over
 	started bool
+	ended   int // units whose outcome has come back, in any order
 }
 
 // runPipeline runs group, a fanout and the pipelined stages after it, and
@@ -120,6 +121,7 @@ func (l *Loop) runPipeline(ctx context.Context, sessionID, runID string, p Plan,
 	head.brief = l.carriedInput(p, head.stage, results)
 	head.started = true
 	progress(head, "running", map[string]any{"agents": len(head.units)})
+	l.runProgress(sessionID, runID, head.stage.Name, 0, 0, len(head.units))
 
 	// feed hands one applied outcome's items to the stage after it.
 	feed := func(j int, o outcome) {
@@ -192,6 +194,10 @@ func (l *Loop) runPipeline(ctx context.Context, sessionID, runID string, p Plan,
 		st := ps[f.j]
 		st.out[f.k] = f.o
 		st.done[f.k] = true
+		st.ended++
+		// Of the units this stage has so far: a pipelined stage's total
+		// grows as the stage before it answers.
+		l.runProgress(sessionID, runID, st.stage.Name, 0, st.ended, len(st.units))
 
 		// Apply outcomes in launch order, and only then pass items on.
 		for st.next < len(st.units) && st.done[st.next] {

@@ -1494,3 +1494,45 @@ func TestArrivingPromptDoesNotInterruptAWalk(t *testing.T) {
 		t.Errorf("the walk lost its place: %q", got)
 	}
 }
+
+// What one running task is doing shows on the busy line and in /tasks,
+// and goes when the task ends: it is true only while the task runs.
+func TestATasksProgressShowsWhileItRuns(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypeTaskProgress, Data: map[string]any{"task_id": "t1", "doing": "early"}})
+	if len(m.tasks) != 0 {
+		t.Errorf("progress for a task this client never saw spawn made a row: %v", m.tasks)
+	}
+	m.applyEvent(events.Event{Type: events.TypeTaskSpawned, Data: map[string]any{
+		"task_id": "t1", "agent": "orchestration run", "prompt": "review the branch",
+	}})
+	m.applyEvent(events.Event{Type: events.TypeTaskProgress, Data: map[string]any{"task_id": "t1", "doing": "look: 2 of 4 finished"}})
+	if !strings.Contains(m.busyLine(), "1 background task: look: 2 of 4 finished") {
+		t.Errorf("busyLine = %q, want the task's progress", m.busyLine())
+	}
+	if !strings.Contains(m.tasksSummary(), "now: look: 2 of 4 finished") {
+		t.Errorf("/tasks = %q, want the task's progress", m.tasksSummary())
+	}
+
+	m.applyEvent(events.Event{Type: events.TypeTaskStatus, Data: map[string]any{"task_id": "t1", "status": "completed"}})
+	if strings.Contains(m.tasksSummary(), "look:") {
+		t.Errorf("a finished task still says what it was doing: %q", m.tasksSummary())
+	}
+	m.applyEvent(events.Event{Type: events.TypeTaskProgress, Data: map[string]any{"task_id": "t1", "doing": "late"}})
+	if strings.Contains(m.tasksSummary(), "late") {
+		t.Errorf("progress arriving after the end brought it back: %q", m.tasksSummary())
+	}
+
+	// The one task running is the one whose progress shows, and two
+	// running show neither: the line has room for one.
+	for _, id := range []string{"t2", "t3"} {
+		m.applyEvent(events.Event{Type: events.TypeTaskSpawned, Data: map[string]any{"task_id": id, "agent": "explore"}})
+		if id == "t2" && strings.Contains(m.busyLine(), "late") {
+			t.Errorf("busyLine = %q, shows a finished task's progress", m.busyLine())
+		}
+		m.applyEvent(events.Event{Type: events.TypeTaskProgress, Data: map[string]any{"task_id": id, "doing": "in " + id}})
+	}
+	if line := m.busyLine(); !strings.Contains(line, "2 background tasks (/tasks") {
+		t.Errorf("busyLine = %q, want two tasks counted and neither's progress", line)
+	}
+}

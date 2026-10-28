@@ -196,6 +196,24 @@ func (l *Loop) progressSession(sessionID, runID string) string {
 	return sessionID
 }
 
+// runProgress puts what a run is doing on its row in the conversation's
+// task list: the stage, and how many of its agents have finished.
+//
+// Broadcast, like a background task's mirrored tool progress, because it
+// is true only when it is sent. Always into the conversation, let go or
+// not: the row is there either way, and it is the row a person looks at
+// to see whether a run that has been going for ten minutes is moving.
+func (l *Loop) runProgress(sessionID, runID, stage string, round, done, of int) {
+	if runID == sessionID {
+		return
+	}
+	doing := fmt.Sprintf("%s: %d of %d finished", stage, done, of)
+	if round > 1 {
+		doing = fmt.Sprintf("%s, round %d: %d of %d finished", stage, round, done, of)
+	}
+	l.Store.Broadcast(sessionID, events.TypeTaskProgress, map[string]any{"task_id": runID, "doing": doing})
+}
+
 // runPlan executes a validated plan and returns the report.
 //
 // ctx is the run session's, which the turn that started the run cancels
