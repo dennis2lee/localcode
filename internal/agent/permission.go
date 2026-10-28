@@ -272,7 +272,8 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 				// the conversation on screen would be misleading.
 				"description":  fmt.Sprintf("[background task %s] %s", sessionID, description),
 				"rule":         rule.Match,
-				"can_always":   b.ConfigPath != "",
+				"can_always":   b.ConfigPath != "" && !ask.Once,
+				"once":         ask.Once,
 				"task_session": sessionID,
 			}))
 		}
@@ -285,7 +286,9 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 			// can show what is actually being widened rather than making
 			// the user guess.
 			"rule":       rule.Match,
-			"can_always": b.ConfigPath != "",
+			"can_always": b.ConfigPath != "" && !ask.Once,
+			// Only this use can be approved: clients offer allow and deny.
+			"once": ask.Once,
 		})); err != nil {
 			return false, err
 		}
@@ -306,6 +309,13 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 
 		select {
 		case res := <-ch:
+			if ask.Once {
+				// Whatever the client sent: a client that predates the
+				// field offers "always", and the API takes any scope.
+				// Recorded as once too, so a restart's replay grants
+				// nothing either.
+				res.scope = ScopeOnce
+			}
 			if res.allow {
 				b.applyScope(sessionID, toolName, rule, ask, res.scope)
 			}

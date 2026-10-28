@@ -441,9 +441,12 @@ function showPermissionRequest(req, waiting) {
     permissionAllowDirBtn.hidden = true;
     permissionAllowOutsideBtn.hidden = true;
   }
-  const offerAlways = session.pendingPermissionCanAlways && !outside;
+  // A question asked every time (a resume of a run that writes) takes
+  // allow and deny only; the daemon treats any other answer as once.
+  const once = req.once === true;
+  const offerAlways = session.pendingPermissionCanAlways && !outside && !once;
   permissionAllowAlwaysBtn.style.display = offerAlways ? '' : 'none';
-  permissionAllowSessionBtn.style.display = outside ? 'none' : '';
+  permissionAllowSessionBtn.style.display = outside || once ? 'none' : '';
   if (offerAlways) {
     permissionAllowAlwaysBtn.title = `don't ask again — writes "${req.rule}" to config.json`;
   }

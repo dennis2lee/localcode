@@ -20,9 +20,15 @@ import (
 //     the report are the same on every run, and a resumed run can match a
 //     unit by what it was asked.
 //
-//   - One budget. Every launch is counted when it is queued, by the one
-//     goroutine that queues, against the same 32-turn ceiling; items that
-//     would pass it are dropped and counted, as a reference fanout's are.
+//   - One budget, shared in stage order. Every launch is counted when it
+//     is given its place, against the same 32-turn ceiling. A stage never
+//     takes room an earlier stage of the group might still need: until an
+//     earlier stage's items are all known, as many places as it could
+//     still take (sixteen items, times its copies) are kept back for it,
+//     and an item that does not fit beside them waits, in order, until
+//     they are known. So which items run, and which are dropped and
+//     counted, is what the same plan without pipelining would decide,
+//     whichever agent happens to be slow.
 //
 //   - Producers first. A free slot goes to the earliest stage with work
 //     waiting, so the stages that find things are not starved by the
@@ -56,7 +62,9 @@ type pipeStage struct {
 	next    int // first unit whose outcome has not been applied
 	kept    []outcome
 	seen    map[string]bool
-	items   int
+	items   int // items given units
+	taken   int // distinct items considered, at most maxFanout: items, held and dropped
+	held    []string
 	brief   string
 	allowed []string
 	field   string // the field of the stage before that this one spreads over
@@ -96,8 +104,8 @@ func (l *Loop) runPipeline(ctx context.Context, sessionID, runID string, p Plan,
 	// The first stage is an ordinary fanout: its items are known now, and
 	// it is priced and capped exactly as runPlan prices and caps one.
 	head := ps[0]
-	items, merged := l.stageItems(head.stage, results)
-	head.sr.merged = merged
+	items, merged, capped := l.stageItems(head.stage, results)
+	head.sr.merged, head.sr.capped = merged, capped
 	copies := max(head.stage.Copies, 1)
 	if room := (maxRunAgents - report.launched) / copies; len(items) > room {
 		if _, isRef := planRef(head.stage.Over); isRef {
@@ -109,6 +117,12 @@ func (l *Loop) runPipeline(ctx context.Context, sessionID, runID string, p Plan,
 		for c := range copies {
 			head.units = append(head.units, unit{stage: head.stage.Name, item: item, copy: c + 1})
 		}
+	}
+	if len(head.units) == 0 && head.sr.dropped > 0 {
+		// As runPlan stops an ordinary stage none of whose items fit.
+		report.stages = append(report.stages, head.sr)
+		return fmt.Sprintf("stopped at %s: the run had already launched %d of its %d agents, so none of its %d items could run",
+			head.stage.Name, report.launched, maxRunAgents, head.sr.dropped)
 	}
 	if report.launched+len(head.units) > maxRunAgents {
 		return fmt.Sprintf("stopped before %s: the run had launched %d agents and this stage needs %d more, past the limit of %d",
@@ -123,10 +137,11 @@ func (l *Loop) runPipeline(ctx context.Context, sessionID, runID string, p Plan,
 	progress(head, "running", map[string]any{"agents": len(head.units)})
 	l.runProgress(sessionID, runID, head.stage.Name, 0, 0, len(head.units))
 
-	// feed hands one applied outcome's items to the stage after it.
+	// feed hands one applied outcome's items to the stage after it, as an
+	// ordinary fanout over that stage would take them: merged, in order,
+	// the first sixteen.
 	feed := func(j int, o outcome) {
 		st := ps[j]
-		copies := max(st.stage.Copies, 1)
 		for _, v := range asStrings(o.data[st.field]) {
 			key := itemKey(v)
 			if st.seen[key] {
@@ -134,24 +149,63 @@ func (l *Loop) runPipeline(ctx context.Context, sessionID, runID string, p Plan,
 				continue
 			}
 			st.seen[key] = true
-			if st.items >= maxFanout {
+			if st.taken >= maxFanout {
+				st.sr.capped++
 				continue
 			}
-			if report.launched+copies > maxRunAgents {
-				st.sr.dropped++
-				continue
+			st.taken++
+			st.held = append(st.held, v)
+		}
+	}
+
+	// known reports whether stage j's items are all known and placed: the
+	// stages before it have all answered and it holds nothing back.
+	known := func(j int) bool {
+		for k := 1; k <= j; k++ {
+			if ps[k-1].next < len(ps[k-1].units) || len(ps[k].held) > 0 {
+				return false
 			}
-			st.items++
-			for c := range copies {
-				st.units = append(st.units, unit{stage: st.stage.Name, item: v, copy: c + 1})
-				st.out = append(st.out, outcome{})
-				st.done = append(st.done, false)
-			}
-			report.launched += copies
-			st.sr.launched += copies
-			if !st.started {
-				st.started = true
-				progress(st, "pipelined", nil)
+		}
+		return true
+	}
+
+	// admit gives held items their places, stage by stage. An item runs
+	// if it fits beside the places kept back for the earlier stages whose
+	// items are not all known yet; it is dropped only once they are, and
+	// otherwise waits.
+	admit := func() {
+		for j := 1; j < len(ps); j++ {
+			st := ps[j]
+			copies := max(st.stage.Copies, 1)
+			for len(st.held) > 0 {
+				kept := 0
+				for k := 1; k < j; k++ {
+					if !known(k) {
+						kept += (maxFanout - ps[k].items - ps[k].sr.dropped) * max(ps[k].stage.Copies, 1)
+					}
+				}
+				if report.launched+copies+kept > maxRunAgents {
+					if !known(j - 1) {
+						break // waits for the earlier stages
+					}
+					st.held = st.held[1:]
+					st.sr.dropped++
+					continue
+				}
+				v := st.held[0]
+				st.held = st.held[1:]
+				st.items++
+				for c := range copies {
+					st.units = append(st.units, unit{stage: st.stage.Name, item: v, copy: c + 1})
+					st.out = append(st.out, outcome{})
+					st.done = append(st.done, false)
+				}
+				report.launched += copies
+				st.sr.launched += copies
+				if !st.started {
+					st.started = true
+					progress(st, "pipelined", nil)
+				}
 			}
 		}
 	}
@@ -174,6 +228,9 @@ func (l *Loop) runPipeline(ctx context.Context, sessionID, runID string, p Plan,
 	}
 
 	for {
+		if stop == "" {
+			admit()
+		}
 		for running < maxParallel && stop == "" && ctx.Err() == nil {
 			j, k, ok := launchable()
 			if !ok {
@@ -228,7 +285,7 @@ func (l *Loop) runPipeline(ctx context.Context, sessionID, runID string, p Plan,
 		report.launched -= unlaunched
 	}
 	for _, st := range ps[1:] {
-		// As in an ordinary stage: a stage none of whose items could run
+		// As runPlan stops an ordinary stage: a stage none of whose items could run
 		// stops the run, rather than handing the stages after it results
 		// with a whole stage missing.
 		if stop == "" && st.items == 0 && st.sr.dropped > 0 {

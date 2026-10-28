@@ -167,3 +167,22 @@ func TestPermissionAnsweredElsewhereClearsTheModal(t *testing.T) {
 		t.Fatal("modal survived the answer given in another client")
 	}
 }
+
+// A question asked every time offers y and n only, and s or a leave it on
+// screen rather than answering it some other way.
+func TestAQuestionAskedEveryTimeTakesOnlyYesOrNo(t *testing.T) {
+	m := armedPending(newTestModel(), true)
+	m.pending.once = true
+	if p := m.pending.prompt(false); strings.Contains(p, "s: allow") || strings.Contains(p, "a: always") {
+		t.Errorf("the prompt offers more than y and n:\n%s", p)
+	}
+	for _, key := range []string{"s", "a"} {
+		next, cmd, _ := press(m, key)
+		if cmd != nil || next.pending == nil {
+			t.Errorf("%q answered a question asked every time", key)
+		}
+	}
+	if next, cmd, _ := press(m, "y"); cmd == nil || next.pending != nil {
+		t.Error("y did not answer it")
+	}
+}

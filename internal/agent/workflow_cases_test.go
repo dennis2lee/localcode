@@ -180,7 +180,8 @@ func TestListedWorkflowNamesCanBeRun(t *testing.T) {
 // must hold the same forms while a turn runs (heldworkflow_test.go).
 func TestWorkflowRoutesOtherWhitespace(t *testing.T) {
 	loop, _, _, _ := workflowLoop(t, func(string) (string, map[string]any) { return "ok", nil })
-	for _, text := range []string{"/workflow\nrun nosuch", "/workflow run\nnosuch", "/workflow save\tmine"} {
+	for _, text := range []string{"/workflow\nrun nosuch", "/workflow run\nnosuch", "/workflow save\tmine",
+		"/workflow\trun nosuch", "/WORKFLOW Run nosuch"} {
 		if err := loop.SendMessage(context.Background(), "conv", "oracle", text); err != nil {
 			t.Fatal(err)
 		}

@@ -154,6 +154,13 @@ test('the always-allow button is hidden when the daemon cannot persist a rule', 
   assert.equal(app.el('permission-allow-always').style.display, '');
 });
 
+test('a question asked every time offers allow and deny only', async () => {
+  const app = await load();
+  app.applyEvent({ type: 'permission.request', data: { id: 'p', tool: 'Orchestrate', once: true, can_always: false, rule: 'resume:task-1' } });
+  assert.equal(app.el('permission-allow-always').style.display, 'none');
+  assert.equal(app.el('permission-allow-session').style.display, 'none');
+});
+
 test('task events feed the sidebar and the status line', async () => {
   const app = await load();
   app.sse.emit({ type: 'task.spawned', data: { task_id: 'task-1', agent: 'plan' } });

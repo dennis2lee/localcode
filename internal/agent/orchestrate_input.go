@@ -8,17 +8,17 @@ import (
 
 // stageItems is what a fanout spreads over: the literal list, or the values
 // of an earlier stage's kept results.
-func (l *Loop) stageItems(stage Stage, results map[string][]outcome) ([]string, int) {
+func (l *Loop) stageItems(stage Stage, results map[string][]outcome) (items []string, merged, capped int) {
 	if stage.Kind != "fanout" {
-		return []string{""}, 0
+		return []string{""}, 0, 0
 	}
 	ref, isRef := planRef(stage.Over)
 	if !isRef {
-		return stage.Over, 0
+		return stage.Over, 0, 0
 	}
 	from, field, ok := splitRef(ref)
 	if !ok {
-		return nil, 0
+		return nil, 0, 0
 	}
 	// Merged, not concatenated. A fanout that reviews one change along
 	// four dimensions and then spreads over what it found gets the same
@@ -28,10 +28,9 @@ func (l *Loop) stageItems(stage Stage, results map[string][]outcome) ([]string, 
 	// became four items and eight launches, half the run spent twice.
 	//
 	// First-seen order, and the count of what was merged goes into the
-	// report: a silent merge is the same defect as a silent cap.
+	// report: a silent merge is the same defect as a silent cap, and so
+	// is the count of distinct items past the first sixteen.
 	seen := map[string]bool{}
-	var items []string
-	merged := 0
 	for _, o := range results[from] {
 		for _, v := range asStrings(o.data[field]) {
 			key := itemKey(v)
@@ -40,13 +39,14 @@ func (l *Loop) stageItems(stage Stage, results map[string][]outcome) ([]string, 
 				continue
 			}
 			seen[key] = true
-			items = append(items, v)
 			if len(items) >= maxFanout {
-				return items, merged
+				capped++
+				continue
 			}
+			items = append(items, v)
 		}
 	}
-	return items, merged
+	return items, merged, capped
 }
 
 // itemKey is the form two items are compared in: case and spacing

@@ -2340,7 +2340,7 @@ A stage is one of three kinds:
 | `keep` | One returned field. Results where it is false or empty are dropped. |
 | `unanswered` | What to do when an agent does not answer in the declared shape: `skip` (default), `keep`, `fail`. |
 | `repeat_until` | One returned field. While it is false or empty the stage runs again, up to `max_rounds`. A rerun carries the earlier rounds in `{{input}}`. Step and fanout stages only: a barrier with `repeat_until` is refused. |
-| `pipeline` | Fanout only, and only over `$prev.field` of the fanout immediately before it. The stage starts on an item as soon as the agent that found it, and every agent launched before that one in the same stage, has finished, instead of waiting for the whole stage. A fast agent's items wait for slower agents launched earlier, so the items, their order and the report are the same on every run. The prompt cannot use `{{input}}`, which is still being written when the stage starts, and neither this stage nor the one before it may repeat. A free slot goes to the earlier stage first. A stage before it that stops the run with `unanswered: fail` also stops the pipelined agents already running. Chains are allowed: a pipelined stage can feed another. |
+| `pipeline` | Fanout only, and only over `$prev.field` of the fanout immediately before it. The stage starts on an item as soon as the agent that found it, and every agent launched before that one in the same stage, has finished, instead of waiting for the whole stage. A fast agent's items wait for slower agents launched earlier, so the items, their order and the report are the same on every run. Near the 32 agent turn ceiling, a stage's item also waits while a stage before it could still need the remaining places, so the items that run are the ones the same plan runs without `pipeline`. The prompt cannot use `{{input}}`, which is still being written when the stage starts, and neither this stage nor the one before it may repeat. A free slot goes to the earlier stage first. A stage before it that stops the run with `unanswered: fail` also stops the pipelined agents already running. Chains are allowed: a pipelined stage can feed another. |
 | `repeat_until_dry` | One returned `strings` field. The stage runs again while its rounds keep finding values not returned before (case and spacing ignored), and stops after `dry_rounds` rounds in a row add nothing. Every round's kept results carry forward, and a rerun carries all of them in `{{input}}`. A round in which no agent answered does not count as dry. Step and fanout stages only, and not together with `repeat_until`. |
 | `dry_rounds` | With `repeat_until_dry`: how many rounds in a row without anything new end the loop. 1 to 3, default 1. `max_rounds` must be larger. |
 | `max_rounds` | Required with `repeat_until` or `repeat_until_dry`. How many times the stage may run in total, at least 2. Counted against the run ceiling like any other launches. |
@@ -2375,7 +2375,7 @@ A stage is one of three kinds:
 | The run | One task of the conversation, shown as an `orchestration run` row. Every agent it launches is a task under that row, not under the conversation. While it runs, the row names the stage and how many of its agents have finished, for example `look: 2 of 4 finished`. The terminal shows the same on the busy line when it is the only task running, and in `/tasks`. |
 | Cancellation | The turn waits on the run, so Esc stops the whole run including the stage in flight. Deleting the run's row does the same. |
 | Letting go | Let go (Ctrl+B in the terminal, the "let go" button in the browser) releases the whole run, not one of its agents. The turn gets its prompt back, the run finishes on its own, and its report is the last entry in the run's task. Its stage progress moves from the conversation into the run. Letting go from inside the run's own session releases the run too. |
-| Permission | Confirmation before each run. Shows maximum limits because referenced fanout sizes are unknown until earlier stages complete. |
+| Permission | Confirmation before each run the model starts. Shows maximum limits because referenced fanout sizes are unknown until earlier stages complete. A saved workflow and a resume ask as [Saved workflows](#saved-workflows) and [Resuming a run](#resuming-a-run) say. |
 | Repeats | Fanout items from prior results are deduplicated after case and whitespace normalization. The report includes the duplicate count. A `repeat_until` stage reruns until its field holds true on every kept result, and the report says after how many rounds it settled, or that it did not. A `repeat_until_dry` stage's report says after how many rounds it ran dry, or that it used every round without running dry. |
 | The report | Generated from execution records by LocalCode, not model summarization. |
 | Nesting | Nested orchestration is refused. |
@@ -2385,7 +2385,7 @@ A stage is one of three kinds:
 `/workflow resume [run]` runs a stopped run again and reuses every agent turn that finished. With no run named, it resumes the last run of this conversation. A run that `/rewind` took back is not resumed. A run's id is in the reply that reported it, and `/tasks` lists it.
 
 * Reused: a unit that completed, with its declared fields when the stage declares `returns`. Its answer is read from the run's own record. No model is called.
-* Run again: a unit that failed, timed out, was cancelled, never started, or did not give its declared fields. A unit whose prompt changed, because an earlier stage's kept results changed, also runs again.
+* Run again: a unit that failed, timed out, was cancelled (including part way through its answer), never started, or did not give its declared fields. A unit whose prompt changed, because an earlier stage's kept results changed, also runs again.
 * A unit matches by its stage, its agent, the agent's profile, provider and model, its tool allowlist, its full prompt, its declared fields, its item, copy and round, and the directory the run works in. A changed config therefore runs the affected units again, and after `/workspace` moves the conversation every unit runs again.
 * The plan is the one the run recorded, not the current file. A saved workflow edited since does not change what a resume runs.
 * The resume is a new run, and the report says how many answers it reused. Reused answers count toward the 32 agent turn ceiling. A resume of a resume reuses the answers the first resume reused.
@@ -2394,11 +2394,11 @@ Refused when:
 
 * The run is still running.
 * The run belongs to another conversation, for example in a fork's copy of the record.
-* A resume of the same run is already running, including one that was let go.
+* Any run of the same lineage is running, including one that was let go: the run itself, a resume of it, a resume of that resume, or the run it was resumed from.
 * The plan no longer validates against the current agents.
 * The same conditions as `/workflow run`: a scheduled turn, a booked command, inside a run or a debate, or orchestration off.
 
-A run with a `builder` or `runner` stage asks before it resumes. A finished unit's edits may have been reverted since, and a cancelled unit may have stopped half way, so the question names the stages that can write. A readonly run resumes without asking.
+A run with a `builder` or `runner` stage asks before it resumes. A finished unit's edits may have been reverted since, and a cancelled unit may have stopped half way, so the question names the stages that can write. The question is asked every time: it offers allow and deny only, and an answer covers that one resume. A rule that allows `Orchestrate` still answers it. A readonly run resumes without asking.
 
 #### Saved workflows
 
@@ -2430,9 +2430,10 @@ How arguments are used:
 
 Who is asked:
 
-* A workflow in the home directory runs when you type it.
-* A project's workflow asks first, because it arrives with a clone and any agent that can write the project can edit it. The question names the workflow and a hash of the file, and says which agents and roles it uses and its ceilings. "Always" approves that exact file; an edited file asks again.
-* A deny rule for `Orchestrate` refuses both.
+* A workflow in the home directory runs when you type it. When the workspace is the home directory, its workflows are the project's and ask.
+* A project's workflow asks first, because it arrives with a clone and any agent that can write the project can edit it. The question names the workflow, the start of the file's SHA-256, which agents and roles it uses and its ceilings, then the workflow's goal. "Always" approves that exact file, by its whole SHA-256; an edited file asks again.
+* A rule that allows `Orchestrate` itself, including the one an "always" to a model's Orchestrate call writes, answers these questions too. A deny rule for `Orchestrate` refuses both.
+* `save` and `delete` without `--user` refuse when the project's `.localcode` or `.localcode/workflows` is a symbolic link, so a repository cannot point them at another directory.
 * It is not run in a scheduled turn, from a command the model booked, inside a run or inside a debate, and orchestration must be on.
 * `/workflow run`, `resume`, `save` and `delete` are refused while a turn is running. Send them again once it ends. Listing and showing are not refused.
 

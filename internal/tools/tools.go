@@ -160,6 +160,11 @@ type Ask struct {
 	Outside   OutsideClass
 	Dir       string
 	Workspace string
+	// Once marks a question whose answer covers this one use only: no
+	// "for this session", no "always". For a decision about the state
+	// of the workspace now, which an answer given last week knows nothing
+	// about. The broker enforces it whatever a client sends.
+	Once bool
 }
 
 // Decision is a resolved permission outcome for one tool call — mirrors
@@ -475,7 +480,7 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		subject = ps.Subject(input)
 	}
 
-	if refusal := r.gate(ctx, name, t, input, subject, describe); refusal != nil {
+	if refusal := r.gate(ctx, name, t, input, subject, describe, false); refusal != nil {
 		return *refusal
 	}
 
@@ -507,7 +512,7 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 // gate is the permission half of Call: allow, deny or ask, for one call of
 // t with input. Nil means go ahead; otherwise the result is the refusal to
 // return in place of running the tool.
-func (r *Registry) gate(ctx context.Context, name string, t Tool, input json.RawMessage, subject, describe string) *Result {
+func (r *Registry) gate(ctx context.Context, name string, t Tool, input json.RawMessage, subject, describe string, once bool) *Result {
 	outcome := Outcome{Decision: DecisionAsk}
 	if !t.RequiresPermission(input) {
 		outcome.Decision = DecisionAllow
@@ -545,6 +550,7 @@ func (r *Registry) gate(ctx context.Context, name string, t Tool, input json.Raw
 			Outside:     outcome.Outside,
 			Dir:         outcome.Dir,
 			Workspace:   outcome.Workspace,
+			Once:        once,
 		})
 		var refused *RefusedError
 		if errors.As(err, &refused) {
@@ -583,13 +589,24 @@ func (r *Registry) gate(ctx context.Context, name string, t Tool, input json.Raw
 // runs the same plan the Orchestrate tool would, and the question it asks
 // has to be the one a rule or an earlier "always" already answers.
 func (r *Registry) Permit(ctx context.Context, name, subject, describe string) (bool, string) {
+	return r.permit(ctx, name, subject, describe, false)
+}
+
+// PermitEachTime is Permit for a question that is asked every time: its
+// answer covers this use and no other (see Ask.Once). A rule in config
+// still answers it, because a rule is the person deciding in advance.
+func (r *Registry) PermitEachTime(ctx context.Context, name, subject, describe string) (bool, string) {
+	return r.permit(ctx, name, subject, describe, true)
+}
+
+func (r *Registry) permit(ctx context.Context, name, subject, describe string, once bool) (bool, string) {
 	r.mu.RLock()
 	t, ok := r.tools[name]
 	r.mu.RUnlock()
 	if !ok {
 		return false, fmt.Sprintf("unknown tool %q", name)
 	}
-	if refusal := r.gate(ctx, name, t, nil, subject, describe); refusal != nil {
+	if refusal := r.gate(ctx, name, t, nil, subject, describe, once); refusal != nil {
 		return false, refusal.Content
 	}
 	return true, ""

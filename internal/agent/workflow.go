@@ -158,7 +158,11 @@ func readWorkflow(path, scope string) Workflow {
 		return wf
 	}
 	sum := sha256.Sum256(data)
-	wf.hash = hex.EncodeToString(sum[:])[:12]
+	// All of it. A prefix is a collision the repository's author can
+	// search for: 48 bits is a few seconds of trying whitespace, and a
+	// readonly file and a runner file sharing one would share an
+	// "always".
+	wf.hash = hex.EncodeToString(sum[:])
 
 	var parsed Workflow
 	dec := json.NewDecoder(bytes.NewReader(data))

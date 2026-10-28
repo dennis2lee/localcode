@@ -33,18 +33,16 @@ import (
 const workflowUsage = "usage: /workflow [list] | show <name> | run <name> [args] | resume [run] | save <name> [--user] [--force] [description] | delete <name> [--user]"
 
 func (l *Loop) routeWorkflow(ctx context.Context, sessionID, text string) (bool, error) {
-	trimmed := strings.TrimSpace(text)
-	first, rest, _ := strings.Cut(trimmed, " ")
-	if first != "/workflow" {
-		first, rest, _ = strings.Cut(trimmed, "\n")
-		if first != "/workflow" {
-			return false, nil
-		}
+	// Cut at any whitespace and matched in any case, as the daemon's
+	// heldUntilIdle reads it: a form one accepts and the other does not
+	// is one that runs at the wrong time.
+	first, rest := cutWord(strings.TrimSpace(text))
+	if !strings.EqualFold(first, "/workflow") {
+		return false, nil
 	}
-	rest = strings.TrimSpace(rest)
-	sub, rest := cutWord(rest)
+	sub, rest := cutWord(strings.TrimSpace(rest))
 
-	switch sub {
+	switch strings.ToLower(sub) {
 	case "", "list":
 		return true, l.replyLocal(sessionID, text, l.workflowList(ctx, sessionID))
 	case "show":
@@ -191,6 +189,11 @@ func (l *Loop) workflowSave(sessionID, rest string) string {
 	if dir == "" {
 		return "there is no home directory to save a --user workflow in"
 	}
+	if !user {
+		if why := linkedWorkflowDir(dir); why != "" {
+			return "not saved: " + why
+		}
+	}
 	path := filepath.Join(dir, name+".json")
 	if _, err := os.Lstat(path); err == nil && !force {
 		return fmt.Sprintf("%s already exists; add --force to replace it", path)
@@ -219,6 +222,21 @@ func (l *Loop) workflowSave(sessionID, rest string) string {
 	}
 	return fmt.Sprintf("Saved %s. It runs with \"/workflow run %s\". To give it arguments, write {{args}} where they go (or over: [\"$args\"] on a fanout) and say what to pass in \"args\".\n```json\n%s```",
 		path, name, data)
+}
+
+// linkedWorkflowDir is why a project's workflow directory is not one save
+// or delete may write in, or "". A repository that ships .localcode or
+// .localcode/workflows as a symbolic link puts those writes wherever its
+// author pointed it, the home's own workflows included, so they are
+// refused there. Reading through it is left alone: what runs from it
+// still asks, as any project workflow does.
+func linkedWorkflowDir(dir string) string {
+	for _, p := range []string{filepath.Dir(dir), dir} {
+		if info, err := os.Lstat(p); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Sprintf("%s is a symbolic link, and save and delete write only in the project's own directory (--user writes in the home's)", p)
+		}
+	}
+	return ""
 }
 
 // lastRunPlan is the plan of the last orchestration run this conversation
@@ -257,6 +275,11 @@ func (l *Loop) workflowDelete(sessionID, rest string) string {
 	dir := l.workflowDirFor(sessionID, user)
 	if dir == "" {
 		return "there is no home directory to delete a --user workflow from"
+	}
+	if !user {
+		if why := linkedWorkflowDir(dir); why != "" {
+			return "not deleted: " + why
+		}
 	}
 	path := filepath.Join(dir, name+".json")
 	if err := os.Remove(path); err != nil {
@@ -366,10 +389,12 @@ func describeWorkflowRun(wf Workflow, p Plan) string {
 		}
 		roles[role] = true
 	}
-	return fmt.Sprintf("run the project workflow %q from %s (%s): %d stages by %s, as %s, at most %d agent turns, %s per agent turn and %s for the run",
-		wf.Name, wf.path, firstLine(p.renderedGoal()), len(p.Stages),
+	// What localcode knows first, and the repository's own words last: a
+	// long goal must not push the roles off the end of the question.
+	return fmt.Sprintf("run the project workflow %q (sha256 %s...) from %s: %d stages by %s, as %s, at most %d agent turns, %s per agent turn and %s for the run. Its goal: %s",
+		wf.Name, wf.hash[:12], wf.path, len(p.Stages),
 		strings.Join(sortedKeys(agents, len(agents)), ", "), strings.Join(sortedKeys(roles, len(roles)), ", "),
-		p.Launches(), stageTimeout, runTimeout)
+		p.Launches(), stageTimeout, runTimeout, firstLine(p.renderedGoal()))
 }
 
 // runRecord is one orchestration run this conversation started, as its
@@ -422,8 +447,48 @@ func (l *Loop) findRun(sessionID, id string) (runRecord, error) {
 	return runRecord{}, errors.New("no orchestration has run in this conversation")
 }
 
-// liveRunOf is runID itself if it is still running, or a resume of it
-// that is, or "".
+// runLineage is the run a chain of resumes started from, and every run in
+// that chain: the original, its resumes, their resumes. Every one of them
+// reuses the same completed units and reruns the same unfinished ones, so
+// a resume of any of them while another is running would run those units
+// twice at once.
+func (l *Loop) runLineage(sessionID, runID string) (string, []string) {
+	from := map[string]string{}
+	evs, _ := l.Store.Events(sessionID, 0)
+	for _, e := range evs {
+		if e.Type != events.TypeTaskSpawned || e.Data["agent"] != runSessionAgent {
+			continue
+		}
+		id, _ := e.Data["task_id"].(string)
+		parent, _ := e.Data["resumed_from"].(string)
+		if id != "" {
+			from[id] = parent
+		}
+	}
+	rootOf := func(id string) string {
+		// Bounded by the number of runs, so a malformed record that
+		// names itself cannot loop.
+		for range len(from) + 1 {
+			p := from[id]
+			if p == "" {
+				return id
+			}
+			id = p
+		}
+		return id
+	}
+	root := rootOf(runID)
+	var members []string
+	for id := range from {
+		if rootOf(id) == root {
+			members = append(members, id)
+		}
+	}
+	return root, members
+}
+
+// liveRunOf is runID itself if it is still running, or another run of its
+// lineage that is, or "".
 func (l *Loop) liveRunOf(sessionID, runID string) string {
 	running := map[string]bool{}
 	for _, id := range l.Tasks.Running() {
@@ -432,12 +497,10 @@ func (l *Loop) liveRunOf(sessionID, runID string) string {
 	if running[runID] {
 		return runID
 	}
-	evs, _ := l.Store.Events(sessionID, 0)
-	for _, e := range evs {
-		if e.Type != events.TypeTaskSpawned || e.Data["resumed_from"] != runID {
-			continue
-		}
-		if id, _ := e.Data["task_id"].(string); running[id] {
+	_, members := l.runLineage(sessionID, runID)
+	sort.Strings(members)
+	for _, id := range members {
+		if running[id] {
 			return id
 		}
 	}
@@ -478,19 +541,22 @@ func (l *Loop) resumeWorkflowCommand(ctx context.Context, sessionID, line, id st
 		// a second would run the ones it has not finished again.
 		return notResumed(fmt.Sprintf("run %s is being resumed already, as run %s", rec.id, live))
 	}
+	// Held by lineage, not by run: resuming a run and resuming its resume
+	// at the same moment would run the same units twice.
+	lineage, _ := l.runLineage(sessionID, rec.id)
 	l.mu.Lock()
-	if l.resuming[rec.id] {
+	if l.resuming[lineage] {
 		l.mu.Unlock()
 		return notResumed(fmt.Sprintf("run %s is being resumed already", rec.id))
 	}
 	if l.resuming == nil {
 		l.resuming = map[string]bool{}
 	}
-	l.resuming[rec.id] = true
+	l.resuming[lineage] = true
 	l.mu.Unlock()
 	defer func() {
 		l.mu.Lock()
-		delete(l.resuming, rec.id)
+		delete(l.resuming, lineage)
 		l.mu.Unlock()
 	}()
 
@@ -503,7 +569,7 @@ func (l *Loop) resumeWorkflowCommand(ctx context.Context, sessionID, line, id st
 		// finished may have had its changes reverted since: reusing or
 		// rerunning either is a decision about this workspace now, so it
 		// is asked every time.
-		ok, why := l.Tools.Permit(WithSessionID(ctx, sessionID), orchestrateToolName, "resume:"+rec.id,
+		ok, why := l.Tools.PermitEachTime(WithSessionID(ctx, sessionID), orchestrateToolName, "resume:"+rec.id,
 			fmt.Sprintf("resume run %s (%s), whose stages %s can change the workspace: %d finished answers would be reused and everything else run again, at most %d agent turns",
 				rec.id, firstLine(rec.plan.renderedGoal()), strings.Join(writes, ", "), len(cache), rec.plan.Launches()))
 		if !ok {

@@ -95,6 +95,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		if m.pending != nil && m.canAnswerPermission() {
 			id := m.pending.id
 			canAlways := m.pending.canAlways
+			once := m.pending.once
 			// A boundary question takes a different set of answers: see
 			// pendingPermission.prompt. "d" only exists there, and "s"
 			// and "a" mean something else.
@@ -102,6 +103,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			key := msg.String()
 			if key == "d" && !outside {
 				return m, nil, false // an ordinary letter everywhere else
+			}
+			if once && (key == "s" || key == "a") {
+				// Not offered: this question is asked every time, and the
+				// question stays on screen for a y or an n.
+				return m, nil, true
 			}
 			// Answered here, so the next queued request comes up now
 			// rather than waiting for this answer's own resolved event

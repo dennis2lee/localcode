@@ -17,6 +17,9 @@ type pendingPermission struct {
 	// to (started with neither --config nor a resolvable global config),
 	// in which case "always" isn't offered — only once/session/deny.
 	canAlways bool
+	// once is a question whose answer covers this use only (a resume of
+	// a run that writes): only y and n are offered or taken.
+	once bool
 
 	// outside is "read" or "write" when this question exists because the
 	// path leaves the workspace, and empty otherwise. It changes both
@@ -40,7 +43,9 @@ type pendingPermission struct {
 func (p pendingPermission) prompt(typing bool) string {
 	head := fmt.Sprintf("Permission request [%s]: %s", p.tool, p.description)
 	keys := "y: allow once  n: deny  s: allow for session"
-	if p.canAlways {
+	if p.once {
+		keys = "y: allow this once  n: deny  (asked every time)"
+	} else if p.canAlways {
 		keys += fmt.Sprintf("  a: always allow %q", p.rule)
 	}
 

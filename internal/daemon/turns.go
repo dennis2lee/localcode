@@ -563,6 +563,9 @@ func heldUntilIdle(text string) string {
 	if i := strings.IndexFunc(trimmed, unicode.IsSpace); i >= 0 {
 		first, rest = trimmed[:i], trimmed[i:]
 	}
+	// In any case, as the router reads a command: "/REWIND" typed during
+	// a turn is the same command as "/rewind".
+	first = strings.ToLower(first)
 	switch first {
 	case "/clear":
 		return "/clear"
@@ -582,7 +585,7 @@ func heldUntilIdle(text string) string {
 		// delete write the workspace a running turn may be editing.
 		// Listing and showing only read.
 		if words := strings.Fields(rest); len(words) > 0 {
-			switch words[0] {
+			switch strings.ToLower(words[0]) {
 			case "run", "resume", "save", "delete":
 				return "/workflow"
 			}

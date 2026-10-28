@@ -386,3 +386,51 @@ func TestSpawnLeavesNoOrphanWhenTheParentIsMissing(t *testing.T) {
 		t.Errorf("%d session(s) left behind by a failed spawn", after-before)
 	}
 }
+
+// A question asked every time (Ask.Once, a resume of a run that writes)
+// takes "always" and "for this session" as this once: nothing is written
+// to config.json, nothing is remembered, the next use asks again, and the
+// answer is recorded as once so a restart's replay grants nothing.
+func TestAQuestionAskedEveryTimeIsAnsweredOnlyOnce(t *testing.T) {
+	broker, store, configPath := newPermissionTestBroker(t)
+	ask := func(scope string) {
+		t.Helper()
+		before, _ := store.Events("s1", 0)
+		done := make(chan bool, 1)
+		go func() {
+			ok, _ := broker.Func()(WithSessionID(context.Background(), "s1"),
+				tools.Ask{Tool: "Orchestrate", Subject: "resume:task-1", Description: "resume", Once: true})
+			done <- ok
+		}()
+		id := waitForPermissionID(t, store, "s1", len(before))
+		broker.Resolve(id, true, scope)
+		select {
+		case ok := <-done:
+			if !ok {
+				t.Fatalf("an allowed %s answer refused", scope)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the %s answer never returned", scope)
+		}
+	}
+	ask(ScopeAlways)
+	ask(ScopeSession) // asked again: the "always" granted nothing
+	ask(ScopeOnce)    // and again: so did "session"
+
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Errorf("an always answer to a question asked every time wrote config.json (%v)", err)
+	}
+	evs, _ := store.Events("s1", 0)
+	for _, e := range evs {
+		switch e.Type {
+		case events.TypePermissionRequest:
+			if e.Data["once"] != true || e.Data["can_always"] != false {
+				t.Errorf("the request does not tell clients to offer allow and deny only: %v", e.Data)
+			}
+		case events.TypePermissionResolved:
+			if e.Data["scope"] != ScopeOnce {
+				t.Errorf("the answer was recorded as %v, want once, or a restart would grant it", e.Data["scope"])
+			}
+		}
+	}
+}

@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.169.1
+
+Saved workflows and resume after a red-team review: a project workflow's approval bound to the whole file hash, a resume of a run that writes asked every time, and no unit run twice by a chain of resumes or cut short and then reused.
+
+**Fixed**
+
+* A project workflow's "always" bound to the first 48 bits of the file's SHA-256, so a repository could swap in a file sharing that prefix and have it run without a question; the whole hash is bound now
+* A resume of a run with builder or runner stages not asked again after an "always" or "for this session" answer; that question offers allow and deny only
+* `/workflow save` and `delete` writing through a project `.localcode/workflows` that is a symbolic link, for example into the home directory's own workflows
+* A resume started while a resume of a resume of the same run was still running, which ran the same units twice at once
+* A delegated agent or orchestration unit cut off part way through its answer (Esc, the stage timeout, the run deadline) recorded as finished, so a resume reused the half answer and the stage kept it
+* A pipelined chain at the 32 agent turn ceiling running different items depending on which agent was slow
+* A pipeline whose first stage had no room left not stopping the run, and a pipelined stage counting items past its 16 item limit as dropped by the ceiling
+* Letting go of a run answered with "nothing to let go of" while an earlier run of the same conversation was let go and still going
+* An in-app update handing over while a let-go run was still going, leaving two daemons writing that run's conversation
+* `/REWIND`, `/Clear` and the other held commands typed in another case reaching a running turn as text, and `/workflow` followed by a tab not read as a command
+
+**Changed**
+
+* The Orchestrate result names its run, so a run with failed units can be resumed by its id
+* The report counts the items of a fanout past its first 16 instead of leaving them out
+* A project workflow's question puts its stages, agents, roles and the start of the file's hash before the workflow's own goal text
+
 ## v0.169.0
 
 Orchestration plans saved as workflows and run by name, stopped runs resumed without paying again for what finished, and each run one task that shows how far it has got.

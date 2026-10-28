@@ -274,7 +274,7 @@ func TestResumingARunThatWritesAsks(t *testing.T) {
 		t.Fatalf("asked %d times, want once", len(asks.asks))
 	}
 	q := asks.asks[0]
-	if q.Tool != orchestrateToolName || q.Subject != "resume:"+run || !strings.Contains(q.Description, "fix can change the workspace") {
+	if q.Tool != orchestrateToolName || q.Subject != "resume:"+run || !q.Once || !strings.Contains(q.Description, "fix can change the workspace") {
 		t.Errorf("the question is %+v", q)
 	}
 	if ids := runIDs(loop, "conv"); len(ids) != 1 {

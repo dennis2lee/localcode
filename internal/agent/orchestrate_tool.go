@@ -175,7 +175,7 @@ func (t *OrchestrateTool) Execute(ctx context.Context, input json.RawMessage) to
 	sessionID, _ := SessionIDFromContext(ctx)
 	runID, text, err := t.loop.Tasks.SpawnRun(ctx, sessionID, p.Goal, map[string]any{"plan": p}, t.loop.planWork(sessionID, p))
 	if errors.Is(err, errLetGo) {
-		return tools.Result{Content: text}
+		return tools.Result{Content: text} // the note names the run
 	}
 	if err != nil {
 		if text == "" {
@@ -183,7 +183,8 @@ func (t *OrchestrateTool) Execute(ctx context.Context, input json.RawMessage) to
 		}
 		return tools.Result{Content: fmt.Sprintf("the run %s stopped: %v\n\n%s", runID, err, text), IsError: true}
 	}
-	return tools.Result{Content: text}
+	// Named, so a run with failed units can be resumed by its id.
+	return tools.Result{Content: fmt.Sprintf("Run %s.\n\n%s", runID, text)}
 }
 
 // planWork is what a run session does: the plan, then the report, written
@@ -242,6 +243,9 @@ func (r runReport) String() string {
 		}
 		if s.merged > 0 {
 			fmt.Fprintf(&b, ", %d repeat(s) of an item merged", s.merged)
+		}
+		if s.capped > 0 {
+			fmt.Fprintf(&b, ", %d item(s) past the first %d not run", s.capped, maxFanout)
 		}
 		if s.dropped > 0 {
 			fmt.Fprintf(&b, ", %d item(s) not run because the run's %d-agent ceiling was reached", s.dropped, maxRunAgents)

@@ -299,6 +299,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		desc, _ := ev.Data["description"].(string)
 		rule, _ := ev.Data["rule"].(string)
 		canAlways, _ := ev.Data["can_always"].(bool)
+		once, _ := ev.Data["once"].(bool)
 		if desc == "" {
 			desc = "(no description given)"
 		}
@@ -306,7 +307,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		outsideDir, _ := ev.Data["outside_dir"].(string)
 		workspace, _ := ev.Data["workspace"].(string)
 		m.enqueuePermission(&pendingPermission{
-			id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways,
+			id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways, once: once,
 			outside: outside, outsideDir: outsideDir, workspace: workspace,
 		})
 	case events.TypePermissionResolved:

@@ -165,6 +165,9 @@ type stageReport struct {
 	dropped int
 	// merged is how many repeats of an item an earlier stage returned.
 	merged int
+	// capped is how many distinct items of a reference fanout came past
+	// the first maxFanout, which are not run.
+	capped int
 	// rounds is how many times a repeat_until stage ran, and settled says
 	// whether its field came back true. Zero on every other stage.
 	rounds  int
@@ -247,7 +250,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 			continue
 		}
 
-		items, merged := l.stageItems(stage, results)
+		items, merged, capped := l.stageItems(stage, results)
 		copies := max(stage.Copies, 1)
 
 		// A fanout over an earlier stage's results is the one width nobody
@@ -271,7 +274,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 		}
 		if len(units) == 0 {
 			report.stages = append(report.stages, stageReport{
-				name: stage.Name, kind: stage.Kind, agent: stage.Agent, dropped: dropped, merged: merged,
+				name: stage.Name, kind: stage.Kind, agent: stage.Agent, dropped: dropped, merged: merged, capped: capped,
 			})
 			if dropped > 0 {
 				report.stopped = fmt.Sprintf("stopped at %s: the run had already launched %d of its %d agents, so none of its %d items could run",
@@ -301,7 +304,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 		got := l.runStage(ctx, sessionID, runID, p, stage, units, brief, first)
 		report.launched += len(units)
 
-		sr := stageReport{name: stage.Name, kind: stage.Kind, agent: stage.Agent, launched: len(units), dropped: dropped, merged: merged}
+		sr := stageReport{name: stage.Name, kind: stage.Kind, agent: stage.Agent, launched: len(units), dropped: dropped, merged: merged, capped: capped}
 		// Round 1 is stamped only on a repeat_until stage: on an ordinary
 		// stage every outcome stays at round 0 and the report reads as
 		// before, while a repeated stage labels every round including the

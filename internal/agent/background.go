@@ -626,11 +626,22 @@ func (tm *TaskManager) Running() []string {
 func (tm *TaskManager) RunningParents() []string {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
-	parents := make([]string, 0, len(tm.pending))
+	seen := map[string]bool{}
 	for parent, tasks := range tm.pending {
 		if len(tasks) > 0 {
-			parents = append(parents, parent)
+			seen[parent] = true
 		}
+	}
+	// A synchronous child writes its final status into its parent too,
+	// and one that was let go (an orchestration run, most often) outlives
+	// the turn that started it, so its parent is just as much a log this
+	// daemon will still write to.
+	for _, parent := range tm.syncParent {
+		seen[parent] = true
+	}
+	parents := make([]string, 0, len(seen))
+	for parent := range seen {
+		parents = append(parents, parent)
 	}
 	sort.Strings(parents)
 	return parents

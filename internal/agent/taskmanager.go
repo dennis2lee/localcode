@@ -758,6 +758,13 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 			// that actually contains it is the one whose manifest names it.
 			err = tm.loop.SendMessage(withDelegatedTask(ctx, agentName, prompt), taskID, agentName, prompt)
 		}
+		if err == nil && ctx.Err() != nil {
+			// A turn cut off part way through its answer ends without an
+			// error and with the half it had written. That is not an
+			// answer: recorded as completed, an orchestration resume would
+			// reuse it and a stage would keep it.
+			err = ctx.Err()
+		}
 		if err != nil {
 			tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
 				"task_id": taskID, "status": "failed", "error": err.Error(),
@@ -861,10 +868,19 @@ func (tm *TaskManager) DetachChildOf(parentSessionID string) (string, bool) {
 	tm.mu.Lock()
 	var taskID string
 	for id, parent := range tm.syncParent {
-		if parent == parentSessionID {
-			taskID = id
-			break
+		if parent != parentSessionID {
+			continue
 		}
+		// One already let go stays registered until it ends, which for
+		// a run is up to half an hour; it is not what is blocking the
+		// turn now, so letting go must not stop at it.
+		select {
+		case <-tm.detach[id]:
+			continue
+		default:
+		}
+		taskID = id
+		break
 	}
 	tm.mu.Unlock()
 	if taskID == "" {
