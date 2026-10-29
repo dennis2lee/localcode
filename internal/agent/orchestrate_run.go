@@ -150,6 +150,10 @@ type runReport struct {
 	stages   []stageReport
 	launched int
 	stopped  string
+	// atCeiling is a stop at the 32-turn ceiling. Recorded with the
+	// report, because a resume of such a run would stop at the same
+	// place: what it reuses counts toward the same ceiling.
+	atCeiling bool
 }
 
 type stageReport struct {
@@ -277,6 +281,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 				name: stage.Name, kind: stage.Kind, agent: stage.Agent, dropped: dropped, merged: merged, capped: capped,
 			})
 			if dropped > 0 {
+				report.atCeiling = true
 				report.stopped = fmt.Sprintf("stopped at %s: the run had already launched %d of its %d agents, so none of its %d items could run",
 					stage.Name, report.launched, maxRunAgents, dropped)
 				return report
@@ -284,6 +289,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 			continue
 		}
 		if report.launched+len(units) > maxRunAgents {
+			report.atCeiling = true
 			report.stopped = fmt.Sprintf("stopped before %s: the run had launched %d agents and this stage needs %d more, past the limit of %d",
 				stage.Name, report.launched, len(units), maxRunAgents)
 			return report
@@ -327,7 +333,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 		seen := map[string]bool{}
 		empty := 0
 		if stage.RepeatUntilDry != "" {
-			empty = dryCount(stage, got, kept, seen, empty)
+			empty = dryCount(stage, got, seen, empty)
 		}
 		finished := func() bool {
 			if stage.RepeatUntilDry != "" {
@@ -351,6 +357,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 			if report.launched+len(units) > maxRunAgents {
 				sr.rounds = round
 				report.stages = append(report.stages, sr)
+				report.atCeiling = true
 				report.stopped = fmt.Sprintf("stopped in %s: round %d settled nothing and the run had launched %d agents, past the limit of %d",
 					stage.Name, round+1, report.launched, maxRunAgents)
 				return report
@@ -375,7 +382,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID, runID string, p Plan) run
 				return report
 			}
 			if stage.RepeatUntilDry != "" {
-				empty = dryCount(stage, got, kept, seen, empty)
+				empty = dryCount(stage, got, seen, empty)
 				carried = append(carried, kept...)
 			} else {
 				carried = kept

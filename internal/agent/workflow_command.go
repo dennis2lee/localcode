@@ -447,6 +447,21 @@ func (l *Loop) findRun(sessionID, id string) (runRecord, error) {
 	return runRecord{}, errors.New("no orchestration has run in this conversation")
 }
 
+// stoppedAtCeiling reports whether a run's report says it stopped at the
+// agent ceiling.
+func (l *Loop) stoppedAtCeiling(runID string) bool {
+	evs, err := l.Store.Events(runID, 0)
+	if err != nil {
+		return false
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		if evs[i].Type == events.TypeMessagePartEnd {
+			return evs[i].Data["ceiling"] == true
+		}
+	}
+	return false
+}
+
 // runLineage is the run a chain of resumes started from, and every run in
 // that chain: the original, its resumes, their resumes. Every one of them
 // reuses the same completed units and reruns the same unfinished ones, so
@@ -534,6 +549,9 @@ func (l *Loop) resumeWorkflowCommand(ctx context.Context, sessionID, line, id st
 		// units belong to the conversation it was forked from.
 		return notResumed(fmt.Sprintf("run %s belongs to another conversation", rec.id))
 	}
+	if l.stoppedAtCeiling(rec.id) {
+		return notResumed(fmt.Sprintf("run %s stopped at the %d agent turn ceiling, and the answers a resume reuses count toward that ceiling, so a resume would stop at the same place. Run the plan over fewer items, or split it", rec.id, maxRunAgents))
+	}
 	if live := l.liveRunOf(sessionID, rec.id); live == rec.id {
 		return notResumed(fmt.Sprintf("run %s is still running", rec.id))
 	} else if live != "" {
@@ -570,7 +588,7 @@ func (l *Loop) resumeWorkflowCommand(ctx context.Context, sessionID, line, id st
 		// rerunning either is a decision about this workspace now, so it
 		// is asked every time.
 		ok, why := l.Tools.PermitEachTime(WithSessionID(ctx, sessionID), orchestrateToolName, "resume:"+rec.id,
-			fmt.Sprintf("resume run %s (%s), whose stages %s can change the workspace: %d finished answers would be reused and everything else run again, at most %d agent turns",
+			fmt.Sprintf("resume run %s (%s), whose stages %s can change the workspace: %d finished answers that could be reused (those whose units are asked the same again) and everything else run again, at most %d agent turns",
 				rec.id, firstLine(rec.plan.renderedGoal()), strings.Join(writes, ", "), len(cache), rec.plan.Launches()))
 		if !ok {
 			return notResumed(why + ".")

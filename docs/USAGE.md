@@ -2374,7 +2374,7 @@ A stage is one of three kinds:
 | Timeouts | 10 minutes per agent turn; 30 minutes per run. |
 | The run | One task of the conversation, shown as an `orchestration run` row. Every agent it launches is a task under that row, not under the conversation. While it runs, the row names the stage and how many of its agents have finished, for example `look: 2 of 4 finished`. The terminal shows the same on the busy line when it is the only task running, and in `/tasks`. |
 | Cancellation | The turn waits on the run, so Esc stops the whole run including the stage in flight. Deleting the run's row does the same. |
-| Letting go | Let go (Ctrl+B in the terminal, the "let go" button in the browser) releases the whole run, not one of its agents. The turn gets its prompt back, the run finishes on its own, and its report is the last entry in the run's task. Its stage progress moves from the conversation into the run. Letting go from inside the run's own session releases the run too. |
+| Letting go | Let go (Ctrl+B in the terminal, the "let go" button in the browser) releases the whole run, not one of its agents. The turn gets its prompt back, the run finishes on its own, and its report is the last entry in the run's task. Stage lines from then on go into the run; the ones already in the conversation stay there. Letting go from inside the run's own session releases the run too. |
 | Permission | Confirmation before each run the model starts. Shows maximum limits because referenced fanout sizes are unknown until earlier stages complete. A saved workflow and a resume ask as [Saved workflows](#saved-workflows) and [Resuming a run](#resuming-a-run) say. |
 | Repeats | Fanout items from prior results are deduplicated after case and whitespace normalization. The report includes the duplicate count. A `repeat_until` stage reruns until its field holds true on every kept result, and the report says after how many rounds it settled, or that it did not. A `repeat_until_dry` stage's report says after how many rounds it ran dry, or that it used every round without running dry. |
 | The report | Generated from execution records by LocalCode, not model summarization. |
@@ -2396,6 +2396,7 @@ Refused when:
 * The run belongs to another conversation, for example in a fork's copy of the record.
 * Any run of the same lineage is running, including one that was let go: the run itself, a resume of it, a resume of that resume, or the run it was resumed from.
 * The plan no longer validates against the current agents.
+* The run stopped at the 32 agent turn ceiling. The answers a resume reuses count toward that ceiling, so it would stop at the same place. Run the plan over fewer items, or split it.
 * The same conditions as `/workflow run`: a scheduled turn, a booked command, inside a run or a debate, or orchestration off.
 
 A run with a `builder` or `runner` stage asks before it resumes. A finished unit's edits may have been reverted since, and a cancelled unit may have stopped half way, so the question names the stages that can write. The question is asked every time: it offers allow and deny only, and an answer covers that one resume. A rule that allows `Orchestrate` still answers it. A readonly run resumes without asking.

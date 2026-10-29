@@ -89,14 +89,24 @@ func (d *Daemon) handleTaskOutput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var out strings.Builder
+	streamed := false
 	for _, ev := range evs {
 		switch ev.Type {
 		case events.TypeMessagePartDelta:
 			if text, ok := ev.Data["text"].(string); ok {
 				out.WriteString(text)
+				streamed = true
 			}
 		case events.TypeMessagePartEnd:
+			// A message written whole, with no deltas before it, is in
+			// its end event: an orchestration run's report is written
+			// that way, and is what a let-go run's reply says to read
+			// here.
+			if text, _ := ev.Data["text"].(string); !streamed && text != "" {
+				out.WriteString(text)
+			}
 			out.WriteString("\n")
+			streamed = false
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"output": strings.TrimRight(out.String(), "\n")})

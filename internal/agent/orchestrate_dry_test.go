@@ -183,3 +183,27 @@ func TestDryRoundsCountsConsecutiveEmptyRounds(t *testing.T) {
 		t.Errorf("rounds = %d, ran dry = %v; want 5 and true: two empty rounds in a row after the last new finding", h.rounds, h.ranDry)
 	}
 }
+
+// "New" means not returned before, kept or not: a value a keep filter
+// dropped in round 1 is not new when round 2 returns it again, so the loop
+// runs dry at round 2.
+func TestADryLoopCountsReturnedValuesNotOnlyKeptOnes(t *testing.T) {
+	var calls int32
+	m := &scriptedModel{reply: func(string) (string, map[string]any) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return "", map[string]any{"found": []any{"bug a"}, "good": false}
+		}
+		return "", map[string]any{"found": []any{"bug a"}, "good": true}
+	}}
+	loop := orchestrateLoop(t, m.server(t).URL)
+	report := runPlanJSON(t, loop, `{"goal":"g","stages":[
+	  {"name":"hunt","kind":"step","agent":"oracle","prompt":"hunt",
+	   "returns":{"found":"strings","good":"bool"},"keep":"good",
+	   "repeat_until_dry":"found","max_rounds":4}]}`)
+	if report.stopped != "" {
+		t.Fatalf("did not finish: %s", report.stopped)
+	}
+	if h := report.stages[0]; h.rounds != 2 || !h.ranDry {
+		t.Errorf("rounds=%d ranDry=%v, want 2 and true: round 2 returned nothing not returned before", h.rounds, h.ranDry)
+	}
+}

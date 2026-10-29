@@ -56,6 +56,9 @@ func TestAPipelinedStageAtTheCeilingStopsTheRunLikeAnUnpipelinedOne(t *testing.T
 			t.Errorf("pipeline=%v: every item of check was past the ceiling (%d dropped), and the run did not stop; sum ran=%v",
 				pipelined, check.dropped, ranSum)
 		}
+		if !report.atCeiling {
+			t.Errorf("pipeline=%v: a stop at the ceiling is not recorded as one, so a resume would try again", pipelined)
+		}
 	}
 }
 

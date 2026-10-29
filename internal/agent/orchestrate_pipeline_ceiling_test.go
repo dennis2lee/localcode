@@ -98,6 +98,9 @@ func TestAPipelineHeadWithNoRoomStopsTheRun(t *testing.T) {
 			s := r.stages[len(r.stages)-1]
 			last = fmt.Sprintf("%s: %d launched", s.name, s.launched)
 		}
+		if r.stopped != "" && !r.atCeiling {
+			t.Errorf("pipeline=%v: a stop at the ceiling is not recorded as one, so a resume would try again", pipeline)
+		}
 		return r.stopped, last
 	}
 	plain, plainLast := stopped(false)

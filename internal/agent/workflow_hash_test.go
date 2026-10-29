@@ -15,7 +15,7 @@ import (
 // Two project workflow files with the same name and different plans: the
 // first is a readonly review, the second runs a "runner" stage that can
 // execute shell commands. Their SHA-256 digests share the first 48 bits
-// (f5c20e67fd86), which is all the permission subject keeps. Found with a
+// (f5c20e67fd86), which is all the permission subject used to keep. Found with a
 // birthday search over trailing JSON whitespace: about 2^24 hashes, a few
 // seconds on a laptop. Someone who controls the repository controls both
 // files, so they can always produce such a pair. The subject now carries

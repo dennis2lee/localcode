@@ -121,10 +121,12 @@ func (l *Loop) runPipeline(ctx context.Context, sessionID, runID string, p Plan,
 	if len(head.units) == 0 && head.sr.dropped > 0 {
 		// As runPlan stops an ordinary stage none of whose items fit.
 		report.stages = append(report.stages, head.sr)
+		report.atCeiling = true
 		return fmt.Sprintf("stopped at %s: the run had already launched %d of its %d agents, so none of its %d items could run",
 			head.stage.Name, report.launched, maxRunAgents, head.sr.dropped)
 	}
 	if report.launched+len(head.units) > maxRunAgents {
+		report.atCeiling = true
 		return fmt.Sprintf("stopped before %s: the run had launched %d agents and this stage needs %d more, past the limit of %d",
 			head.stage.Name, report.launched, len(head.units), maxRunAgents)
 	}
@@ -289,6 +291,7 @@ func (l *Loop) runPipeline(ctx context.Context, sessionID, runID string, p Plan,
 		// stops the run, rather than handing the stages after it results
 		// with a whole stage missing.
 		if stop == "" && st.items == 0 && st.sr.dropped > 0 {
+			report.atCeiling = true
 			stop = fmt.Sprintf("stopped at %s: the run had already launched %d of its %d agents, so none of its %d items could run",
 				st.stage.Name, report.launched, maxRunAgents, st.sr.dropped)
 		}

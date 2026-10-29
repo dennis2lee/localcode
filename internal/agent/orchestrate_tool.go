@@ -193,8 +193,13 @@ func (t *OrchestrateTool) Execute(ctx context.Context, input json.RawMessage) to
 func (l *Loop) planWork(sessionID string, p Plan) syncWork {
 	return func(ctx context.Context, runID string) (string, error) {
 		l.Store.Append(runID, events.TypeUserMessage, map[string]any{"text": p.renderedGoal(), "local": true})
-		text := l.runPlan(ctx, sessionID, runID, p).String()
-		l.Store.Append(runID, events.TypeMessagePartEnd, map[string]any{"text": text})
+		report := l.runPlan(ctx, sessionID, runID, p)
+		text := report.String()
+		end := map[string]any{"text": text}
+		if report.atCeiling {
+			end["ceiling"] = true
+		}
+		l.Store.Append(runID, events.TypeMessagePartEnd, end)
 		return text, ctx.Err()
 	}
 }

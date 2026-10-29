@@ -863,7 +863,10 @@ func (tm *TaskManager) DetachChildOf(parentSessionID string) (string, bool) {
 	// own outlives Esc and the run's deadline, and a resume would start it
 	// again beside itself.
 	if s, err := tm.loop.Store.Get(parentSessionID); err == nil && s.Agent == runSessionAgent {
-		return parentSessionID, tm.Detach(parentSessionID)
+		if !tm.Detach(parentSessionID) {
+			return "", false // finished, or let go already
+		}
+		return parentSessionID, true
 	}
 	tm.mu.Lock()
 	var taskID string
@@ -883,10 +886,12 @@ func (tm *TaskManager) DetachChildOf(parentSessionID string) (string, bool) {
 		break
 	}
 	tm.mu.Unlock()
-	if taskID == "" {
+	if taskID == "" || !tm.Detach(taskID) {
+		// Nothing, or a child that finished between the scan and here:
+		// named only when something was let go.
 		return "", false
 	}
-	return taskID, tm.Detach(taskID)
+	return taskID, true
 }
 
 // lastAssistantText finds the most recent message.part.end event in a

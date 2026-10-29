@@ -16,12 +16,16 @@ Saved workflows and resume after a red-team review: a project workflow's approva
 * Letting go of a run answered with "nothing to let go of" while an earlier run of the same conversation was let go and still going
 * An in-app update handing over while a let-go run was still going, leaving two daemons writing that run's conversation
 * `/REWIND`, `/Clear` and the other held commands typed in another case reaching a running turn as text, and `/workflow` followed by a tab not read as a command
+* `/tasks <run>` showing nothing for an orchestration run, whose report a let-go run's reply says to read there
+* A `repeat_until_dry` stage with `keep` counting a value the keep filter dropped as new when a later round returned it again, which ran extra rounds
+* Letting go naming a task it had not let go, when the task had just finished
 
 **Changed**
 
 * The Orchestrate result names its run, so a run with failed units can be resumed by its id
 * The report counts the items of a fanout past its first 16 instead of leaving them out
 * A project workflow's question puts its stages, agents, roles and the start of the file's hash before the workflow's own goal text
+* A run that stopped at the 32 agent turn ceiling is not resumed, with the reason: a resume would stop at the same place
 
 ## v0.169.0
 

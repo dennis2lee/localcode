@@ -192,3 +192,47 @@ func TestAResumeDoesNotReuseAnswersFromAnotherWorkspace(t *testing.T) {
 		}
 	}
 }
+
+// A run that stopped at the 32 agent turn ceiling is not resumed: the
+// answers a resume reuses count toward the same ceiling, so it would stop
+// at the same place, every time. The refusal says so.
+func TestARunStoppedAtTheCeilingIsNotResumed(t *testing.T) {
+	m := &scriptedModel{reply: func(p string) (string, map[string]any) {
+		if strings.Contains(p, "find things") {
+			var out []any
+			for i := 1; i <= 20; i++ {
+				out = append(out, fmt.Sprintf("f%d", i))
+			}
+			return "", map[string]any{"found": out}
+		}
+		return "ok", nil
+	}}
+	loop := orchestrateLoop(t, m.server(t).URL)
+	res := executeOrchestrate(context.Background(), loop, `{"goal":"g","stages":[
+	  {"name":"find","kind":"step","agent":"oracle","prompt":"find things","returns":{"found":"strings"}},
+	  {"name":"check","kind":"fanout","agent":"oracle","over":["$find.found"],"copies":2,"prompt":"check {{item}}"},
+	  {"name":"last","kind":"fanout","agent":"oracle","over":["x","y"],"prompt":"last {{item}}"}]}`)
+	if !strings.Contains(res.Content, "past the limit") {
+		t.Fatalf("the run did not stop at the ceiling:\n%s", res.Content)
+	}
+	before := len(m.seen())
+	out := resume(t, loop, "main", "")
+	if !strings.Contains(out, "Not resumed") || !strings.Contains(out, "ceiling") {
+		t.Errorf("a run stopped at the ceiling was resumed, or refused without saying why:\n%s", out)
+	}
+	if n := len(m.seen()) - before; n != 0 {
+		t.Errorf("the refused resume asked a model %d times", n)
+	}
+}
+
+// Letting go names a task only when one was let go: asked about a run
+// that has already finished, it names nothing.
+func TestLettingGoOfAFinishedRunNamesNothing(t *testing.T) {
+	m := &scriptedModel{reply: func(string) (string, map[string]any) { return "ok", nil }}
+	loop := orchestrateLoop(t, m.server(t).URL)
+	executeOrchestrate(context.Background(), loop, `{"goal":"g","stages":[{"name":"a","kind":"step","agent":"oracle","prompt":"x"}]}`)
+	run := runIDs(loop, "main")[0]
+	if id, ok := loop.Tasks.DetachChildOf(run); ok || id != "" {
+		t.Errorf("DetachChildOf(finished run) = (%q, %v), want nothing", id, ok)
+	}
+}

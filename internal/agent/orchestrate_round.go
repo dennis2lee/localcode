@@ -71,9 +71,16 @@ func resultsWith(results map[string][]outcome, stage string, kept []outcome) map
 // before, raised by an answered round that added nothing, and left alone
 // by a round in which nobody answered, which found nothing because nobody
 // looked. seen collects every normalised value so far.
-func dryCount(stage Stage, got, kept []outcome, seen map[string]bool, empty int) int {
+//
+// Every value an agent returned counts, kept or not: "new" means not
+// returned before, so a value a keep filter dropped in one round is not
+// new when it comes back in the next.
+func dryCount(stage Stage, got []outcome, seen map[string]bool, empty int) int {
 	fresh := 0
-	for _, o := range kept {
+	for _, o := range got {
+		if o.err != nil {
+			continue
+		}
 		for _, v := range asStrings(o.data[stage.RepeatUntilDry]) {
 			if k := itemKey(v); !seen[k] {
 				seen[k] = true
