@@ -158,9 +158,14 @@ function applyTaskEvent(ev) {
     // it is stuck on something specific, and nothing said so. The answer
     // is given in the main window, where the prompt appears; this says
     // what it is waiting for and stops saying it when it is answered.
+    //
+    // A stale request is one the daemon is not waiting on and that
+    // nothing in the log answers: the daemon that asked stopped first.
+    // The task is not waiting for it, so the line does not say it is.
     case 'permission.request':
       currentEl = null;
-      line('msg-error', `⏸ waiting for permission: [${d.tool || '?'}] ${d.description || ''}`);
+      if (d.stale === true) line('msg-tool', `⏹ permission left unanswered: [${d.tool || '?'}] ${d.description || ''}`);
+      else line('msg-error', `⏸ waiting for permission: [${d.tool || '?'}] ${d.description || ''}`);
       break;
     case 'permission.resolved':
       currentEl = null;

@@ -251,6 +251,11 @@ const (
 	// blocked until TypeInputResolved carries {"id","answer"} back, or
 	// {"id","cancelled":true} when the turn ended first.
 	//
+	// A replay can carry "stale": true on this and on permission.request:
+	// a question the serving daemon is not waiting on, which nothing
+	// after it answers. It is never in the log. See markStaleQuestions in
+	// internal/daemon.
+	//
 	// Distinct from permission.request, which looks similar and is not:
 	// that answer is a policy decision with a scope and a persisted
 	// rule, and this is one reply to one question.

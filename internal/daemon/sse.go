@@ -104,6 +104,92 @@ func collapseFinishedDeltas(evs []events.Event) []events.Event {
 	return out
 }
 
+// markStaleQuestions marks each question in evs that nobody can answer
+// any more: a permission.request or an input.request this daemon is not
+// waiting on in sessionID, with no resolution after it in evs. Each one
+// is sent as a copy whose data carries "stale": true, and both clients
+// skip a stale request instead of putting it in front of the person.
+//
+// A question open when its daemon stopped never gets its resolution
+// event, and both clients rebuild open questions from the log, so it was
+// shown again every time the conversation was opened, and in every fork
+// of it. Closing it by writing a resolution into the log was tried and
+// dropped: another daemon process can be appending to the same log, and
+// that write puts one seq on disk twice. This writes nothing. It says
+// what this daemon knows at the moment it serves the log.
+//
+// A request with a resolution after it is left alone, live or not. A
+// client already takes the pair as a question that was asked and
+// answered, and the task window draws both halves: a request marked
+// stale there would read "left unanswered" above "permission granted".
+// The match is on the resolution after the request, because a log from
+// before ids were per daemon can hold one id twice, the first answered
+// and the second left open.
+//
+// Called after the backlog is read, never before. Both brokers record a
+// question before they write it, so a request in the backlog that is
+// still open is one ShownIn knows. A question asked after the read is
+// not in evs: it arrives on the live channel, which is never marked.
+// What a reader can still see is an answer the broker has taken and not
+// yet written: the request is marked, and its resolution follows on the
+// live channel.
+func (d *Daemon) markStaleQuestions(sessionID string, evs []events.Event) []events.Event {
+	var out []events.Event
+	answered := map[events.Type]map[string]bool{
+		events.TypePermissionRequest: {},
+		events.TypeInputRequest:      {},
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		ev := evs[i]
+		id, _ := ev.Data["id"].(string)
+		switch ev.Type {
+		case events.TypePermissionResolved:
+			answered[events.TypePermissionRequest][id] = true
+			continue
+		case events.TypeInputResolved:
+			answered[events.TypeInputRequest][id] = true
+			continue
+		case events.TypePermissionRequest, events.TypeInputRequest:
+		default:
+			continue
+		}
+		if answered[ev.Type][id] {
+			delete(answered[ev.Type], id)
+			continue
+		}
+		if d.waitingOn(sessionID, ev.Type, id) {
+			continue
+		}
+		if out == nil {
+			out = append([]events.Event(nil), evs...)
+		}
+		// A new map: the event is the store's, shared with every other
+		// reader of the log.
+		data := make(map[string]any, len(ev.Data)+1)
+		for k, v := range ev.Data {
+			data[k] = v
+		}
+		data["stale"] = true
+		out[i].Data = data
+	}
+	if out == nil {
+		return evs
+	}
+	return out
+}
+
+// waitingOn reports whether this daemon is waiting on an answer to the
+// question id of type typ in sessionID.
+func (d *Daemon) waitingOn(sessionID string, typ events.Type, id string) bool {
+	switch typ {
+	case events.TypePermissionRequest:
+		return d.Broker != nil && d.Broker.ShownIn(sessionID, id)
+	case events.TypeInputRequest:
+		return d.Loop.Input.ShownIn(sessionID, id)
+	}
+	return false
+}
+
 func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	// Where to start replaying from, in precedence order: the
@@ -245,7 +331,10 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// The resume id still only ever climbs, so a reconnect cannot be sent
 	// backwards by one of those repeats. On an ordinary log every id here
 	// is the event's own sequence, exactly as before.
-	for _, ev := range collapseFinishedDeltas(backlog) {
+	//
+	// Stale questions are marked here, after the read, and only here: see
+	// markStaleQuestions. writeSSE sends the live events as they are.
+	for _, ev := range d.markStaleQuestions(id, collapseFinishedDeltas(backlog)) {
 		if ev.Seq > lastSeq {
 			lastSeq = ev.Seq
 		}

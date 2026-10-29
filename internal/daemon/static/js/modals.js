@@ -463,8 +463,13 @@ function showPermissionRequest(req, waiting) {
 // blocked on it, or answering the second would strand the first with no
 // way to reach it again. A repeat of an id already held replaces it,
 // keeping the latest description rather than stacking a duplicate.
+//
+// A stale request is not shown at all. The daemon marks one it is not
+// waiting on when it replays the log (a question left open by a daemon
+// that has since stopped, or copied into a fork): nothing will resolve
+// it, and an answer gets the daemon's 404.
 export function enqueuePermissionRequest(req) {
-  if (!req || !req.id) return;
+  if (!req || !req.id || req.stale === true) return;
   if (!session.pendingPermissionID) {
     showPermissionRequest(req, session.pendingPermissionQueue.length);
     return;

@@ -67,6 +67,16 @@ func (p pendingPermission) prompt(typing bool) string {
 	return head + "\n" + keys
 }
 
+// staleQuestion reports whether the daemon marked a replayed
+// permission.request or input.request as one it is not waiting on: a
+// question left open by a daemon that has since stopped, or copied into
+// a fork. Nothing will resolve it, and an answer gets the daemon's 404,
+// so it is not shown. See markStaleQuestions in internal/daemon.
+func staleQuestion(data map[string]any) bool {
+	stale, _ := data["stale"].(bool)
+	return stale
+}
+
 // enqueuePermission shows a request, or queues it behind the one on
 // screen. The screen always holds the oldest unresolved request: a newer
 // arrival must not cover an older question whose turn is still blocked

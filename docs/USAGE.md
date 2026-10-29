@@ -816,6 +816,8 @@ The Web UI locks the prompt box while the permission modal is open. The TUI keep
 
 An answer that fails to reach the daemon puts its question back, behind any question already on screen, and the error is shown. The Web UI locks the prompt box again. A question does not come back when it was answered in another window in the meantime, when the daemon says it is not waiting on it (a question a stopped daemon left in the log), or when its turn was declared lost.
 
+A question nobody can answer any more is not shown when a conversation is opened. The daemon replays the conversation's log to each client that opens it. In that replay it marks each permission question and model question that it is not waiting on and that nothing later in the log answers. Such a question was left open by a daemon that stopped while asking, or was copied into a fork. Both clients skip a marked question: the TUI shows no prompt, and the Web UI opens no modal and does not take the next message as an answer. The Web UI transcript keeps the model's question, with `(left unanswered)` in place of the reply hint. A background task's window shows `permission left unanswered` in place of `waiting for permission`. A question asked after the client opened the conversation arrives live and is shown. The log itself is not changed.
+
 ### Viewing and changing permission settings without waiting for a prompt
 
 The permission pill shows the current conversation state: `permissions: ask (N rules)`, `permissions: tools skipped`, or `permissions: skip`. Click it to open controls for:

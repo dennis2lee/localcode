@@ -299,7 +299,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `message.part.delta` | `{"text"}` fragment of a streaming reply |
 | `message.part.end` | `{"text", "failed"?, "shell_command"?}` the finished reply text; one turn has several when tools ran. `failed: true` closes a reply whose stream died before it finished: the text is on the record and not in the history, which is rebuilt without it. `text` is empty when the stream died after a tool call and before any text; the calls a failed reply started never ran. A log written before this key existed rebuilds such a reply into the history as finished. `shell_command` names the `!` command whose output `text` is |
 | `tool.start`, `tool.end` | a tool call and its result |
-| `permission.request` | a tool approval question; answered at `POST /api/sessions/{id}/permissions/{permId}` |
+| `permission.request` | a tool approval question; answered at `POST /api/sessions/{id}/permissions/{permId}`. `stale: true` on a replayed one marks a question this daemon is not waiting on and that nothing later in the replay answers: an answer to it gets `404`, and clients do not show it. Live events are never marked, and the log does not carry the key |
 | `permission.resolved` | how it was answered |
 | `permission.forgotten` | `{"class": "read" or "write"}`; remembered directories dropped |
 | `permissions.changed` | the session switches view, per session |
@@ -331,7 +331,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `schedule.seen` | `{"id"}` |
 | `schedule.renamed` | `{"id", "name"}` |
 | `schedule.removed` | `{"id"}` |
-| `input.request` | `{"id", "question", "options"?}`; answered at `POST /api/sessions/{id}/input/{askId}` |
+| `input.request` | `{"id", "question", "options"?, "stale"?}`; answered at `POST /api/sessions/{id}/input/{askId}`. `stale` as on `permission.request` |
 | `input.resolved` | `{"id", "answer"?}` or `{"id", "cancelled": true}` |
 | `plan.updated` | `{"plan": [{"step", "status"}], "explanation"?}`; logged, unlike `task.progress` |
 | `memory.session` | `{"name", "content"}` when the model saves a session note, `{"name", "forgotten": true}` when it forgets one; logged. The daemon rebuilds the conversation's notes from these on restart, rewind, redo and fork; `cleared` starts them over. The Web UI and the TUI draw the `memory_save` and `memory_forget` tool calls instead, and ignore this event. |

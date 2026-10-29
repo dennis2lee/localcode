@@ -241,12 +241,18 @@ const handlers = {
   // rather than as a modal: the options are a shortcut, not the whole
   // answer space, and the box below is already where a person types the
   // one the model did not think of.
+  //
+  // A stale question (the daemon is not waiting on it: see
+  // enqueuePermissionRequest) is drawn as the record of what was asked
+  // and does not arm the box. Armed, it took the next message as an
+  // answer, which the daemon refused with a 404.
   'input.request': (d) => {
-    session.pendingAsk = d.id;
+    const stale = d.stale === true;
+    if (!stale) session.pendingAsk = d.id;
     const opts = Array.isArray(d.options) ? d.options : [];
     appendAsk([`[the model is asking] ${d.question}`,
       ...opts.map((o, i) => `  ${i + 1}. ${o}`),
-      '  (reply in the box below, in your own words or with a number)'].join('\n'));
+      stale ? '  (left unanswered)' : '  (reply in the box below, in your own words or with a number)'].join('\n'));
   },
   'input.resolved': (d) => {
     if (session.pendingAsk === d.id) session.pendingAsk = null;

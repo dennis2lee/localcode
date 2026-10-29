@@ -294,6 +294,9 @@ func (m *Model) applyEvent(ev events.Event) {
 			}
 		}
 	case events.TypePermissionRequest:
+		if staleQuestion(ev.Data) {
+			break
+		}
 		id, _ := ev.Data["id"].(string)
 		tool, _ := ev.Data["tool"].(string)
 		desc, _ := ev.Data["description"].(string)
@@ -486,6 +489,11 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.skipFoldDeltas = false
 		m.foldThinking(time.Duration(intField(ev.Data, "elapsed_ms")) * time.Millisecond)
 	case events.TypeInputRequest:
+		// A box armed for an answer nobody will take sends the next
+		// message there instead, and the daemon answers it 404.
+		if staleQuestion(ev.Data) {
+			break
+		}
 		id, _ := ev.Data["id"].(string)
 		question, _ := ev.Data["question"].(string)
 		raw, _ := ev.Data["options"].([]any)

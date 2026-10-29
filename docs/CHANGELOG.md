@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+A question a stopped daemon left open is no longer shown again when the conversation is opened.
+
+**Fixed**
+
+* A permission question or a model question left open by a stopped daemon shown on every open of the conversation and of its forks, in the TUI, the Web UI and the task window
+
 ## v0.169.4
 
 A quote the shell reads differently, a zsh glob qualifier, a Windows delete command or a workspace `git.bat` no longer gets a command past a bash rule.
