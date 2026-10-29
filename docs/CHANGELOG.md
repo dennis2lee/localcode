@@ -1,31 +1,29 @@
 # Changelog
 
-## Unreleased
+## v0.169.3
 
-A session grant for one command no longer covers a whole command line, let go during a debate gives the turn back, "always" for a subject with `*` or `?` stays that subject, and a permission answer that fails to send leaves its question answerable.
+A session grant no longer covers a whole command line, let go during a debate gives the turn back, and "always" for a subject with `*` or `?` stays that subject.
 
 **Fixed**
 
-* "Allow for this session" on one command covering any line that began with it: a grant for `ls -la` let `ls -la && rm -rf ~`, `ls $(...)` and `ls > file` run without a question (since v0.100.0)
-* An answer to a question a stopped daemon left in a session's log answering the question the next daemon had open under the same id; each daemon's question ids are its own, and an answer only reaches a question shown in the session it was posted to
-* Web UI: a question replaced by another under the same id left the first one's text on screen
-* Let go during a debate releasing one reviewer, chosen at random, and leaving the turn waiting on the others, a reviewer still starting included; the reviewer let go was recorded as having reviewed, with the "still working" note as its review
-* A task let go in the instant it finished shown as working in the background for good, with the "still working" note in place of its answer
-* `/tasks <id>` of a debate reviewer showing none of its review, which is its Verdict call rather than a message; the verdict and findings are shown
-* "Always" for a path or command containing `*` or `?` stored as a glob, so approving `/proj/a*b` also allowed `/proj/aXYZb`; the rule is stored with `"literal": true` and allows that subject only
-* TUI: a permission question gone from the screen when the answer failed to send, while the turn still waited on it
-* Web UI: the same, with the input box unlocked while the question still blocked the turn
-* TUI: a `!cmd` sent during a turn, which the daemon refuses until the turn ends, stopping that turn's spinner, so the next prompt was sent at once and bounced; the refusal is now written in the transcript, since the status line shows the turn
-* TUI: the echo of a send that was refused or failed left on screen after it was taken out of the transcript, and a refusal taking the echo of an earlier send of the same line
-* TUI: a send into a running turn that failed outright stopping that turn's spinner
-* A run v0.169.0 stopped at the 32 agent turn ceiling resumed once, to stop at the same place
+* A session grant for one command covering any line that began with it, such as `ls -la && rm -rf ~` (since v0.100.0)
+* An answer to a question a stopped daemon left behind reaching a live question with the same id
+* Let go during a debate leaving the turn waiting on the other reviewers, and recording the reviewer let go as a review
+* A task let go as it finished shown as working in the background for good
+* `/tasks <id>` of a debate reviewer showing none of its review
+* "Always" for a subject with `*` or `?` stored as a glob, so approving `/proj/a*b` also allowed `/proj/aXYZb`
+* A permission question lost when its answer failed to send, in the TUI and the Web UI
+* Web UI: a question replaced under the same id keeping the old text on screen
+* TUI: a `!cmd` or a failed send during a turn stopping that turn's spinner
+* TUI: a refused or failed send's echo left on screen, or an earlier send's echo removed in its place
+* A run v0.169.0 stopped at the 32 agent turn ceiling resumed once more
 
 **Changed**
 
-* "Allow for this session" on a bash line grants that line as it stands. Any other line runs on session grants only when each of its commands is covered, as written and unquoted; a line with a substitution or a redirect is asked
+* A bash session grant covers the answered line as it stands, and another line only when each of its commands is covered; a substitution or redirect is asked
 * Let go names every task it let go of
-* A plan's stage name may not hold a line break or another control character
-* The settings window marks a literal rule `(exact)`. Rules earlier versions wrote for a subject with `*` or `?` are globs and stay globs; review them there
+* Stage names refuse line breaks and control characters
+* Literal rules marked `(exact)` in the settings window. Rules earlier versions wrote for a subject with `*` or `?` are still globs; review them there
 
 ## v0.169.2
 
