@@ -47,7 +47,7 @@ func (l *Loop) RehydrateAll() {
 // It only reads the log. A successor daemon rehydrates every session at
 // startup, before it knows which ones the daemon it replaced is still
 // writing, so a write from here could land in a log another process
-// owns. See CloseStaleQuestions for the one write that used to be here.
+// owns.
 //
 // Best-effort: a session with no events, or one whose log can't be read,
 // is simply left with empty state (same as a brand-new session) rather
@@ -92,71 +92,6 @@ func (l *Loop) RehydrateSession(sessionID string) {
 		l.cumulativeUsage[sessionID] = cum
 	}
 	l.mu.Unlock()
-}
-
-// CloseStaleQuestions closes every question in a session's log that
-// nothing in this process will ever answer: a permission request or a
-// model question with no resolution, which its broker is not waiting on
-// in this session. Without it a question a stopped daemon left open was
-// shown again every time the conversation was opened, and in its forks.
-//
-// It writes to the log, so it is the daemon's to call, for a session it
-// owns: at startup for every session the daemon it replaced is not still
-// writing, when it takes one of those over, and for a fork or a
-// retrieved conversation. Each log is closed on its own, so a parent's
-// mirror of a task's question and a fork's copy are each closed in the
-// log that holds them.
-func (l *Loop) CloseStaleQuestions(sessionID string) {
-	evs, err := l.Store.Events(sessionID, 0)
-	if err != nil {
-		return
-	}
-	l.resolveStaleQuestions(sessionID, evs)
-}
-
-func (l *Loop) resolveStaleQuestions(sessionID string, evs []events.Event) {
-	type question struct {
-		input bool
-		id    string
-	}
-	// The index of each question's last request, while it is unresolved.
-	// The last, because ids restarted in every daemon before v0.169.3, so
-	// one log can hold an answered p1 and a later p1 left open.
-	open := map[question]int{}
-	for i, ev := range evs {
-		id := dataString(ev.Data, "id")
-		if id == "" {
-			continue
-		}
-		switch ev.Type {
-		case events.TypePermissionRequest:
-			open[question{false, id}] = i
-		case events.TypePermissionResolved:
-			delete(open, question{false, id})
-		case events.TypeInputRequest:
-			open[question{true, id}] = i
-		case events.TypeInputResolved:
-			delete(open, question{true, id})
-		}
-	}
-	// Closed in the order they were asked, so the log reads in order.
-	for i, ev := range evs {
-		q := question{ev.Type == events.TypeInputRequest, dataString(ev.Data, "id")}
-		if last, ok := open[q]; !ok || last != i {
-			continue
-		}
-		if q.input {
-			if !l.Input.ShownIn(sessionID, q.id) {
-				l.Store.Append(sessionID, events.TypeInputResolved, map[string]any{"id": q.id, "cancelled": true})
-			}
-			continue
-		}
-		if l.PermissionShownIn == nil || !l.PermissionShownIn(sessionID, q.id) {
-			l.Store.Append(sessionID, events.TypePermissionResolved, map[string]any{
-				"id": q.id, "allow": false, "scope": ScopeOnce, "unanswered": true,
-			})
-		}
-	}
 }
 
 // rehydrateHistory replays a session's event log into the same

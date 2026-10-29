@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-A quote the shell reads differently, a zsh glob qualifier, a Windows delete command or a workspace `git.bat` no longer gets a command past a bash rule, and questions a stopped daemon left open are closed.
+A quote the shell reads differently, a zsh glob qualifier, a Windows delete command or a workspace `git.bat` no longer gets a command past a bash rule.
 
 **Fixed**
 
@@ -10,7 +10,6 @@ A quote the shell reads differently, a zsh glob qualifier, a Windows delete comm
 * A zsh glob qualifier allowed by a rule for its command, such as `ls *` allowing `ls a(e:'rm -rf ~':)`
 * A `git.bat` in the workspace run in place of git under cmd.exe
 * Windows delete, permission, service, registry, kill and launcher commands generalized by "allow for session" and "always", such as `del x.obj` granting `del *`
-* A question a stopped daemon left open shown again every time the conversation was opened, and in its forks
 * An answer to a stale model question reaching another conversation's live question with the same id
 * A conversation taken over by an in-place update sending its next turn to the model without the conversation before it
 * A queued prompt whose send then failed keeping its echo on screen, in the TUI and the Web UI

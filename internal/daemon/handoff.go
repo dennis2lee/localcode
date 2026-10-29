@@ -150,53 +150,46 @@ func (d *Daemon) sessionsOwnedElsewhere() map[string]bool {
 	return owned
 }
 
-// takeOwnership is what a daemon does the first time it is about to
-// write a session: the moment the log becomes this process's to append
-// to.
+// takeOwnership is what the new daemon does the first time it is about
+// to write a session the old one has released: read the session again,
+// because the copy it loaded at startup predates the old daemon's last
+// writes to it, and rebuild the model's history from what was read.
+// Clearing the session's state and re-reading only the log left the next
+// turn sending the model none of the conversation.
 //
-// For a session the old daemon listed, that starts with reading it
-// again, because the copy loaded at startup predates the old daemon's
-// last writes to it, and with rebuilding the model's history from what
-// was read: clearing the session's state and re-reading only the log
-// left the next turn sending the model none of the conversation. A
-// session it never listed was not being written after this daemon
-// loaded it, so its copy is current.
-//
-// Either way it then closes the questions a stopped daemon left open in
-// the log. A daemon that took over from another one writes nothing to a
-// log before this, so this is where such a daemon closes them; see
-// CloseStaleQuestionsAtStart for the daemon that started on its own.
-//
-// Once per session, tracked in memory.
+// Once per session, tracked in memory. The manifest going away is the
+// signal that the old daemon is done with all of them; a session it
+// never listed needs no reload.
 func (d *Daemon) takeOwnership(sessionID string) error {
 	d.takeoverMu.Lock()
 	if d.tookOver == nil {
 		d.tookOver = map[string]bool{}
 	}
-	first := !d.tookOver[sessionID]
-	suspect := first && d.ownedAtStart[sessionID]
+	// Sessions the retiring daemon never listed were not being written
+	// after this daemon loaded them, so their copies are current and
+	// there is nothing to re-read.
+	suspect := d.ownedAtStart[sessionID] && !d.tookOver[sessionID]
 	d.tookOver[sessionID] = true
 	d.takeoverMu.Unlock()
-	if !first {
+	if !suspect {
 		return nil
 	}
 	// Outside the lock: a reload reads a file, and the gate runs this on
 	// every write to the session, some of them concurrent.
-	if suspect {
-		d.Loop.ClearSessionState(sessionID)
-		if err := d.Loop.Store.Reload(sessionID); err != nil {
-			return err
-		}
-		d.Loop.RehydrateSession(sessionID)
+	d.Loop.ClearSessionState(sessionID)
+	if err := d.Loop.Store.Reload(sessionID); err != nil {
+		return err
 	}
-	d.Loop.CloseStaleQuestions(sessionID)
+	d.Loop.RehydrateSession(sessionID)
 	return nil
 }
 
 // noteOwnedAtStart records which sessions a daemon the manifest names is
 // still writing, as construction finds them, so takeOwnership treats
-// them as suspect. NoteTakeover adds what it reads later.
-func (d *Daemon) noteOwnedAtStart() map[string]bool {
+// them as suspect. NoteTakeover adds what it reads later: a session
+// released between the two reads was still being written after this
+// daemon loaded it.
+func (d *Daemon) noteOwnedAtStart() {
 	owned := d.sessionsOwnedElsewhere()
 	if len(owned) > 0 {
 		d.takeoverMu.Lock()
@@ -207,33 +200,6 @@ func (d *Daemon) noteOwnedAtStart() map[string]bool {
 			d.ownedAtStart[id] = true
 		}
 		d.takeoverMu.Unlock()
-	}
-	return owned
-}
-
-// CloseStaleQuestionsAtStart closes the questions a stopped daemon left
-// open, in every session but a shelved one (retrieving it closes them)
-// and one another daemon is listed as still writing. For a daemon that
-// started on its own, called once it is built and before it serves.
-//
-// Not for a daemon that took over from another one. Its manifest does
-// not name everything the retiring daemon may still write (a scheduled
-// run is not listed, and work is admitted until the drain begins), and a
-// close written here landed in a log that daemon was still appending to:
-// one seq twice on disk, and a live question shown as unanswered. Such a
-// daemon closes each session's questions in takeOwnership instead, when
-// it first writes the session, which it would be doing anyway.
-func (d *Daemon) CloseStaleQuestionsAtStart() {
-	if d.Loop == nil || d.Loop.Store == nil {
-		return
-	}
-	owned := d.noteOwnedAtStart()
-	shelved := d.Loop.Store.ShelvedIDs()
-	for _, s := range d.Loop.Store.AllSessions() {
-		if shelved[s.ID] || owned[s.ID] {
-			continue
-		}
-		d.Loop.CloseStaleQuestions(s.ID)
 	}
 }
 

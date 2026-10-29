@@ -43,7 +43,6 @@ func runDaemon(configPath, listen string) error {
 		ln.Close()
 		return err
 	}
-	d.CloseStaleQuestionsAtStart()
 	var cleanupOnce sync.Once
 	cleanupOnce_ := func() { cleanupOnce.Do(cleanup) }
 	defer cleanupOnce_()
@@ -171,7 +170,6 @@ func runGUI(configPath string) error {
 		if err != nil {
 			return nil, err
 		}
-		d.CloseStaleQuestionsAtStart()
 		cleanup = done
 		var cleanupOnce sync.Once
 		cleanupOnce_ := func() { cleanupOnce.Do(done) }
@@ -335,7 +333,6 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 		got.ln.Close()
 		return err
 	}
-	d.CloseStaleQuestionsAtStart()
 	// Once, whichever path gets there first: a handoff runs it when the
 	// retiring daemon has drained, and the deferred call at exit must
 	// not run it again.
@@ -485,9 +482,6 @@ func runSuccessor(configPath string, in inherited) error {
 	cleanupOnce_ := func() { cleanupOnce.Do(cleanup) }
 	defer cleanupOnce_()
 
-	// No CloseStaleQuestionsAtStart: the daemon this one replaces may
-	// still be writing any session. Each is closed when this one first
-	// writes it (takeOwnership).
 	d.NoteTakeover()
 	listen := in.ln.Addr().String()
 	d.AllowUpdateInstall = loopbackOnly(listen)

@@ -111,6 +111,11 @@ func TestAlwaysAllowWindowsDestructiveCommandsKeepExactCommand(t *testing.T) {
 		"bcdedit /set safeboot minimal",
 		"wevtutil cl Security",
 		"Set-MpPreference -DisableRealtimeMonitoring $true",
+		"Add-MpPreference -ExclusionPath C:\\",
+		"Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False",
+		"New-NetFirewallRule -DisplayName x -Direction Inbound -Action Allow",
+		"New-Service -Name x -BinaryPathName C:\\Users\\me\\x.exe",
+		"Set-Item -Path HKLM:\\x -Value 1",
 	}
 	for _, cmd := range tests {
 		if got := PermissionRuleFor(BashToolName, cmd).Match; got != cmd {

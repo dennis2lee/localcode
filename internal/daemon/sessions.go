@@ -250,9 +250,6 @@ func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	// transcript while the model had never heard any of it — the exact
 	// split-brain a restart used to cause before rehydration existed.
 	d.Loop.RehydrateSession(newID)
-	// A question copied from the source is not this conversation's to
-	// answer, live in the source or not.
-	d.Loop.CloseStaleQuestions(newID)
 
 	writeJSON(w, http.StatusCreated, sess)
 }
@@ -456,11 +453,6 @@ func (d *Daemon) handleRetrieveSession(w http.ResponseWriter, r *http.Request) {
 	// log has been waiting for: nothing has touched it since the
 	// daemon started.
 	d.Loop.RehydrateSession(id)
-	// Startup skipped its questions too, and those of every task under
-	// it, whose logs it did not read either.
-	for _, sid := range append([]string{id}, d.Loop.Store.Descendants(id)...) {
-		d.Loop.CloseStaleQuestions(sid)
-	}
 	// And the books, from the same log. Startup skips the shelf, so for
 	// a conversation archived before the last restart this is the only
 	// place its rows come back — and a moment that passed while it was

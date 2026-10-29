@@ -166,10 +166,7 @@ func (b *InputBroker) Ask(ctx context.Context, sessionID, question string, optio
 
 // ShownIn reports whether id is waiting on an answer from sessionID: an
 // answer to it can still be taken, and it was asked there. A copy of the
-// request in another session is not answerable there. An answer already
-// taken reads false a moment before its resolution is logged, so a
-// CloseStaleQuestions in that moment writes a second resolution, which
-// every client and hydrate ignore.
+// request in another session is not answerable there.
 func (b *InputBroker) ShownIn(sessionID, id string) bool {
 	if b == nil {
 		return false

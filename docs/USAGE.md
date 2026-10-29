@@ -716,7 +716,7 @@ Answering "always allow" writes a rule to `config.json`. For most programs the r
 | Interpreters and shells | `sh`, `bash`, `python3`, `node`, `perl`, `ruby`, `powershell`, `cmd`, `env`, `xargs`, `Start-Process`, `Invoke-Expression`, `schtasks`, `wmic`, `forfiles`, `msiexec`, `Invoke-Item` | The exact command. `python3 *` is not permission to run a command, it is permission to run any code written later. |
 | Privilege and destructive commands | `sudo`, `su`, `doas`, `rm`, `dd`, `shred`, `chmod`, `chown`, `kill`, `del`, `erase`, `rd`, `format`, `Remove-Item`, `icacls`, `taskkill`, `Stop-Process`, `reg`, `sc`, `net`, `shutdown`, `robocopy`, `vssadmin`, `cipher` | The exact command. `rm -rf build` and `rm -rf ~` are one rule apart under `rm *`. |
 
-The lists are not exhaustive: a program on neither generalizes to `<program> *`, so answer "once" for a command whose argument is the whole question. On Windows the privilege list also has the registry, service, firewall, boot and Defender commands and cmdlets (`Set-ItemProperty`, `Stop-Service`, `netsh`, `bcdedit`, `Set-MpPreference` and their neighbours).
+The lists are not exhaustive: a program on neither generalizes to `<program> *`, so answer "once" for a command whose argument is the whole question. On Windows the privilege list also has registry, service, firewall, boot and Defender commands, among them `Set-ItemProperty`, `Set-Item`, `New-Service`, `Stop-Service`, `netsh`, `Set-NetFirewallProfile`, `bcdedit` and `Set-MpPreference`.
 
 `always` stays available for both; a repeated `rm -rf build` stops asking. The rule is matched against the program's base name without case or executable extensions (`.exe`, `.com`, `.bat`, `.cmd`), so `/usr/bin/sudo` and `sudo`, or `format.com` and `format`, are the same answer.
 
@@ -1968,13 +1968,6 @@ Session events append to `~/.localcode/sessions/<session-id>.jsonl`, useful for 
 Session metadata at `~/.localcode/sessions/<id>.meta.json` and the event log at `<id>.jsonl` both persist, so **restarting the daemon keeps** the session list, the conversation context, and `/usage` totals.
 
 At startup, `session.LoadAllFromDisk` restores metadata and `agent.Loop.RehydrateAll()` rebuilds model history from event logs. Restoration includes tool calls, tool results, compaction summaries, and token usage.
-
-A permission request or a model question that a stopped daemon left unanswered is closed in the session log, so it is not shown again each time the conversation is opened:
-
-* A daemon that started on its own closes them at startup, except in archived conversations.
-* A daemon that took over during an in-place update closes a session's when it first writes that session, because the daemon it replaced may still be writing any of them.
-* Retrieving an archived conversation closes its own and those of its background tasks.
-* A fork closes the questions it copied.
 
 If one session fails to restore, for example a corrupt `.meta.json`, the rest still restore and the daemon logs a warning.
 

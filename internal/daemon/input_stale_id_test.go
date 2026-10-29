@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -62,55 +61,5 @@ func TestAnAnswerToAStaleInputDoesNotResolveAnotherSessionsQuestion(t *testing.T
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("session b never received its answer")
-	}
-}
-
-func TestForkAndRetrieveCloseStaleQuestions(t *testing.T) {
-	for _, path := range []string{"fork", "retrieve"} {
-		t.Run(path, func(t *testing.T) {
-			d := newTestDaemon(t, "http://127.0.0.1:1")
-			const source = "source"
-			if _, err := d.Loop.Store.CreateSession(source, "", "general-purpose", true); err != nil {
-				t.Fatal(err)
-			}
-			for _, kind := range []events.Type{events.TypePermissionRequest, events.TypeInputRequest} {
-				if _, err := d.Loop.Store.Append(source, kind, map[string]any{"id": string(kind)}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if path == "retrieve" {
-				if _, err := d.Loop.Store.Archive(source); err != nil {
-					t.Fatal(err)
-				}
-			}
-			rec := httptest.NewRecorder()
-			d.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/sessions/"+source+"/"+path, nil))
-			wantStatus := http.StatusOK
-			if path == "fork" {
-				wantStatus = http.StatusCreated
-			}
-			if rec.Code != wantStatus {
-				t.Fatalf("%s = %d %s", path, rec.Code, rec.Body.String())
-			}
-			var result struct {
-				ID string `json:"id"`
-			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
-				t.Fatal(err)
-			}
-			evs, err := d.Loop.Store.Events(result.ID, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			resolved := map[events.Type]bool{}
-			for _, ev := range evs {
-				if ev.Type == events.TypePermissionResolved || ev.Type == events.TypeInputResolved {
-					resolved[ev.Type] = true
-				}
-			}
-			if len(resolved) != 2 {
-				t.Errorf("%s left stale questions: %v", path, evs)
-			}
-		})
 	}
 }

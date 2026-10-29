@@ -855,7 +855,11 @@ var wideProgramNames = map[string]bool{
 	"remove-itemproperty": true, "rp": true,
 	"set-service": true, "stop-service": true, "spsv": true, "remove-service": true,
 	"stop-computer": true, "restart-computer": true, "set-executionpolicy": true,
-	"netsh": true, "bcdedit": true, "wevtutil": true, "set-mppreference": true,
+	"netsh": true, "bcdedit": true, "wevtutil": true,
+	"set-mppreference": true, "add-mppreference": true, "remove-mppreference": true,
+	"set-netfirewallprofile": true, "new-netfirewallrule": true,
+	"set-netfirewallrule": true, "remove-netfirewallrule": true,
+	"new-service": true, "start-service": true, "set-item": true,
 	// Destructive: neighbours differ in the argument, not the program.
 	"rm": true, "rmdir": true, "del": true, "erase": true, "rd": true,
 	"remove-item": true, "ri": true, "robocopy": true,
