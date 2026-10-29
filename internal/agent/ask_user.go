@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -55,6 +57,10 @@ type InputBroker struct {
 	mu      sync.Mutex
 	counter int
 	pending map[string]chan string
+	// Each daemon owns its ids, as the permission broker does.
+	idPrefix string
+	// Set before the request is logged and cleared after its resolution.
+	shownIn map[string]string
 	// asking counts the questions each session is waiting on an answer
 	// to. The model asking the person something is a session stopped and
 	// waiting for them as much as a permission request is, and a session
@@ -64,7 +70,15 @@ type InputBroker struct {
 }
 
 func NewInputBroker(store *session.Store) *InputBroker {
-	return &InputBroker{store: store, pending: map[string]chan string{}, asking: map[string]int{}}
+	var nonce [3]byte
+	_, _ = rand.Read(nonce[:])
+	return &InputBroker{
+		store:    store,
+		idPrefix: "q" + hex.EncodeToString(nonce[:]) + "-",
+		pending:  map[string]chan string{},
+		shownIn:  map[string]string{},
+		asking:   map[string]int{},
+	}
 }
 
 // Asking reports which sessions are waiting on an answer to a question
@@ -112,9 +126,10 @@ func (b *InputBroker) Ask(ctx context.Context, sessionID, question string, optio
 	}
 	b.mu.Lock()
 	b.counter++
-	id := fmt.Sprintf("q%d", b.counter)
+	id := fmt.Sprintf("%s%d", b.idPrefix, b.counter)
 	ch := make(chan string, 1)
 	b.pending[id] = ch
+	b.shownIn[id] = sessionID
 	b.mu.Unlock()
 	// Up before the question is written and down on every way out, so
 	// the mark covers exactly the span in which somebody could answer.
@@ -132,6 +147,7 @@ func (b *InputBroker) Ask(ctx context.Context, sessionID, question string, optio
 	defer func() {
 		b.mu.Lock()
 		delete(b.pending, id)
+		delete(b.shownIn, id)
 		b.mu.Unlock()
 	}()
 
@@ -145,6 +161,18 @@ func (b *InputBroker) Ask(ctx context.Context, sessionID, question string, optio
 		b.store.Append(sessionID, events.TypeInputResolved, map[string]any{"id": id, "cancelled": true})
 		return "", false
 	}
+}
+
+// ShownIn reports whether id is waiting on an answer from sessionID.
+// A copied request in another session is not answerable there.
+func (b *InputBroker) ShownIn(sessionID, id string) bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, pending := b.pending[id]
+	return pending && b.shownIn[id] == sessionID
 }
 
 // Resolve delivers an answer. It reports whether a question was waiting

@@ -54,7 +54,7 @@ func TestSplitShellSegmentsHonorsBackslashOutsideQuotes(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := splitShellSegments(tc.command)
+			got := splitShellSegments(tc.command, posixQuoting)
 			if len(got) != len(tc.want) {
 				t.Fatalf("split %q into %d segments %q, want %d %q", tc.command, len(got), got, len(tc.want), tc.want)
 			}
@@ -77,5 +77,53 @@ func TestEscapedQuoteCannotSmuggleACommandPastAnAllowRule(t *testing.T) {
 	// The allowed command on its own is unaffected.
 	if got := c.resolveShellCommand(context.Background(), `git status`, true); got != DecisionAllow {
 		t.Errorf("plain `git status` = %v, want allow", got)
+	}
+}
+
+// In zsh, a parenthesised group at the end of a word is a glob qualifier,
+// and qualifiers like `e` and `+` run code without needing any wildcard.
+// An unquoted parenthesis must therefore be treated as an unsafe construct
+// for all POSIX shells, while quoted and escaped parentheses remain allowed.
+func TestUnquotedParenthesisIsUnsafeShellConstruct(t *testing.T) {
+	cfg := &Config{
+		Permissions: map[string]ToolPermission{
+			BashToolName: {
+				Rules: []PermissionRule{
+					{Match: "ls *", Decision: DecisionAllow},
+					{Match: "git *", Decision: DecisionAllow},
+					{Match: "grep *", Decision: DecisionAllow},
+					{Match: "echo *", Decision: DecisionAllow},
+				},
+			},
+		},
+	}
+
+	unsafeCmds := []string{
+		`ls *(e:'rm -rf ~':)`,
+		`ls a(e:'rm -rf ~':)`,
+		`echo (a|b)(e:'touch p6':)`,
+		`echo "x" a(e:'y':)`,
+	}
+	for _, cmd := range unsafeCmds {
+		if got := cfg.ResolvePermission(BashToolName, cmd, false); got == DecisionAllow {
+			t.Errorf("ResolvePermission(bash, %q) = %v, want ask (unsafe unquoted paren)", cmd, got)
+		}
+		if got, ok := GrantSegments(cmd); ok {
+			t.Errorf("GrantSegments(%q) = %q, true; want false (unsafe unquoted paren)", cmd, got)
+		}
+	}
+
+	safeCmds := []string{
+		`git commit -m "fix(tui): x"`,
+		`grep '(a|b)' file.txt`,
+		`echo \(hello\)`,
+	}
+	for _, cmd := range safeCmds {
+		if got := cfg.ResolvePermission(BashToolName, cmd, false); got != DecisionAllow {
+			t.Errorf("ResolvePermission(bash, %q) = %v, want allow", cmd, got)
+		}
+		if _, ok := GrantSegments(cmd); !ok {
+			t.Errorf("GrantSegments(%q) = false, want true", cmd)
+		}
 	}
 }

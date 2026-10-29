@@ -262,6 +262,10 @@ export function dequeueNext(isRetry = false) {
       if (!isRetry) retryQueueSoon();
       return;
     }
+    // The line drawn when Enter was pressed stood for it while it was
+    // queued; nothing took it, so it goes with the error, as it does
+    // when the first send fails.
+    resolvePendingUser(item.text);
     setWaiting(false);
     appendError(err);
   });

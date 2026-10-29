@@ -276,7 +276,7 @@ func TestSplitShellSegments(t *testing.T) {
 		{`git commit -m 'a && b'`, []string{`git commit -m 'a && b'`}},
 	}
 	for _, c := range cases {
-		got := splitShellSegments(c.in)
+		got := splitShellSegments(c.in, posixQuoting)
 		if len(got) != len(c.want) {
 			t.Errorf("splitShellSegments(%q) = %q, want %q", c.in, got, c.want)
 			continue

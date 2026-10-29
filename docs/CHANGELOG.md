@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+A quote the shell reads differently, a zsh glob qualifier, a Windows delete command or a workspace `git.bat` no longer gets a command past a bash rule, and questions a stopped daemon left open are closed.
+
+**Fixed**
+
+* A second command hidden behind a quote in `$'...'`, a comment or a here-document, so the built-in `git *` rule allowed `git log $'\'' && rm -rf ~`
+* A zsh glob qualifier allowed by a rule for its command, such as `ls *` allowing `ls a(e:'rm -rf ~':)`
+* A `git.bat` in the workspace run in place of git under cmd.exe
+* Windows delete, permission, kill and launcher commands generalized by "allow for session" and "always", such as `del x.obj` granting `del *`
+* A question a stopped daemon left open shown again every time the conversation was opened, and in its forks
+* An answer to a stale model question reaching another conversation's live question with the same id
+* A queued prompt whose send then failed keeping its echo on screen, in the TUI and the Web UI
+
+**Changed**
+
+* An unquoted `(` in a bash command is asked, as a substitution or a redirect is
+* On Windows a program in the working directory has to be named with its path (`.\gradlew build`)
+
 ## v0.169.3
 
 A session grant no longer covers a whole command line, let go during a debate gives the turn back, and "always" for a subject with `*` or `?` stays that subject.

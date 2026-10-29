@@ -152,7 +152,7 @@ func (d *Daemon) handleResolveInput(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("answer is empty"))
 		return
 	}
-	if d.Loop == nil || d.Loop.Input == nil || !d.Loop.Input.Resolve(askID, req.Answer) {
+	if d.Loop == nil || d.Loop.Input == nil || !d.Loop.Input.ShownIn(r.PathValue("id"), askID) || !d.Loop.Input.Resolve(askID, req.Answer) {
 		// Same reasoning as the permission route: a client told this
 		// succeeded would believe the turn it is watching is unblocked.
 		writeError(w, http.StatusNotFound, fmt.Errorf(

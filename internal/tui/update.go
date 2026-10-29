@@ -355,9 +355,14 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 		// window, or another client's turn). That is queue material, not
 		// an error: put it back at the front and wait for the running
 		// turn's turn.done to drain it.
+		//
+		// The "[queued]" line stands for it from here, so its echo goes.
+		// The queue sends it again with no echo of its own, and if that
+		// send failed, nothing was left to take this one away.
 		m.queue = append([]string{msg.text}, m.queue...)
 		m.waiting = true
 		m.turnEpoch++
+		m.resolveOwnEcho(msg.echo)
 		m.appendLocal(fmt.Sprintf("[queued] %s", msg.text))
 		return m, m.startSpin()
 	}

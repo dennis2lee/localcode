@@ -713,10 +713,10 @@ Answering "always allow" writes a rule to `config.json`. For most programs the r
 
 | Family | Examples | Rule written |
 |---|---|---|
-| Interpreters and shells | `sh`, `bash`, `python3`, `node`, `perl`, `ruby`, `powershell`, `env`, `xargs` | The exact command. `python3 *` is not permission to run a command, it is permission to run any code written later. |
-| Privilege and destructive commands | `sudo`, `su`, `doas`, `rm`, `dd`, `shred`, `chmod`, `chown`, `kill` | The exact command. `rm -rf build` and `rm -rf ~` are one rule apart under `rm *`. |
+| Interpreters and shells | `sh`, `bash`, `python3`, `node`, `perl`, `ruby`, `powershell`, `cmd`, `env`, `xargs`, `Start-Process`, `Invoke-Expression` | The exact command. `python3 *` is not permission to run a command, it is permission to run any code written later. |
+| Privilege and destructive commands | `sudo`, `su`, `doas`, `rm`, `dd`, `shred`, `chmod`, `chown`, `kill`, `del`, `erase`, `rd`, `format`, `Remove-Item`, `icacls`, `taskkill`, `Stop-Process` | The exact command. `rm -rf build` and `rm -rf ~` are one rule apart under `rm *`. |
 
-`always` stays available for both; a repeated `rm -rf build` stops asking. The rule is matched against the program's base name, so `/usr/bin/sudo` and `sudo` are the same answer.
+`always` stays available for both; a repeated `rm -rf build` stops asking. The rule is matched against the program's base name without case or executable extensions (`.exe`, `.com`, `.bat`, `.cmd`), so `/usr/bin/sudo` and `sudo`, or `format.com` and `format`, are the same answer.
 
 Patterns are globs where `*` is zero or more characters and `?` is exactly one. Backslashes are literal.
 
@@ -771,7 +771,16 @@ The panel and commands save changes with the session. Background tasks follow th
 
 `bash` rules apply to each command segment. LocalCode splits unquoted `&&`, `||`, `;`, `|`, `&`, and newlines. Every segment must resolve to `allow`; any `deny` rejects the full line. Separators that are quoted or backslash-escaped remain part of their command.
 
-Command substitution and output redirection never auto-allow: `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, and `>>`. These forms require confirmation unless an explicit rule denies them, or permission skipping is on: with `skip_all` a line whose every segment resolves to `allow` runs with the redirect or substitution in it. An explicit `deny` still denies in every mode.
+A line is split once more for each other way a shell can read its quotes, and the segments of every split are checked:
+
+| Construct in the line | Extra split |
+|---|---|
+| `$'...'` | A backslash escapes the next character inside it, `'` included, as in bash and zsh. |
+| `#` or `<<` | Quotes are ordinary characters, as in a comment or a here-document body. |
+
+So `git log $'\'' && rm -rf ~` and `git status # '` followed by a command on the next line are asked, not allowed by the built-in `git *` rule. The cost is that a line with `#` and a quoted separator, such as `git log --grep "a; b" # note`, is asked.
+
+Command substitution, output redirection, and unquoted parentheses never auto-allow: `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, `>>`, and an unquoted `(`. In zsh, unquoted parentheses in a word act as glob qualifiers that run code, such as `*(e:'...')`. In other POSIX shells, they define subshells or extglobs. These forms require confirmation unless an explicit rule denies them, or permission skipping is on: with `skip_all` a line whose every segment resolves to `allow` runs with the construct in it. An explicit `deny` still denies in every mode.
 
 ### Answering a permission prompt: once, this session, or always
 
@@ -781,7 +790,7 @@ Ordinary tool prompts provide the following choices. Workspace-boundary prompts 
 |---|---|---|
 | Allow once | `y` | Approves exactly this call. Asks again next time. |
 | Deny | `n` | Refuses this call. Asks again next time. |
-| Allow for session | `s` | Approves this call and later matching calls for the life of the session. It survives a restart: the answer is in the session's log, and the grant is rebuilt from it when the session is next looked at. Nothing is written to config.json. For bash, the line that was answered is granted as it stands, so the same line runs again unasked, pipes and redirects included. Another line runs on these grants only when each of its commands is covered, as written and with its quoting removed. A line with a substitution (`$(`, a backtick) or a redirect is asked unless it is the answered line. Under a shell that is not POSIX, only a line of letters, digits, spaces and ``-_./\:=,+~"'*?@`` is covered that way. |
+| Allow for session | `s` | Approves this call and later matching calls for the life of the session. It survives a restart: the answer is in the session's log, and the grant is rebuilt from it when the session is next looked at. Nothing is written to config.json. For bash, the line that was answered is granted as it stands, so the same line runs again unasked, pipes and redirects included. Another line runs on these grants only when each of its commands is covered, as written and with its quoting removed. A line with a substitution (`$(`, a backtick), an unquoted parenthesis, or a redirect is asked unless it is the answered line. Under a shell that is not POSIX, only a line of letters, digits, spaces and ``-_./\:=,+~"'*?@`` is covered that way. |
 | Always allow | `a` (only shown when available) | Everything "allow for session" does, plus writes a matching rule to config.json, so the same pattern is auto-allowed in every future session too. |
 
 The Web UI shows the same four as buttons: Deny, Allow for session, Always allow, Allow once.
@@ -1950,6 +1959,8 @@ Session events append to `~/.localcode/sessions/<session-id>.jsonl`, useful for 
 Session metadata at `~/.localcode/sessions/<id>.meta.json` and the event log at `<id>.jsonl` both persist, so **restarting the daemon keeps** the session list, the conversation context, and `/usage` totals.
 
 At startup, `session.LoadAllFromDisk` restores metadata and `agent.Loop.RehydrateAll()` rebuilds model history from event logs. Restoration includes tool calls, tool results, compaction summaries, and token usage.
+
+Unanswered permission requests and model questions left by a stopped daemon are closed in the session log when it is restored, including forked copies and archived conversations when retrieved.
 
 If one session fails to restore, for example a corrupt `.meta.json`, the rest still restore and the daemon logs a warning.
 

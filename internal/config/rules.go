@@ -805,16 +805,23 @@ func tooWideToGeneralize(program string) bool {
 }
 
 // normalizeProgram is the program as the table spells it: no directory, no
-// case, no ".exe".
+// case, and no executable extensions (.exe, .com, .bat, .cmd).
 //
 // The trim is the part that was missing. Without it "rm.exe -rf build"
 // answered false and persisted "rm.exe *" — a wildcard grant for every
-// rm on the machine, from an approval that named one command. Two names
-// were worked around by listing them twice ("powershell.exe", "cmd.exe")
-// and the other forty-five were not. Lowercasing has to come first, the
-// way internal/shell does it: "RM.EXE" trims to "rm" only in that order.
+// rm on the machine, from an approval that named one command. Trimming
+// covers cmd.exe and PowerShell executable extensions (.com, .bat, .cmd)
+// as well so "format.com C:" normalizes to "format" and keeps its exact
+// command. Lowercasing has to come first, the way internal/shell does it:
+// "FORMAT.COM" trims to "format" only in that order.
 func normalizeProgram(program string) string {
-	return strings.TrimSuffix(strings.ToLower(baseName(program)), ".exe")
+	base := strings.ToLower(baseName(program))
+	for _, ext := range []string{".exe", ".com", ".bat", ".cmd"} {
+		if strings.HasSuffix(base, ext) {
+			return strings.TrimSuffix(base, ext)
+		}
+	}
+	return base
 }
 
 // baseName is the program without its directory, so "/usr/bin/sudo" and
@@ -836,10 +843,18 @@ var wideProgramNames = map[string]bool{
 	"powershell": true, "pwsh": true,
 	"cmd": true, "wscript": true, "cscript": true,
 	"eval": true, "exec": true, "xargs": true, "env": true,
+	"start": true, "start-process": true, "saps": true, "call": true,
+	"invoke-expression": true, "iex": true, "invoke-command": true, "icm": true,
+	"wsl": true, "mshta": true, "rundll32": true, "regsvr32": true,
 	// Privilege: the argument is the whole question.
 	"sudo": true, "doas": true, "su": true, "runas": true,
 	// Destructive: neighbours differ in the argument, not the program.
-	"rm": true, "rmdir": true, "dd": true, "shred": true, "truncate": true,
-	"mkfs": true, "chmod": true, "chown": true, "chgrp": true,
+	"rm": true, "rmdir": true, "del": true, "erase": true, "rd": true,
+	"remove-item": true, "ri": true,
+	"dd": true, "shred": true, "truncate": true, "clear-content": true,
+	"mkfs": true, "format": true, "diskpart": true,
+	"chmod": true, "chown": true, "chgrp": true,
+	"icacls": true, "takeown": true, "cacls": true, "attrib": true,
 	"kill": true, "killall": true, "pkill": true,
+	"taskkill": true, "stop-process": true, "spps": true,
 }

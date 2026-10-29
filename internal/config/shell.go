@@ -45,7 +45,7 @@ func (c *Config) resolveShellCommand(ctx context.Context, command string, static
 // the split being right: it needs one piece to match, not all of them.
 func (c *Config) resolveShellCommandUnder(ctx context.Context, command string, staticRequiresPermission, posix bool) Decision {
 	worst := DecisionAllow
-	for _, segment := range splitShellSegments(command) {
+	for _, segment := range shellSegments(command) {
 		if segment == "" {
 			continue
 		}
@@ -218,7 +218,7 @@ func grantSegmentsUnder(command string, posix bool) ([]string, bool) {
 		return []string{trimmed}, true
 	}
 	var out []string
-	for _, segment := range splitShellSegments(command) {
+	for _, segment := range shellSegments(command) {
 		if segment == "" {
 			continue
 		}
@@ -242,7 +242,123 @@ func hasUnsafeShellConstruct(command string) bool {
 			return true
 		}
 	}
+	return hasUnquotedParen(command)
+}
+
+// hasUnquotedParen reports whether command has a "(" outside quotes
+// and escapes in any reading of it (see shellQuotings).
+//
+// Under zsh a parenthesis in a word makes it a pattern, and a group at
+// its end is a glob qualifier: `ls a(e:'rm -rf ~':)` runs the command for
+// each file that matches, with no wildcard needed. Under sh and bash an
+// unquoted "(" is a subshell, a function definition, an extglob or a
+// syntax error, none of which should be allowed by a rule for the word
+// before it. A quoted or escaped one is a character to every shell.
+func hasUnquotedParen(command string) bool {
+	runes := []rune(command)
+	for _, q := range shellQuotings(command) {
+		bare := bareRunes(runes, q)
+		for i, r := range runes {
+			if r == '(' && bare[i] {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+// shellQuoting is one way of reading where a command line's quotes are.
+type shellQuoting int
+
+const (
+	// posixQuoting: ' and " quote, and a backslash escapes the next
+	// character everywhere except inside single quotes. How sh, bash and
+	// zsh read a line with none of the constructs below in it.
+	posixQuoting shellQuoting = iota
+	// ansiCQuoting adds $'...', inside which a backslash escapes the next
+	// character, ' included. bash and zsh read it so; a shell without
+	// $'...' reads "$" followed by an ordinary single quote, which is
+	// posixQuoting.
+	ansiCQuoting
+	// noQuoting: ' and " are ordinary characters. That is how a shell
+	// reads them in a comment and in a here-document's body.
+	noQuoting
+)
+
+// shellQuotings are the readings a command line is checked under: the
+// POSIX one, and each other one a construct in the line makes possible.
+//
+// One reading is not enough, and trusting one was a permission bypass.
+// Under posixQuoting alone, with the built-in "git *" rule and nothing
+// configured, each of these was one command and allowed unasked, while
+// bash ran the rm:
+//
+//	git log $'\'' && rm -rf ~        (the \' is escaped in $'...')
+//	git status # '<newline>rm -rf ~<newline>'   (a quote in a comment)
+//
+// and a here-document's body hid commands the same way. Which reading
+// the shell uses is not knowable here (dash has no $'...', and whether a
+// "#" starts a comment depends on where it is), so every plausible one
+// is split and all of their pieces are checked: an allow needs every
+// piece of every reading, and one denied piece in any reading denies.
+func shellQuotings(command string) []shellQuoting {
+	qs := []shellQuoting{posixQuoting}
+	if strings.Contains(command, "$'") {
+		qs = append(qs, ansiCQuoting)
+	}
+	if strings.Contains(command, "#") || strings.Contains(command, "<<") {
+		qs = append(qs, noQuoting)
+	}
+	return qs
+}
+
+// shellSegments is splitShellSegments under every reading of command,
+// without repeats.
+func shellSegments(command string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, q := range shellQuotings(command) {
+		for _, segment := range splitShellSegments(command, q) {
+			if !seen[segment] {
+				seen[segment] = true
+				out = append(out, segment)
+			}
+		}
+	}
+	return out
+}
+
+// bareRunes reports, for each rune of a command line read under q,
+// whether it is outside quotes and not escaped: the runes a shell can
+// read as an operator.
+func bareRunes(runes []rune, q shellQuoting) []bool {
+	bare := make([]bool, len(runes))
+	var quote rune // 0 when not inside quotes
+	ansiC := false // the quote is $'...'
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if quote != 0 {
+			if r == '\\' && (quote == '"' || ansiC) && i+1 < len(runes) {
+				i++
+				continue
+			}
+			if r == quote {
+				quote, ansiC = 0, false
+			}
+			continue
+		}
+		switch {
+		case r == '\\':
+			// The next character is literal, whatever it is.
+			i++
+		case (r == '\'' || r == '"') && q != noQuoting:
+			quote = r
+			ansiC = q == ansiCQuoting && r == '\'' && i > 0 && runes[i-1] == '$' && bare[i-1]
+		default:
+			bare[i] = true
+		}
+	}
+	return bare
 }
 
 // splitShellSegments breaks a command line on the operators that chain
@@ -269,10 +385,9 @@ func hasUnsafeShellConstruct(command string) bool {
 // character literal (so it can neither open a quote nor act as a
 // separator); inside double quotes it likewise escapes the next
 // character; inside single quotes there is no escaping at all.
-func splitShellSegments(command string) []string {
+func splitShellSegments(command string, q shellQuoting) []string {
 	var segments []string
 	var cur strings.Builder
-	var quote rune // 0 when not inside quotes
 
 	flush := func() {
 		segments = append(segments, strings.TrimSpace(cur.String()))
@@ -280,37 +395,17 @@ func splitShellSegments(command string) []string {
 	}
 
 	runes := []rune(command)
+	bare := bareRunes(runes, q)
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
-
-		if quote != 0 {
-			if r == '\\' && quote == '"' && i+1 < len(runes) {
-				cur.WriteRune(r)
-				i++
-				cur.WriteRune(runes[i])
-				continue
-			}
-			if r == quote {
-				quote = 0
-			}
+		if !bare[i] {
+			// Quoted or escaped: kept in the segment as written, so it
+			// still reads as the user wrote it for glob matching, and
+			// not interpreted here.
 			cur.WriteRune(r)
 			continue
 		}
-
 		switch r {
-		case '\\':
-			// The next character is literal, whatever it is. Both are
-			// kept in the segment text so it still reads as the user
-			// wrote it for glob matching; what matters is that neither
-			// is interpreted here.
-			cur.WriteRune(r)
-			if i+1 < len(runes) {
-				i++
-				cur.WriteRune(runes[i])
-			}
-		case '\'', '"':
-			quote = r
-			cur.WriteRune(r)
 		case '\n', ';':
 			flush()
 		case '&', '|':
