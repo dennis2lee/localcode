@@ -90,7 +90,7 @@ The Windows MSI, the macOS `.app` and the Debian packages are on the [releases p
    ```
 
 2. Start localcode in the project it should work on: `cd ~/src/your-project && localcode`. The directory it starts in is the workspace, where the model reads and edits files.
-3. Type a message and press Enter. A file write or a shell command asks first: `y` allows once, `s` for this session, `a` always, `n` denies. `git` commands run without asking.
+3. Type a message and press Enter. A file write or a shell command asks first: `y` allows once, `s` for this session, `a` always, `n` denies. `git` commands run without asking, except one that makes git run another program, such as `git rebase --exec`.
 4. Open `http://127.0.0.1:4096` for the browser client on the same conversations. Keep the terminal running.
 
 localcode installs a newer release when it starts. Set `"auto_update": false` in config.json to stay on the installed version. [config.example.json](config.example.json) is the full key reference: every key, with a note on each.

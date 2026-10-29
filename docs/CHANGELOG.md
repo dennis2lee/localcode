@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.169.5
 
 The built-in `git *` rule no longer lets git run another command without a question.
 
