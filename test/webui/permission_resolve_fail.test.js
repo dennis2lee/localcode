@@ -149,3 +149,40 @@ test('answering p1 then p2: p2 succeeds first and p1 fails restores p1 and not p
   assert.deepEqual([...app.state.pendingPermissionQueue].map((q) => q.id), []);
   assert.equal(app.el('input').disabled, true);
 });
+
+// A permission.request with no permission.resolved after it is what a
+// session's log holds when the daemon that asked stopped while asking.
+// Replaying the log shows the question, and an answer to it gets the
+// daemon's 404 "not pending". Put back, it would lock the composer under a
+// question nobody is asking, every time the session is opened.
+test('a question the daemon says is not pending can be dismissed', async () => {
+  let posts = 0;
+  const app = await load({
+    routes: {
+      'POST /api/sessions/*/permissions/*': () => {
+        posts++;
+        return {
+          status: 404,
+          body: { error: 'permission request p1 is not pending (already answered, or from a turn that has since ended)' },
+        };
+      },
+    },
+  });
+
+  // The replayed log: the question, and nothing after it.
+  app.sse.emit({
+    seq: 1,
+    type: 'permission.request',
+    data: { id: 'p1', tool: 'bash', description: 'rm -rf build/', can_always: true, rule: 'rm -rf build/' },
+  });
+  assert.equal(app.permissionRequest.isOpen, true);
+
+  app.el('permission-deny').click();
+  await app.settle();
+
+  assert.equal(posts, 1);
+  assert.equal(app.permissionRequest.isOpen, false,
+    'an answer refused as not pending put the question back on screen');
+  assert.equal(app.el('input').disabled, false,
+    'the composer stays locked under a question no daemon is asking');
+});

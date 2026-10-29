@@ -23,6 +23,11 @@ type streamEndedMsg struct {
 type turnDoneMsg struct {
 	text string
 	err  error
+	// startsTurn says the send was the one that set waiting: sent from
+	// idle or from the queue, not into a turn already running. A refusal
+	// is matched to its own send by it, since the same text can be on
+	// screen twice.
+	startsTurn bool
 }
 
 // opErrMsg reports the outcome of a fire-and-forget daemon call whose

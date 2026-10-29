@@ -482,11 +482,16 @@ var ceilingStops = []*regexp.Regexp{
 }
 
 // endsAtCeiling reports whether a report's last line is a stop at the
-// ceiling. Only the last line: the answers above it are model text, and
-// the stop line is always the last thing a report says.
+// ceiling. A stopped report ends with its stop line and one line break. A
+// report that did not stop ends with the blank line after its last stage,
+// so the line read here is empty, never the last answer, which is model
+// text and may quote a stop.
 func endsAtCeiling(report string) bool {
-	trimmed := strings.TrimRight(report, "\n")
-	last := trimmed[strings.LastIndex(trimmed, "\n")+1:]
+	body, ok := strings.CutSuffix(report, "\n")
+	if !ok {
+		return false
+	}
+	last := body[strings.LastIndex(body, "\n")+1:]
 	for _, re := range ceilingStops {
 		if re.MatchString(last) {
 			return true

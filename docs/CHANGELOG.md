@@ -2,20 +2,27 @@
 
 ## Unreleased
 
-Let go during a debate gives the turn back, "always" for a path with `*` or `?` stays that one path, and a permission question survives an answer that failed to send.
+A session grant for one command no longer covers a whole command line, let go during a debate gives the turn back, "always" for a subject with `*` or `?` stays that subject, and a permission answer that fails to send leaves its question answerable.
 
 **Fixed**
 
-* Let go during a debate releasing one reviewer, chosen at random, and leaving the turn waiting on the others; the reviewer let go was recorded as having reviewed, with the "still working" note as its review
+* "Allow for this session" on one command covering any line that began with it: a grant for `ls -la` let `ls -la && rm -rf ~`, `ls $(...)` and `ls > file` run without a question (since v0.100.0)
+* Let go during a debate releasing one reviewer, chosen at random, and leaving the turn waiting on the others, a reviewer still starting included; the reviewer let go was recorded as having reviewed, with the "still working" note as its review
+* A task let go in the instant it finished shown as working in the background for good, with the "still working" note in place of its answer
+* `/tasks <id>` of a debate reviewer showing none of its review, which is its Verdict call rather than a message; the verdict and findings are shown
 * "Always" for a path or command containing `*` or `?` stored as a glob, so approving `/proj/a*b` also allowed `/proj/aXYZb`; the rule is stored with `"literal": true` and allows that subject only
 * TUI: a permission question gone from the screen when the answer failed to send, while the turn still waited on it
 * Web UI: the same, with the input box unlocked while the question still blocked the turn
-* TUI: a `!cmd` sent during a turn, which the daemon refuses until the turn ends, stopping that turn's spinner, so the next prompt was sent at once and bounced
+* TUI: a `!cmd` sent during a turn, which the daemon refuses until the turn ends, stopping that turn's spinner, so the next prompt was sent at once and bounced; the refusal is now written in the transcript, since the status line shows the turn
+* TUI: the echo of a send that was refused or failed left on screen after it was taken out of the transcript
 * A run v0.169.0 stopped at the 32 agent turn ceiling resumed once, to stop at the same place
 
 **Changed**
 
+* A bash line runs on session grants only when each of its commands is covered by its own grant; a line with a substitution or a redirect is asked
 * Let go names every task it let go of
+* A plan's stage name may not hold a line break or another control character
+* The settings window marks a literal rule `(exact)`. Rules earlier versions wrote for a subject with `*` or `?` are globs and stay globs; review them there
 
 ## v0.169.2
 

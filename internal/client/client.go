@@ -97,6 +97,14 @@ func IsHeld(err error) bool {
 	return errors.As(err, &se) && se.Status == http.StatusConflict && se.Held != ""
 }
 
+// IsNotPending reports whether err is the daemon saying the question an
+// answer was for is not waiting on one: answered already, or left in the
+// log by a turn that ended without resolving it.
+func IsNotPending(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Status == http.StatusNotFound
+}
+
 // IsBusy reports whether err is the daemon refusing a message because the
 // session already has a turn in flight — the one error a client should
 // queue-and-retry rather than surface.

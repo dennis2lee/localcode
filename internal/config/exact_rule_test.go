@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -256,6 +257,32 @@ func TestPermissionRuleLiteralKeepsItsQuotes(t *testing.T) {
 		}
 		if got := cfg.ResolvePermission(BashToolName, tc.approved, true); got != DecisionAllow {
 			t.Errorf("approving %s resolves it again as %q, want allow", tc.approved, got)
+		}
+	}
+}
+
+// A session grant is checked command by command, as config rules are. A
+// line with a substitution or a redirect is never covered, and under a
+// shell that does not split the POSIX way only a line with nothing any
+// shell reads as an operator or an escape is.
+func TestGrantSegments(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		posix   bool
+		want    []string
+	}{
+		{"ls -la && rm -rf ~", true, []string{"ls -la", "rm -rf ~"}},
+		{"  git status  ", true, []string{"git status"}},
+		{"ls $(rm -rf ~)", true, nil},
+		{"ls > out", true, nil},
+		{"git status", false, []string{"git status"}},
+		{`git status \& rm -rf /`, false, nil},
+		{"git status ^& del x", false, nil},
+		{"dir | more", false, nil},
+	} {
+		got, ok := grantSegmentsUnder(tc.command, tc.posix)
+		if ok != (tc.want != nil) || strings.Join(got, "\x00") != strings.Join(tc.want, "\x00") {
+			t.Errorf("grantSegmentsUnder(%q, posix=%v) = %q, %v; want %q", tc.command, tc.posix, got, ok, tc.want)
 		}
 	}
 }

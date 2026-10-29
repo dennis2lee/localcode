@@ -67,6 +67,13 @@ type TaskManager struct {
 	// scrolled away.
 	detach     map[string]chan struct{}
 	syncParent map[string]string
+	// letGoCount counts, per conversation, the lets go that let go of
+	// something. A synchronous child that was on its way to being
+	// registered when one happened, still in a delegate hook, starts out
+	// let go: it is part of what the person asked to be given back, and
+	// a debate reviewer missed that way kept the turn waiting on its
+	// whole review.
+	letGoCount map[string]int
 
 	// owner is the conversation each running task counts for: the
 	// top-level session at the root of its chain of parents, from the
@@ -92,6 +99,7 @@ func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *Tas
 		cancels:    map[string]context.CancelFunc{},
 		detach:     map[string]chan struct{}{},
 		syncParent: map[string]string{},
+		letGoCount: map[string]int{},
 		waiters:    map[string]chan struct{}{},
 		results:    map[string]taskOutcome{},
 		pending:    map[string][]string{},
@@ -582,6 +590,9 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 	// Admission is when the delegation was accepted, so admission is what
 	// it runs under.
 	ctx = tm.loop.pinSmart(ctx)
+	tm.mu.Lock()
+	letGoBefore := tm.letGoCount[parentSessionID]
+	tm.mu.Unlock()
 
 	// A run is not a delegation to an agent, and its units are each
 	// checked by this hook when they are spawned.
@@ -683,6 +694,9 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 	tm.owner[taskID] = owner
 	tm.detach[taskID] = detached
 	tm.syncParent[taskID] = parentSessionID
+	if tm.letGoCount[parentSessionID] != letGoBefore {
+		close(detached) // see letGoCount
+	}
 	tm.mu.Unlock()
 	tm.tasksChanged(owner)
 	tm.loop.lifecycle.admitted(parentSessionID)
@@ -751,6 +765,19 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 		err  error
 	}
 	answered := make(chan syncResult, 1)
+	// The child's end is recorded under endMu, and so is a let go's
+	// "detached", which is written only while the child has not ended.
+	// Let go landing between the child's end and its release used to
+	// write "detached" after "completed", and both clients showed a
+	// finished child working in the background for good.
+	var endMu sync.Mutex
+	ended := false
+	end := func(status map[string]any) {
+		endMu.Lock()
+		defer endMu.Unlock()
+		ended = true
+		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, status)
+	}
 	// Recorded, then released, then handed back, in that order. Released
 	// before the caller has the answer, so a caller that acts on it at
 	// once (resumes the run, or asks to let go) never finds the finished
@@ -774,9 +801,7 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 			err = ctx.Err()
 		}
 		if err != nil {
-			tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
-				"task_id": taskID, "status": "failed", "error": err.Error(),
-			})
+			end(map[string]any{"task_id": taskID, "status": "failed", "error": err.Error()})
 			release()
 			answered <- syncResult{text: text, err: err}
 			return
@@ -787,7 +812,7 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 				done[k] = v
 			}
 		}
-		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, done)
+		end(done)
 		if work == nil {
 			text = lastAssistantText(tm.loop.Store, taskID)
 		}
@@ -803,9 +828,18 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 		// it eventually says is read the way every other background
 		// task's answer is — "/tasks <id>", the task panel — rather than
 		// spliced into a conversation that has moved on without it.
+		endMu.Lock()
+		if ended {
+			// Let go in the instant it ended: its end is recorded and its
+			// answer is on the way, so that is what the caller gets.
+			endMu.Unlock()
+			r := <-answered
+			return taskID, r.text, r.err
+		}
 		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
 			"task_id": taskID, "status": "detached",
 		})
+		endMu.Unlock()
 		return taskID, detachedNote(taskID, agentName), errLetGo
 	}
 }
@@ -907,6 +941,11 @@ func (tm *TaskManager) DetachChildOf(parentSessionID string) ([]string, bool) {
 		if tm.Detach(id) {
 			letGo = append(letGo, id)
 		}
+	}
+	if len(letGo) > 0 {
+		tm.mu.Lock()
+		tm.letGoCount[parentSessionID]++
+		tm.mu.Unlock()
 	}
 	return letGo, len(letGo) > 0
 }

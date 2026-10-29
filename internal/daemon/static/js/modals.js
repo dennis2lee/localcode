@@ -230,7 +230,9 @@ export function renderPermissionRulesList() {
       row.className = 'rule-row';
       const text = document.createElement('span');
       text.className = 'rule-text';
-      text.textContent = `${tool}: "${rule.match}" -> ${rule.decision}`;
+      // "(exact)" for a literal rule, which matches its text and nothing
+      // else; the same text without it is a glob.
+      text.textContent = `${tool}: "${rule.match}"${rule.literal ? ' (exact)' : ''} -> ${rule.decision}`;
       row.appendChild(text);
       if (app.canEditPermissions) {
         const removeBtn = document.createElement('button');
@@ -551,7 +553,11 @@ export async function resolvePermission(allow, scope) {
     await apiClient.resolvePermissionRequest(session.sessionID, id, allow, scope);
     session.answeringPermissions.delete(id);
   } catch (err) {
-    if (session.answeringPermissions.delete(id)) {
+    // Back only while the daemon may still be waiting on it. A question it
+    // says is not pending, put back, would lock the session on a question
+    // nobody is asking: a replayed log can show one a turn left behind
+    // when its daemon stopped.
+    if (session.answeringPermissions.delete(id) && !apiClient.isNotPending(err)) {
       enqueuePermissionRequest(req);
     }
     appendError(`failed to respond to permission request: ${err}`);

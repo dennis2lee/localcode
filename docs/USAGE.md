@@ -726,7 +726,7 @@ A rule with `"literal": true` matches only a subject equal to its `match`, with 
 { "match": "/proj/a*b", "decision": "allow", "literal": true }
 ```
 
-For bash the subject is the command as approved, quotes included: approving `rm "a*b"` does not allow `rm a*b`. A command whose program name contains `*` or `?` is kept whole rather than generalized. A rule can be written with `"literal": true` by hand; a rule without it is a glob, as before. Removing a rule in the settings window removes both kinds with the same match and decision.
+For bash the subject is the command as approved, quotes included: approving `rm "a*b"` does not allow `rm a*b`. A command whose program name contains `*` or `?` is kept whole rather than generalized. A rule can be written with `"literal": true` by hand; a rule without it is a glob, as before. The settings window marks a literal rule `(exact)`. Removing a rule there removes both kinds with the same match and decision. Rules written before v0.169.3 for a subject with `*` or `?` are globs and stay globs; review them in the settings window.
 
 #### The four switches
 
@@ -781,7 +781,7 @@ Ordinary tool prompts provide the following choices. Workspace-boundary prompts 
 |---|---|---|
 | Allow once | `y` | Approves exactly this call. Asks again next time. |
 | Deny | `n` | Refuses this call. Asks again next time. |
-| Allow for session | `s` | Approves this call and later matching calls for the life of the session. It survives a restart: the answer is in the session's log, and the grant is rebuilt from it when the session is next looked at. Nothing is written to config.json. |
+| Allow for session | `s` | Approves this call and later matching calls for the life of the session. It survives a restart: the answer is in the session's log, and the grant is rebuilt from it when the session is next looked at. Nothing is written to config.json. A bash line runs on these grants only when every command in it is covered by its own grant. A line with a substitution (`$(`, a backtick) or a redirect is asked, as config rules ask it. Under a shell that is not POSIX, only a line with none of ``& \| ; < > ^`` and a backtick is covered. |
 | Always allow | `a` (only shown when available) | Everything "allow for session" does, plus writes a matching rule to config.json, so the same pattern is auto-allowed in every future session too. |
 
 The Web UI shows the same four as buttons: Deny, Allow for session, Always allow, Allow once.
@@ -796,7 +796,7 @@ Session grants are forgotten when a session is deleted. A daemon restart keeps t
 
 The Web UI locks the prompt box while the permission modal is open. The TUI keeps its separate permission line and shows a one-time hint if Enter is pressed while a request is pending.
 
-An answer that fails to reach the daemon puts its question back, behind any question already on screen, and the error is shown. The Web UI locks the prompt box again. A question answered in another window in the meantime does not come back.
+An answer that fails to reach the daemon puts its question back, behind any question already on screen, and the error is shown. The Web UI locks the prompt box again. A question does not come back when it was answered in another window in the meantime, when the daemon says it is not waiting on it (a question a stopped daemon left in the log), or when its turn was declared lost.
 
 ### Viewing and changing permission settings without waiting for a prompt
 
@@ -2340,7 +2340,7 @@ A stage is one of three kinds:
 
 | Stage field | Meaning |
 |---|---|
-| `name` | Lowercase, no spaces. How a later stage refers to this one. |
+| `name` | Lowercase, with no spaces, line breaks, dots or dollars. How a later stage refers to this one. |
 | `agent` | Which delegatable agent runs it. Checked against the roster the turn was admitted with. |
 | `role` | Tool role: `readonly` (default), `builder`, or `runner`. Intersected with agent restrictions. Plans cannot enumerate tools or widen an agent's permissions. |
 | `prompt` | Stands on its own. Three substitutions and no others: `{{task}}`, `{{item}}` in a fanout, `{{input}}` for what earlier stages kept. |
@@ -2903,7 +2903,7 @@ Debate outcomes:
 | `rounds` | The budget ran out with no approval. The work stands; read it before trusting it. |
 | `stalled` | Two consecutive rounds without an author tool call. |
 | `stopped` | You pressed Stop. What was done is kept. |
-| `let go` | You let go (Ctrl+B in the TUI, **let go** in the Web UI) while the reviewers were reading. Every reviewer still reading is let go together, the turn gets its prompt back, and the reviewers keep working in the background. The note names each reviewer's task; read its review with `/tasks <id>`. Reviews that came back before are recorded. What was done is kept. |
+| `let go` | You let go (Ctrl+B in the TUI, **let go** in the Web UI) while the reviewers were reading. Every reviewer still reading is let go together, and one still starting (a delegate hook running) is let go as soon as it starts. The turn gets its prompt back, and the reviewers keep working in the background. The note names each reviewer's task; read its review with `/tasks <id>`. Reviews that came back before are recorded. What was done is kept. |
 | `failed` | A model call failed without Stop being pressed: the author's turn, or every reviewer's review in a round. The note says which. What was done is kept. |
 
 At debate completion, model context replaces debate instructions, reviews, and intermediate answers with the task and final work state. The closing message reports this change. All rounds remain visible in the conversation and event log. Expired debate instructions do not apply to the next message.

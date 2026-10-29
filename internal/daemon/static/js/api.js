@@ -24,6 +24,11 @@ export class ApiError extends Error {
 export const isHeld = (err) => err instanceof ApiError && err.status === 409 &&
   !!(err.data && err.data.held);
 
+// isNotPending identifies the daemon saying the question an answer was for
+// is not waiting on one: answered already, or left in the log by a turn
+// that ended without resolving it.
+export const isNotPending = (err) => err instanceof ApiError && err.status === 404;
+
 // isBusy identifies the one status the caller usually has to treat
 // differently: the daemon already has a turn running for this session, so
 // the request is queue material, not a failure to report.

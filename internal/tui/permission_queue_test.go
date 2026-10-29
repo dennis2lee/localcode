@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"localcode/internal/client"
 	"localcode/internal/events"
 )
@@ -285,5 +287,45 @@ func TestFailedPermissionResolveRestoresRequest(t *testing.T) {
 				t.Fatal("expected errMsg to be set after p1 failed")
 			}
 		})
+	}
+}
+
+// A permission.request with no permission.resolved after it is what a
+// session's log holds when the daemon that asked stopped while asking.
+// Replaying the log shows the question, and an answer to it gets the
+// daemon's 404 "not pending". Put back, it would hold the session on a
+// question nobody is asking: Enter sends nothing while one is on screen.
+func TestAQuestionTheDaemonSaysIsNotPendingIsDismissed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/permissions/") {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"error":"permission request p1 is not pending (already answered, or from a turn that has since ended)"}`)
+			return
+		}
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
+	m.applyEvent(events.Event{Type: events.TypePermissionRequest, Data: map[string]any{
+		"id": "p1", "tool": "bash", "description": "rm -rf build/", "rule": "rm -rf build/", "can_always": true,
+	}})
+	m.pendingSince = time.Now().Add(-time.Hour)
+	next, cmd, handled := press(m, "n")
+	if !handled || cmd == nil {
+		t.Fatal("n did not answer the question")
+	}
+	updated, _ := next.Update(cmd())
+	m = updated.(Model)
+	if m.pending != nil {
+		t.Errorf("an answer refused as not pending put the question back: %+v", m.pending)
+	}
+	if m.errMsg == "" {
+		t.Error("the refusal was not shown")
+	}
+	m.input.SetValue("hello")
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil {
+		t.Error("Enter sent nothing after the question was dismissed")
 	}
 }

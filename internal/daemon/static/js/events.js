@@ -855,6 +855,9 @@ async function resyncAfterReconnect() {
   app.turnMoves++;
   session.pendingPermissionQueue = [];
   settlePermissionRequest(session.pendingPermissionID);
+  // An answer still on its way is to a question no daemon will wait on
+  // again, so its failure must not bring the question back.
+  session.answeringPermissions.clear();
   session.pendingAsk = null;
   session.promptQueue = [];
   setWaiting(false);

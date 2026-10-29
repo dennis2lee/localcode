@@ -403,7 +403,7 @@ export { applyEvent } from './events.js';
 export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage, autoResizeInput, getAttachedImages, clearAttachedImages, removeAttachedImage, getAttachmentsEl, handlePaste } from './composer.js';
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
 export { renderSchedules, applyScheduleEvent, loadSchedules, openScheduleDetails } from './schedules.js';
-export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';
+export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace, renderPermissionRulesList } from './modals.js';
 export { usageView, openUsage, closeUsage, figuresOf, totalOf } from './usage.js';
 export { forkSession } from './sessions.js';
 export { setPanelWidth } from './resize.js';

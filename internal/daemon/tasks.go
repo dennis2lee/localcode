@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"localcode/internal/agent"
 	"localcode/internal/events"
 )
 
@@ -107,6 +108,12 @@ func (d *Daemon) handleTaskOutput(w http.ResponseWriter, r *http.Request) {
 			}
 			out.WriteString("\n")
 			streamed = false
+		case events.TypeToolStart:
+			name, _ := ev.Data["name"].(string)
+			input, _ := ev.Data["input"].(string)
+			if review, ok := agent.VerdictReview(name, input); ok {
+				out.WriteString(review + "\n")
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"output": strings.TrimRight(out.String(), "\n")})

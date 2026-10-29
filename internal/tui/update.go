@@ -170,7 +170,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case permissionResolvedMsg:
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
-			m.restorePermission(msg.id)
+			// Back only while the daemon may still be waiting on it. A
+			// question it says is not pending, put back, would hold the
+			// session on a question nobody is asking: a replayed log can
+			// show one a turn left behind when its daemon stopped.
+			if client.IsNotPending(msg.err) {
+				delete(m.answering, msg.id)
+			} else {
+				m.restorePermission(msg.id)
+			}
 		} else {
 			delete(m.answering, msg.id)
 		}
@@ -325,11 +333,21 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 	// it is how "/clear" typed during a long turn vanished and then
 	// arrived minutes later, against a conversation somebody had stopped
 	// thinking about.
+	//
+	// waiting goes back only if this send set it. One sent into a turn
+	// already running leaves it, or the spinner of that turn stops and
+	// the next prompt is sent at once, to bounce. The status line shows
+	// that turn until it ends, not errMsg, so the reason goes in the
+	// transcript instead.
 	if client.IsHeld(msg.err) {
-		if m.resolvePendingUser(msg.text) {
+		m.resolvePendingUser(msg.text)
+		if msg.startsTurn {
 			m.waiting = false
+			m.errMsg = msg.err.Error()
+			m.refreshViewport()
+		} else {
+			m.appendLocal(msg.err.Error())
 		}
-		m.errMsg = msg.err.Error()
 		return m, nil
 	}
 	if client.IsBusy(msg.err) {
@@ -350,6 +368,7 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 		// than leaving a line that says it was sent above the reason it
 		// was not.
 		m.resolvePendingUser(msg.text)
+		m.refreshViewport()
 		if cmd := m.dequeue(); cmd != nil {
 			return m, cmd
 		}

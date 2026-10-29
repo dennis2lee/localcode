@@ -123,9 +123,8 @@ func (m *Model) appendPendingUser(text string) {
 }
 
 // resolvePendingUser drops the oldest echo of text, and reports whether it
-// was a turn-starting prompt (entryPending) rather than a mid-turn send
-// (entrySent). Oldest first: the same prompt can be sent twice, and each
-// send owns one echo.
+// found one. Oldest first: the same prompt can be sent twice, and each send
+// owns one echo.
 //
 // A line sent into a running turn is an echo too: "[sent — …] text"
 // stands for the message until the model is given it, and then the
@@ -145,7 +144,7 @@ func (m *Model) resolvePendingUser(text string) bool {
 		if m.streamOpen && i < m.streamAt {
 			m.streamAt--
 		}
-		return e.kind == entryPending
+		return true
 	}
 	return false
 }

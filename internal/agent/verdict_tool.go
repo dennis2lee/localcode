@@ -30,6 +30,29 @@ type verdictArgs struct {
 	Findings string `json:"findings"`
 }
 
+// VerdictReview is the review a Verdict call carries, as a person reads
+// it, and false for any other call. A reviewer's review is the call, not
+// a message, since the call ends its turn, so whatever shows a reviewer's
+// session as text has to show the call: a debate let go of says to read
+// each reviewer's review with "/tasks <id>".
+func VerdictReview(toolName, input string) (string, bool) {
+	if toolName != verdictToolName {
+		return "", false
+	}
+	var args verdictArgs
+	if json.Unmarshal([]byte(input), &args) != nil {
+		return "", false
+	}
+	review := "[verdict: not approved]"
+	if args.Approved {
+		review = "[verdict: approved]"
+	}
+	if findings := strings.TrimSpace(args.Findings); findings != "" {
+		review += "\n" + findings
+	}
+	return review, true
+}
+
 // VerdictTool is offered only to a reviewer inside a debate. It is hidden
 // from every other turn (see hiddenTools) and refuses to run there, so
 // there is no turn in which a model can declare its own work approved.

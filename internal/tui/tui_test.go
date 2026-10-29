@@ -924,74 +924,90 @@ func TestNonBusySendErrorStillShows(t *testing.T) {
 	}
 }
 
-func TestHeldCommandRefusalPreservesTurnState(t *testing.T) {
-	t.Run("keeps waiting true when turn is already running", func(t *testing.T) {
-		m := newTestModel()
+// A command the daemon holds until the running turn ends leaves the
+// TUI's turn state as the send found it. Sent into the TUI's own turn, the
+// refusal keeps waiting, or the spinner of that turn stops and the next
+// prompt is sent at once, to bounce. Sent from idle, it goes back to idle.
+// Each refusal is matched to its own send, not to the oldest echo of the
+// same text, which can be a send of the same line still waiting for its
+// turn to start.
+func TestAHeldCommandLeavesTheTurnStateAsItWas(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprint(w, `{"error":"! does not go to a turn already running","held":"!"}`)
+	}))
+	defer srv.Close()
+	newModel := func() Model {
+		return New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
+	}
+	// send presses Enter on text and feeds back what the daemon answered.
+	send := func(t *testing.T, m Model, text string) Model {
+		t.Helper()
+		m, cmd := pressEnterWith(t, m, text)
+		done, ok := turnDoneFrom(cmd)
+		if !ok {
+			t.Fatalf("Enter on %q sent nothing", text)
+		}
+		updated, _ := m.Update(done)
+		return updated.(Model)
+	}
+
+	t.Run("into the TUI's own turn", func(t *testing.T) {
+		m := newModel()
 		m.waiting = true
-
-		updated, _ := m.handleTurnDone(turnDoneMsg{
-			text: "!git status",
-			err:  &client.StatusError{Status: http.StatusConflict, Message: "409: held", Held: "!"},
-		})
-		m = updated.(Model)
-
+		m = send(t, m, "!git status")
 		if !m.waiting {
-			t.Error("waiting = false after held refusal mid-turn, want true so the running turn keeps its spinner")
+			t.Error("the refusal stopped the running turn's spinner")
 		}
 		if len(m.queue) != 0 {
 			t.Errorf("queue = %v, want nothing queued for a held command", m.queue)
 		}
-		if m.errMsg == "" {
-			t.Error("errMsg should report the held refusal")
-		}
-
-		// Also verify when sent through handleEnter while waiting is true.
-		m2 := newTestModel()
-		m2.waiting = true
-		m2, _ = pressEnterWith(t, m2, "!git status")
-		updated2, _ := m2.Update(turnDoneMsg{
-			text: "!git status",
-			err:  &client.StatusError{Status: http.StatusConflict, Message: "409: held", Held: "!"},
-		})
-		m2 = updated2.(Model)
-
-		if !m2.waiting {
-			t.Error("waiting = false after held refusal of mid-turn Enter, want true")
-		}
-		if len(m2.queue) != 0 {
-			t.Errorf("queue = %v, want nothing queued", m2.queue)
-		}
-		if strings.Contains(m2.transcriptText(), "!git status") {
-			t.Errorf("transcript = %q, want the mid-turn echo removed on refusal", m2.transcriptText())
+		if strings.Contains(m.transcriptText(), "!git status") {
+			t.Errorf("transcript = %q, want the refused line's echo gone", m.transcriptText())
 		}
 	})
 
-	t.Run("restores waiting false when sent from idle TUI", func(t *testing.T) {
-		m := newTestModel()
-		m, _ = pressEnterWith(t, m, "/compact")
-		if !m.waiting {
-			t.Fatal("precondition: idle send should set waiting = true while the request is in flight")
-		}
-
-		updated, _ := m.Update(turnDoneMsg{
-			text: "/compact",
-			err:  &client.StatusError{Status: http.StatusConflict, Message: "409: held", Held: "/compact"},
-		})
-		m = updated.(Model)
-
+	t.Run("from idle", func(t *testing.T) {
+		m := send(t, newModel(), "!git status")
 		if m.waiting {
-			t.Error("waiting = true after held refusal from an idle TUI, want false so the TUI returns to idle")
-		}
-		if len(m.queue) != 0 {
-			t.Errorf("queue = %v, want nothing queued for a held command", m.queue)
-		}
-		if strings.Contains(m.transcriptText(), "/compact") {
-			t.Errorf("transcript = %q, want the pending echo removed on refusal", m.transcriptText())
+			t.Error("the refusal of a send from idle left the TUI waiting")
 		}
 		if m.errMsg == "" {
-			t.Error("errMsg should report the held refusal")
+			t.Error("the refusal was not shown")
 		}
 	})
+
+	t.Run("the same line again while the first waits to start", func(t *testing.T) {
+		m := newModel()
+		// The first send from idle, accepted; its turn has not said so yet.
+		m, _ = pressEnterWith(t, m, "!make test")
+		updated, _ := m.Update(turnDoneMsg{text: "!make test", startsTurn: true})
+		m = updated.(Model)
+		m = send(t, m, "!make test")
+		if !m.waiting {
+			t.Error("the refused repeat set waiting false while the first !make test is still running")
+		}
+	})
+}
+
+// turnDoneFrom runs cmd and returns the turnDoneMsg it produces, looking
+// inside a batch.
+func turnDoneFrom(cmd tea.Cmd) (turnDoneMsg, bool) {
+	if cmd == nil {
+		return turnDoneMsg{}, false
+	}
+	switch msg := cmd().(type) {
+	case turnDoneMsg:
+		return msg, true
+	case tea.BatchMsg:
+		for _, c := range msg {
+			if done, ok := turnDoneFrom(c); ok {
+				return done, true
+			}
+		}
+	}
+	return turnDoneMsg{}, false
 }
 
 // TestToolEventsLeaveNoTranscriptLines is the headline of this change:

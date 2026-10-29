@@ -183,6 +183,38 @@ func unquoteShellText(segment string) string {
 	return b.String()
 }
 
+// GrantSegments is the commands of a bash command line that a remembered
+// "allow for this session" has to cover one by one, as
+// resolveShellCommand decides config rules, and false for a line no
+// grant may cover: one with a substitution or a redirect, which
+// resolveShellCommand never allows either. Under a shell that does not
+// split the POSIX way only a line with nothing any shell reads as an
+// operator or an escape is covered, whole, since the pieces this would
+// cut it into are not that shell's.
+func GrantSegments(command string) ([]string, bool) {
+	return grantSegmentsUnder(command, shell.IsPOSIX())
+}
+
+func grantSegmentsUnder(command string, posix bool) ([]string, bool) {
+	if hasUnsafeShellConstruct(command) {
+		return nil, false
+	}
+	if !posix {
+		if strings.ContainsAny(command, "&|;<>^`\n\r") {
+			return nil, false
+		}
+		trimmed := strings.TrimSpace(command)
+		return []string{trimmed}, trimmed != ""
+	}
+	var out []string
+	for _, segment := range splitShellSegments(command) {
+		if segment != "" {
+			out = append(out, segment)
+		}
+	}
+	return out, len(out) > 0
+}
+
 func hasUnsafeShellConstruct(command string) bool {
 	for _, c := range unsafeShellConstructs {
 		if strings.Contains(command, c) {

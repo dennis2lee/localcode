@@ -293,3 +293,31 @@ func TestLettingGoOfAFinishedRunNamesNothing(t *testing.T) {
 		t.Errorf("DetachChildOf(finished run) = (%q, %v), want nothing", ids, ok)
 	}
 }
+
+// A run that finished, whose last answer ends with a line in the ceiling
+// wording, is resumed. Its report ends with the blank line after its last
+// stage, so the line read for a stop is that, not the answer above it.
+func TestAFinishedRunWhoseLastAnswerQuotesTheCeilingIsResumed(t *testing.T) {
+	quote := "The run did not finish: stopped before check: the run had launched 31 agents and this stage needs 2 more, past the limit of 32"
+	m := &scriptedModel{reply: func(p string) (string, map[string]any) {
+		// A model summarising an earlier run, quoting its last line.
+		return "Here is what the last run said:\n" + quote, nil
+	}}
+	loop := orchestrateLoop(t, m.server(t).URL)
+	res := executeOrchestrate(context.Background(), loop, `{"goal":"g","stages":[
+	  {"name":"summarise","kind":"step","agent":"oracle","prompt":"summarise the last run"}]}`)
+	if strings.Contains(res.Content, "did not finish: stopped") && !strings.Contains(res.Content, "last run said") {
+		t.Fatalf("the run itself stopped:\n%s", res.Content)
+	}
+	runs := runIDs(loop, "main")
+	if len(runs) != 1 {
+		t.Fatalf("got runs %v, want one", runs)
+	}
+	if loop.stoppedAtCeiling(runs[0]) {
+		t.Errorf("a run that finished is read as stopped at the ceiling; its report:\n%s", lastAssistantText(loop.Store, runs[0]))
+	}
+	out := resume(t, loop, "main", "")
+	if strings.Contains(out, "ceiling") {
+		t.Errorf("a finished run was refused a resume for a ceiling it never reached:\n%s", out)
+	}
+}

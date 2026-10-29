@@ -45,7 +45,7 @@ func (m *Model) dequeue() tea.Cmd {
 	m.queue = m.queue[1:]
 	m.waiting = true
 	m.turnEpoch++
-	return m.sendMessage(next)
+	return m.sendMessage(next, true)
 }
 
 // handleEnter is the "enter" key case: resolve a pending permission
@@ -104,7 +104,7 @@ func handleEnter(m Model) (tea.Model, tea.Cmd) {
 			// since that wait can be minutes.
 			m.appendSent(fmt.Sprintf("[sent — the model will pick this up at its next step] %s", text))
 			m.turnEpoch++
-			return m, m.sendMessage(text)
+			return m, m.sendMessage(text, false)
 		} else {
 			// Commands can't be queued (replaying one later via
 			// sendMessage would send it as literal chat text instead of
@@ -134,5 +134,5 @@ func handleEnter(m Model) (tea.Model, tea.Cmd) {
 	m.appendPendingUser(text)
 	m.waiting = true
 	m.turnEpoch++
-	return m, tea.Batch(m.sendMessage(text), m.startSpin())
+	return m, tea.Batch(m.sendMessage(text, true), m.startSpin())
 }

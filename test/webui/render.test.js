@@ -116,6 +116,16 @@ test('the permission pill counts rules, and shouts when prompts are skipped', as
   assert.ok(!app.el('permission-status-btn').classList.contains('skip'));
 });
 
+test('a literal permission rule is marked exact in the rule list', async () => {
+  const app = await load();
+  app.state.permissionRules = {
+    write_file: [{ match: '/proj/a*b', decision: 'allow', literal: true }, { match: '/proj/*.go', decision: 'allow' }],
+  };
+  app.internals.renderPermissionRulesList();
+  const rows = Array.from(app.el('permission-rules-list').querySelectorAll('.rule-text'), (el) => el.textContent);
+  assert.deepEqual(rows, ['write_file: "/proj/a*b" (exact) -> allow', 'write_file: "/proj/*.go" -> allow']);
+});
+
 test('auto-delegate on with no target agent says it is doing nothing', async () => {
   const app = await load();
   app.state.autoDelegate = true;

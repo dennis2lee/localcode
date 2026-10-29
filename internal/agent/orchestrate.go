@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Orchestration: a plan the model fills in, and a Go loop that runs it.
@@ -268,8 +269,12 @@ func (p Plan) Validate(l Limits) error {
 		if s.Name == "" {
 			return fmt.Errorf("%s has no name", where)
 		}
-		if s.Name != strings.ToLower(s.Name) || strings.ContainsAny(s.Name, " \t.$") {
-			return fmt.Errorf("%s: a stage name is lowercase with no spaces, dots or dollars", where)
+		// No space of any kind and no control character: a name goes into
+		// the report's lines, and one with a line break in it split the
+		// stop line a resume reads.
+		if s.Name != strings.ToLower(s.Name) || strings.ContainsAny(s.Name, ".$") ||
+			strings.ContainsFunc(s.Name, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+			return fmt.Errorf("%s: a stage name is lowercase with no spaces, line breaks, dots or dollars", where)
 		}
 		if _, dup := known[s.Name]; dup {
 			return fmt.Errorf("%s: two stages have that name, and a later stage refers to results by name", where)

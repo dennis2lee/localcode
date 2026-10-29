@@ -236,7 +236,7 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 		// An earlier "allow for this session" (or "always") already covers
 		// this call, so don't ask again.
 		rule := config.PermissionRuleFor(toolName, subject)
-		if b.isGranted(sessionID, toolName, rule.Match) {
+		if b.coveredBySession(sessionID, toolName, subject, rule) {
 			return true, nil
 		}
 		// A directory this conversation already approved leaving the
@@ -468,6 +468,28 @@ func (b *PermissionBroker) grant(sessionID, toolName, pattern string) {
 		b.granted[sessionID] = map[string]bool{}
 	}
 	b.granted[sessionID][grantKey(toolName, pattern)] = true
+}
+
+// coveredBySession reports whether earlier "allow for this session" or
+// "always" answers in this session cover a call. A bash line is covered
+// only when each of its commands is, by that command's own rule: the rule
+// a line generalizes to names its first command, and matching the whole
+// line against it let "ls -la && rm -rf ~" run on a grant for "ls -la".
+// See config.GrantSegments for the lines no grant covers.
+func (b *PermissionBroker) coveredBySession(sessionID, toolName, subject string, rule config.PermissionRule) bool {
+	if toolName != config.BashToolName || subject == "" {
+		return b.isGranted(sessionID, toolName, rule.Match)
+	}
+	segments, ok := config.GrantSegments(subject)
+	if !ok {
+		return false
+	}
+	for _, segment := range segments {
+		if !b.isGranted(sessionID, toolName, config.PermissionRuleFor(toolName, segment).Match) {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *PermissionBroker) isGranted(sessionID, toolName, pattern string) bool {
