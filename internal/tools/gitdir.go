@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -61,12 +62,19 @@ func IntoGitDir(ctx context.Context, path string) bool {
 // holds the user-wide attributes file a diff or filter driver is named in.
 //
 // Compared both as spelled and with the home directory's own links
-// resolved, and without case, which is how macOS and Windows compare
-// names. On Linux that costs a question about a file git does not read.
+// resolved, and component by component as fileSystemName spells them,
+// which is how macOS and Windows compare names. On Linux that costs a
+// question about a file git does not read. Not compared: Unicode
+// normalization, which APFS also ignores; a home path with a decomposed
+// accented letter written the other way is not recognised.
 func gitUserConfig(path string) bool {
 	// git takes $HOME first, on Windows too, where Go's UserHomeDir is
-	// %USERPROFILE%; the two can differ there.
+	// %USERPROFILE%; the two can differ there. With no HOME, git for
+	// Windows takes %HOMEDRIVE%%HOMEPATH% before %USERPROFILE%.
 	homes := []string{os.Getenv("HOME")}
+	if drive, p := os.Getenv("HOMEDRIVE"), os.Getenv("HOMEPATH"); drive != "" && p != "" {
+		homes = append(homes, drive+p)
+	}
 	if h, err := os.UserHomeDir(); err == nil {
 		homes = append(homes, h)
 	}
@@ -90,15 +98,18 @@ func gitUserConfig(path string) bool {
 	if g := os.Getenv("GIT_CONFIG_GLOBAL"); g != "" {
 		places = append(places, place{g, false})
 	}
-	target := strings.ToLower(path)
+	target := fileSystemPath(path)
 	for _, pl := range places {
 		spellings := []string{pl.path}
 		if r, err := resolvePhysical(pl.path); err == nil {
 			spellings = append(spellings, r)
 		}
 		for _, sp := range spellings {
-			sp = strings.ToLower(filepath.Clean(sp))
-			if target == sp || pl.dir && strings.HasPrefix(target, sp+string(filepath.Separator)) {
+			want := fileSystemPath(sp)
+			if len(target) < len(want) || !pl.dir && len(target) != len(want) {
+				continue
+			}
+			if slices.Equal(target[:len(want)], want) {
 				return true
 			}
 		}
@@ -129,17 +140,57 @@ func hasGitDirComponent(path string) bool {
 // On a file system where one of these is a different name, it costs one
 // question about a file that is not git's.
 func isGitDirName(part string) bool {
+	part = fileSystemName(part)
+	return part == ".git" || gitShortName.MatchString(part)
+}
+
+// fileSystemName is a path component as the file systems above compare
+// it: no case, no code points HFS+ ignores, nothing from a colon on, and
+// no trailing dots or spaces.
+func fileSystemName(part string) string {
 	part = strings.Map(func(r rune) rune {
 		if ignoredByHFS(r) {
 			return -1
 		}
 		return unicode.ToLower(r)
 	}, part)
-	if i := strings.IndexByte(part, ':'); i >= 0 {
+	if i := strings.IndexByte(part, ':'); i >= 0 && i > len(filepath.VolumeName(part)) {
 		part = part[:i]
 	}
-	part = strings.TrimRight(part, ". ")
-	return part == ".git" || gitShortName.MatchString(part)
+	return strings.TrimRight(part, ". ")
+}
+
+// fileSystemPath is a path split into its components, each spelled by
+// fileSystemName, so ".gitconfig." and ".gitconfig::$DATA" are
+// .gitconfig as Windows reads them.
+func fileSystemPath(path string) []string {
+	parts := strings.Split(filepath.Clean(path), string(filepath.Separator))
+	for i, p := range parts {
+		parts[i] = fileSystemName(p)
+	}
+	return parts
+}
+
+// resolves reports whether a path's physical location can be worked out.
+// One that cannot (a link whose expansion is longer than the system's
+// path limit, a junction on Windows) may still be followed by the kernel,
+// so where a write through it lands is unknown.
+func resolves(ctx context.Context, path string) bool {
+	if path == "" {
+		return true
+	}
+	_, err := resolvePhysical(resolve(ctx, path))
+	return err == nil
+}
+
+// gitWriteReason is what a .git question adds to the tool's description:
+// where the write lands, which the typed path need not show.
+func gitWriteReason(ctx context.Context, path string) string {
+	full := resolve(ctx, path)
+	if physical, err := resolvePhysical(full); err == nil {
+		full = physical
+	}
+	return "This writes " + full + ", which git reads its configuration or hooks from. git runs what they name."
 }
 
 var gitShortName = regexp.MustCompile(`^git~[0-9]+$`)

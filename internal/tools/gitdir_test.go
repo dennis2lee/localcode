@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -326,5 +327,164 @@ func TestGitUserConfigIsAGitDir(t *testing.T) {
 		if !IntoGitDir(ctx, path) {
 			t.Errorf("IntoGitDir(%q) = false with XDG_CONFIG_HOME and GIT_CONFIG_GLOBAL set", path)
 		}
+	}
+}
+
+// longLinkIntoGit builds <ws>/l -> "A/A/.../../../.git" with each A a
+// 248-byte name, deep enough that the absolute path EvalSymlinks builds
+// on the way is longer than the system's path limit while the link text
+// is not. The kernel follows the link a component at a time and reaches
+// .git; resolvePhysical cannot. Skipped where that does not hold.
+func longLinkIntoGit(t *testing.T) (ws, gitConfig string) {
+	t.Helper()
+	pathMax := map[string]int{"darwin": 1024, "linux": 4096}[runtime.GOOS]
+	if pathMax == 0 {
+		t.Skip("path limit not known here")
+	}
+	ws = filepath.Join(t.TempDir(), strings.Repeat("w", 200))
+	if err := os.MkdirAll(filepath.Join(ws, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitConfig = filepath.Join(ws, ".git", "config")
+	if err := os.WriteFile(gitConfig, []byte("[core]\n\tbare = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	real, err := filepath.EvalSymlinks(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := strings.Repeat("A", 248)
+	n := (pathMax-len(real))/(len(name)+1) + 1
+	target := strings.Repeat(name+"/", n) + strings.Repeat("../", n) + ".git"
+	if len(target) >= pathMax {
+		t.Skipf("a %d-byte link is past the limit", len(target))
+	}
+	dir, err := os.OpenRoot(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		if err := dir.Mkdir(name, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		next, err := dir.OpenRoot(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir.Close()
+		dir = next
+	}
+	dir.Close()
+	if err := os.Symlink(target, filepath.Join(ws, "l")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolvePhysical(filepath.Join(ws, "l", "config")); err == nil {
+		t.Skip("this system resolves the link")
+	}
+	if got, err := os.ReadFile(filepath.Join(ws, "l", "config")); err != nil || !strings.Contains(string(got), "bare") {
+		t.Skipf("the kernel does not follow the link here: %v", err)
+	}
+	return ws, gitConfig
+}
+
+// A path the kernel follows into .git but resolvePhysical cannot work out
+// is a boundary question while writing outside is off, and a .git
+// question once it is on, when the boundary no longer asks.
+func TestAWriteThatDoesNotResolveIsAskedPastTheBoundary(t *testing.T) {
+	ws, gitConfig := longLinkIntoGit(t)
+	ctx := WithWorkingDir(context.Background(), ws)
+	for _, writeOutside := range []bool{false, true} {
+		var asked []Ask
+		reg := NewRegistry(func(_ context.Context, a Ask) (bool, error) {
+			asked = append(asked, a)
+			return false, nil
+		})
+		reg.Resolver = ComposeResolver(
+			func(context.Context, string, string, bool) Decision { return DecisionAllow },
+			Policy{
+				SkipAll:        func(context.Context) bool { return false },
+				SkipTools:      func(context.Context) bool { return false },
+				OutsideAllowed: func(context.Context, OutsideClass) bool { return writeOutside },
+			},
+		)
+		reg.Register(WriteFile{})
+		input, _ := json.Marshal(map[string]string{"path": "l/config", "content": "[core]\n\tfsmonitor = touch pwned\n"})
+		reg.Call(ctx, "write_file", input, "")
+		if got, _ := os.ReadFile(gitConfig); strings.Contains(string(got), "fsmonitor") {
+			t.Errorf("write-outside=%v: .git/config was written without being approved", writeOutside)
+		}
+		if len(asked) != 1 {
+			t.Fatalf("write-outside=%v: %d question(s), want 1", writeOutside, len(asked))
+		}
+		a := asked[0]
+		if !writeOutside && a.Outside != OutsideWrite {
+			t.Errorf("write-outside off: asked as outside=%v, want a boundary question", a.Outside)
+		}
+		if writeOutside && (!a.Once || a.Outside != OutsideNone || !strings.Contains(a.Description, "does not resolve")) {
+			t.Errorf("write-outside on: once=%v outside=%v description=%q; want a once question that says the path does not resolve", a.Once, a.Outside, a.Description)
+		}
+	}
+}
+
+// The question says where the write lands, which the typed path need not.
+func TestAGitDirQuestionSaysWhereTheWriteLands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need a privilege on Windows")
+	}
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(ws, ".git", "config"), filepath.Join(ws, "notes.txt")); err != nil {
+		t.Fatal(err)
+	}
+	var asked []Ask
+	reg := NewRegistry(func(_ context.Context, a Ask) (bool, error) {
+		asked = append(asked, a)
+		return false, nil
+	})
+	off := func(context.Context) bool { return false }
+	reg.Resolver = ComposeResolver(
+		func(context.Context, string, string, bool) Decision { return DecisionAllow },
+		Policy{SkipAll: off, SkipTools: off, OutsideAllowed: func(context.Context, OutsideClass) bool { return false }},
+	)
+	reg.Register(WriteFile{})
+	input, _ := json.Marshal(map[string]string{"path": "notes.txt", "content": "x"})
+	reg.Call(WithWorkingDir(context.Background(), ws), "write_file", input, "")
+	real, _ := filepath.EvalSymlinks(filepath.Join(ws, ".git"))
+	if len(asked) != 1 || !strings.Contains(asked[0].Description, filepath.Join(real, "config")) {
+		t.Errorf("the question does not name .git/config: %+v", asked)
+	}
+}
+
+// Windows and macOS read some other spellings as git's user config, and
+// git for Windows takes %HOMEDRIVE%%HOMEPATH% when HOME is not set.
+func TestGitUserConfigSpellingsAndHomes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("HOME spelling")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+	ctx := WithWorkingDir(context.Background(), t.TempDir())
+	for _, path := range []string{
+		filepath.Join(home, ".gitconfig."), filepath.Join(home, ".gitconfig "),
+		filepath.Join(home, ".gitconfig::$DATA"), filepath.Join(home, ".GitConfig"),
+		filepath.Join(home, ".config", "git.", "config"), filepath.Join(home, ".config", "GIT", "attributes"),
+	} {
+		if !IntoGitDir(ctx, path) {
+			t.Errorf("IntoGitDir(%q) = false: a file system reads it as git's user config", path)
+		}
+	}
+
+	drive := t.TempDir()
+	if err := os.Mkdir(filepath.Join(drive, "h"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOMEDRIVE", drive)
+	t.Setenv("HOMEPATH", string(filepath.Separator)+"h")
+	if !IntoGitDir(ctx, filepath.Join(drive, "h", ".gitconfig")) {
+		t.Error("IntoGitDir(%HOMEDRIVE%%HOMEPATH%\\.gitconfig) = false")
 	}
 }

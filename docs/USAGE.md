@@ -815,7 +815,8 @@ The guard does not inspect these sources of behavior:
 * A git directory under another name: a bare repository (`HEAD`, `config`, `objects`, `refs`) the model writes and then names with `-C` or `--git-dir`, one set apart with `--separate-git-dir`, or the bare repository a worktree shares (`git worktree add` run in `proj.git`). Outside the project the workspace boundary asks about a write there, and "allow writes in this directory" for it covers it.
 * A hard link to a file in `.git`, made before the session or by a bash command a rule allows.
 * git's system configuration (`/etc/gitconfig`, and on Windows `C:\ProgramData\Git\config` and the one in the Git installation). Writing it usually needs administrator rights.
-* A path through a Windows junction. It does not resolve, so it is judged by its text, and the workspace boundary asks about it as outside the project.
+* A file git's configuration includes (`include.path`, `includeIf`), such as a shared `../.gitconfig` or `~/.gitconfig.local`.
+* git's user configuration spelled with another Unicode normalization of an accented letter in its path, which APFS treats as the same name.
 * Configuration and hooks in another repository selected by `-C`, `--git-dir`, or `--work-tree`.
 * Existing aliases and `git-<name>` programs on PATH.
 * Configured diff and merge drivers, including `--ext-diff` and `--textconv`.
@@ -826,7 +827,8 @@ The guard does not inspect these sources of behavior:
 
 A `write_file` or `edit` into a `.git` directory, to a `.git` file, or to git's per-user configuration requires confirmation even when a rule allows the write. Git runs what its configuration and hooks name: `core.fsmonitor` written into `.git/config` runs on the next `git status`. The per-user configuration is `~/.gitconfig`, the file `GIT_CONFIG_GLOBAL` names, and everything in `$XDG_CONFIG_HOME/git` (`~/.config/git` when unset); git reads it in every repository.
 
-* The path is judged after `..` is taken off its text, and again where its symlinks lead. A path that cannot be resolved, such as a symlink loop, is judged by its text.
+* The path is judged after `..` is taken off its text, and again where its symlinks lead. The question names where the write lands, which a link can hide.
+* A path whose physical location cannot be worked out is judged by its text: a symlink loop, a Windows junction, or a link that the kernel follows but whose expansion is longer than the path limit. The workspace boundary asks about it as outside the project. When writing outside the project is allowed the boundary does not ask, so the write is asked as a `.git` write, each time.
 * A component is `.git` in any case and in the spellings Windows and HFS+ read as `.git`: `.git.`, `.git::$INDEX_ALLOCATION`, `GIT~1`, and `.g` + U+200C + `it`.
 * Outside the project the question is a plain one. "Allow writes in this directory" for another project does not cover its `.git`.
 * Reading `.git` is not affected.
@@ -837,7 +839,7 @@ Every file tool takes `..` and trailing separators off a path's text before it u
 
 ### Answering a permission prompt: once, this session, or always
 
-Ordinary tool prompts provide the following choices. Workspace-boundary prompts use the choices in [Leaving the project](#leaving-the-project).
+Ordinary tool prompts provide the following choices. Workspace-boundary prompts use the choices in [Leaving the project](#leaving-the-project). A write into `.git` offers only "allow once" and "deny".
 
 | Answer | TUI key | Effect |
 |---|---|---|

@@ -303,6 +303,10 @@ type Outcome struct {
 	// replaced by a link into .git, which git's own allowed commands can
 	// check out. An answer covers the one write.
 	GitDir bool
+	// Reason is what the question says on top of the tool's own
+	// description, for a question the call alone would not explain: the
+	// path the model typed can be a link, and nothing in it says .git.
+	Reason string
 }
 
 // ComposeResolver is the whole permission pipeline in its required order.
@@ -349,7 +353,7 @@ func ComposeResolver(
 				// main.go, would cover other-project/.git/config too;
 				// asked here, it would cover the whole .git. A plain
 				// answer covers the one write.
-				return Outcome{Decision: DecisionAsk, GitDir: true}
+				return Outcome{Decision: DecisionAsk, GitDir: true, Reason: gitWriteReason(ctx, q.Subject)}
 			}
 			return Outcome{
 				Decision:  DecisionAsk,
@@ -359,6 +363,20 @@ func ComposeResolver(
 			}
 		}
 
+		// A write the boundary let through, because it is inside the
+		// project or because writing outside is allowed, whose path does
+		// not resolve. The kernel may still follow it: a link whose
+		// expansion is longer than the path limit, which git's own allowed
+		// commands can check out, leads into .git with nothing in its text
+		// to say so. Inside the project such a path is outside to the
+		// boundary, so this is the write-outside case.
+		reason := ""
+		if q.Class == OutsideWrite && !gitWrite && !resolves(ctx, q.Subject) {
+			gitWrite = true
+			reason = "Where this write lands cannot be worked out: its path does not resolve, and it could lead into .git."
+		} else if gitWrite {
+			reason = gitWriteReason(ctx, q.Subject)
+		}
 		if gitWrite {
 			d = DecisionAsk
 		}
@@ -366,6 +384,6 @@ func ComposeResolver(
 		if d == DecisionAsk && (p.SkipAll(ctx) || p.SkipTools(ctx)) {
 			return Outcome{Decision: DecisionAllow}
 		}
-		return Outcome{Decision: d, GitDir: gitWrite}
+		return Outcome{Decision: d, GitDir: gitWrite, Reason: reason}
 	}
 }

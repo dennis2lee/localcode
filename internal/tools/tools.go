@@ -543,6 +543,9 @@ func (r *Registry) gate(ctx context.Context, name string, t Tool, input json.Raw
 				describe = fmt.Sprintf("%s %s", name, string(input))
 			}
 		}
+		if outcome.Reason != "" {
+			describe += "\n" + outcome.Reason
+		}
 		allowed, err := r.permission(ctx, Ask{
 			Tool:        name,
 			Subject:     subject,
