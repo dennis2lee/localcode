@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.169.4
 
 A quote the shell reads differently, a zsh glob qualifier, a Windows delete command or a workspace `git.bat` no longer gets a command past a bash rule.
 

@@ -79,8 +79,8 @@ func seqsOnDisk(t *testing.T, dir, id string) map[uint64]int {
 
 // The retiring daemon lets go of S1 between construction, which read the
 // manifest, and NoteTakeover, which reads it again. S1 was still being
-// written after this daemon loaded it, so it is still re-read and its
-// questions closed only then.
+// written after this daemon loaded it, so it is still re-read before
+// this daemon writes it.
 func TestASessionReleasedBeforeTheSuccessorLooksIsStillTakenOver(t *testing.T) {
 	dir := staleStore(t, []string{"S1"})
 	writeManifest(t, dir, "S1")
