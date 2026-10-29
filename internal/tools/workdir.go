@@ -50,21 +50,32 @@ func WorkingDir(ctx context.Context) string {
 // resolve turns a tool's path argument into one that means the same thing
 // no matter what the process's working directory happens to be.
 //
-// Absolute paths are returned untouched: the model asked for a specific
-// place and gets it. A relative path is joined onto the session's
-// directory, which is the whole point — "src/main.go" has to mean the
-// src/main.go of the workspace this turn belongs to, not of whichever
-// directory the daemon was started in.
+// An absolute path keeps its place: the model asked for a specific one
+// and gets it. A relative path is joined onto the session's directory,
+// which is the whole point — "src/main.go" has to mean the src/main.go of
+// the workspace this turn belongs to, not of whichever directory the
+// daemon was started in.
+//
+// Both come back cleaned, so ".." is taken off the text before the file
+// system sees it. The permission checks (OutsideWorkspace, IntoGitDir)
+// judge the cleaned path, and the file system reads "link/.." as the
+// directory above wherever link points: an absolute "<ws>/h/../config"
+// with h a link to .git/hooks was judged as <ws>/config and written to
+// .git/config. A relative path joined onto the directory was always
+// cleaned, by Join.
 //
 // An empty path stays empty rather than becoming the directory itself, so
 // a tool that treats "" as "unset" keeps doing so.
 func resolve(ctx context.Context, path string) string {
-	if path == "" || filepath.IsAbs(path) {
+	if path == "" {
 		return path
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
 	}
 	dir := WorkingDir(ctx)
 	if dir == "" {
-		return path
+		return filepath.Clean(path)
 	}
 	return filepath.Join(dir, path)
 }
@@ -182,6 +193,12 @@ func resolvePhysical(path string) (string, error) {
 			// The component exists and is a symlink — its *target* is
 			// what's missing. Follow it; the target is where a write
 			// through this path would land.
+			//
+			// Not cleaned: a target is read the way the file system reads
+			// it, and that is not by its text. "h/../info/attributes"
+			// with h a link to .git/hooks is .git/info/attributes, and
+			// EvalSymlinks, on the next pass, follows h before it applies
+			// the "..". Cleaning first made it <ws>/info/attributes.
 			if links++; links > maxDanglingLinkHops {
 				return "", errors.New("too many links")
 			}
@@ -190,18 +207,41 @@ func resolvePhysical(path string) (string, error) {
 				return "", rerr
 			}
 			if !filepath.IsAbs(dest) {
-				dest = filepath.Join(filepath.Dir(p), dest)
+				parent, _ := splitLastElement(p)
+				dest = strings.TrimSuffix(parent, string(filepath.Separator)) + string(filepath.Separator) + dest
 			}
-			p = filepath.Clean(dest)
+			p = dest
 			continue
 		}
-		parent := filepath.Dir(p)
-		if parent == p {
+		// Peeled by its text for the same reason: filepath.Dir would
+		// clean what is left. A missing ".." or "." is not a name to
+		// peel; the path does not resolve.
+		parent, base := splitLastElement(p)
+		if parent == p || base == "" || base == "." || base == ".." {
 			return "", err
 		}
-		tail = filepath.Join(filepath.Base(p), tail)
+		tail = filepath.Join(base, tail)
 		p = parent
 	}
+}
+
+// splitLastElement is filepath.Split without the cleaning filepath.Dir
+// does: the parent is the text before the last separator, the root kept
+// whole, and "." for a relative path of one element.
+func splitLastElement(p string) (parent, base string) {
+	vol := len(filepath.VolumeName(p))
+	i := len(p) - 1
+	for i >= vol && !os.IsPathSeparator(p[i]) {
+		i--
+	}
+	if i < vol {
+		return ".", p[vol:]
+	}
+	parent = p[:i]
+	if len(parent) == vol {
+		parent = p[:i+1]
+	}
+	return parent, p[i+1:]
 }
 
 // maxDanglingLinkHops bounds how many dangling symlinks resolution will
@@ -285,11 +325,21 @@ func ComposeResolver(
 		if d == DecisionDeny {
 			return Outcome{Decision: d}
 		}
+		gitWrite := q.Class == OutsideWrite && IntoGitDir(ctx, q.Subject)
 
 		if q.Class != OutsideNone && OutsideWorkspace(ctx, q.Subject) &&
 			!p.OutsideAllowed(ctx, q.Class) {
 			if p.SkipAll(ctx) {
 				return Outcome{Decision: DecisionAllow}
+			}
+			if gitWrite {
+				// Asked as a plain question, not as a boundary one. A
+				// boundary question is answered for a directory, and
+				// "allow writes in other-project", given for its
+				// main.go, would cover other-project/.git/config too;
+				// asked here, it would cover the whole .git. A plain
+				// answer covers the one path.
+				return Outcome{Decision: DecisionAsk}
 			}
 			return Outcome{
 				Decision:  DecisionAsk,
@@ -299,7 +349,7 @@ func ComposeResolver(
 			}
 		}
 
-		if d == DecisionAllow && q.Class == OutsideWrite && IntoGitDir(ctx, q.Subject) {
+		if gitWrite {
 			d = DecisionAsk
 		}
 

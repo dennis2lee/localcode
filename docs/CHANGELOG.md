@@ -7,6 +7,11 @@ A file written into `.git` is asked before the next ordinary git command can run
 **Fixed**
 
 * A `write_file` or `edit` into `.git` allowed by a rule, such as `core.fsmonitor` written into `.git/config` and run by the next `git status`
+* An absolute file tool path with `..` after a symlink (`/proj/link/../x`) written or read where the link leads, not at the path the workspace boundary judged
+
+**Changed**
+
+* An absolute file tool path has `..` taken off its text, as a relative one already had
 
 ## v0.169.5
 

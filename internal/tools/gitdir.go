@@ -27,20 +27,26 @@ import (
 // directory named .git, anywhere on the path, or the .git file itself
 // (which, in a worktree or a submodule, names the directory git uses).
 //
-// The path is judged twice and either is enough. As written, cleaned, so
-// ".git/../.git/config" and "./.git/config" are what they say. And
-// physically, with symlinks followed the way resolvePhysical follows them
-// for the workspace boundary, so a link to .git is where it leads.
+// The path is judged twice and either is enough. As the tools will use
+// it, which is cleaned (see resolve), so ".git/../.git/config" and
+// "./.git/config" are what they say. And physically, with symlinks
+// followed the way resolvePhysical follows them for the workspace
+// boundary, so a link to .git is where it leads.
+//
+// A path that does not resolve counts, as it counts as outside the
+// workspace there: a symlink loop, a directory that cannot be read, and on
+// Windows a junction, which Go's EvalSymlinks does not follow. Where it
+// leads is unknown, and the cost of being wrong is one question.
 func IntoGitDir(ctx context.Context, path string) bool {
 	if path == "" {
 		return false
 	}
 	full := resolve(ctx, path)
-	if hasGitDirComponent(filepath.Clean(full)) {
+	if hasGitDirComponent(full) {
 		return true
 	}
 	physical, err := resolvePhysical(full)
-	return err == nil && hasGitDirComponent(physical)
+	return err != nil || hasGitDirComponent(physical)
 }
 
 func hasGitDirComponent(path string) bool {

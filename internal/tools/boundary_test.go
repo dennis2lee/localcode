@@ -369,6 +369,13 @@ func TestThePermissionPipeline(t *testing.T) {
 		{"write into .github", false, false, false, false, "write_file", ".github/workflows/ci.yml", OutsideWrite, DecisionAllow, OutsideNone},
 		{"write into .git under skip_tools", false, true, false, false, "write_file", ".git/config", OutsideWrite, DecisionAllow, OutsideNone},
 		{"write into .git under skip_all", true, false, false, false, "write_file", ".git/config", OutsideWrite, DecisionAllow, OutsideNone},
+		// Outside the project, a write into .git is still a plain question:
+		// a boundary one is answered for a directory, and "allow writes
+		// in other-project" would cover its .git. skip_tools does not
+		// cross the boundary for it; skip_all does.
+		{"write into another project's .git", false, false, false, false, "write_file", filepath.Join(filepath.Dir(workspace), "other-project", ".git", "config"), OutsideWrite, DecisionAsk, OutsideNone},
+		{"write into another project's .git under skip_tools", false, true, false, false, "write_file", filepath.Join(filepath.Dir(workspace), "other-project", ".git", "config"), OutsideWrite, DecisionAsk, OutsideNone},
+		{"write into another project's .git under skip_all", true, false, false, false, "write_file", filepath.Join(filepath.Dir(workspace), "other-project", ".git", "config"), OutsideWrite, DecisionAllow, OutsideNone},
 		{"write into another project's .git with writes outside allowed", false, false, false, true, "write_file", filepath.Join(filepath.Dir(workspace), "other-project", ".git", "config"), OutsideWrite, DecisionAsk, OutsideNone},
 		{"deny into .git", false, false, false, false, "write_file", ".git/id_rsa", OutsideWrite, DecisionDeny, OutsideNone},
 	} {

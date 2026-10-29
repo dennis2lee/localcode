@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"localcode/internal/config"
+	"localcode/internal/events"
 	"localcode/internal/session"
 	"localcode/internal/tools"
 )
@@ -19,6 +20,37 @@ import (
 // about a file somebody already said yes to, and it lives in the broker,
 // so only a test through both shows them connected.
 func TestAWriteIntoGitIsAskedOnceForTheSession(t *testing.T) {
+	r := newGitWriteRig(t)
+	r.unasked("src/main.go")
+	r.asked(".git/config", ScopeSession)
+	r.unasked(".git/config")
+	r.asked(".git/hooks/pre-commit", ScopeOnce)
+}
+
+// "Allow writes in this directory", given for another project's file,
+// does not cover that project's .git. The .git question is a plain one,
+// so no answer to it covers a directory either.
+func TestAnApprovedDirectoryDoesNotCoverItsGitDir(t *testing.T) {
+	r := newGitWriteRig(t)
+	other := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(other, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.asked(filepath.Join(other, "main.go"), ScopeOutsideDir); got != "write" {
+		t.Fatalf("a write to another project was asked as %q, want a boundary question", got)
+	}
+	r.unasked(filepath.Join(other, "notes.md"))
+	if got := r.asked(filepath.Join(other, ".git", "config"), ScopeOnce); got != "" {
+		t.Errorf("a write into the other project's .git was asked as a boundary question (%q); a directory answer could cover it", got)
+	}
+}
+
+type gitWriteRig struct {
+	unasked func(path string)
+	asked   func(path, scope string) string
+}
+
+func newGitWriteRig(t *testing.T) gitWriteRig {
 	project := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(project, ".git", "hooks"), 0o755); err != nil {
 		t.Fatal(err)
@@ -81,18 +113,24 @@ func TestAWriteIntoGitIsAskedOnceForTheSession(t *testing.T) {
 			t.Errorf("write %s wrote %d event(s); it should have asked nothing", path, n)
 		}
 	}
-	asked := func(path, scope string) {
+	// asked answers the question the write raises and reports which kind
+	// it was: "write" for a boundary question, "" for a plain one.
+	asked := func(path, scope string) string {
 		t.Helper()
 		before := len(mustEvents(t, store, sid))
 		res := write(path)
-		broker.Resolve(waitForPermissionID(t, store, sid, before), true, scope)
+		id := waitForPermissionID(t, store, sid, before)
+		var outside string
+		for _, ev := range mustEvents(t, store, sid)[before:] {
+			if ev.Type == events.TypePermissionRequest {
+				outside, _ = ev.Data["outside"].(string)
+			}
+		}
+		broker.Resolve(id, true, scope)
 		if r := <-res; r.IsError {
 			t.Errorf("approved write %s: %s", path, r.Content)
 		}
+		return outside
 	}
-
-	unasked("src/main.go")
-	asked(".git/config", ScopeSession)
-	unasked(".git/config")
-	asked(".git/hooks/pre-commit", ScopeOnce)
+	return gitWriteRig{unasked: unasked, asked: asked}
 }

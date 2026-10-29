@@ -673,8 +673,6 @@ Default behavior without any rules:
 
 Ordinary Git commands run without confirmation by default. Git options and subcommands that run another command require confirmation even when an explicit rule allows Git. An explicit tool rule overrides its built-in default.
 
-A `write_file` or `edit` into a `.git` directory, or to a `.git` file, requires confirmation even when a rule allows the write. Git runs what its configuration and hooks name: `core.fsmonitor` in `.git/config` runs on the next `git status`. The check follows symlinks, ignores case, and treats the names Windows and HFS+ read as `.git` (`.git.`, `GIT~1`, `.git::$INDEX_ALLOCATION`, `.g` + U+200C + `it`) as `.git`. Reading `.git` is not affected. `skip_tools` and `skip_all` allow the write, since bash runs any command unasked under either. "Allow for session" covers the same path again; "always" does not stop the question in a later session.
-
 ```json
 {
   "permission": {
@@ -813,6 +811,7 @@ The safe `-c` keys are `user.name`, `user.email`, `core.quotepath`, `init.defaul
 The guard does not inspect these sources of behavior:
 
 * Repository configuration and hooks written by a bash command a rule allows (`cp hook .git/hooks/pre-commit` under a `cp *` rule), or there before the session. A redirect into `.git` is asked like any redirect.
+* Hooks git runs from outside `.git`: a `core.hooksPath` directory in the project (husky's `.husky`), a `.git/hooks` that is a symlink into the project, and the files a hook manager reads (`.pre-commit-config.yaml`, `lefthook.yml`). A write to one of them runs on the next allowed `git commit`. To be asked before every commit, add `{ "match": "git commit*", "decision": "ask" }` to the `bash` rules.
 * A git directory under another name: a bare repository (`HEAD`, `config`, `objects`, `refs`) the model writes and then names with `-C` or `--git-dir`, or one set apart with `--separate-git-dir`.
 * Configuration and hooks in another repository selected by `-C`, `--git-dir`, or `--work-tree`.
 * Existing aliases and `git-<name>` programs on PATH.
@@ -821,6 +820,17 @@ The guard does not inspect these sources of behavior:
 * File output options such as `--output`.
 * External merge strategies selected by `git merge -s <name>`.
 * A git command behind a wrapper such as `nohup git` or `time git`. A rule for the wrapper decides it. The built-in rule allows no wrapper.
+
+A `write_file` or `edit` into a `.git` directory, or to a `.git` file, requires confirmation even when a rule allows the write. Git runs what its configuration and hooks name: `core.fsmonitor` written into `.git/config` runs on the next `git status`.
+
+* The path is judged after `..` is taken off its text, and again where its symlinks lead. A path that cannot be resolved, such as a symlink loop or a Windows junction, counts as `.git`.
+* A component is `.git` in any case and in the spellings Windows and HFS+ read as `.git`: `.git.`, `.git::$INDEX_ALLOCATION`, `GIT~1`, and `.g` + U+200C + `it`.
+* Outside the project the question is a plain one. "Allow writes in this directory" for another project does not cover its `.git`.
+* Reading `.git` is not affected.
+* Inside the project, `skip_tools` and `skip_all` allow the write, since bash runs any command unasked under either. Outside it, only `skip_all` does.
+* "Allow for session" covers the same path, spelled the same way. "Always" also writes a rule, and a later session asks again for that path.
+
+Every file tool takes `..` off a path's text before it uses it, an absolute path as a relative one: `/proj/link/../x` is `/proj/x`, wherever `link` points. The workspace boundary and the `.git` check judge that same path.
 
 ### Answering a permission prompt: once, this session, or always
 
