@@ -174,6 +174,8 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 	broker.SetPolicy(d.Policy, d.announceSessionPermissions)
 	loop.OnPermissionsChanged = d.announceSessionPermissions
 	loop.ForgetOutside = broker.ForgetOutside
+	loop.PermissionShownIn = broker.ShownIn
+	d.closeStaleQuestionsAtStart()
 
 	d.routes(webFS)
 	// Every status change becomes one live event carrying the whole list.

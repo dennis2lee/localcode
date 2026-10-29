@@ -10,7 +10,7 @@ import (
 	"localcode/internal/tools"
 )
 
-func TestRehydrateClosesStaleQuestions(t *testing.T) {
+func TestCloseStaleQuestionsClosesEachLogOnce(t *testing.T) {
 	dir := t.TempDir()
 	store, err := session.NewStore(dir)
 	if err != nil {
@@ -35,13 +35,11 @@ func TestRehydrateClosesStaleQuestions(t *testing.T) {
 	loop, _ := scriptedLoop(t, &scriptedProvider{}, tools.NewRegistry(nil))
 	loop.Store = restored
 	loop.Input = NewInputBroker(restored)
-	loop.RehydrateAll()
-	for _, sid := range []string{"parent", "task"} {
-		assertStaleQuestionsClosed(t, restored, sid)
-	}
-	loop.RehydrateAll()
-	for _, sid := range []string{"parent", "task"} {
-		assertStaleQuestionsClosed(t, restored, sid)
+	for range 2 {
+		for _, sid := range []string{"parent", "task"} {
+			loop.CloseStaleQuestions(sid)
+			assertStaleQuestionsClosed(t, restored, sid)
+		}
 	}
 }
 
@@ -110,7 +108,7 @@ func waitForInputQuestion(t *testing.T, store *session.Store, sid string, baseli
 	return ""
 }
 
-func TestRehydrateKeepsLiveQuestionsAndClosesTheirCopies(t *testing.T) {
+func TestCloseStaleQuestionsKeepsLiveQuestionsAndClosesTheirCopies(t *testing.T) {
 	loop, parent := scriptedLoop(t, &scriptedProvider{}, tools.NewRegistry(nil))
 	broker := NewPermissionBroker(loop.Store)
 	loop.PermissionShownIn = broker.ShownIn
@@ -149,7 +147,9 @@ func TestRehydrateKeepsLiveQuestionsAndClosesTheirCopies(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	loop.RehydrateAll()
+	for _, sid := range []string{parent, "task", "copy"} {
+		loop.CloseStaleQuestions(sid)
+	}
 	for _, sid := range []string{parent, "task", "copy"} {
 		evs, err := loop.Store.Events(sid, 0)
 		if err != nil {
@@ -192,42 +192,25 @@ func TestRehydrateKeepsLiveQuestionsAndClosesTheirCopies(t *testing.T) {
 	}
 }
 
-func TestRehydrateLeavesShelvedQuestionsUntilRetrieval(t *testing.T) {
+// Rehydration only reads. A successor daemon rehydrates every session
+// before it knows which ones the daemon it replaced is still writing, so
+// a write from here lands in a log another process owns.
+func TestRehydrationWritesNothing(t *testing.T) {
 	loop, parent := scriptedLoop(t, &scriptedProvider{}, tools.NewRegistry(nil))
-	if _, err := loop.Store.CreateSession("task", parent, "general-purpose", false); err != nil {
-		t.Fatal(err)
-	}
-	for _, sid := range []string{parent, "task"} {
-		for _, kind := range []events.Type{events.TypePermissionRequest, events.TypeInputRequest} {
-			if _, err := loop.Store.Append(sid, kind, map[string]any{"id": string(kind)}); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if _, err := loop.Store.Archive(parent); err != nil {
-		t.Fatal(err)
-	}
-	loop.RehydrateAll()
-	for _, sid := range []string{parent, "task"} {
-		evs, err := loop.Store.Events(sid, 0)
-		if err != nil {
+	loop.Input = NewInputBroker(loop.Store)
+	for _, kind := range []events.Type{events.TypePermissionRequest, events.TypeInputRequest} {
+		if _, err := loop.Store.Append(parent, kind, map[string]any{"id": string(kind)}); err != nil {
 			t.Fatal(err)
 		}
-		if len(evs) != 2 {
-			t.Errorf("startup changed shelved %s: %v", sid, evs)
-		}
 	}
-	if _, err := loop.Store.Retrieve(parent); err != nil {
-		t.Fatal(err)
-	}
+	loop.RehydrateAll()
 	loop.RehydrateSession(parent)
-	assertStaleQuestionsClosed(t, loop.Store, parent)
-	// A child is closed when its own log is rehydrated, not via the parent.
-	loop.RehydrateSession("task")
-	assertStaleQuestionsClosed(t, loop.Store, "task")
+	if evs, _ := loop.Store.Events(parent, 0); len(evs) != 2 {
+		t.Errorf("rehydration wrote to the log: %v", evs)
+	}
 }
 
-func TestRehydrateDoesNotResolveAnsweredOrEmptyQuestions(t *testing.T) {
+func TestCloseStaleQuestionsSkipsAnsweredOrEmptyQuestions(t *testing.T) {
 	loop, sid := scriptedLoop(t, &scriptedProvider{}, tools.NewRegistry(nil))
 	for _, kind := range []events.Type{events.TypePermissionRequest, events.TypeInputRequest, events.TypePermissionResolved, events.TypeInputResolved} {
 		if _, err := loop.Store.Append(sid, kind, map[string]any{"id": "answered"}); err != nil {
@@ -240,7 +223,7 @@ func TestRehydrateDoesNotResolveAnsweredOrEmptyQuestions(t *testing.T) {
 		}
 	}
 	before, _ := loop.Store.Events(sid, 0)
-	loop.RehydrateSession(sid)
+	loop.CloseStaleQuestions(sid)
 	after, _ := loop.Store.Events(sid, 0)
 	if len(after) != len(before) {
 		t.Errorf("added events for answered or empty questions: %v", after[len(before):])
@@ -250,7 +233,7 @@ func TestRehydrateDoesNotResolveAnsweredOrEmptyQuestions(t *testing.T) {
 // An id an earlier daemon reused in the same log (ids restarted at p1 in
 // every daemon before v0.169.3) is closed once, and stale questions are
 // closed in the order they were asked.
-func TestRehydrateClosesAReusedIdOnceAndInOrder(t *testing.T) {
+func TestCloseStaleQuestionsClosesAReusedIdOnceAndInOrder(t *testing.T) {
 	store, err := session.NewStore("")
 	if err != nil {
 		t.Fatal(err)
@@ -275,7 +258,7 @@ func TestRehydrateClosesAReusedIdOnceAndInOrder(t *testing.T) {
 	loop, _ := scriptedLoop(t, &scriptedProvider{}, tools.NewRegistry(nil))
 	loop.Store = store
 	loop.Input = NewInputBroker(store)
-	loop.RehydrateSession("s")
+	loop.CloseStaleQuestions("s")
 
 	evs, _ := store.Events("s", 0)
 	var closed []string

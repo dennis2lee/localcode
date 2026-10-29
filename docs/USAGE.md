@@ -713,8 +713,8 @@ Answering "always allow" writes a rule to `config.json`. For most programs the r
 
 | Family | Examples | Rule written |
 |---|---|---|
-| Interpreters and shells | `sh`, `bash`, `python3`, `node`, `perl`, `ruby`, `powershell`, `cmd`, `env`, `xargs`, `Start-Process`, `Invoke-Expression` | The exact command. `python3 *` is not permission to run a command, it is permission to run any code written later. |
-| Privilege and destructive commands | `sudo`, `su`, `doas`, `rm`, `dd`, `shred`, `chmod`, `chown`, `kill`, `del`, `erase`, `rd`, `format`, `Remove-Item`, `icacls`, `taskkill`, `Stop-Process` | The exact command. `rm -rf build` and `rm -rf ~` are one rule apart under `rm *`. |
+| Interpreters and shells | `sh`, `bash`, `python3`, `node`, `perl`, `ruby`, `powershell`, `cmd`, `env`, `xargs`, `Start-Process`, `Invoke-Expression`, `schtasks`, `wmic`, `forfiles`, `msiexec`, `Invoke-Item` | The exact command. `python3 *` is not permission to run a command, it is permission to run any code written later. |
+| Privilege and destructive commands | `sudo`, `su`, `doas`, `rm`, `dd`, `shred`, `chmod`, `chown`, `kill`, `del`, `erase`, `rd`, `format`, `Remove-Item`, `icacls`, `taskkill`, `Stop-Process`, `reg`, `sc`, `net`, `shutdown`, `robocopy`, `vssadmin`, `cipher` | The exact command. `rm -rf build` and `rm -rf ~` are one rule apart under `rm *`. |
 
 `always` stays available for both; a repeated `rm -rf build` stops asking. The rule is matched against the program's base name without case or executable extensions (`.exe`, `.com`, `.bat`, `.cmd`), so `/usr/bin/sudo` and `sudo`, or `format.com` and `format`, are the same answer.
 
@@ -775,10 +775,17 @@ A line is split once more for each other way a shell can read its quotes, and th
 
 | Construct in the line | Extra split |
 |---|---|
+| A backslash at the end of a line | The line joined to the next, as the shell joins it before it reads quotes. |
 | `$'...'` | A backslash escapes the next character inside it, `'` included, as in bash and zsh. |
-| `#` or `<<` | Quotes are ordinary characters, as in a comment or a here-document body. |
+| `#` or `<<` outside quotes | Quotes and backslashes are ordinary characters, as in a comment or a here-document body. |
+| `${`, `$(`, a backtick, `<(`, `>(` or `$[`, quoted or not | The same: quotes start over inside these, so the plain reading can pair them wrongly. |
 
-So `git log $'\'' && rm -rf ~` and `git status # '` followed by a command on the next line are asked, not allowed by the built-in `git *` rule. The cost is that a line with `#` and a quoted separator, such as `git log --grep "a; b" # note`, is asked.
+So `git log $'\'' && rm -rf ~`, `git log "${x:-"'"}" ; rm -rf ~` and `git status # '` followed by a command on the next line are asked, not allowed by the built-in `git *` rule.
+
+The cost falls on a line that has one of the last two constructs and also a quoted separator or a quoted `(`, such as `git log --grep "a; b" # note` or `git commit -m "fix(ui): ${MSG}"`:
+
+* The line is asked. "Allow for session" covers that same line again, and no other line like it.
+* A `deny` rule can match the text after a quoted separator. Under a `deny` for `rm *`, `git commit -m "a; rm b" # note` is denied.
 
 Command substitution, output redirection, and unquoted parentheses never auto-allow: `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, `>>`, and an unquoted `(`. In zsh, unquoted parentheses in a word act as glob qualifiers that run code, such as `*(e:'...')`. In other POSIX shells, they define subshells or extglobs. These forms require confirmation unless an explicit rule denies them, or permission skipping is on: with `skip_all` a line whose every segment resolves to `allow` runs with the construct in it. An explicit `deny` still denies in every mode.
 

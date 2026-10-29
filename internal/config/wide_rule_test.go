@@ -88,6 +88,20 @@ func TestAlwaysAllowWindowsDestructiveCommandsKeepExactCommand(t *testing.T) {
 		"regsvr32 /s mydll.dll",
 		"diskpart /s script.txt",
 		"Clear-Content file.txt",
+		"clc file.txt",
+		"reg delete HKCU\\Software\\scratch /f",
+		"sc.exe delete scratch",
+		"net localgroup administrators scratch /add",
+		"shutdown /s /t 0",
+		"schtasks /create /tn scratch /tr scratch.cmd /sc once /st 23:59",
+		"wmic process call create scratch.cmd",
+		"ForFiles /p . /m scratch /c \"cmd /c echo @file\"",
+		"msiexec /i scratch.msi /qn",
+		"Invoke-Item scratch.lnk",
+		"ii scratch.lnk",
+		"cipher /w:C:\\",
+		"vssadmin delete shadows /all",
+		"robocopy empty C:\\Users\\me /MIR",
 	}
 	for _, cmd := range tests {
 		if got := PermissionRuleFor(BashToolName, cmd).Match; got != cmd {

@@ -192,9 +192,9 @@ type Loop struct {
 	Providers    map[string]provider.Provider // provider config key -> client
 	Config       *config.Config
 	SystemPrompt string
-	// PermissionShownIn checks whether a replayed question is still
-	// answerable in this session. Wired to the permission broker before
-	// startup replays any log; nil means no question can be waiting.
+	// PermissionShownIn checks whether a logged permission question is
+	// still answerable in this session (see CloseStaleQuestions). Wired to
+	// the permission broker by daemon.New; nil means none can be.
 	PermissionShownIn func(sessionID, id string) bool
 	// Skills backs the /skill slash command (list / load by name). It's
 	// separate from the Skill *tool* the model can call on its own —

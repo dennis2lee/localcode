@@ -42,8 +42,12 @@ func (l *Loop) RehydrateAll() {
 // RehydrateSession restores one session's model history and usage totals
 // from its event log. Used at startup by RehydrateAll, and by a fork,
 // which writes a copy of another session's log and then needs the model
-// to actually remember it. Retrieving an archived conversation also
-// comes through here, so stale questions are closed when its log is read.
+// to actually remember it.
+//
+// It only reads the log. A successor daemon rehydrates every session at
+// startup, before it knows which ones the daemon it replaced is still
+// writing, so a write from here could land in a log another process
+// owns. See CloseStaleQuestions for the one write that used to be here.
 //
 // Best-effort: a session with no events, or one whose log can't be read,
 // is simply left with empty state (same as a brand-new session) rather
@@ -54,8 +58,6 @@ func (l *Loop) RehydrateSession(sessionID string) {
 	if err != nil || len(evs) == 0 {
 		return
 	}
-
-	l.resolveStaleQuestions(sessionID, evs)
 
 	// Set unconditionally, empty included. The guard used to be "only if
 	// there is something to set", which reads as caution and is the bug
@@ -92,10 +94,26 @@ func (l *Loop) RehydrateSession(sessionID string) {
 	l.mu.Unlock()
 }
 
-// resolveStaleQuestions closes requests whose broker no longer has an
-// answer waiting in this session. Each log owns its resolution, including
-// a parent's mirrored request and a fork's copied request. Startup leaves
-// shelved logs unread; retrieval closes their questions here later.
+// CloseStaleQuestions closes every question in a session's log that
+// nothing in this process will ever answer: a permission request or a
+// model question with no resolution, which its broker is not waiting on
+// in this session. Without it a question a stopped daemon left open was
+// shown again every time the conversation was opened, and in its forks.
+//
+// It writes to the log, so it is the daemon's to call, for a session it
+// owns: at startup for every session the daemon it replaced is not still
+// writing, when it takes one of those over, and for a fork or a
+// retrieved conversation. Each log is closed on its own, so a parent's
+// mirror of a task's question and a fork's copy are each closed in the
+// log that holds them.
+func (l *Loop) CloseStaleQuestions(sessionID string) {
+	evs, err := l.Store.Events(sessionID, 0)
+	if err != nil {
+		return
+	}
+	l.resolveStaleQuestions(sessionID, evs)
+}
+
 func (l *Loop) resolveStaleQuestions(sessionID string, evs []events.Event) {
 	type question struct {
 		input bool

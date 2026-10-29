@@ -255,10 +255,9 @@ func hasUnsafeShellConstruct(command string) bool {
 // syntax error, none of which should be allowed by a rule for the word
 // before it. A quoted or escaped one is a character to every shell.
 func hasUnquotedParen(command string) bool {
-	runes := []rune(command)
-	for _, q := range shellQuotings(command) {
-		bare := bareRunes(runes, q)
-		for i, r := range runes {
+	for _, reading := range shellReadings(command) {
+		bare := bareRunes(reading.runes, reading.q)
+		for i, r := range reading.runes {
 			if r == '(' && bare[i] {
 				return true
 			}
@@ -280,12 +279,19 @@ const (
 	// $'...' reads "$" followed by an ordinary single quote, which is
 	// posixQuoting.
 	ansiCQuoting
-	// noQuoting: ' and " are ordinary characters. That is how a shell
-	// reads them in a comment and in a here-document's body.
+	// noQuoting: quotes and backslashes are ordinary characters. That is
+	// how a shell reads them in a comment, and quotes in a here-document's
+	// body.
 	noQuoting
 )
 
-// shellQuotings are the readings a command line is checked under: the
+// shellReading is one text of a command line read under one quoting.
+type shellReading struct {
+	runes []rune
+	q     shellQuoting
+}
+
+// shellReadings are the readings a command line is checked under: the
 // POSIX one, and each other one a construct in the line makes possible.
 //
 // One reading is not enough, and trusting one was a permission bypass.
@@ -295,21 +301,79 @@ const (
 //
 //	git log $'\'' && rm -rf ~        (the \' is escaped in $'...')
 //	git status # '<newline>rm -rf ~<newline>'   (a quote in a comment)
+//	git status # \<newline>rm -rf ~           (no escape in a comment)
+//	git log $\<newline>'\''; rm -rf ~        (the line is joined first)
 //
 // and a here-document's body hid commands the same way. Which reading
 // the shell uses is not knowable here (dash has no $'...', and whether a
 // "#" starts a comment depends on where it is), so every plausible one
 // is split and all of their pieces are checked: an allow needs every
 // piece of every reading, and one denied piece in any reading denies.
-func shellQuotings(command string) []shellQuoting {
-	qs := []shellQuoting{posixQuoting}
-	if strings.Contains(command, "$'") {
-		qs = append(qs, ansiCQuoting)
+//
+// The line is read as written and, when it has one, with each backslash
+// newline removed, which the shell does before it looks at quotes.
+//
+// The quote-blind reading splits at every operator character, so the
+// places the shell splits are always among its places. It is taken in
+// two cases. When a "#" or a "<<" is bare in another reading: the first
+// one the shell acts on is outside quotes in the reading the shell is
+// using, so that is enough, and a "#" inside a commit message does not
+// turn its parentheses into a prompt. And when the line has a construct
+// inside which quotes start over: in "${x:-"'"}" the inner quotes are a
+// new pair to every shell, while posixQuoting closes the outer one at
+// the first of them and lets the ' hide the rest of the line.
+func shellReadings(command string) []shellReading {
+	texts := []string{command}
+	if joined := strings.ReplaceAll(command, "\\\n", ""); joined != command {
+		texts = append(texts, joined)
 	}
-	if strings.Contains(command, "#") || strings.Contains(command, "<<") {
-		qs = append(qs, noQuoting)
+	var out []shellReading
+	for _, text := range texts {
+		runes := []rune(text)
+		qs := []shellQuoting{posixQuoting}
+		if strings.Contains(text, "$'") {
+			qs = append(qs, ansiCQuoting)
+		}
+		blind := hasNestedQuoting(text)
+		for _, q := range qs {
+			out = append(out, shellReading{runes, q})
+			blind = blind || startsCommentOrHereDoc(runes, bareRunes(runes, q))
+		}
+		if blind {
+			out = append(out, shellReading{runes, noQuoting})
+		}
 	}
-	return qs
+	return out
+}
+
+// nestedQuotings are the constructs inside which a shell starts its
+// quoting over: parameter expansion, command and process substitution,
+// and the old arithmetic form.
+var nestedQuotings = []string{"${", "$(", "`", "<(", ">(", "$["}
+
+// hasNestedQuoting reports whether text has one of nestedQuotings,
+// quoted or not: a parameter expansion is live inside double quotes,
+// which is where it is usually written.
+func hasNestedQuoting(text string) bool {
+	for _, c := range nestedQuotings {
+		if strings.Contains(text, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// startsCommentOrHereDoc reports whether a bare "#" or "<<" is in runes.
+func startsCommentOrHereDoc(runes []rune, bare []bool) bool {
+	for i, r := range runes {
+		if !bare[i] {
+			continue
+		}
+		if r == '#' || (r == '<' && i+1 < len(runes) && runes[i+1] == '<' && bare[i+1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // shellSegments is splitShellSegments under every reading of command,
@@ -317,8 +381,8 @@ func shellQuotings(command string) []shellQuoting {
 func shellSegments(command string) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, q := range shellQuotings(command) {
-		for _, segment := range splitShellSegments(command, q) {
+	for _, reading := range shellReadings(command) {
+		for _, segment := range splitShellSegments(string(reading.runes), reading.q) {
 			if !seen[segment] {
 				seen[segment] = true
 				out = append(out, segment)
@@ -348,7 +412,7 @@ func bareRunes(runes []rune, q shellQuoting) []bool {
 			continue
 		}
 		switch {
-		case r == '\\':
+		case r == '\\' && q != noQuoting:
 			// The next character is literal, whatever it is.
 			i++
 		case (r == '\'' || r == '"') && q != noQuoting:

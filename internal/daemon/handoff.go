@@ -175,7 +175,48 @@ func (d *Daemon) takeOwnership(sessionID string) error {
 	// Outside the lock: a reload reads a file, and the gate runs this on
 	// every write to the session, some of them concurrent.
 	d.Loop.ClearSessionState(sessionID)
-	return d.Loop.Store.Reload(sessionID)
+	if err := d.Loop.Store.Reload(sessionID); err != nil {
+		return err
+	}
+	// Questions the old daemon left open are stale now that it has let
+	// go, and this is the first moment the log is this daemon's to write.
+	d.Loop.CloseStaleQuestions(sessionID)
+	return nil
+}
+
+// closeStaleQuestionsAtStart closes the questions a stopped daemon left
+// open in every session this one can write: all of them, except a
+// shelved one (retrieving it closes them) and one the daemon this one
+// replaced is still writing, whose questions may still be answered there
+// and whose log is not this process's to append to. Those are recorded
+// as owned at start, so takeOwnership re-reads them and closes theirs
+// once they are released.
+//
+// Here rather than in rehydration, which runs earlier and before the
+// manifest has been read: the successor closed the retiring daemon's
+// live questions, in a log that daemon was still appending to.
+func (d *Daemon) closeStaleQuestionsAtStart() {
+	if d.Loop == nil || d.Loop.Store == nil {
+		return
+	}
+	owned := d.sessionsOwnedElsewhere()
+	if len(owned) > 0 {
+		d.takeoverMu.Lock()
+		if d.ownedAtStart == nil {
+			d.ownedAtStart = map[string]bool{}
+		}
+		for id := range owned {
+			d.ownedAtStart[id] = true
+		}
+		d.takeoverMu.Unlock()
+	}
+	shelved := d.Loop.Store.ShelvedIDs()
+	for _, s := range d.Loop.Store.AllSessions() {
+		if shelved[s.ID] || owned[s.ID] {
+			continue
+		}
+		d.Loop.CloseStaleQuestions(s.ID)
+	}
 }
 
 // NoteTakeover records, at startup, which sessions the retiring daemon
@@ -187,21 +228,26 @@ func (d *Daemon) NoteTakeover() {
 	if path == "" {
 		return
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
+	// Gone or unreadable reads as nothing listed: what construction
+	// recorded still has to be watched.
 	var m handoffManifest
-	if json.Unmarshal(data, &m) != nil {
-		return
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &m)
 	}
 	d.takeoverMu.Lock()
-	d.ownedAtStart = map[string]bool{}
+	// Added to what construction found owned, not in place of it: a
+	// session the old daemon released between the two reads was still
+	// being written after this daemon loaded it, so its copy is suspect
+	// all the same.
+	if d.ownedAtStart == nil {
+		d.ownedAtStart = map[string]bool{}
+	}
 	for _, id := range m.Sessions {
 		d.ownedAtStart[id] = true
 	}
+	watch := len(d.ownedAtStart) > 0
 	d.takeoverMu.Unlock()
-	if len(m.Sessions) > 0 {
+	if watch {
 		go d.watchTakeover()
 	}
 }

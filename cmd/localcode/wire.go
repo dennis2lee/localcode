@@ -203,7 +203,6 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	loop.Memory = memoryConfig(cfg, e.home, true)
 	loop.Version = version
 	loop.Input = input
-	loop.PermissionShownIn = broker.ShownIn
 	// "/rewind" needs a copy of a file as it was before the turn changed
 	// it, and the only place the resolved path exists is inside
 	// internal/tools. Wired here rather than in buildOneShot: a run prints

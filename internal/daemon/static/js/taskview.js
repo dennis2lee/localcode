@@ -164,7 +164,9 @@ function applyTaskEvent(ev) {
       break;
     case 'permission.resolved':
       currentEl = null;
-      line('msg-tool', d.allowed ? '▶ permission granted' : '⛔ permission denied');
+      if (d.allow) line('msg-tool', '▶ permission granted');
+      else if (d.unanswered || d.cancelled) line('msg-tool', '⏹ permission not answered');
+      else line('msg-tool', '⛔ permission denied');
       break;
     // A task can delegate too, and a task waiting on its own children
     // with nothing on screen about them is the same gap one level down.

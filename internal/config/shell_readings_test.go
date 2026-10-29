@@ -9,8 +9,8 @@ import (
 //
 // Each line below was one command to the splitter and was allowed by the
 // built-in "git *" rule with nothing configured; sh on macOS (bash) ran
-// the second command in each. Checked by running them: the touch
-// happened every time.
+// the second command in each, and bash, zsh and dash ran it for the last
+// two. Checked by running them: the touch happened every time.
 func TestAQuoteTheShellDoesNotReadHidesNoCommand(t *testing.T) {
 	hidden := map[string]string{
 		// $'...' escapes its quote with a backslash; a plain '...' does not.
@@ -19,6 +19,18 @@ func TestAQuoteTheShellDoesNotReadHidesNoCommand(t *testing.T) {
 		"git status --short # '\ntouch pwned\n'": "touch pwned",
 		// Nor does one in a here-document's body.
 		"git log -1 <<EOF\ngit '\nEOF\ntouch pwned\n'": "touch pwned",
+		// A backslash in a comment escapes nothing, the newline included.
+		"git status # \\\ntouch pwned": "touch pwned",
+		// The shell joins a backslash newline before it reads quotes.
+		"git log $\\\n'\\''; touch pwned":             "touch pwned",
+		"git status # \\\ntouch a1 # \\\ntouch pwned": "touch pwned",
+		// Quotes start over inside ${...}: the ' is quoted by the inner "".
+		`git log "${x:-"'"}" ; touch pwned`:                       "touch pwned",
+		`git log "${x%"'"}" ; touch pwned`:                        "touch pwned",
+		`git log ${x:-"${y:-"'"}"} ; touch pwned`:                 "touch pwned",
+		`git log -1 "${GIT_DIR:-"'"}" && touch pwned && echo "'"`: "touch pwned",
+		`git log "${x:-'"'}" ; touch pwned`:                       "touch pwned",
+		`git log "$(echo "'")" ; touch pwned`:                     "touch pwned",
 	}
 	cfg := &Config{}
 	deny := &Config{Permissions: map[string]ToolPermission{
@@ -48,6 +60,11 @@ func TestOrdinaryQuotingIsStillAllowed(t *testing.T) {
 		`git log --format='%H %s'`,
 		`git show $'HEAD'`,
 		`git log --grep 'a#b'`,
+		// A "#" in quotes starts no comment, so the parenthesis stays quoted.
+		`git commit -m "fix(core): close #12"`,
+		`git commit -m "Fix bug #42; update tests"`,
+		`git log -- "${dir}/a.go"`,
+		`git diff "${BASE:-main}"`,
 	} {
 		if got := cfg.ResolvePermission(BashToolName, command, true); got != DecisionAllow {
 			t.Errorf("ResolvePermission(bash, %q) = %v, want allow", command, got)
@@ -55,14 +72,22 @@ func TestOrdinaryQuotingIsStillAllowed(t *testing.T) {
 	}
 }
 
-// A parenthesis the posix reading thinks is quoted, and $'...' does not.
+// A parenthesis the posix reading thinks is quoted, and zsh does not.
 func TestAParenthesisAfterAnAnsiCQuoteIsUnsafe(t *testing.T) {
-	command := `git log $'a\'b' a(e:'touch pwned':)`
-	if !hasUnquotedParen(command) {
-		t.Errorf("hasUnquotedParen(%q) = false; under zsh the qualifier runs touch", command)
-	}
-	if got := (&Config{}).ResolvePermission(BashToolName, command, true); got == DecisionAllow {
-		t.Errorf("ResolvePermission(bash, %q) = allow", command)
+	cfg := &Config{Permissions: map[string]ToolPermission{
+		BashToolName: {Rules: []PermissionRule{{Match: "ls *", Decision: DecisionAllow}}},
+	}}
+	for _, command := range []string{
+		`git log $'a\'b' a(e:'touch pwned':)`,
+		`ls "${x:-"'"}" *(e:'touch pwned':)`,
+		`git log "${x:-"'"}" =(touch pwned)`,
+	} {
+		if !hasUnquotedParen(command) {
+			t.Errorf("hasUnquotedParen(%q) = false; under zsh it runs touch", command)
+		}
+		if got := cfg.ResolvePermission(BashToolName, command, true); got == DecisionAllow {
+			t.Errorf("ResolvePermission(bash, %q) = allow", command)
+		}
 	}
 }
 

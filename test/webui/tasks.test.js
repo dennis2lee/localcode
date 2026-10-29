@@ -140,8 +140,14 @@ test('a task waiting on a permission says so', async () => {
   assert.match(body.textContent, /waiting for permission/);
   assert.match(body.textContent, /rm -rf build/, 'it should say what it is waiting on');
 
-  s.emit({ type: 'permission.resolved', data: { allowed: true } });
+  // The event's own shape: the field is "allow". The window read
+  // "allowed", so every answer, yes included, said denied.
+  s.emit({ type: 'permission.resolved', data: { id: 'p1', allow: true, scope: 'once' } });
   assert.match(body.textContent, /permission granted/);
+  s.emit({ type: 'permission.resolved', data: { id: 'p2', allow: false, scope: 'once' } });
+  assert.match(body.textContent, /permission denied/);
+  s.emit({ type: 'permission.resolved', data: { id: 'p3', allow: false, scope: 'once', unanswered: true } });
+  assert.match(body.textContent, /permission not answered/);
 });
 
 // A task can delegate, and a task waiting on its own children with
