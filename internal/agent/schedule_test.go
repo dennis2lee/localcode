@@ -736,3 +736,28 @@ func TestALaterRunsAnswerIsUnreadAfterARestart(t *testing.T) {
 		t.Error("reading the second run's answer recorded nothing")
 	}
 }
+
+// A booking made after the scheduler was disarmed is not armed either.
+// A retiring daemon disarms at the start of its drain and goes on running
+// the turns it has, and a turn can book work. Armed there, the booking
+// fired in the daemon that was stopping and again in the one that re-read
+// it on taking the session over.
+func TestABookingMadeAfterDisarmIsNotArmed(t *testing.T) {
+	loop := scheduleLoop(t)
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	sched := NewScheduler(context.Background(), loop)
+	sched.Disarm()
+	entry, err := sched.Add(sid, "general-purpose", "run the tests", time.Now().Add(30*time.Millisecond), RepeatOptions{})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	// Waiting to be sure something does not happen, so longer is only
+	// slower, never wrong.
+	time.Sleep(300 * time.Millisecond)
+	if e, _ := sched.Get(sid, entry.ID); e.Status != SchedulePending {
+		t.Errorf("a booking made after Disarm is %q, want it left %q for the daemon taking over", e.Status, SchedulePending)
+	}
+}

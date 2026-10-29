@@ -160,29 +160,99 @@ func (d *Daemon) sessionsOwnedElsewhere() map[string]bool {
 // Once per session, tracked in memory. The manifest going away is the
 // signal that the old daemon is done with all of them; a session it
 // never listed needs no reload.
+//
+// A write that arrives while the re-read is running waits for it, and is
+// told what it came to. The session used to be marked taken over before
+// it was read, so a send that arrived during the read was let straight
+// through and started a turn on the history the read had just cleared:
+// the model was sent the new message and nothing before it. Marked only
+// once the read has succeeded, so a failed one is tried again by the
+// next write rather than written over.
 func (d *Daemon) takeOwnership(sessionID string) error {
 	d.takeoverMu.Lock()
-	if d.tookOver == nil {
-		d.tookOver = map[string]bool{}
-	}
 	// Sessions the retiring daemon never listed were not being written
 	// after this daemon loaded them, so their copies are current and
 	// there is nothing to re-read.
-	suspect := d.ownedAtStart[sessionID] && !d.tookOver[sessionID]
-	d.tookOver[sessionID] = true
-	d.takeoverMu.Unlock()
-	if !suspect {
+	if !d.ownedAtStart[sessionID] || d.tookOver[sessionID] {
+		d.takeoverMu.Unlock()
 		return nil
 	}
+	if t := d.takingOver[sessionID]; t != nil {
+		d.takeoverMu.Unlock()
+		<-t.done
+		return t.err
+	}
+	// The error stands until the re-read returns, so one that panics
+	// (net/http recovers it) is not recorded as done, and the writes
+	// waiting on it are let go rather than left waiting for good.
+	t := &takeover{done: make(chan struct{}), err: errTakeoverUnfinished}
+	if d.takingOver == nil {
+		d.takingOver = map[string]*takeover{}
+	}
+	d.takingOver[sessionID] = t
+	d.takeoverMu.Unlock()
+	defer func() {
+		d.takeoverMu.Lock()
+		delete(d.takingOver, sessionID)
+		if t.err == nil {
+			if d.tookOver == nil {
+				d.tookOver = map[string]bool{}
+			}
+			d.tookOver[sessionID] = true
+		}
+		d.takeoverMu.Unlock()
+		close(t.done)
+	}()
+
 	// Outside the lock: a reload reads a file, and the gate runs this on
-	// every write to the session, some of them concurrent.
-	d.Loop.ClearSessionState(sessionID)
+	// every write to every session.
+	t.err = d.reread(sessionID)
+	return t.err
+}
+
+// errTakeoverUnfinished is what the writes waiting on a takeover are told
+// when its re-read never returned.
+var errTakeoverUnfinished = errors.New("the session could not be re-read")
+
+// takeover is one session's re-read while it runs: done closes when it
+// ends, and err is what it came to.
+type takeover struct {
+	done chan struct{}
+	err  error
+}
+
+// reread builds again, from the session's log as it is now, everything
+// this daemon built from the copy it loaded at startup: the log itself,
+// the model's history, the session's bookings, and the grants its
+// answers made.
+//
+// Each was read once and kept, so each missed what the retiring daemon
+// wrote during the drain. A booking made then was not listed and never
+// fired here, and one cancelled then stayed armed. An "allow for this
+// session" answered then was lost whenever a client had opened the
+// session's permissions during the drain, because that read the grants
+// from the older copy and they are not read twice.
+func (d *Daemon) reread(sessionID string) error {
 	if err := d.Loop.Store.Reload(sessionID); err != nil {
 		return err
 	}
+	if takeoverBarrier != nil {
+		takeoverBarrier()
+	}
+	d.Loop.ClearSessionState(sessionID)
 	d.Loop.RehydrateSession(sessionID)
+	if d.Loop.Schedules != nil {
+		d.Loop.Schedules.Reread(sessionID, time.Now())
+	}
+	if d.Broker != nil {
+		d.Broker.Reread(sessionID)
+	}
 	return nil
 }
+
+// takeoverBarrier is test-only. It fires inside a takeover, after the
+// log has been re-read and before anything is built from it.
+var takeoverBarrier func()
 
 // noteOwnedAtStart records which sessions a daemon the manifest names is
 // still writing, as construction finds them, so takeOwnership treats

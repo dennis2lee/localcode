@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Fixed**
+
+* A message sent while an in-place update re-read its conversation starting a turn without the conversation before it, or answered 404
+* A booking made during an in-place update never listed or run, and one cancelled then still armed
+* An "allow for this session" answered during an in-place update asked again after it
+
 ## v0.169.4
 
 A quote the shell reads differently, a zsh glob qualifier, a Windows delete command or a workspace `git.bat` no longer gets a command past a bash rule.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -327,5 +328,60 @@ func TestHydrationWritesNothing(t *testing.T) {
 	after, _ := store.Events("s1", 0)
 	if len(after) != len(before) {
 		t.Errorf("a remembered answer wrote %d event(s); it must write none", len(after)-len(before))
+	}
+}
+
+// A read of a session's grants that began before the session was re-read
+// installs nothing once it has been. Reread drops what the broker read
+// from the old copy; a read still in flight across it would otherwise put
+// that copy back, a directory forgotten since included.
+func TestAGrantReadFromBeforeARereadIsNotInstalledAfterIt(t *testing.T) {
+	first, store, _ := newPermissionTestBroker(t)
+	ask := tools.Ask{
+		Tool: "read_file", Subject: "/opt/shared/lib/util.h", Description: "read",
+		Outside: tools.OutsideRead, Dir: "/opt/shared", Workspace: "/home/me/project",
+	}
+	before, _ := store.Events("s1", 0)
+	done := make(chan bool, 1)
+	go func() {
+		ok, err := first.Func()(WithSessionID(context.Background(), "s1"), ask)
+		done <- ok && err == nil
+	}()
+	first.Resolve(waitForPermissionID(t, store, "s1", len(before)), true, ScopeOutsideDir)
+	<-done
+
+	b := rebuiltBroker(t, first)
+	// The first read is held after it has read the log and before it has
+	// installed anything; every later read goes straight through.
+	arrived, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	hydrateBarrier = func() {
+		held := false
+		once.Do(func() { held = true })
+		if held {
+			close(arrived)
+			<-release
+		}
+	}
+	t.Cleanup(func() { hydrateBarrier = nil })
+	stale := make(chan struct{})
+	go func() {
+		b.RememberedOutside("s1", tools.OutsideRead)
+		close(stale)
+	}()
+	<-arrived
+
+	// The log moves on, the way a takeover's re-read finds it: the
+	// directory was forgotten. The broker is told to read it again.
+	first.ForgetOutside("s1", tools.OutsideRead)
+	b.Reread("s1")
+	if got := b.RememberedOutside("s1", tools.OutsideRead); len(got) != 0 {
+		t.Fatalf("after the re-read the broker remembers %v, want none", got)
+	}
+
+	close(release)
+	<-stale
+	if got := b.RememberedOutside("s1", tools.OutsideRead); len(got) != 0 {
+		t.Errorf("a read from before the re-read put back %v", got)
 	}
 }
