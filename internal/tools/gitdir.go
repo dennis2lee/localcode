@@ -64,19 +64,29 @@ func IntoGitDir(ctx context.Context, path string) bool {
 // resolved, and without case, which is how macOS and Windows compare
 // names. On Linux that costs a question about a file git does not read.
 func gitUserConfig(path string) bool {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return false
-	}
-	xdg := os.Getenv("XDG_CONFIG_HOME")
-	if xdg == "" {
-		xdg = filepath.Join(home, ".config")
+	// git takes $HOME first, on Windows too, where Go's UserHomeDir is
+	// %USERPROFILE%; the two can differ there.
+	homes := []string{os.Getenv("HOME")}
+	if h, err := os.UserHomeDir(); err == nil {
+		homes = append(homes, h)
 	}
 	type place struct {
 		path string
 		dir  bool
 	}
-	places := []place{{filepath.Join(home, ".gitconfig"), false}, {filepath.Join(xdg, "git"), true}}
+	var places []place
+	for _, home := range homes {
+		if home == "" {
+			continue
+		}
+		places = append(places, place{filepath.Join(home, ".gitconfig"), false})
+		if os.Getenv("XDG_CONFIG_HOME") == "" {
+			places = append(places, place{filepath.Join(home, ".config", "git"), true})
+		}
+	}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		places = append(places, place{filepath.Join(xdg, "git"), true})
+	}
 	if g := os.Getenv("GIT_CONFIG_GLOBAL"); g != "" {
 		places = append(places, place{g, false})
 	}
