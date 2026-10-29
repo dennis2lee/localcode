@@ -120,7 +120,11 @@ func gitWordsRunCommand(words []shellWord) bool {
 			return true
 		}
 		if !strings.HasPrefix(word.text, "-") {
-			return gitSubcommandRunsCommand(word.text, words[i+1:])
+			// Lowercased because git finds a subcommand it has no
+			// builtin for as a git-<name> program, and on a
+			// case-insensitive file system (macOS by default) "git
+			// Submodule foreach" runs git-submodule.
+			return gitSubcommandRunsCommand(strings.ToLower(word.text), words[i+1:])
 		}
 		if word.text == "--config-env" || strings.HasPrefix(word.text, "--config-env=") {
 			return true
@@ -166,6 +170,9 @@ func safeGitConfigKey(value string) bool {
 // a configuration key lists. submodule--helper is the builtin behind
 // submodule and takes foreach the same way.
 //
+// fetch-pack and send-pack are the plumbing under fetch and push, and take
+// the program to run on the other end the same way.
+//
 // For the rest of the table, a word that expands is asked as well, since
 // a glob or a variable can produce the option or the action word.
 func gitSubcommandRunsCommand(command string, words []shellWord) bool {
@@ -203,8 +210,10 @@ func gitSubcommandRunsCommand(command string, words []shellWord) bool {
 		long = []string{"upload-pack"}
 	case "ls-remote":
 		long, short = []string{"upload-pack"}, "u"
-	case "push":
+	case "push", "send-pack":
 		long = []string{"receive-pack", "exec"}
+	case "fetch-pack":
+		long = []string{"upload-pack", "exec"}
 	case "archive":
 		long = []string{"exec"}
 	default:

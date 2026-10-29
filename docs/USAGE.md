@@ -801,9 +801,10 @@ The Git guard asks for these forms:
 * `rebase --exec` or `-x`, and `grep --open-files-in-pager` or `-O`.
 * `clone --upload-pack`, `--config`, `--template`, `-u`, or `-c`, and `init --template`.
 * `fetch`, `pull`, or `ls-remote` with `--upload-pack`, including `ls-remote -u`.
-* `push --receive-pack` or `--exec`, and `archive --exec`.
+* `push` or `send-pack` with `--receive-pack` or `--exec`, `fetch-pack` with `--upload-pack` or `--exec`, and `archive --exec`.
 * Abbreviated long options (`--exe=`) and bundled short options (`-qx`) for the options above.
 * An expanded word anywhere after `config`, `submodule`, `bisect`, and the subcommands from `rebase` through `archive`. A glob can expand to a file named `--exec=cmd`.
+* A subcommand in any case. On a case-insensitive file system `git Submodule` runs `git-submodule`.
 
 The safe `-c` keys are `user.name`, `user.email`, `core.quotepath`, `color.ui`, `init.defaultbranch`, `commit.gpgsign`, and `advice.<name>` with no further dot. Key comparison ignores case. Bare `git --exec-path` remains allowed. Recognized `config` reads include `--get`, `--get-all`, `--get-regexp`, `--get-urlmatch`, `--list`, `-l`, and the `get` and `list` subcommands. A write operation in the same invocation still requires confirmation.
 

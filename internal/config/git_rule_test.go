@@ -111,6 +111,11 @@ func TestGitRuleAsked(t *testing.T) {
 		`git submodule--helper foreach 'touch pwned'`,
 		`git remote-ext x 'sh -c touch% pwned' <<< 'connect git-upload-pack'`,
 		`git merge-index ./m.sh -a`,
+		`git Submodule foreach 'touch pwned'`, `git FILTER-BRANCH --tree-filter x HEAD`,
+		`git fetch-pack --upload-pack='touch pwned' . HEAD`,
+		`git fetch-pack --exec='touch pwned' . HEAD`,
+		`git send-pack --receive-pack='touch pwned' . HEAD:refs/heads/x`,
+		`git send-pack --exec='touch pwned' . HEAD:refs/heads/x`,
 		`git for-each-repo --config=submodule.sub.url -- -c alias.x='!touch pwned' x`,
 	} {
 		t.Run(line, func(t *testing.T) {
@@ -134,6 +139,8 @@ func TestGitRuleOptionRows(t *testing.T) {
 		{"pull", []string{"--upload-pack=x", "--upload=x"}},
 		{"ls-remote", []string{"--upload-pack=x", "-u", "-qux"}},
 		{"push", []string{"--receive-pack=x", "--exec=x", "--rece=x"}},
+		{"send-pack", []string{"--receive-pack=x", "--exec=x", "--rece=x"}},
+		{"fetch-pack", []string{"--upload-pack=x", "--exec=x", "--upl=x"}},
 		{"archive", []string{"--exec=x", "--exe=x"}},
 	}
 	for _, row := range rows {
