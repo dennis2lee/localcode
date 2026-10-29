@@ -102,6 +102,15 @@ func TestAlwaysAllowWindowsDestructiveCommandsKeepExactCommand(t *testing.T) {
 		"cipher /w:C:\\",
 		"vssadmin delete shadows /all",
 		"robocopy empty C:\\Users\\me /MIR",
+		"Remove-ItemProperty -Path HKCU:\\Software\\scratch -Name x",
+		"Set-ItemProperty -Path HKCU:\\Software\\scratch -Name x -Value 1",
+		"Stop-Service -Name scratch",
+		"Set-Service -Name scratch -StartupType Disabled",
+		"Stop-Computer -Force",
+		"netsh advfirewall set allprofiles state off",
+		"bcdedit /set safeboot minimal",
+		"wevtutil cl Security",
+		"Set-MpPreference -DisableRealtimeMonitoring $true",
 	}
 	for _, cmd := range tests {
 		if got := PermissionRuleFor(BashToolName, cmd).Match; got != cmd {

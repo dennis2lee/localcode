@@ -93,7 +93,12 @@ func newTestDaemon(t *testing.T, modelURL string) *Daemon {
 		t.Fatalf("new store: %v", err)
 	}
 	t.Cleanup(store.Close)
+	return newTestDaemonOver(t, store, modelURL)
+}
 
+// newTestDaemonOver is newTestDaemon over a store the test built.
+func newTestDaemonOver(t *testing.T, store *session.Store, modelURL string) *Daemon {
+	t.Helper()
 	broker := agent.NewPermissionBroker(store)
 	registry := tools.NewRegistry(broker.Func())
 	registry.Register(tools.WriteFile{})

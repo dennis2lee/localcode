@@ -851,6 +851,11 @@ var wideProgramNames = map[string]bool{
 	// Privilege: the argument is the whole question.
 	"sudo": true, "doas": true, "su": true, "runas": true,
 	"reg": true, "sc": true, "net": true, "shutdown": true,
+	"set-itemproperty": true, "sp": true, "new-itemproperty": true,
+	"remove-itemproperty": true, "rp": true,
+	"set-service": true, "stop-service": true, "spsv": true, "remove-service": true,
+	"stop-computer": true, "restart-computer": true, "set-executionpolicy": true,
+	"netsh": true, "bcdedit": true, "wevtutil": true, "set-mppreference": true,
 	// Destructive: neighbours differ in the argument, not the program.
 	"rm": true, "rmdir": true, "del": true, "erase": true, "rd": true,
 	"remove-item": true, "ri": true, "robocopy": true,

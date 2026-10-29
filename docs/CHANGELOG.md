@@ -12,6 +12,7 @@ A quote the shell reads differently, a zsh glob qualifier, a Windows delete comm
 * Windows delete, permission, service, registry, kill and launcher commands generalized by "allow for session" and "always", such as `del x.obj` granting `del *`
 * A question a stopped daemon left open shown again every time the conversation was opened, and in its forks
 * An answer to a stale model question reaching another conversation's live question with the same id
+* A conversation taken over by an in-place update sending its next turn to the model without the conversation before it
 * A queued prompt whose send then failed keeping its echo on screen, in the TUI and the Web UI
 * Web UI task window: every permission answer shown as denied
 
