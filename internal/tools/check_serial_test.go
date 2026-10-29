@@ -78,21 +78,31 @@ func TestChecksInDifferentDirectoriesStillRunTogether(t *testing.T) {
 		t.Skip("needs a POSIX shell")
 	}
 	a, b := t.TempDir(), t.TempDir()
-	slow := func(d string) Check {
-		return NewCheck(func() string { return "sleep 0.3 > " + filepath.Join(d, "out") })
+	// Each run marks that it started, then waits up to ten seconds for the
+	// other's mark and records whether it came. Run together, each sees
+	// the other at once. Made to queue, the first gives up before the
+	// second can start. The answer does not depend on how fast the
+	// machine is: this used to compare the elapsed time with half a
+	// second, and a loaded CI runner under -race took 0.5006s for two
+	// runs that did overlap.
+	meets := func(own, other string) Check {
+		mark, seen := "'"+filepath.Join(own, "started")+"'", "'"+filepath.Join(other, "started")+"'"
+		return NewCheck(func() string {
+			return "touch " + mark + "; i=0; while [ ! -e " + seen + " ] && [ $i -lt 1000 ]; do sleep 0.01; i=$((i+1)); done; " +
+				"if [ -e " + seen + " ]; then touch '" + filepath.Join(own, "saw") + "'; fi"
+		})
 	}
 
-	started := time.Now()
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); slow(a).Execute(WithWorkingDir(context.Background(), a), nil) }()
-	go func() { defer wg.Done(); slow(b).Execute(WithWorkingDir(context.Background(), b), nil) }()
+	go func() { defer wg.Done(); meets(a, b).Execute(WithWorkingDir(context.Background(), a), nil) }()
+	go func() { defer wg.Done(); meets(b, a).Execute(WithWorkingDir(context.Background(), b), nil) }()
 	wg.Wait()
 
-	// Serialised they take 0.6s; together, near 0.3s. Half a second is a
-	// generous line that still fails if the two were made to queue.
-	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
-		t.Errorf("two directories queued behind each other: %v", elapsed)
+	for _, d := range []string{a, b} {
+		if _, err := os.Stat(filepath.Join(d, "saw")); err != nil {
+			t.Errorf("the check in %s never saw the other one start: two directories queued behind each other", d)
+		}
 	}
 }
 
