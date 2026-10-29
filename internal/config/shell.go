@@ -64,7 +64,7 @@ func (c *Config) resolveShellCommandUnder(ctx context.Context, command string, s
 		// question nobody was in a position to ask.
 		return DecisionAsk
 	}
-	if worst == DecisionAllow && hasUnsafeShellConstruct(command) {
+	if worst == DecisionAllow && (hasUnsafeShellConstruct(command) || lineRunsGitCommand(command)) {
 		// skip_permissions reaches this ask too.
 		//
 		// It did not, and the result was that turning "skip all
@@ -188,7 +188,8 @@ func unquoteShellText(segment string) string {
 // cover, one by one, for a bash line other than the one answered: each
 // command of it, as written and with its quoting removed, the two
 // readings resolveSegment requires of a config rule. False for a line no
-// grant may cover: one with a substitution or a redirect, which
+// grant may cover: one with a substitution, a redirect or a Git command
+// that runs another command, which
 // resolveShellCommand never allows either. Under a shell that does not
 // split the POSIX way only a line made of plain characters is covered,
 // whole, since the pieces this would cut it into are not that shell's,
@@ -198,7 +199,7 @@ func GrantSegments(command string) ([]string, bool) {
 }
 
 func grantSegmentsUnder(command string, posix bool) ([]string, bool) {
-	if hasUnsafeShellConstruct(command) {
+	if hasUnsafeShellConstruct(command) || lineRunsGitCommand(command) {
 		return nil, false
 	}
 	if !posix {

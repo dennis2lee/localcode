@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+The built-in `git *` rule no longer lets git run another command without a question.
+
+**Fixed**
+
+* Git options and subcommands that run a command, allowed by the built-in `git *` rule: `git -c alias.x='!cmd' x`, `git -c core.fsmonitor=cmd status`, `git rebase --exec cmd`, `git submodule foreach cmd`, `git config alias.x '!cmd'` and others
+* The same lines allowed by a `git *` rule in config.json, which "always" writes, or by an "allow for session" answer on another git line
+
+**Changed**
+
+* `git config` writes, `git -c` with a key outside a short safe list (`user.name`, `user.email`, `core.quotepath` and a few more), and a git line whose options or subcommand come from a variable or a glob are asked
+
 ## v0.169.4
 
 A quote the shell reads differently, a zsh glob qualifier, a Windows delete command or a workspace `git.bat` no longer gets a command past a bash rule.

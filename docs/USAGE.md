@@ -668,10 +668,10 @@ Default behavior without any rules:
 | Tool | Confirmation |
 |---|---|
 | `read_file`, `view_image`, `glob`, `grep`, `check`, and every built-in tool not named below | Runs immediately |
-| `bash` running a `git` command | Runs immediately (built in default, see below) |
+| `bash` running a `git` command | Runs immediately except for the command execution forms below |
 | `write_file`, `edit`, `bash` running anything else, `Orchestrate`, `Schedule`, `Debate`, MCP tools | Always asks |
 
-Git commands run without confirmation by default. An explicit `bash` rule for Git can change the decision to `ask` or `deny`. Any explicit tool rule overrides its built-in default.
+Ordinary Git commands run without confirmation by default. Git options and subcommands that run another command require confirmation even when an explicit rule allows Git. An explicit tool rule overrides its built-in default.
 
 ```json
 {
@@ -789,7 +789,34 @@ The cost falls on a line that has one of the last two constructs and also a quot
 * The line is asked. "Allow for session" covers that same line again, and no other line like it.
 * A `deny` rule can match the text after a quoted separator. Under a `deny` for `rm *`, `git commit -m "a; rm b" # note` is denied.
 
-Command substitution, output redirection, and unquoted parentheses never auto-allow: `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, `>>`, and an unquoted `(`. In zsh, unquoted parentheses in a word act as glob qualifiers that run code, such as `*(e:'...')`. In other POSIX shells, they define subshells or extglobs. These forms require confirmation unless an explicit rule denies them, or permission skipping is on: with `skip_all` a line whose every segment resolves to `allow` runs with the construct in it. An explicit `deny` still denies in every mode.
+Command substitution, output redirection, unquoted parentheses and Git command execution forms never auto-allow. Shell forms include `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, `>>`, and an unquoted `(`. In zsh, unquoted parentheses in a word act as glob qualifiers that run code, such as `*(e:'...')`. In other POSIX shells, they define subshells or extglobs. These forms require confirmation even when a rule allows the command. With `skip_all`, a line whose every segment resolves to `allow` runs with the construct in it. An explicit `deny` still denies in every mode. For these forms, "allow for session" covers only the answered line. A broader session grant does not cover another such line. A stored "always" allow rule does not bypass this check.
+
+The Git guard asks for these forms:
+
+* Global `-c` settings outside the safe key list, `--config-env`, and `--exec-path=<dir>`.
+* A word the shell expands (`$VAR`, `"$VAR"`, `*`, `?`, `[`, `{a,b}`) among git's own options, their values or the subcommand.
+* `config` writes and invocations without a recognized read operation.
+* `filter-branch`, `filter-repo`, `difftool`, `mergetool`, `send-email`, `instaweb`, `daemon`, `hook`, `remote-ext`, `merge-index`, and `for-each-repo`.
+* `submodule foreach` (also as `submodule--helper foreach`) and `bisect run`.
+* `rebase --exec` or `-x`, and `grep --open-files-in-pager` or `-O`.
+* `clone --upload-pack`, `--config`, `--template`, `-u`, or `-c`, and `init --template`.
+* `fetch`, `pull`, or `ls-remote` with `--upload-pack`, including `ls-remote -u`.
+* `push --receive-pack` or `--exec`, and `archive --exec`.
+* Abbreviated long options (`--exe=`) and bundled short options (`-qx`) for the options above.
+* An expanded word anywhere after `config`, `submodule`, `bisect`, and the subcommands from `rebase` through `archive`. A glob can expand to a file named `--exec=cmd`.
+
+The safe `-c` keys are `user.name`, `user.email`, `core.quotepath`, `color.ui`, `init.defaultbranch`, `commit.gpgsign`, and `advice.<name>` with no further dot. Key comparison ignores case. Bare `git --exec-path` remains allowed. Recognized `config` reads include `--get`, `--get-all`, `--get-regexp`, `--get-urlmatch`, `--list`, `-l`, and the `get` and `list` subcommands. A write operation in the same invocation still requires confirmation.
+
+The guard does not inspect these sources of behavior:
+
+* Repository configuration and hooks, including files written into `.git/config` or `.git/hooks/pre-commit` before an allowed `git status` or `git commit`.
+* Configuration and hooks in another repository selected by `-C`, `--git-dir`, or `--work-tree`.
+* Existing aliases and `git-<name>` programs on PATH.
+* Configured diff and merge drivers, including `--ext-diff` and `--textconv`.
+* Editors and pagers selected by configuration.
+* File output options such as `--output`.
+* External merge strategies selected by `git merge -s <name>`.
+* A git command behind a wrapper such as `nohup git` or `time git`. A rule for the wrapper decides it. The built-in rule allows no wrapper.
 
 ### Answering a permission prompt: once, this session, or always
 
@@ -799,8 +826,8 @@ Ordinary tool prompts provide the following choices. Workspace-boundary prompts 
 |---|---|---|
 | Allow once | `y` | Approves exactly this call. Asks again next time. |
 | Deny | `n` | Refuses this call. Asks again next time. |
-| Allow for session | `s` | Approves this call and later matching calls for the life of the session. It survives a restart: the answer is in the session's log, and the grant is rebuilt from it when the session is next looked at. Nothing is written to config.json. For bash, the line that was answered is granted as it stands, so the same line runs again unasked, pipes and redirects included. Another line runs on these grants only when each of its commands is covered, as written and with its quoting removed. A line with a substitution (`$(`, a backtick), an unquoted parenthesis, or a redirect is asked unless it is the answered line. Under a shell that is not POSIX, only a line of letters, digits, spaces and ``-_./\:=,+~"'*?@`` is covered that way. |
-| Always allow | `a` (only shown when available) | Everything "allow for session" does, plus writes a matching rule to config.json, so the same pattern is auto-allowed in every future session too. |
+| Allow for session | `s` | Approves this call and later matching calls for the life of the session. It survives a restart: the answer is in the session's log, and the grant is rebuilt from it when the session is next looked at. Nothing is written to config.json. For bash, the line that was answered is granted as it stands, so the same line runs again unasked, pipes and redirects included. Another line runs on these grants only when each of its commands is covered, as written and with its quoting removed. A line with a substitution (`$(`, a backtick), an unquoted parenthesis, a redirect or a Git command execution form listed above is asked unless it is the answered line. Under a shell that is not POSIX, only a line of letters, digits, spaces and ``-_./\:=,+~"'*?@`` is covered that way. |
+| Always allow | `a` (only shown when available) | Everything "allow for session" does, plus writes a matching rule to config.json. Future sessions apply that rule subject to the shell and Git command execution checks above. |
 
 The Web UI shows the same four as buttons: Deny, Allow for session, Always allow, Allow once.
 

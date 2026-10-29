@@ -657,10 +657,17 @@ func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string,
 // turns them all back off.
 //
 // git is allowed outright because an agent that has to ask before every
-// "git status" is unusable, and because git is the one command set where
-// almost everything is either read-only or recoverable through the reflog.
-// This is only safe alongside resolveShellCommand: matched against the raw
-// command string, "git *" would also green-light "git status && rm -rf ~".
+// "git status" is unusable. That rests on two checks in
+// resolveShellCommand. Matched against the raw command string, "git *"
+// would also green-light "git status && rm -rf ~", so each segment is
+// decided on its own. And git runs other programs on request (an alias
+// starting with "!", core.fsmonitor, rebase --exec, submodule foreach), so
+// a line that asks it to is asked whatever allowed it; see
+// lineRunsGitCommand.
+//
+// What neither check sees is what git reads from the repository: a
+// .git/config or a hook the model wrote runs on an ordinary "git status"
+// or "git commit". docs/USAGE.md lists that and the rest of what is left.
 var builtinRules = map[string][]PermissionRule{
 	BashToolName: {
 		{Match: "git", Decision: DecisionAllow},
