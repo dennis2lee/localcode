@@ -28,7 +28,7 @@ func TestAHeldRefusalFromIdleClearsItsEchoFromTheScreen(t *testing.T) {
 		Message: "! decides what this conversation is, and another client is mid-turn on it",
 		Held:    "!",
 	}
-	updated, _ = m.Update(turnDoneMsg{text: "!git status", err: heldErr, startsTurn: true})
+	updated, _ = m.Update(turnDoneMsg{text: "!git status", err: heldErr, startsTurn: true, echo: m.sends})
 	m = updated.(Model)
 
 	if m.waiting {
@@ -81,7 +81,7 @@ func TestAFailedSendClearsItsEchoFromTheScreen(t *testing.T) {
 		t.Fatalf("precondition: expected the pending echo on screen, got:\n%s", m.viewport.View())
 	}
 	failed := &client.StatusError{Status: http.StatusInternalServerError, Message: "500: the daemon fell over"}
-	updated, _ = m.Update(turnDoneMsg{text: "hello there", err: failed, startsTurn: true})
+	updated, _ = m.Update(turnDoneMsg{text: "hello there", err: failed, startsTurn: true, echo: m.sends})
 	m = updated.(Model)
 	if strings.Contains(m.viewport.View(), "hello there") {
 		t.Errorf("the failed send's echo is gone from the transcript but still on screen:\n%s", m.viewport.View())

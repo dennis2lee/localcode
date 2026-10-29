@@ -340,7 +340,7 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 	// that turn until it ends, not errMsg, so the reason goes in the
 	// transcript instead.
 	if client.IsHeld(msg.err) {
-		m.resolveOwnEcho(msg.text, msg.startsTurn)
+		m.resolveOwnEcho(msg.echo)
 		if msg.startsTurn {
 			m.waiting = false
 			m.errMsg = msg.err.Error()
@@ -365,7 +365,7 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 		// Nothing took the prompt, so its echo is a lie: remove it rather
 		// than leaving a line that says it was sent above the reason it
 		// was not.
-		m.resolveOwnEcho(msg.text, msg.startsTurn)
+		m.resolveOwnEcho(msg.echo)
 		if !msg.startsTurn {
 			// Sent into a turn that is still running, which goes on
 			// waiting; the reason goes in the transcript, as a held

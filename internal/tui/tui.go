@@ -119,6 +119,8 @@ type Model struct {
 	// pressing Tab (or any rapid sequence of events) used to trigger before
 	// this field existed. A slice's backing array has no such restriction.
 	transcript []transcriptEntry
+	// sends numbers the echoes of sent lines; see transcriptEntry.send.
+	sends int
 	// streamOpen is true between the first message.part.delta of a model
 	// message and its message.part.end — while true, the next delta
 	// extends the entry at streamAt instead of starting a new one, so a

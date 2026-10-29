@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"localcode/internal/tools"
@@ -40,5 +41,24 @@ func TestALineGrantSurvivesARestart(t *testing.T) {
 	again := rebuiltBroker(t, first)
 	if !remembered(t, again, "s1", tools.Ask{Tool: "bash", Subject: line, Description: "again"}) {
 		t.Error("the line answered before a restart is asked again after it")
+	}
+}
+
+// Two daemons do not give their first questions the same id. Counted from
+// 1 alone they did, and a question a stopped daemon left in a log was
+// answered for the next daemon's live question under that id.
+func TestEachDaemonsQuestionIdsAreItsOwn(t *testing.T) {
+	first, _, _ := newPermissionTestBroker(t)
+	second := rebuiltBroker(t, first)
+	ids := map[string]bool{}
+	for _, b := range []*PermissionBroker{first, second} {
+		before, _ := b.store.Events("s1", 0)
+		go b.Func()(WithSessionID(context.Background(), "s1"), tools.Ask{Tool: "bash", Subject: "make", Description: "make"})
+		id := waitForPermissionID(t, b.store, "s1", len(before))
+		ids[id] = true
+		b.Resolve(id, false, "")
+	}
+	if len(ids) != 2 {
+		t.Errorf("both daemons' first question had the id %v", ids)
 	}
 }

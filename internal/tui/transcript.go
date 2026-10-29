@@ -69,6 +69,10 @@ type transcriptEntry struct {
 	note string
 	live bool
 	open bool
+	// send is the send an echo stands for (entryPending, entrySent), so a
+	// send nothing took removes its own echo and no other. Zero for every
+	// other entry.
+	send int
 }
 
 // appendEntry is the single mutation point for the transcript. Every write
@@ -104,8 +108,16 @@ func (m *Model) appendUser(rawText, displayText string) {
 // again: the daemon drops the queue when a turn is cancelled, and a line
 // still saying the model will pick this up at its next step is then a
 // promise about a message nobody has.
-func (m *Model) appendSent(text string) {
+func (m *Model) appendSent(text string) int {
 	m.appendEntry(entrySent, text)
+	return m.markSend()
+}
+
+// markSend numbers the echo just appended as the next send's.
+func (m *Model) markSend() int {
+	m.sends++
+	m.transcript[len(m.transcript)-1].send = m.sends
+	return m.sends
 }
 
 // appendPendingUser draws a prompt the instant Enter is pressed, dimmed,
@@ -116,10 +128,12 @@ func (m *Model) appendSent(text string) {
 // on a slow or remote model it is seconds. A screen that does not change in
 // that time reads as an Enter that never registered, and the honest
 // response to that is to type it again.
-func (m *Model) appendPendingUser(text string) {
+func (m *Model) appendPendingUser(text string) int {
 	m.appendEntry(entryPending, text)
+	send := m.markSend()
 	// Called from the key handler, not applyEvent, so it refreshes itself.
 	m.refreshViewport()
+	return send
 }
 
 // resolvePendingUser drops the oldest echo of text, and reports whether it
@@ -145,15 +159,16 @@ func (m *Model) resolvePendingUser(text string) bool {
 	return false
 }
 
-// resolveOwnEcho drops the echo of a send nothing took: the entryPending
-// a send that started a turn left, or the entrySent of one sent into a
-// turn already running. Not the oldest echo of the text, which can be a
-// send of the same line that was taken and is waiting for its turn to
-// say so.
-func (m *Model) resolveOwnEcho(text string, startsTurn bool) {
+// resolveOwnEcho drops the echo of a send nothing took, found by the
+// number it was given. Not by its text: the same line can be on screen
+// twice, once for a send that was taken and is waiting for its turn to say
+// so.
+func (m *Model) resolveOwnEcho(send int) {
+	if send == 0 {
+		return
+	}
 	for i, e := range m.transcript {
-		if startsTurn && e.kind == entryPending && e.text == text ||
-			!startsTurn && e.kind == entrySent && sentText(e.text) == text {
+		if e.send == send {
 			m.removeEntry(i)
 			return
 		}

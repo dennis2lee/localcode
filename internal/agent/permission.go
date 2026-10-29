@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"strings"
@@ -76,7 +78,11 @@ type PermissionBroker struct {
 
 	mu      sync.Mutex
 	counter int
-	pending map[string]chan resolution
+	// idPrefix makes this daemon's question ids its own. Counted from 1
+	// alone, the first question of every daemon was p1, and a question a
+	// stopped daemon left in a log shared its id with a live one.
+	idPrefix string
+	pending  map[string]chan resolution
 	// shownIn is the sessions each pending question was put in front of:
 	// the one asking, and the conversations it is mirrored into. See
 	// ShownIn.
@@ -211,7 +217,10 @@ type resolution struct {
 }
 
 func NewPermissionBroker(store *session.Store) *PermissionBroker {
+	var nonce [3]byte
+	_, _ = rand.Read(nonce[:])
 	return &PermissionBroker{
+		idPrefix: "p" + hex.EncodeToString(nonce[:]) + "-",
 		store:    store,
 		pending:  map[string]chan resolution{},
 		shownIn:  map[string][]string{},
@@ -260,7 +269,7 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 
 		b.mu.Lock()
 		b.counter++
-		id := fmt.Sprintf("p%d", b.counter)
+		id := fmt.Sprintf("%s%d", b.idPrefix, b.counter)
 		ch := make(chan resolution, 1)
 		b.pending[id] = ch
 		b.shownIn[id] = where.all()
@@ -754,10 +763,9 @@ func (b *PermissionBroker) ForgetSession(sessionID string) {
 }
 
 // ShownIn reports whether the question id is waiting on an answer and was
-// put in front of sessionID. Ids count from p1 in every daemon, so a
-// question a stopped daemon left in one session's log can share its id
-// with a live one in another session, and an answer to the stale one
-// must not answer the live one.
+// put in front of sessionID. Ids are this daemon's own (see idPrefix), and
+// this is the second guard: an answer posted to one session never answers
+// a question another session is showing.
 func (b *PermissionBroker) ShownIn(sessionID, id string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()

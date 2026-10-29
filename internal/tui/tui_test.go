@@ -974,6 +974,9 @@ func TestAHeldCommandLeavesTheTurnStateAsItWas(t *testing.T) {
 		if m.waiting {
 			t.Error("the refusal of a send from idle left the TUI waiting")
 		}
+		if strings.Contains(m.transcriptText(), "!git status") {
+			t.Errorf("transcript = %q, want the refused line's echo gone", m.transcriptText())
+		}
 		if m.errMsg == "" {
 			t.Error("the refusal was not shown")
 		}
@@ -1509,9 +1512,9 @@ func TestRepeatedPromptKeepsOneLineEach(t *testing.T) {
 // worse than no line at all.
 func TestFailedSendRemovesItsEcho(t *testing.T) {
 	m := newTestModel()
-	m.appendPendingUser("doomed")
+	echo := m.appendPendingUser("doomed")
 
-	updated, _ := m.Update(turnDoneMsg{text: "doomed", err: fmt.Errorf("daemon said no"), startsTurn: true})
+	updated, _ := m.Update(turnDoneMsg{text: "doomed", err: fmt.Errorf("daemon said no"), startsTurn: true, echo: echo})
 	m = updated.(Model)
 
 	if strings.Contains(m.transcriptText(), "doomed") {

@@ -28,6 +28,8 @@ type turnDoneMsg struct {
 	// is matched to its own send by it, since the same text can be on
 	// screen twice.
 	startsTurn bool
+	// echo is the number of the send's echo, 0 for a send that drew none.
+	echo int
 }
 
 // opErrMsg reports the outcome of a fire-and-forget daemon call whose

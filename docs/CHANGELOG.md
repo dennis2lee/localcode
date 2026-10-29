@@ -7,7 +7,8 @@ A session grant for one command no longer covers a whole command line, let go du
 **Fixed**
 
 * "Allow for this session" on one command covering any line that began with it: a grant for `ls -la` let `ls -la && rm -rf ~`, `ls $(...)` and `ls > file` run without a question (since v0.100.0)
-* An answer to a question a stopped daemon left in one session's log answering the question the next daemon had open under the same id in another session
+* An answer to a question a stopped daemon left in a session's log answering the question the next daemon had open under the same id; each daemon's question ids are its own, and an answer only reaches a question shown in the session it was posted to
+* Web UI: a question replaced by another under the same id left the first one's text on screen
 * Let go during a debate releasing one reviewer, chosen at random, and leaving the turn waiting on the others, a reviewer still starting included; the reviewer let go was recorded as having reviewed, with the "still working" note as its review
 * A task let go in the instant it finished shown as working in the background for good, with the "still working" note in place of its answer
 * `/tasks <id>` of a debate reviewer showing none of its review, which is its Verdict call rather than a message; the verdict and findings are shown

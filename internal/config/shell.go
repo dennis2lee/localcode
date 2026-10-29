@@ -208,7 +208,14 @@ func grantSegmentsUnder(command string, posix bool) ([]string, bool) {
 				return nil, false
 			}
 		}
-		return []string{trimmed}, trimmed != ""
+		if trimmed == "" {
+			return nil, false
+		}
+		// Unquoted as well, as for POSIX: fish runs "rm" as rm.
+		if unquoted := unquoteShellText(trimmed); unquoted != trimmed {
+			return []string{trimmed, unquoted}, true
+		}
+		return []string{trimmed}, true
 	}
 	var out []string
 	for _, segment := range splitShellSegments(command) {
@@ -225,8 +232,9 @@ func grantSegmentsUnder(command string, posix bool) ([]string, bool) {
 
 // plainShellRunes are the characters other than letters and digits that
 // no shell localcode runs under reads as an operator, an escape, a
-// substitution or a grouping.
-const plainShellRunes = " -_./\\:=,+~\"'*?%@"
+// substitution or a grouping. Not %: cmd.exe expands %VAR:~n,1% to any
+// one character of a variable, & included, before it looks for operators.
+const plainShellRunes = " -_./\\:=,+~\"'*?@"
 
 func hasUnsafeShellConstruct(command string) bool {
 	for _, c := range unsafeShellConstructs {

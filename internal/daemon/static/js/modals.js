@@ -470,7 +470,8 @@ export function enqueuePermissionRequest(req) {
     return;
   }
   if (session.pendingPermissionID === req.id) {
-    session.pendingPermission = req;
+    // Drawn again, not only stored: what is answered is what is shown.
+    showPermissionRequest(req, session.pendingPermissionQueue.length);
     return;
   }
   const i = session.pendingPermissionQueue.findIndex((q) => q.id === req.id);
