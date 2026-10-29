@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.169.6
 
 A file written into `.git` is asked, each time, before the next ordinary git command can run it.
 
