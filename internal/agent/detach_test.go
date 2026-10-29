@@ -42,6 +42,14 @@ func slowServer(t *testing.T, release <-chan struct{}) *httptest.Server {
 	return srv
 }
 
+// letGoOf lets go of what blocks parent and returns its id, for the tests
+// in which one child does; several come back joined, so a comparison with
+// the one expected fails and shows them.
+func letGoOf(tm *TaskManager, parent string) (string, bool) {
+	ids, ok := tm.DetachChildOf(parent)
+	return strings.Join(ids, ","), ok
+}
+
 // The parent's turn comes back before the child has finished, and the
 // child keeps going.
 func TestLettingGoReturnsTheTurnAndKeepsTheChild(t *testing.T) {
@@ -53,13 +61,14 @@ func TestLettingGoReturnsTheTurnAndKeepsTheChild(t *testing.T) {
 	}
 
 	type spawn struct {
-		taskID, text string
-		err          error
+		text string
+		err  error
 	}
 	answered := make(chan spawn, 1)
 	go func() {
-		id, text, err := tasks.SpawnSyncInto(context.Background(), "parent", "", "explore", "take your time")
-		answered <- spawn{id, text, err}
+		// SpawnSync, what the Task tool calls: the note is the answer.
+		text, err := tasks.SpawnSync(context.Background(), "parent", "explore", "take your time")
+		answered <- spawn{text, err}
 	}()
 
 	// Let go of whatever is blocking the parent, without knowing the id —
@@ -67,7 +76,7 @@ func TestLettingGoReturnsTheTurnAndKeepsTheChild(t *testing.T) {
 	var taskID string
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if id, ok := tasks.DetachChildOf("parent"); ok {
+		if id, ok := letGoOf(tasks, "parent"); ok {
 			taskID = id
 			break
 		}
@@ -118,7 +127,7 @@ func TestLettingGoTwiceIsHarmless(t *testing.T) {
 	var taskID string
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if id, ok := tasks.DetachChildOf("parent"); ok {
+		if id, ok := letGoOf(tasks, "parent"); ok {
 			taskID = id
 			break
 		}
@@ -139,8 +148,8 @@ func TestLettingGoTwiceIsHarmless(t *testing.T) {
 // as an error.
 func TestLettingGoWithNothingRunning(t *testing.T) {
 	_, tasks := newBackgroundLoop(t, "http://127.0.0.1:1")
-	if id, ok := tasks.DetachChildOf("parent"); ok {
-		t.Errorf("it let go of %q in a conversation with nothing running", id)
+	if ids, ok := tasks.DetachChildOf("parent"); ok {
+		t.Errorf("it let go of %q in a conversation with nothing running", ids)
 	}
 }
 

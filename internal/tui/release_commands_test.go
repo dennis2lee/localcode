@@ -211,7 +211,7 @@ func TestCtrlBDetachesChildSubAgent(t *testing.T) {
 	if requestedMethod != http.MethodPost || requestedPath != "/api/sessions/s1/detach" {
 		t.Errorf("asked %s %s, want POST /api/sessions/s1/detach", requestedMethod, requestedPath)
 	}
-	if !detMsg.detached || detMsg.taskID != "task-sub-1" {
+	if !detMsg.detached || len(detMsg.taskIDs) != 1 || detMsg.taskIDs[0] != "task-sub-1" {
 		t.Errorf("unexpected detach response: %+v", detMsg)
 	}
 
@@ -219,6 +219,34 @@ func TestCtrlBDetachesChildSubAgent(t *testing.T) {
 	m = updated.(Model)
 	if !strings.Contains(m.transcriptText(), "Let go of task-sub-1.") {
 		t.Errorf("transcript missing detach confirmation: %q", m.transcriptText())
+	}
+}
+
+// Ctrl+B during a debate lets go of the whole panel, and the line names
+// every reviewer's task, each with the command that reads it.
+func TestCtrlBNamesEveryTaskItLetGoOf(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/sessions/s1/detach" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"detached": true,
+				"task_id":  "task-a",
+				"task_ids": []string{"task-a", "task-b"},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'b', Mod: tea.ModCtrl})
+	m = updated.(Model)
+	updated, _ = m.Update(cmd())
+	m = updated.(Model)
+	want := "Let go of task-a and task-b. They keep working; read what they say with /tasks task-a and /tasks task-b."
+	if !strings.Contains(m.transcriptText(), want) {
+		t.Errorf("transcript = %q, want it to contain %q", m.transcriptText(), want)
 	}
 }
 

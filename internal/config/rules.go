@@ -70,6 +70,8 @@ func ValidDecision(d Decision) bool {
 type PermissionRule struct {
 	Match    string   `json:"match"`
 	Decision Decision `json:"decision"`
+	// Literal compares the subject by equality instead of as a glob.
+	Literal bool `json:"literal,omitempty"`
 }
 
 // ToolPermission is the value of one entry in Config.Permissions. Its JSON
@@ -185,13 +187,22 @@ func (t ToolPermission) MarshalJSON() ([]byte, error) {
 // and whether it had an opinion at all (false if it's an empty rule list
 // that never matched, or a zero-value ToolPermission).
 func (t ToolPermission) resolve(subject string) (Decision, bool) {
+	return t.resolveFor(subject, subject)
+}
+
+// resolveFor is resolve with the text a literal rule is compared with
+// given apart from the text a glob is matched against. The two differ for
+// a bash command, whose globs are tried on it as written and with its
+// quoting removed; a literal rule is only ever the command as written.
+// See shellSegmentKey.
+func (t ToolPermission) resolveFor(subject, literal string) (Decision, bool) {
 	if t.Flat != "" {
 		return t.Flat, true
 	}
 	var last Decision
 	matched := false
 	for _, r := range t.Rules {
-		if globMatch(r.Match, subject) {
+		if (r.Literal && r.Match == literal) || (!r.Literal && globMatch(r.Match, subject)) {
 			last = r.Decision
 			matched = true
 		}
@@ -211,7 +222,7 @@ func addRule(m map[string]ToolPermission, tool string, rule PermissionRule) {
 		tp.Flat = ""
 	}
 	for _, existing := range tp.Rules {
-		if existing.Match == rule.Match && existing.Decision == rule.Decision {
+		if existing == rule {
 			return // already covered, don't grow the file on every approval
 		}
 	}
@@ -219,9 +230,11 @@ func addRule(m map[string]ToolPermission, tool string, rule PermissionRule) {
 	m[tool] = tp
 }
 
-// removeRule removes the rule matching (Match, Decision) exactly from
-// m[tool], dropping the tool's key entirely once its last rule is gone
-// rather than leaving an empty array behind. Shared by the runtime
+// removeRule removes every rule matching (Match, Decision), regardless of
+// Literal: Web UI and daemon removal requests carry no literal flag. Removing
+// an allow rule only makes localcode ask more. It drops the tool's key once
+// its last rule is gone rather than leaving an empty array behind.
+// Shared by the runtime
 // (RemovePermissionRuleRuntime) and file (RemovePermissionRuleFromFile)
 // writers.
 func removeRule(m map[string]ToolPermission, tool string, rule PermissionRule) {
@@ -547,8 +560,9 @@ func (c *Config) resolveOne(ctx context.Context, toolName, subject string, stati
 // following the exact precedence: an exact rule for toolName first, then
 // any aliases covering toolName (strictest decision wins), then a "*"
 // fallback rule. It reports whether any rule matched; if none did, the caller
-// moves to the next precedence tier.
-func resolveRules(perms map[string]ToolPermission, toolName, subject string) (Decision, bool) {
+// moves to the next precedence tier. literal is what a literal rule is
+// compared with; see resolveFor.
+func resolveRules(perms map[string]ToolPermission, toolName, subject, literal string) (Decision, bool) {
 	if len(perms) == 0 {
 		return "", false
 	}
@@ -556,7 +570,7 @@ func resolveRules(perms map[string]ToolPermission, toolName, subject string) (De
 	// somebody who wrote "write_file" meant write_file, whatever an
 	// opencode key covering it also says.
 	if tp, ok := perms[toolName]; ok {
-		if d, matched := tp.resolve(subject); matched {
+		if d, matched := tp.resolveFor(subject, literal); matched {
 			return d, true
 		}
 	}
@@ -566,7 +580,7 @@ func resolveRules(perms map[string]ToolPermission, toolName, subject string) (De
 	)
 	for _, alias := range aliasesFor(toolName) {
 		if atp, hasAlias := perms[alias]; hasAlias {
-			if d, matched := atp.resolve(subject); matched {
+			if d, matched := atp.resolveFor(subject, literal); matched {
 				if !hasAliasMatch {
 					aliasDecision, hasAliasMatch = d, true
 				} else {
@@ -579,7 +593,7 @@ func resolveRules(perms map[string]ToolPermission, toolName, subject string) (De
 		return aliasDecision, true
 	}
 	if fallback, hasFallback := perms["*"]; hasFallback {
-		if d, matched := fallback.resolve(subject); matched {
+		if d, matched := fallback.resolveFor(subject, literal); matched {
 			return d, true
 		}
 	}
@@ -589,6 +603,11 @@ func resolveRules(perms map[string]ToolPermission, toolName, subject string) (De
 func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision {
 	c.permMu.RLock()
 	defer c.permMu.RUnlock()
+
+	literal := subject
+	if segment, ok := ctx.Value(shellSegmentKey{}).(string); ok && toolName == BashToolName {
+		literal = segment
+	}
 
 	// 1. The running agent's own rule, when it matches — including through
 	// the alias table and "*".
@@ -601,7 +620,7 @@ func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string,
 	agentName := c.AgentFor(ctx)
 	if agentName != "" && c.Agents != nil {
 		if agentCfg, ok := c.Agents[agentName]; ok && len(agentCfg.Permission) > 0 {
-			if d, matched := resolveRules(agentCfg.Permission, toolName, subject); matched {
+			if d, matched := resolveRules(agentCfg.Permission, toolName, subject, literal); matched {
 				return d
 			}
 		}
@@ -610,7 +629,7 @@ func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string,
 	// 2. Then everything the top-level block does today, unchanged and in
 	// its current definition order: exact tool match, aliases (strictest),
 	// and "*" fallback.
-	if d, matched := resolveRules(c.Permissions, toolName, subject); matched {
+	if d, matched := resolveRules(c.Permissions, toolName, subject, literal); matched {
 		return d
 	}
 
@@ -733,18 +752,30 @@ func PermissionRuleFor(toolName, subject string) PermissionRule {
 	if toolName == BashToolName {
 		fields := strings.Fields(subject)
 		if len(fields) > 0 {
+			if strings.ContainsAny(fields[0], "*?") {
+				return literalPermissionRule(strings.TrimSpace(subject))
+			}
 			if len(fields) == 1 {
-				return PermissionRule{Match: fields[0], Decision: DecisionAllow}
+				return literalPermissionRule(fields[0])
 			}
 			if tooWideToGeneralize(fields[0]) {
 				// The whole command, not the program plus a wildcard.
 				// See tooWideToGeneralize.
-				return PermissionRule{Match: subject, Decision: DecisionAllow}
+				return literalPermissionRule(strings.TrimSpace(subject))
 			}
 			return PermissionRule{Match: fields[0] + " *", Decision: DecisionAllow}
 		}
 	}
-	return PermissionRule{Match: subject, Decision: DecisionAllow}
+	return literalPermissionRule(subject)
+}
+
+// literalPermissionRule preserves the subject and disables glob matching only
+// when it contains wildcard characters.
+func literalPermissionRule(subject string) PermissionRule {
+	return PermissionRule{
+		Match: subject, Decision: DecisionAllow,
+		Literal: strings.ContainsAny(subject, "*?"),
+	}
 }
 
 // tooWideToGeneralize names the programs for which "<program> *" is a

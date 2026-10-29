@@ -530,8 +530,14 @@ func (d *Daemon) handleDetachChild(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"detached": false})
 		return
 	}
-	taskID, ok := d.Tasks.DetachChildOf(id)
-	writeJSON(w, http.StatusOK, map[string]any{"detached": ok, "task_id": taskID})
+	// task_ids, since a debate's reviewers are let go of together;
+	// task_id is the first of them, for a client that reads only that.
+	taskIDs, ok := d.Tasks.DetachChildOf(id)
+	first := ""
+	if len(taskIDs) > 0 {
+		first = taskIDs[0]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"detached": ok, "task_id": first, "task_ids": taskIDs})
 }
 
 // heldUntilIdle names the command in text that must not be injected into

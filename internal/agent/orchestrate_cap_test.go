@@ -50,7 +50,13 @@ func TestEveryStopAtTheCeilingIsRecordedAsOne(t *testing.T) {
 		}
 		return "ok", map[string]any{"done": false, "more": []any{"m"}}
 	}
+	wordings := map[string]bool{}
 	for name, plan := range map[string]string{
+		"before a stage": `{"goal":"g","stages":[
+		  {"name":"find","kind":"step","agent":"oracle","prompt":"find things","returns":{"found":"strings"}},
+		  {"name":"check","kind":"fanout","agent":"oracle","over":["$find.found"],"copies":2,"prompt":"check {{item}}"},
+		  {"name":"last","kind":"fanout","agent":"oracle","over":["x","y"],"prompt":"last {{item}}"}]}`,
+		"pipelined stage": ceilingPlan(true),
 		"repeat": `{"goal":"g","stages":[
 		  {"name":"find","kind":"step","agent":"oracle","prompt":"find things","returns":{"found":"strings"}},
 		  {"name":"check","kind":"fanout","agent":"oracle","over":["$find.found"],"copies":2,"prompt":"check {{item}}"},
@@ -68,6 +74,18 @@ func TestEveryStopAtTheCeilingIsRecordedAsOne(t *testing.T) {
 			if r.stopped == "" || !r.atCeiling {
 				t.Errorf("stopped=%q atCeiling=%v, want a stop recorded as at the ceiling", r.stopped, r.atCeiling)
 			}
+			// A report from before the ceiling key is read by its words,
+			// so the words of every stop at the ceiling have to be read
+			// as one.
+			if !endsAtCeiling(r.String()) {
+				t.Errorf("the report's last line is not read as a stop at the ceiling:\n%s", r.String())
+			}
+			wordings[strings.SplitN(r.stopped, " ", 3)[1]] = true
 		})
+	}
+	for _, w := range []string{"at", "before", "in"} {
+		if !wordings[w] {
+			t.Errorf("no plan here stops with \"stopped %s\", so its wording is not checked (seen %v)", w, wordings)
+		}
 	}
 }

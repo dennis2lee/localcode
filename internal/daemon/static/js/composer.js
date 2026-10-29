@@ -194,7 +194,11 @@ export async function detachChild() {
   try {
     const res = await apiClient.detachSessionChild(session.sessionID);
     if (res && res.detached) {
-      appendTool(`[system] let go of ${res.task_id}. It keeps working; its answer is in the task panel.`);
+      // task_ids, since a debate's reviewers are let go of together.
+      const ids = res.task_ids && res.task_ids.length ? res.task_ids : [res.task_id];
+      appendTool(ids.length === 1
+        ? `[system] let go of ${ids[0]}. It keeps working; its answer is in the task panel.`
+        : `[system] let go of ${ids.join(' and ')}. They keep working; their answers are in the task panel.`);
     } else {
       appendTool('[system] nothing to let go of: this turn is not waiting on a sub-agent.');
     }

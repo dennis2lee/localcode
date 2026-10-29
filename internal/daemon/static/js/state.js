@@ -136,7 +136,9 @@ export function freshSessionState(id) {
     // it: {model, agent, level, source, levels, note}. Per session and
     // per model, so it is fetched on a switch rather than kept in app.
     effort: null,
+    pendingPermission: null,
     pendingPermissionID: null,
+    answeringPermissions: new Map(),
     // Requests waiting behind the one on screen, oldest first. An
     // Orchestrate fanout raises up to four at once and the broker keeps
     // one question per waiter, so a single slot would show the newest

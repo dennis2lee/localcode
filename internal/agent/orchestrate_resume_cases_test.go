@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"localcode/internal/events"
 )
 
 // A resume that was let go goes on running the units it did not reuse.
@@ -59,7 +61,7 @@ func TestALetGoResumeDoesNotRunTheSameUnitsTwice(t *testing.T) {
 	if inFlight.Load() == 0 {
 		t.Fatal("the resumed unit never started")
 	}
-	letGo, ok := loop.Tasks.DetachChildOf("main")
+	letGo, ok := letGoOf(loop.Tasks, "main")
 	if !ok {
 		t.Fatal("nothing to let go of")
 	}
@@ -225,6 +227,59 @@ func TestARunStoppedAtTheCeilingIsNotResumed(t *testing.T) {
 	}
 }
 
+// A run v0.169.0 stopped at the ceiling is refused too. That version
+// wrote the same report without the "ceiling" key, so the refusal has to
+// come from its words.
+func TestARunStoppedAtTheCeilingBeforeTheKeyExistedIsNotResumed(t *testing.T) {
+	m := &scriptedModel{reply: func(p string) (string, map[string]any) {
+		if strings.Contains(p, "find things") {
+			var out []any
+			for i := 1; i <= 20; i++ {
+				out = append(out, fmt.Sprintf("f%d", i))
+			}
+			return "", map[string]any{"found": out}
+		}
+		return "ok", nil
+	}}
+	loop := orchestrateLoop(t, m.server(t).URL)
+	executeOrchestrate(context.Background(), loop, `{"goal":"g","stages":[
+	  {"name":"find","kind":"step","agent":"oracle","prompt":"find things","returns":{"found":"strings"}},
+	  {"name":"check","kind":"fanout","agent":"oracle","over":["$find.found"],"copies":2,"prompt":"check {{item}}"},
+	  {"name":"last","kind":"fanout","agent":"oracle","over":["x","y"],"prompt":"last {{item}}"}]}`)
+	runs := runIDs(loop, "main")
+	if len(runs) != 1 {
+		t.Fatalf("got runs %v, want one", runs)
+	}
+	// The report as v0.169.0 wrote it: the same text, no key.
+	text := lastAssistantText(loop.Store, runs[0])
+	loop.Store.Append(runs[0], events.TypeMessagePartEnd, map[string]any{"text": text})
+
+	before := len(m.seen())
+	out := resume(t, loop, "main", "")
+	if !strings.Contains(out, "Not resumed") || !strings.Contains(out, "ceiling") {
+		t.Errorf("a v0.169.0 run stopped at the ceiling was resumed:\n%s", out)
+	}
+	if n := len(m.seen()) - before; n != 0 {
+		t.Errorf("the refused resume asked a model %d times", n)
+	}
+}
+
+// Only the report's own last line counts. An answer of several lines
+// writes its later lines with no "* " in front, so one that quotes a stop
+// at the ceiling must not make a run that went on look stopped at it.
+func TestAnAnswerQuotingTheCeilingIsNotAStop(t *testing.T) {
+	quote := "The run did not finish: stopped before x: the run had launched 31 agents and this stage needs 2 more, past the limit of 32"
+	if !endsAtCeiling("* a: ok\n\n" + quote + "\n") {
+		t.Errorf("the stop line itself is not read as one")
+	}
+	if endsAtCeiling("* a: what I found\n" + quote + "\n* b: ok\n") {
+		t.Errorf("a quoted stop line above the end was read as the run stopping")
+	}
+	if endsAtCeiling("* a: ok\n\nThe run did not finish: stopped in check: an agent did not answer in the shape the stage declared, and the stage says unanswered: fail\n") {
+		t.Errorf("a stop for another reason was read as a stop at the ceiling")
+	}
+}
+
 // Letting go names a task only when one was let go: asked about a run
 // that has already finished, it names nothing.
 func TestLettingGoOfAFinishedRunNamesNothing(t *testing.T) {
@@ -234,7 +289,7 @@ func TestLettingGoOfAFinishedRunNamesNothing(t *testing.T) {
 	run := runIDs(loop, "main")[0]
 	// Asked the moment the run has answered: it unregisters before it
 	// hands its answer back, so there is nothing left to let go of.
-	if id, ok := loop.Tasks.DetachChildOf(run); ok || id != "" {
-		t.Errorf("DetachChildOf(finished run) = (%q, %v), want nothing", id, ok)
+	if ids, ok := loop.Tasks.DetachChildOf(run); ok || len(ids) != 0 {
+		t.Errorf("DetachChildOf(finished run) = (%q, %v), want nothing", ids, ok)
 	}
 }

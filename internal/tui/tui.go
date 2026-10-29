@@ -156,6 +156,10 @@ type Model struct {
 	// oldest unresolved request is what is shown, and answering nothing
 	// never promotes.
 	pendingQueue []*pendingPermission
+	// answering holds each request settled locally while its resolve POST
+	// is in flight, keyed by id, so a failed POST can put its own request
+	// back even when several questions were answered in a row.
+	answering map[string]*pendingPermission
 	// asking is the model's own question, waiting on an answer. Its own
 	// field rather than a mode on pending: the two can be on screen for
 	// different reasons and take different keys.
@@ -342,6 +346,7 @@ func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Ev
 		input:        ta,
 		events:       eventCh,
 		currentAgent: agentName,
+		answering:    map[string]*pendingPermission{},
 		tasks:        map[string]taskState{},
 		drafts:       map[string]string{},
 		mouseEnabled: mouseEnabled,

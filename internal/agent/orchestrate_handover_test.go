@@ -39,7 +39,7 @@ func TestALetGoRunsConversationIsKeptThroughAHandover(t *testing.T) {
 	for started.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	run, ok := loop.Tasks.DetachChildOf("main")
+	run, ok := letGoOf(loop.Tasks, "main")
 	if !ok {
 		t.Fatal("nothing to let go of")
 	}

@@ -490,15 +490,21 @@ func (c *Client) CancelTurn(ctx context.Context, sessionID string) error {
 	return c.doJSON(ctx, http.MethodPost, path, map[string]string{}, nil)
 }
 
-// DetachChild lets go of the synchronous sub-agent blocking a
-// conversation and names it, or reports that there was none.
-func (c *Client) DetachChild(ctx context.Context, sessionID string) (string, bool, error) {
+// DetachChild lets go of the synchronous sub-agents blocking a
+// conversation and names them, or reports that there was none.
+func (c *Client) DetachChild(ctx context.Context, sessionID string) ([]string, bool, error) {
 	var out struct {
-		Detached bool   `json:"detached"`
-		TaskID   string `json:"task_id"`
+		Detached bool     `json:"detached"`
+		TaskID   string   `json:"task_id"`
+		TaskIDs  []string `json:"task_ids"`
 	}
 	err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/detach", nil, &out)
-	return out.TaskID, out.Detached, err
+	ids := out.TaskIDs
+	if len(ids) == 0 && out.TaskID != "" {
+		// A daemon from before task_ids, which let go of one at a time.
+		ids = []string{out.TaskID}
+	}
+	return ids, out.Detached, err
 }
 
 func (c *Client) SpawnTask(ctx context.Context, sessionID, agentName, prompt string) (string, error) {

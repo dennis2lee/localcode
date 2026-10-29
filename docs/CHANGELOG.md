@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Let go during a debate gives the turn back, "always" for a path with `*` or `?` stays that one path, and a permission question survives an answer that failed to send.
+
+**Fixed**
+
+* Let go during a debate releasing one reviewer, chosen at random, and leaving the turn waiting on the others; the reviewer let go was recorded as having reviewed, with the "still working" note as its review
+* "Always" for a path or command containing `*` or `?` stored as a glob, so approving `/proj/a*b` also allowed `/proj/aXYZb`; the rule is stored with `"literal": true` and allows that subject only
+* TUI: a permission question gone from the screen when the answer failed to send, while the turn still waited on it
+* Web UI: the same, with the input box unlocked while the question still blocked the turn
+* TUI: a `!cmd` sent during a turn, which the daemon refuses until the turn ends, stopping that turn's spinner, so the next prompt was sent at once and bounced
+* A run v0.169.0 stopped at the 32 agent turn ceiling resumed once, to stop at the same place
+
+**Changed**
+
+* Let go names every task it let go of
+
 ## v0.169.2
 
 A delegated agent or an orchestration run that has answered is no longer let go of by a let go pressed in the same instant.

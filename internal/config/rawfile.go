@@ -205,7 +205,7 @@ func AddPermissionRuleToFile(path, toolName string, rule PermissionRule) error {
 	})
 }
 
-// RemovePermissionRuleFromFile removes one rule from path's "permission"
+// RemovePermissionRuleFromFile removes all rules from path's "permission"
 // map for toolName, matched by exact (Match, Decision). It leaves every
 // other key untouched, the same surgical approach as AddPermissionRuleToFile.
 // Removing the last rule for a tool drops that tool's key entirely rather

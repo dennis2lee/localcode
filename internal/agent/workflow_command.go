@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -449,6 +450,11 @@ func (l *Loop) findRun(sessionID, id string) (runRecord, error) {
 
 // stoppedAtCeiling reports whether a run's report says it stopped at the
 // agent ceiling.
+//
+// The report's last event says so with "ceiling". One written before that
+// key existed, by v0.169.0, says it only in words, so its last line is
+// read as well: without that, a v0.169.0 run stopped at the ceiling is
+// resumed once, to stop at the same place.
 func (l *Loop) stoppedAtCeiling(runID string) bool {
 	evs, err := l.Store.Events(runID, 0)
 	if err != nil {
@@ -456,7 +462,34 @@ func (l *Loop) stoppedAtCeiling(runID string) bool {
 	}
 	for i := len(evs) - 1; i >= 0; i-- {
 		if evs[i].Type == events.TypeMessagePartEnd {
-			return evs[i].Data["ceiling"] == true
+			if evs[i].Data["ceiling"] == true {
+				return true
+			}
+			text, _ := evs[i].Data["text"].(string)
+			return endsAtCeiling(text)
+		}
+	}
+	return false
+}
+
+// ceilingStops are the last lines of a report that stopped at the ceiling,
+// as runReport.String writes them around the stop reasons in
+// orchestrate_run.go and orchestrate_pipeline.go.
+var ceilingStops = []*regexp.Regexp{
+	regexp.MustCompile(`^The run did not finish: stopped at .+: the run had already launched \d+ of its \d+ agents, so none of its \d+ items could run$`),
+	regexp.MustCompile(`^The run did not finish: stopped before .+: the run had launched \d+ agents and this stage needs \d+ more, past the limit of \d+$`),
+	regexp.MustCompile(`^The run did not finish: stopped in .+: round \d+ settled nothing and the run had launched \d+ agents, past the limit of \d+$`),
+}
+
+// endsAtCeiling reports whether a report's last line is a stop at the
+// ceiling. Only the last line: the answers above it are model text, and
+// the stop line is always the last thing a report says.
+func endsAtCeiling(report string) bool {
+	trimmed := strings.TrimRight(report, "\n")
+	last := trimmed[strings.LastIndex(trimmed, "\n")+1:]
+	for _, re := range ceilingStops {
+		if re.MatchString(last) {
+			return true
 		}
 	}
 	return false

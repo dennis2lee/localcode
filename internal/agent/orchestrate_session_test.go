@@ -57,7 +57,7 @@ func TestLettingGoOfARunLetsGoOfTheWholeRun(t *testing.T) {
 		t.Fatalf("only %d units started", atomic.LoadInt32(&started))
 	}
 
-	let, ok := loop.Tasks.DetachChildOf("main")
+	let, ok := letGoOf(loop.Tasks, "main")
 	if !ok {
 		t.Fatal("nothing to let go of while a run was in flight")
 	}
@@ -300,7 +300,7 @@ func TestLettingGoFromInsideARunLetsGoOfTheRun(t *testing.T) {
 	run := loop.Store.Children("main")[0].ID
 
 	let, ok := loop.Tasks.DetachChildOf(run)
-	if !ok || let != run {
+	if !ok || len(let) != 1 || let[0] != run {
 		t.Fatalf("letting go inside run %s let go of %q (%v), want the run", run, let, ok)
 	}
 	select {

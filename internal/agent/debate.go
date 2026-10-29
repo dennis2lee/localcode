@@ -86,6 +86,9 @@ type debateRun struct {
 	// session's history, taken before the first of them. See
 	// collapsedDebate.
 	historyMark int
+	// letGo is the reviewers let go of in the round the debate ended in,
+	// named in the closing note with where their reviews will be.
+	letGo []reviewResult
 }
 
 // reviewResult is one reviewer's round.
@@ -172,9 +175,17 @@ func (l *Loop) runDebate(ctx context.Context, d debateRun) error {
 		results := l.runReviews(ctx, d, round, done, changes, sessions, models, allowed)
 		answered := 0
 		approvals := 0
+		var letGo []reviewResult
 		for _, r := range results {
 			if r.session != "" {
 				sessions[r.reviewer] = r.session
+			}
+			if errors.Is(r.err, errLetGo) {
+				// Not a failure, and not a review either: it goes on
+				// reviewing in the background, and what came back is the
+				// note that says so.
+				letGo = append(letGo, r)
+				continue
 			}
 			if r.err != nil {
 				// A reviewer that Stop cancelled did not fail, and saying
@@ -205,6 +216,15 @@ func (l *Loop) runDebate(ctx context.Context, d debateRun) error {
 			})
 		}
 
+		// Let go of while the reviewers were reading. The person wants the
+		// prompt back, and a round is judged on every review, so the
+		// debate ends here; the reviews that did come back are recorded
+		// above.
+		if len(letGo) > 0 {
+			d.letGo = letGo
+			l.endDebate(d, "let go", round, false)
+			return nil
+		}
 		// Every reviewer that answered has to approve. A panel where one
 		// approves and one does not is a disagreement, and taking the
 		// approval would be picking the answer that ends the work. Asked
@@ -322,6 +342,15 @@ func (l *Loop) endDebate(d debateRun, reason string, rounds int, approved bool) 
 			roundCount(rounds), d.author, debateStallLimit)
 	case "stopped":
 		note = fmt.Sprintf("debate stopped after %s. What was done is kept.", roundCount(rounds))
+	case "let go":
+		var names, reads []string
+		for _, r := range d.letGo {
+			names = append(names, r.reviewer)
+			reads = append(reads, "/tasks "+r.session)
+		}
+		note = fmt.Sprintf("debate let go in round %d: %s %s reviewing in the background. Read what %s with %s. What was done is kept.",
+			rounds, strings.Join(names, " and "), plural(len(names), "keeps", "keep"),
+			plural(len(names), "it says", "they say"), strings.Join(reads, " and "))
 	case "failed":
 		note = fmt.Sprintf("debate ended after %s: no review came back. What was done is kept.", roundCount(rounds))
 	case authorFailed:

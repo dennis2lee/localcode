@@ -127,7 +127,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.err != nil:
 			m.errMsg = fmt.Sprintf("could not let go of the sub-agent: %v", msg.err)
 		case msg.detached:
-			m.appendLocal("Let go of " + msg.taskID + ". It keeps working; read what it says with /tasks " + msg.taskID + ".")
+			var reads []string
+			for _, id := range msg.taskIDs {
+				reads = append(reads, "/tasks "+id)
+			}
+			works, says := "It keeps working", "it says"
+			if len(msg.taskIDs) > 1 {
+				works, says = "They keep working", "they say"
+			}
+			m.appendLocal(fmt.Sprintf("Let go of %s. %s; read what %s with %s.",
+				strings.Join(msg.taskIDs, " and "), works, says, strings.Join(reads, " and ")))
 		default:
 			m.appendLocal("Nothing to let go of: this turn is not waiting on a sub-agent.")
 		}
@@ -156,6 +165,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// caused the daemon to broadcast (agent.switched, permission
 		// resolution, turn.cancelled) — not here, so every subscribed
 		// client (including this one) reacts to it the same way.
+		return m, nil
+
+	case permissionResolvedMsg:
+		if msg.err != nil {
+			m.errMsg = msg.err.Error()
+			m.restorePermission(msg.id)
+		} else {
+			delete(m.answering, msg.id)
+		}
 		return m, nil
 
 	case taskOutputMsg:
@@ -308,9 +326,10 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 	// arrived minutes later, against a conversation somebody had stopped
 	// thinking about.
 	if client.IsHeld(msg.err) {
-		m.waiting = false
+		if m.resolvePendingUser(msg.text) {
+			m.waiting = false
+		}
 		m.errMsg = msg.err.Error()
-		m.resolvePendingUser(msg.text)
 		return m, nil
 	}
 	if client.IsBusy(msg.err) {
@@ -525,6 +544,7 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	m.queue = nil
 	m.pending = nil
 	m.pendingQueue = nil
+	m.answering = nil
 	m.pendingHintShown = false
 	m.scrollbarDragging = false
 	m.scrollbarDragGrab = 0

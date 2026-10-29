@@ -87,6 +87,7 @@ func (m *Model) endLostTurn() {
 		m.abandonPendingUsers()
 		m.pending = nil
 		m.pendingQueue = nil
+		m.answering = nil
 		m.asking = nil
 		m.appendTool("[the localcode running this turn is no longer running it; the turn did not finish]")
 	}

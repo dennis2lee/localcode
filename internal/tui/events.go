@@ -327,7 +327,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		// just that one instead of being ignored until replay buries
 		// the modal in answered questions.
 		if id, _ := ev.Data["id"].(string); id != "" {
-			m.settlePermission(id)
+			m.resolvePermissionEvent(id)
 		}
 	case events.TypeTaskSpawned:
 		// No transcript line — background tasks surface in the busy

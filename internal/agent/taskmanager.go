@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -507,7 +508,7 @@ func (tm *TaskManager) subagentDepthLimit() int {
 // the delegating agent's own turn needs the sub-agent's answer before it
 // can continue.
 func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName, prompt string) (string, error) {
-	_, text, err := tm.spawnSync(ctx, parentSessionID, "", agentName, prompt)
+	_, text, err := tm.spawnSync(ctx, parentSessionID, agentName, prompt)
 	return text, err
 }
 
@@ -521,12 +522,15 @@ func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName
 // between a review and a debate. Reusing the session is also what keeps
 // the per-round prompt small: its own findings are already in its
 // history, so they are not sent again.
+//
+// A child let go of returns errLetGo with the note, unlike SpawnSync: a
+// debate reads what comes back as a review, and the note is not one.
 func (tm *TaskManager) SpawnSyncInto(ctx context.Context, parentSessionID, childID, agentName, prompt string) (string, string, error) {
-	return tm.spawnSync(ctx, parentSessionID, childID, agentName, prompt)
+	return tm.spawnSyncWork(ctx, parentSessionID, childID, agentName, prompt, nil, nil, nil)
 }
 
-func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, agentName, prompt string) (string, string, error) {
-	id, text, err := tm.spawnSyncWork(ctx, parentSessionID, childID, agentName, prompt, nil, nil, nil)
+func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, agentName, prompt string) (string, string, error) {
+	id, text, err := tm.spawnSyncWork(ctx, parentSessionID, "", agentName, prompt, nil, nil, nil)
 	if errors.Is(err, errLetGo) {
 		// A delegating turn is told in words, and goes on: the note is
 		// its answer.
@@ -857,25 +861,29 @@ func (tm *TaskManager) LetGo(taskID string) bool {
 	}
 }
 
-// DetachChildOf lets go of whatever synchronous sub-agent is blocking one
-// conversation, and names it.
+// DetachChildOf lets go of whatever synchronous sub-agents are blocking
+// one conversation, and names them.
 //
 // By conversation rather than by task id, because that is how it is
 // asked: the id was printed on a line that has scrolled away, and the
 // question a person has is "give me my turn back".
-func (tm *TaskManager) DetachChildOf(parentSessionID string) (string, bool) {
+//
+// Every one of them, not one: a debate's reviewers are the turn's
+// children all at once, and letting go of one left the turn waiting on
+// the others.
+func (tm *TaskManager) DetachChildOf(parentSessionID string) ([]string, bool) {
 	// Asked from inside an orchestration run, it is the run that is let
 	// go. Its units are let go with it or not at all: one let go on its
 	// own outlives Esc and the run's deadline, and a resume would start it
 	// again beside itself.
 	if s, err := tm.loop.Store.Get(parentSessionID); err == nil && s.Agent == runSessionAgent {
 		if !tm.Detach(parentSessionID) {
-			return "", false // finished, or let go already
+			return nil, false // finished, or let go already
 		}
-		return parentSessionID, true
+		return []string{parentSessionID}, true
 	}
 	tm.mu.Lock()
-	var taskID string
+	var blocking []string
 	for id, parent := range tm.syncParent {
 		if parent != parentSessionID {
 			continue
@@ -888,16 +896,19 @@ func (tm *TaskManager) DetachChildOf(parentSessionID string) (string, bool) {
 			continue
 		default:
 		}
-		taskID = id
-		break
+		blocking = append(blocking, id)
 	}
 	tm.mu.Unlock()
-	if taskID == "" || !tm.Detach(taskID) {
-		// Nothing, or a child that finished between the scan and here:
-		// named only when something was let go.
-		return "", false
+	sort.Strings(blocking)
+	var letGo []string
+	for _, id := range blocking {
+		// A child that finished between the scan and here is not named:
+		// only what was let go is.
+		if tm.Detach(id) {
+			letGo = append(letGo, id)
+		}
 	}
-	return taskID, true
+	return letGo, len(letGo) > 0
 }
 
 // lastAssistantText finds the most recent message.part.end event in a

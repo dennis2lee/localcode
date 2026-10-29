@@ -110,6 +110,7 @@ var unsafeShellConstructs = []string{"$(", "`", "<(", ">(", ">"}
 // never widen a permission — a rule the user did not write to cover the
 // literal text cannot start matching it now.
 func (c *Config) resolveSegment(ctx context.Context, segment string, staticRequiresPermission bool) Decision {
+	ctx = context.WithValue(ctx, shellSegmentKey{}, strings.TrimSpace(segment))
 	raw := c.resolveOne(ctx, BashToolName, segment, staticRequiresPermission)
 	unquoted := unquoteShellText(segment)
 	if unquoted == segment {
@@ -124,6 +125,14 @@ func (c *Config) resolveSegment(ctx context.Context, segment string, staticRequi
 	}
 	return DecisionAsk
 }
+
+// shellSegmentKey carries the command resolveSegment is deciding, as
+// written, to the rules it consults for both readings of it. A literal
+// rule is the one command somebody approved, so it is compared with that
+// and never with the unquoted reading: there, approving rm "a*b", which
+// removes the one file named a*b, would also allow rm a*b, which removes
+// every file the shell expands a*b to.
+type shellSegmentKey struct{}
 
 // unquoteShellText removes one level of shell quoting, the way the shell
 // does before a command is run: outside quotes a backslash makes the next

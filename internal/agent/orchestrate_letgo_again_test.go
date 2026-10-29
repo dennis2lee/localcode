@@ -50,7 +50,7 @@ func TestLettingGoOfTheSecondRunIsNotAnsweredByTheFirst(t *testing.T) {
 		if started.Load() < int32(i) {
 			t.Fatalf("run %d never started", i)
 		}
-		id, ok := loop.Tasks.DetachChildOf("main")
+		id, ok := letGoOf(loop.Tasks, "main")
 		if !ok {
 			wrong = append(wrong, fmt.Sprintf("run %d: let go answered %q, false", i, id))
 			// Keep pressing, as a person would, so the next round starts.

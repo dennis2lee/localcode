@@ -718,7 +718,15 @@ Answering "always allow" writes a rule to `config.json`. For most programs the r
 
 `always` stays available for both; a repeated `rm -rf build` stops asking. The rule is matched against the program's base name, so `/usr/bin/sudo` and `sudo` are the same answer.
 
-Patterns are globs where `*` is zero or more characters and `?` is exactly one.
+Patterns are globs where `*` is zero or more characters and `?` is exactly one. Backslashes are literal.
+
+A rule with `"literal": true` matches only a subject equal to its `match`, with no wildcards. localcode writes one when an approved subject contains `*` or `?`. Approving the path `/proj/a*b` stores the rule below, which allows `/proj/a*b` and nothing else:
+
+```json
+{ "match": "/proj/a*b", "decision": "allow", "literal": true }
+```
+
+For bash the subject is the command as approved, quotes included: approving `rm "a*b"` does not allow `rm a*b`. A command whose program name contains `*` or `?` is kept whole rather than generalized. A rule can be written with `"literal": true` by hand; a rule without it is a glob, as before. Removing a rule in the settings window removes both kinds with the same match and decision.
 
 #### The four switches
 
@@ -780,13 +788,15 @@ The Web UI shows the same four as buttons: Deny, Allow for session, Always allow
 
 An answer given to a background task's mirrored question belongs to the task, not to the conversation you answered it in: "allow for session" and the directory answers leave your conversation ungranted, so it asks again for the same command. "Always allow" is the exception, since its config.json rule covers every session.
 
-For `bash`, session and permanent grants generalize the first word. Approving `npm test` grants `npm *`. Two families are the exception and grant the exact command instead: interpreters and shells, and privilege or destructive commands. See [Fine grained permission rules](#fine-grained-permission-rules). File and MCP grants use the exact subject. The prompt shows the resulting pattern.
+For `bash`, session and permanent grants generalize the first word. Approving `npm test` grants `npm *`. Two families are the exception and grant the exact command instead: interpreters and shells, and privilege or destructive commands. See [Fine grained permission rules](#fine-grained-permission-rules). File and MCP grants use the exact subject. A subject that contains `*` or `?` is stored as a literal rule, so it does not match other subjects. The prompt shows the resulting pattern.
 
 "Always allow" updates the file passed through `--config`, or global `~/.localcode/config.json` when no explicit file is set. It never updates the project override. Only the `permission` key changes. Without a writable config target, this option is unavailable.
 
 Session grants are forgotten when a session is deleted. A daemon restart keeps them: the grant is rebuilt from the session log on the next permission check. Permanent ("always") grants live in config.json and survive both.
 
 The Web UI locks the prompt box while the permission modal is open. The TUI keeps its separate permission line and shows a one-time hint if Enter is pressed while a request is pending.
+
+An answer that fails to reach the daemon puts its question back, behind any question already on screen, and the error is shown. The Web UI locks the prompt box again. A question answered in another window in the meantime does not come back.
 
 ### Viewing and changing permission settings without waiting for a prompt
 
@@ -1162,7 +1172,7 @@ Common to the TUI and Web UI:
 | Find a word in the conversation | **Ctrl+F**, or **Cmd+F**, Web UI and desktop window. See [Finding a word in the conversation](#finding-a-word-in-the-conversation) |
 | Switch agent | **Tab** for the next, in either client. **Shift+Tab** for the previous, Web UI only. |
 | Quit the TUI | **Ctrl+C** on an empty prompt, or type `exit`, `quit`, `:q`, `/exit`, `/quit` or `/q`. With something typed, the first Ctrl+C clears the line the way a shell prompt does and the second leaves, so the key that stops things does not also throw away a half-written message. |
-| Let go of a sub-agent | **Ctrl+B**, TUI only, while a turn is waiting on one. The turn carries on without its answer and the sub-agent keeps working; **Esc** is the other answer to the same moment and throws the work away. |
+| Let go of a sub-agent | **Ctrl+B**, TUI only, while a turn is waiting on one. The turn carries on without its answer and the sub-agent keeps working. During a debate it lets go of every reviewer still reading, and the debate ends; **Esc** is the other answer to the same moment and throws the work away. |
 | Step the reasoning effort | **Ctrl+E**, TUI only. Moves to the next level this model tells apart and wraps at the end; `/effort-set` opens the same list. |
 | Open or fold the reasoning | **Ctrl+O**, TUI only. Opens every folded Muse reasoning block in the transcript, and folds them again on the next press. Blocks folded later follow the same choice. The Web UI opens one block per click on its line. See [What the transcript shows](#what-the-transcript-shows). |
 | Narrow a picker | Type, in any TUI picker. Case-insensitive substring over the row and its detail; **Backspace** removes a character and **Esc** clears the filter before it closes the list. |
@@ -2070,7 +2080,7 @@ One line directly below the input box:
 | TPS | Generation rate across the full turn, excluding prefill and queue time. `~` marks a live stream estimate; the final count replaces it. Single-chunk replies show no rate. Controlled by `show_tps`. |
 | Activity light | Grey: disconnected from daemon. Solid green: connected and idle. Blinking green: turn or background work active. Steady amber: waiting for you, on a permission request or a question the model asked. It blinks whatever the system's motion setting. Uses daemon state and reconnects automatically. Tooltip distinguishes turns from tasks, and permission requests from questions. |
 | Stop button | Cancels the active turn, including a turn started by another client, and the tool it is inside. Equivalent to Esc. See [What stop reaches](#what-stop-reaches). |
-| Let go button | **let go**. Shown whenever a turn is running. When the turn is waiting on a sub agent, the turn carries on without the answer and the sub agent keeps working. Otherwise the transcript says there was nothing to let go of. The Stop button is the other answer to the same moment and ends both. The TUI has this on **Ctrl+B**. |
+| Let go button | **let go**. Shown whenever a turn is running. When the turn is waiting on a sub agent, the turn carries on without the answer and the sub agent keeps working. During a debate it lets go of every reviewer still reading, and the debate ends. Otherwise the transcript says there was nothing to let go of. The Stop button is the other answer to the same moment and ends both. The TUI has this on **Ctrl+B**. |
 | Auto-delegate pill | Opens target-agent and pattern settings. See [Auto delegation](#auto-delegation). |
 | Schedule pill | **schedule**. Books a prompt for later, with the time and the request in separate fields. See [Scheduled tasks](#scheduled-tasks). |
 | Debate pill | **debate**. Starts a debate from a form that shows the command line it sends. See [Debate](#debate). |
@@ -2396,7 +2406,7 @@ Refused when:
 * The run belongs to another conversation, for example in a fork's copy of the record.
 * Any run of the same lineage is running, including one that was let go: the run itself, a resume of it, a resume of that resume, or the run it was resumed from.
 * The plan no longer validates against the current agents.
-* The run stopped at the 32 agent turn ceiling. The answers a resume reuses count toward that ceiling, so it would stop at the same place. Run the plan over fewer items, or split it.
+* The run stopped at the 32 agent turn ceiling. The answers a resume reuses count toward that ceiling, so it would stop at the same place. Run the plan over fewer items, or split it. A run from v0.169.0 is read by the last line of its report, which that version wrote without the marker later versions add.
 * The same conditions as `/workflow run`: a scheduled turn, a booked command, inside a run or a debate, or orchestration off.
 
 A run with a `builder` or `runner` stage asks before it resumes. A finished unit's edits may have been reverted since, and a cancelled unit may have stopped half way, so the question names the stages that can write. The question is asked every time: it offers allow and deny only, and an answer covers that one resume. A rule that allows `Orchestrate` still answers it. A readonly run resumes without asking.
@@ -2893,6 +2903,7 @@ Debate outcomes:
 | `rounds` | The budget ran out with no approval. The work stands; read it before trusting it. |
 | `stalled` | Two consecutive rounds without an author tool call. |
 | `stopped` | You pressed Stop. What was done is kept. |
+| `let go` | You let go (Ctrl+B in the TUI, **let go** in the Web UI) while the reviewers were reading. Every reviewer still reading is let go together, the turn gets its prompt back, and the reviewers keep working in the background. The note names each reviewer's task; read its review with `/tasks <id>`. Reviews that came back before are recorded. What was done is kept. |
 | `failed` | A model call failed without Stop being pressed: the author's turn, or every reviewer's review in a round. The note says which. What was done is kept. |
 
 At debate completion, model context replaces debate instructions, reviews, and intermediate answers with the task and final work state. The closing message reports this change. All rounds remain visible in the conversation and event log. Expired debate instructions do not apply to the next message.

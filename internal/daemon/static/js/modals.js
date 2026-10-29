@@ -412,6 +412,7 @@ async function removePermissionRule(tool, rule) {
 // many requests sit behind it, so answering the modal never answers a
 // question the reader cannot see coming.
 function showPermissionRequest(req, waiting) {
+  session.pendingPermission = req;
   session.pendingPermissionID = req.id;
   session.pendingPermissionCanAlways = !!req.can_always;
   // The light says what the modal says. Without this the dot went on
@@ -466,7 +467,10 @@ export function enqueuePermissionRequest(req) {
     showPermissionRequest(req, session.pendingPermissionQueue.length);
     return;
   }
-  if (session.pendingPermissionID === req.id) return;
+  if (session.pendingPermissionID === req.id) {
+    session.pendingPermission = req;
+    return;
+  }
   const i = session.pendingPermissionQueue.findIndex((q) => q.id === req.id);
   if (i >= 0) session.pendingPermissionQueue[i] = req;
   else session.pendingPermissionQueue.push(req);
@@ -483,6 +487,7 @@ export function enqueuePermissionRequest(req) {
 // closes the modal on a live question.
 export function settlePermissionRequest(id) {
   if (!id) return;
+  session.answeringPermissions.delete(id);
   if (session.pendingPermissionID === id) {
     const next = session.pendingPermissionQueue.shift();
     if (next) {
@@ -508,6 +513,7 @@ export function settlePermissionRequest(id) {
 // of the session. Stopping a turn that was asking is the ordinary way
 // to land there.
 function closePermissionRequest() {
+  session.pendingPermission = null;
   session.pendingPermissionID = null;
   session.pendingPermissionCanAlways = false;
   permissionRequest.close();
@@ -522,11 +528,13 @@ function closePermissionRequest() {
 export async function resolvePermission(allow, scope) {
   if (!session.pendingPermissionID) return;
   const id = session.pendingPermissionID;
+  const req = session.pendingPermission || { id, can_always: session.pendingPermissionCanAlways };
   // The next queued request comes up now rather than waiting for this
   // answer's own resolved event to arrive — that event then matches
   // nothing and is ignored, which is exactly what an answer already
   // given should do.
   settlePermissionRequest(id);
+  session.answeringPermissions.set(id, req);
   // Answered, so the light stops being yours: back to blinking green if
   // the turn it interrupted is still going, steady green if it is not.
   renderCommDot();
@@ -541,7 +549,11 @@ export async function resolvePermission(allow, scope) {
   if (!session.pendingPermissionID) setInputLocked(false);
   try {
     await apiClient.resolvePermissionRequest(session.sessionID, id, allow, scope);
+    session.answeringPermissions.delete(id);
   } catch (err) {
+    if (session.answeringPermissions.delete(id)) {
+      enqueuePermissionRequest(req);
+    }
     appendError(`failed to respond to permission request: ${err}`);
   }
 }

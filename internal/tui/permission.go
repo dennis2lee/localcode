@@ -106,6 +106,10 @@ func (m *Model) enqueuePermission(p *pendingPermission) {
 // place.
 func (m *Model) settlePermission(id string) {
 	if m.pending != nil && m.pending.id == id {
+		if m.answering == nil {
+			m.answering = map[string]*pendingPermission{}
+		}
+		m.answering[id] = m.pending
 		m.pendingHintShown = false
 		if len(m.pendingQueue) == 0 {
 			m.pending = nil
@@ -122,6 +126,25 @@ func (m *Model) settlePermission(id string) {
 			return
 		}
 	}
+}
+
+// resolvePermissionEvent settles a request from a daemon permission.resolved
+// event and drops any in-flight answer for that id so a later failed POST
+// does not bring the modal back.
+func (m *Model) resolvePermissionEvent(id string) {
+	m.settlePermission(id)
+	delete(m.answering, id)
+}
+
+// restorePermission puts an answered request back through the queue when its
+// resolve POST fails, unless a permission.resolved event already cleared it.
+func (m *Model) restorePermission(id string) {
+	p, ok := m.answering[id]
+	if !ok {
+		return
+	}
+	delete(m.answering, id)
+	m.enqueuePermission(p)
 }
 
 // permissionArmDelay is how long after a request appears before a single

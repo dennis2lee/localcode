@@ -84,7 +84,7 @@ func (m Model) cancelTurn() tea.Cmd {
 func (m Model) resolvePermission(id string, allow bool, scope string) tea.Cmd {
 	return callErr(func(ctx context.Context) error {
 		return m.client.ResolvePermission(ctx, m.sessionID, id, allow, scope)
-	}, func(err error) tea.Msg { return opErrMsg{op: "resolve permission", err: err} })
+	}, func(err error) tea.Msg { return permissionResolvedMsg{id: id, err: err} })
 }
 
 func (m Model) answerQuestion(id, answer string) tea.Cmd {
@@ -258,8 +258,8 @@ func (m Model) detachChild() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
 		defer cancel()
-		taskID, ok, err := m.client.DetachChild(ctx, sessionID)
-		return detachedMsg{taskID: taskID, detached: ok, err: err}
+		taskIDs, ok, err := m.client.DetachChild(ctx, sessionID)
+		return detachedMsg{taskIDs: taskIDs, detached: ok, err: err}
 	}
 }
 

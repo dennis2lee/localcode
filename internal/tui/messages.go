@@ -36,6 +36,13 @@ type opErrMsg struct {
 	err error
 }
 
+// permissionResolvedMsg reports the outcome of answering a permission
+// request, carrying its id so a failed POST can restore that request.
+type permissionResolvedMsg struct {
+	id  string
+	err error
+}
+
 type versionMsg struct {
 	version string
 	err     error
@@ -193,10 +200,10 @@ type modelViewMsg struct {
 	err  error
 }
 
-// detachedMsg is the answer to Ctrl+B: which sub-agent was let go, or
+// detachedMsg is the answer to Ctrl+B: which sub-agents were let go, or
 // that there was none blocking this turn.
 type detachedMsg struct {
-	taskID   string
+	taskIDs  []string
 	detached bool
 	err      error
 }
