@@ -72,9 +72,15 @@ func TestAbsolutePathsAreNotRebased(t *testing.T) {
 // With no directory on the context, everything behaves exactly as it did
 // before any of this existed — relative to the process. That is what keeps
 // a Loop built without a workspace, and every existing caller, working.
+//
+// Relative, and cleaned like every path resolve returns, so on Windows
+// the separators are the system's: the .git check splits on them.
 func TestNoWorkingDirIsTheOldBehaviour(t *testing.T) {
-	if got := resolve(context.Background(), "src/main.go"); got != "src/main.go" {
-		t.Errorf("resolve without a directory = %q, want it untouched", got)
+	if got, want := resolve(context.Background(), "src/main.go"), filepath.FromSlash("src/main.go"); got != want {
+		t.Errorf("resolve without a directory = %q, want %q: relative to the process, not joined onto anything", got, want)
+	}
+	if got, want := resolve(context.Background(), "src/../.git/config"), filepath.FromSlash(".git/config"); got != want {
+		t.Errorf("resolve without a directory = %q, want %q, cleaned", got, want)
 	}
 }
 
