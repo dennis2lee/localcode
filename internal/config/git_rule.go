@@ -148,14 +148,25 @@ func gitWordsRunCommand(words []shellWord) bool {
 	return false
 }
 
+// safeGitConfigKey reports whether a git -c setting is one an agent sets
+// for an ordinary command (an identity for a commit, colour, pull's merge
+// mode) and that names no program.
+//
+// This is an allow list on purpose. Git has dozens of keys that name a
+// command (alias.*, core.fsmonitor, core.pager, core.editor,
+// core.sshCommand, diff.external, credential.helper, gpg.program, ...), so
+// a list of the dangerous ones would never be complete. The color section
+// holds only colours and switches, so all of it is here.
 func safeGitConfigKey(value string) bool {
 	key, _, _ := strings.Cut(value, "=")
 	key = strings.ToLower(key)
-	// This is an allow list on purpose. Git has dozens of keys that name a
-	// command, so a list of dangerous keys would never be complete.
 	switch key {
-	case "user.name", "user.email", "core.quotepath", "color.ui", "init.defaultbranch", "commit.gpgsign":
+	case "user.name", "user.email", "core.quotepath", "init.defaultbranch", "commit.gpgsign",
+		"pull.rebase", "pull.ff":
 		return true
+	}
+	if name, ok := strings.CutPrefix(key, "color."); ok {
+		return name != ""
 	}
 	name, advice := strings.CutPrefix(key, "advice.")
 	return advice && name != "" && !strings.Contains(name, ".")
@@ -167,8 +178,11 @@ func safeGitConfigKey(value string) bool {
 // its URL as a command once it reads "connect" on its input, which a
 // here-string supplies; merge-index runs the program it is given;
 // for-each-repo runs any git arguments, -c included, in every repository
-// a configuration key lists. submodule--helper is the builtin behind
-// submodule and takes foreach the same way.
+// a configuration key lists. svn runs --authors-prog, and parses its
+// options with Perl's Getopt::Long, which takes abbreviations and a single
+// dash, so the whole subcommand is asked rather than one spelling of it.
+// submodule--helper is the builtin behind submodule and takes foreach the
+// same way.
 //
 // fetch-pack and send-pack are the plumbing under fetch and push, and take
 // the program to run on the other end the same way.
@@ -178,7 +192,7 @@ func safeGitConfigKey(value string) bool {
 func gitSubcommandRunsCommand(command string, words []shellWord) bool {
 	switch command {
 	case "filter-branch", "filter-repo", "difftool", "mergetool", "send-email", "instaweb", "daemon", "hook",
-		"remote-ext", "merge-index", "for-each-repo":
+		"remote-ext", "merge-index", "for-each-repo", "svn":
 		return true
 	case "config", "submodule", "submodule--helper", "bisect":
 		for _, word := range words {
@@ -219,7 +233,16 @@ func gitSubcommandRunsCommand(command string, words []shellWord) bool {
 	default:
 		return false
 	}
-	for _, word := range words {
+	for i, word := range words {
+		if command == "grep" && word.text == "--" && (i == 0 || !strings.HasPrefix(words[i-1].text, "-")) {
+			// git grep reads every word after "--" as a path, so a glob
+			// there ("git grep -n foo -- *.go") names files and cannot
+			// become -O. Not after an option, which may take the "--" as
+			// its value: "git grep -e -- -Ocmd" runs cmd. And grep only:
+			// "git pull . -- --upload-pack=cmd" runs cmd, because pull
+			// hands what follows its "--" to fetch.
+			return false
+		}
 		if word.expands || gitCommandOption(word.text, long, short) {
 			return true
 		}
@@ -257,7 +280,8 @@ func gitCommandOption(word string, long []string, short string) bool {
 // is how an alias or a hook path gets into the configuration for a later,
 // ordinary-looking git command to run.
 func gitConfigRead(words []shellWord) bool {
-	var read, firstOperand bool
+	var read bool
+	var operands []string
 	for _, word := range words {
 		switch word.text {
 		case "--add", "--replace-all", "--unset", "--unset-all", "--rename-section", "--remove-section", "--edit", "-e", "set", "unset", "rename-section", "remove-section", "edit":
@@ -265,10 +289,15 @@ func gitConfigRead(words []shellWord) bool {
 		case "--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l":
 			read = true
 		}
-		if !firstOperand && !strings.HasPrefix(word.text, "-") {
-			firstOperand = true
-			read = read || word.text == "get" || word.text == "list"
+		if !strings.HasPrefix(word.text, "-") {
+			operands = append(operands, word.text)
 		}
 	}
-	return read
+	if len(operands) > 0 && (operands[0] == "get" || operands[0] == "list") {
+		return true
+	}
+	// "git config user.name" reads; "git config user.name x" writes. An
+	// option's value is counted as an operand too, which can only make a
+	// read look like a write and ask, never the other way.
+	return read || len(operands) == 1
 }

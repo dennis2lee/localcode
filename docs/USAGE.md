@@ -796,17 +796,17 @@ The Git guard asks for these forms:
 * Global `-c` settings outside the safe key list, `--config-env`, and `--exec-path=<dir>`.
 * A word the shell expands (`$VAR`, `"$VAR"`, `*`, `?`, `[`, `{a,b}`) among git's own options, their values or the subcommand.
 * `config` writes and invocations without a recognized read operation.
-* `filter-branch`, `filter-repo`, `difftool`, `mergetool`, `send-email`, `instaweb`, `daemon`, `hook`, `remote-ext`, `merge-index`, and `for-each-repo`.
+* `filter-branch`, `filter-repo`, `difftool`, `mergetool`, `send-email`, `instaweb`, `daemon`, `hook`, `remote-ext`, `merge-index`, `for-each-repo`, and `svn`.
 * `submodule foreach` (also as `submodule--helper foreach`) and `bisect run`.
 * `rebase --exec` or `-x`, and `grep --open-files-in-pager` or `-O`.
 * `clone --upload-pack`, `--config`, `--template`, `-u`, or `-c`, and `init --template`.
-* `fetch`, `pull`, or `ls-remote` with `--upload-pack`, including `ls-remote -u`.
+* `fetch`, `pull`, or `ls-remote` with `--upload-pack`, and `ls-remote -u` in git versions that have it.
 * `push` or `send-pack` with `--receive-pack` or `--exec`, `fetch-pack` with `--upload-pack` or `--exec`, and `archive --exec`.
 * Abbreviated long options (`--exe=`) and bundled short options (`-qx`) for the options above.
-* An expanded word anywhere after `config`, `submodule`, `bisect`, and the subcommands from `rebase` through `archive`. A glob can expand to a file named `--exec=cmd`.
+* An expanded word anywhere after `config`, `submodule`, `bisect`, and the subcommands from `rebase` through `archive`. A glob can expand to a file named `--exec=cmd`. For `grep`, a word after a `--` that follows an operand is a path and is not checked, so `git grep -n foo -- *.go` runs.
 * A subcommand in any case. On a case-insensitive file system `git Submodule` runs `git-submodule`.
 
-The safe `-c` keys are `user.name`, `user.email`, `core.quotepath`, `color.ui`, `init.defaultbranch`, `commit.gpgsign`, and `advice.<name>` with no further dot. Key comparison ignores case. Bare `git --exec-path` remains allowed. Recognized `config` reads include `--get`, `--get-all`, `--get-regexp`, `--get-urlmatch`, `--list`, `-l`, and the `get` and `list` subcommands. A write operation in the same invocation still requires confirmation.
+The safe `-c` keys are `user.name`, `user.email`, `core.quotepath`, `init.defaultbranch`, `commit.gpgsign`, `pull.rebase`, `pull.ff`, every `color.` key, and `advice.<name>` with no further dot. A key that names a program, such as `core.editor` or `core.pager`, is asked. Key comparison ignores case. Bare `git --exec-path` remains allowed. Recognized `config` reads are `--get`, `--get-all`, `--get-regexp`, `--get-urlmatch`, `--list`, `-l`, the `get` and `list` subcommands, and a name with no value (`git config user.name`). A write operation in the same invocation still requires confirmation.
 
 The guard does not inspect these sources of behavior:
 
