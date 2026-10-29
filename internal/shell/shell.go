@@ -229,7 +229,33 @@ func Command(ctx context.Context, script string) *exec.Cmd {
 	childproc.NewGroup(cmd)
 	cmd.Cancel = func() error { return childproc.KillGroup(cmd) }
 	cmd.WaitDelay = killGrace
+	cmd.Env = commandEnv(runtime.GOOS, os.Environ())
 	return cmd
+}
+
+// noCurrentDirLookup stops cmd.exe looking in the current directory for a
+// program named without a path.
+//
+// cmd.exe looks there before PATH. So a git.bat in the workspace, written
+// by the model or checked in to a repository it cloned, ran in place of
+// git for every `git ...` an allow rule or a session grant passed without
+// a question, the built-in git rule included. The rule named git; the
+// file it ran was whatever the workspace said git was.
+//
+// Set for every shell on Windows, not only cmd.exe, because it is
+// inherited: npm runs package scripts through cmd.exe, and so does
+// `cmd /c` typed into Git Bash. The cost is that a program in the
+// working directory has to be named as one (.\gradlew, not gradlew),
+// which is what every other shell already requires.
+const noCurrentDirLookup = "NoDefaultCurrentDirectoryInExePath=1"
+
+// commandEnv is the environment a shell command runs with on goos: nil,
+// which means this process's own, everywhere except Windows.
+func commandEnv(goos string, environ []string) []string {
+	if goos != "windows" {
+		return nil
+	}
+	return append(environ, noCurrentDirLookup)
 }
 
 // Notice returns a one-line caveat for surfaces the model reads (the bash
@@ -240,7 +266,7 @@ func Notice() string {
 	if current().posix {
 		return ""
 	}
-	return " Commands run under cmd.exe (no POSIX sh was found on this Windows system); use cmd syntax, not bash."
+	return ` Commands run under cmd.exe (no POSIX sh was found on this Windows system); use cmd syntax, not bash, and name a program in the working directory with .\ (.\gradlew build).`
 }
 
 // Windows ships "python.exe" and "python3.exe" as Microsoft Store
