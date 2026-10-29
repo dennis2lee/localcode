@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,6 +77,10 @@ type PermissionBroker struct {
 	mu      sync.Mutex
 	counter int
 	pending map[string]chan resolution
+	// shownIn is the sessions each pending question was put in front of:
+	// the one asking, and the conversations it is mirrored into. See
+	// ShownIn.
+	shownIn map[string][]string
 	// asking counts the unanswered questions showing in each session, so
 	// a client can mark the conversations that are stopped waiting for a
 	// person rather than working.
@@ -209,6 +214,7 @@ func NewPermissionBroker(store *session.Store) *PermissionBroker {
 	return &PermissionBroker{
 		store:    store,
 		pending:  map[string]chan resolution{},
+		shownIn:  map[string][]string{},
 		asking:   map[string]int{},
 		hydrated: map[string]bool{},
 		granted:  map[string]map[string]bool{},
@@ -246,18 +252,25 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 			return true, nil
 		}
 
-		b.mu.Lock()
-		b.counter++
-		id := fmt.Sprintf("p%d", b.counter)
-		ch := make(chan resolution, 1)
-		b.pending[id] = ch
-		b.mu.Unlock()
-
 		// Where this question has to appear for someone to answer it. For
 		// an ordinary session that is the session itself; for a background
 		// task it is also the conversation that spawned it, since nothing
 		// streams a task's own log.
 		where := b.audience(sessionID)
+
+		b.mu.Lock()
+		b.counter++
+		id := fmt.Sprintf("p%d", b.counter)
+		ch := make(chan resolution, 1)
+		b.pending[id] = ch
+		b.shownIn[id] = where.all()
+		b.mu.Unlock()
+		defer func() {
+			b.mu.Lock()
+			delete(b.shownIn, id)
+			b.mu.Unlock()
+		}()
+
 		b.mark(where.all())
 		defer b.unmark(where.all())
 
@@ -278,7 +291,7 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 			}))
 		}
 
-		if _, err := b.store.Append(sessionID, events.TypePermissionRequest, outsideFields(ask, map[string]any{
+		request := map[string]any{
 			"id":          id,
 			"tool":        toolName,
 			"description": description,
@@ -289,7 +302,13 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 			"can_always": b.ConfigPath != "" && !ask.Once,
 			// Only this use can be approved: clients offer allow and deny.
 			"once": ask.Once,
-		})); err != nil {
+		}
+		if toolName == config.BashToolName {
+			// The line itself is granted too (see lineKey), so a restart
+			// rebuilds that grant from here.
+			request["line"] = strings.TrimSpace(subject)
+		}
+		if _, err := b.store.Append(sessionID, events.TypePermissionRequest, outsideFields(ask, request)); err != nil {
 			return false, err
 		}
 
@@ -381,6 +400,9 @@ func (b *PermissionBroker) applyScope(sessionID, toolName string, rule config.Pe
 		return
 	}
 	b.grant(sessionID, toolName, rule.Match)
+	if toolName == config.BashToolName && strings.TrimSpace(ask.Subject) != "" {
+		b.grant(sessionID, toolName, lineKey(ask.Subject))
+	}
 	if scope == ScopeAlways {
 		if err := b.persist(toolName, rule); err != nil {
 			// The approval still stands for this session; only the
@@ -480,17 +502,28 @@ func (b *PermissionBroker) coveredBySession(sessionID, toolName, subject string,
 	if toolName != config.BashToolName || subject == "" {
 		return b.isGranted(sessionID, toolName, rule.Match)
 	}
-	segments, ok := config.GrantSegments(subject)
+	// The line that was answered, exactly, is what the person approved,
+	// substitutions, pipes and redirects included.
+	if b.isGranted(sessionID, toolName, lineKey(subject)) {
+		return true
+	}
+	readings, ok := config.GrantSegments(subject)
 	if !ok {
 		return false
 	}
-	for _, segment := range segments {
-		if !b.isGranted(sessionID, toolName, config.PermissionRuleFor(toolName, segment).Match) {
+	for _, reading := range readings {
+		if !b.isGranted(sessionID, toolName, config.PermissionRuleFor(toolName, reading).Match) {
 			return false
 		}
 	}
 	return true
 }
+
+// lineKey is the grant pattern for one bash line answered "allow for this
+// session" or "always", which covers that line again exactly. A rule's
+// pattern never starts with a NUL, so the two cannot be mistaken for each
+// other: a line that is literally "cd *" must not grant the rule "cd *".
+func lineKey(line string) string { return "\x00line\x00" + strings.TrimSpace(line) }
 
 func (b *PermissionBroker) isGranted(sessionID, toolName, pattern string) bool {
 	b.hydrate(sessionID)
@@ -558,6 +591,9 @@ func (b *PermissionBroker) hydrate(sessionID string) {
 				// covers the interval before that file is re-read.
 				if tool, rule := dataString(req, "tool"), dataString(req, "rule"); tool != "" && rule != "" {
 					b.grant(sessionID, tool, rule)
+				}
+				if tool, line := dataString(req, "tool"), dataString(req, "line"); tool != "" && line != "" {
+					b.grant(sessionID, tool, lineKey(line))
 				}
 			case ScopeOutsideDir:
 				if class, ok := tools.ParseOutsideClass(dataString(req, "outside")); ok {
@@ -715,6 +751,25 @@ func (b *PermissionBroker) ForgetSession(sessionID string) {
 	defer b.mu.Unlock()
 	delete(b.granted, sessionID)
 	delete(b.outside, sessionID)
+}
+
+// ShownIn reports whether the question id is waiting on an answer and was
+// put in front of sessionID. Ids count from p1 in every daemon, so a
+// question a stopped daemon left in one session's log can share its id
+// with a live one in another session, and an answer to the stale one
+// must not answer the live one.
+func (b *PermissionBroker) ShownIn(sessionID, id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := b.pending[id]; !ok {
+		return false
+	}
+	for _, s := range b.shownIn[id] {
+		if s == sessionID {
+			return true
+		}
+	}
+	return false
 }
 
 // Resolve answers a pending permission request. It is a no-op if id is

@@ -22,7 +22,10 @@ func (d *Daemon) handleResolvePermission(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if !d.Broker.Resolve(permID, req.Allow, req.Scope) {
+	// Only a question this session was shown: ids restart in every
+	// daemon, and an answer to one a stopped daemon left in this
+	// session's log must not answer another session's live one.
+	if !d.Broker.ShownIn(r.PathValue("id"), permID) || !d.Broker.Resolve(permID, req.Allow, req.Scope) {
 		// Nothing was waiting on this id. Said plainly rather than
 		// answered with "resolved": the usual cause is a request that was
 		// already answered — from another client, or from a replay of the
@@ -112,6 +115,11 @@ func (d *Daemon) handleTaskOutput(w http.ResponseWriter, r *http.Request) {
 			name, _ := ev.Data["name"].(string)
 			input, _ := ev.Data["input"].(string)
 			if review, ok := agent.VerdictReview(name, input); ok {
+				// A call is recorded while its reply is still streaming,
+				// so text written before it has no line break yet.
+				if out.Len() > 0 && !strings.HasSuffix(out.String(), "\n") {
+					out.WriteString("\n")
+				}
 				out.WriteString(review + "\n")
 			}
 		}

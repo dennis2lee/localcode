@@ -74,6 +74,10 @@ type TaskManager struct {
 	// a debate reviewer missed that way kept the turn waiting on its
 	// whole review.
 	letGoCount map[string]int
+	// ending is the synchronous children recording their end. Detach
+	// refuses them: a child that has answered is not let go, and the
+	// turn gets the answer.
+	ending map[string]bool
 
 	// owner is the conversation each running task counts for: the
 	// top-level session at the root of its chain of parents, from the
@@ -100,6 +104,7 @@ func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *Tas
 		detach:     map[string]chan struct{}{},
 		syncParent: map[string]string{},
 		letGoCount: map[string]int{},
+		ending:     map[string]bool{},
 		waiters:    map[string]chan struct{}{},
 		results:    map[string]taskOutcome{},
 		pending:    map[string][]string{},
@@ -708,6 +713,7 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 		delete(tm.owner, taskID)
 		delete(tm.detach, taskID)
 		delete(tm.syncParent, taskID)
+		delete(tm.ending, taskID)
 		tm.mu.Unlock()
 		cancel()
 		close(syncDone)
@@ -765,17 +771,24 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 		err  error
 	}
 	answered := make(chan syncResult, 1)
-	// The child's end is recorded under endMu, and so is a let go's
-	// "detached", which is written only while the child has not ended.
+	// The child's end and a let go are decided in one place. Once the
+	// child begins to record its end, Detach refuses it (see ending), so
+	// a child that answered is neither named as let go nor recorded as
+	// "detached". A let go that came first is recorded first: the end
+	// waits for the caller's "detached" record, which is closed recorded.
 	// Let go landing between the child's end and its release used to
 	// write "detached" after "completed", and both clients showed a
 	// finished child working in the background for good.
-	var endMu sync.Mutex
-	ended := false
+	recorded := make(chan struct{})
 	end := func(status map[string]any) {
-		endMu.Lock()
-		defer endMu.Unlock()
-		ended = true
+		tm.mu.Lock()
+		tm.ending[taskID] = true
+		tm.mu.Unlock()
+		select {
+		case <-detached:
+			<-recorded
+		default:
+		}
 		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, status)
 	}
 	// Recorded, then released, then handed back, in that order. Released
@@ -828,18 +841,10 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 		// it eventually says is read the way every other background
 		// task's answer is — "/tasks <id>", the task panel — rather than
 		// spliced into a conversation that has moved on without it.
-		endMu.Lock()
-		if ended {
-			// Let go in the instant it ended: its end is recorded and its
-			// answer is on the way, so that is what the caller gets.
-			endMu.Unlock()
-			r := <-answered
-			return taskID, r.text, r.err
-		}
 		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
 			"task_id": taskID, "status": "detached",
 		})
-		endMu.Unlock()
+		close(recorded)
 		return taskID, detachedNote(taskID, agentName), errLetGo
 	}
 }
@@ -862,8 +867,13 @@ func detachedNote(taskID, agentName string) string {
 func (tm *TaskManager) Detach(taskID string) bool {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
+	return tm.detachLocked(taskID)
+}
+
+// detachLocked is Detach for a caller already holding tm.mu.
+func (tm *TaskManager) detachLocked(taskID string) bool {
 	ch, ok := tm.detach[taskID]
-	if !ok {
+	if !ok || tm.ending[taskID] {
 		return false
 	}
 	select {
@@ -916,7 +926,11 @@ func (tm *TaskManager) DetachChildOf(parentSessionID string) ([]string, bool) {
 		}
 		return []string{parentSessionID}, true
 	}
+	// The scan, the lets go and the count in one hold of the lock: a
+	// child registering between them would be neither let go nor see
+	// the count raised, and the turn would wait on it. See letGoCount.
 	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	var blocking []string
 	for id, parent := range tm.syncParent {
 		if parent != parentSessionID {
@@ -932,20 +946,17 @@ func (tm *TaskManager) DetachChildOf(parentSessionID string) ([]string, bool) {
 		}
 		blocking = append(blocking, id)
 	}
-	tm.mu.Unlock()
 	sort.Strings(blocking)
 	var letGo []string
 	for _, id := range blocking {
-		// A child that finished between the scan and here is not named:
-		// only what was let go is.
-		if tm.Detach(id) {
+		// A child that is recording its end is not let go: only what was
+		// is named.
+		if tm.detachLocked(id) {
 			letGo = append(letGo, id)
 		}
 	}
 	if len(letGo) > 0 {
-		tm.mu.Lock()
 		tm.letGoCount[parentSessionID]++
-		tm.mu.Unlock()
 	}
 	return letGo, len(letGo) > 0
 }

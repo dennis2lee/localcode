@@ -911,8 +911,9 @@ func TestBusySendRequeuesInsteadOfError(t *testing.T) {
 func TestNonBusySendErrorStillShows(t *testing.T) {
 	m := newTestModel()
 	updated, _ := m.Update(turnDoneMsg{
-		text: "some prompt",
-		err:  &client.StatusError{Status: http.StatusInternalServerError, Message: "500: boom"},
+		text:       "some prompt",
+		err:        &client.StatusError{Status: http.StatusInternalServerError, Message: "500: boom"},
+		startsTurn: true,
 	})
 	m = updated.(Model)
 
@@ -1510,7 +1511,7 @@ func TestFailedSendRemovesItsEcho(t *testing.T) {
 	m := newTestModel()
 	m.appendPendingUser("doomed")
 
-	updated, _ := m.Update(turnDoneMsg{text: "doomed", err: fmt.Errorf("daemon said no")})
+	updated, _ := m.Update(turnDoneMsg{text: "doomed", err: fmt.Errorf("daemon said no"), startsTurn: true})
 	m = updated.(Model)
 
 	if strings.Contains(m.transcriptText(), "doomed") {

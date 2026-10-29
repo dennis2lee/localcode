@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"strings"
+	"unicode"
 
 	"localcode/internal/shell"
 )
@@ -183,14 +184,15 @@ func unquoteShellText(segment string) string {
 	return b.String()
 }
 
-// GrantSegments is the commands of a bash command line that a remembered
-// "allow for this session" has to cover one by one, as
-// resolveShellCommand decides config rules, and false for a line no
+// GrantSegments is what a remembered "allow for this session" has to
+// cover, one by one, for a bash line other than the one answered: each
+// command of it, as written and with its quoting removed, the two
+// readings resolveSegment requires of a config rule. False for a line no
 // grant may cover: one with a substitution or a redirect, which
 // resolveShellCommand never allows either. Under a shell that does not
-// split the POSIX way only a line with nothing any shell reads as an
-// operator or an escape is covered, whole, since the pieces this would
-// cut it into are not that shell's.
+// split the POSIX way only a line made of plain characters is covered,
+// whole, since the pieces this would cut it into are not that shell's,
+// and fish and PowerShell run a command in parentheses.
 func GrantSegments(command string) ([]string, bool) {
 	return grantSegmentsUnder(command, shell.IsPOSIX())
 }
@@ -200,20 +202,31 @@ func grantSegmentsUnder(command string, posix bool) ([]string, bool) {
 		return nil, false
 	}
 	if !posix {
-		if strings.ContainsAny(command, "&|;<>^`\n\r") {
-			return nil, false
-		}
 		trimmed := strings.TrimSpace(command)
+		for _, r := range trimmed {
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune(plainShellRunes, r) {
+				return nil, false
+			}
+		}
 		return []string{trimmed}, trimmed != ""
 	}
 	var out []string
 	for _, segment := range splitShellSegments(command) {
-		if segment != "" {
-			out = append(out, segment)
+		if segment == "" {
+			continue
+		}
+		out = append(out, segment)
+		if unquoted := unquoteShellText(segment); unquoted != segment {
+			out = append(out, unquoted)
 		}
 	}
 	return out, len(out) > 0
 }
+
+// plainShellRunes are the characters other than letters and digits that
+// no shell localcode runs under reads as an operator, an escape, a
+// substitution or a grouping.
+const plainShellRunes = " -_./\\:=,+~\"'*?%@"
 
 func hasUnsafeShellConstruct(command string) bool {
 	for _, c := range unsafeShellConstructs {

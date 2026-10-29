@@ -139,14 +139,33 @@ func (m *Model) resolvePendingUser(text string) bool {
 		default:
 			continue
 		}
-		m.transcript = append(m.transcript[:i:i], m.transcript[i+1:]...)
-		m.transcriptRev++
-		if m.streamOpen && i < m.streamAt {
-			m.streamAt--
-		}
+		m.removeEntry(i)
 		return true
 	}
 	return false
+}
+
+// resolveOwnEcho drops the echo of a send nothing took: the entryPending
+// a send that started a turn left, or the entrySent of one sent into a
+// turn already running. Not the oldest echo of the text, which can be a
+// send of the same line that was taken and is waiting for its turn to
+// say so.
+func (m *Model) resolveOwnEcho(text string, startsTurn bool) {
+	for i, e := range m.transcript {
+		if startsTurn && e.kind == entryPending && e.text == text ||
+			!startsTurn && e.kind == entrySent && sentText(e.text) == text {
+			m.removeEntry(i)
+			return
+		}
+	}
+}
+
+func (m *Model) removeEntry(i int) {
+	m.transcript = append(m.transcript[:i:i], m.transcript[i+1:]...)
+	m.transcriptRev++
+	if m.streamOpen && i < m.streamAt {
+		m.streamAt--
+	}
 }
 
 // abandonPendingUsers answers a stopped turn: every prompt still drawn as
