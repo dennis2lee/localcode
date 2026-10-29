@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.169.2
+
+A delegated agent or an orchestration run that has answered is no longer let go of by a let go pressed in the same instant.
+
+**Fixed**
+
+* Let go pressed in the instant a delegated agent or an orchestration run finished releasing it anyway, which could mark its row as still working in the background and hand the turn a "still working" note in place of the answer it already had
+
 ## v0.169.1
 
 Saved workflows and resume after a red-team review: a project workflow's approval bound to the whole file hash, a resume of a run that writes asked every time, and no unit run twice by a chain of resumes or cut short and then reused.

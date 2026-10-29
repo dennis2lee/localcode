@@ -747,8 +747,12 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 		err  error
 	}
 	answered := make(chan syncResult, 1)
+	// Recorded, then released, then handed back, in that order. Released
+	// before the caller has the answer, so a caller that acts on it at
+	// once (resumes the run, or asks to let go) never finds the finished
+	// child still registered: let go would release a child that had
+	// already answered, and a resume would call a finished run running.
 	go func() {
-		defer release()
 		var text string
 		var err error
 		if work != nil {
@@ -769,6 +773,7 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 			tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
 				"task_id": taskID, "status": "failed", "error": err.Error(),
 			})
+			release()
 			answered <- syncResult{text: text, err: err}
 			return
 		}
@@ -782,6 +787,7 @@ func (tm *TaskManager) spawnSyncWork(ctx context.Context, parentSessionID, child
 		if work == nil {
 			text = lastAssistantText(tm.loop.Store, taskID)
 		}
+		release()
 		answered <- syncResult{text: text}
 	}()
 

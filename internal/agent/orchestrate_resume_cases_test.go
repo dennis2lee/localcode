@@ -232,6 +232,8 @@ func TestLettingGoOfAFinishedRunNamesNothing(t *testing.T) {
 	loop := orchestrateLoop(t, m.server(t).URL)
 	executeOrchestrate(context.Background(), loop, `{"goal":"g","stages":[{"name":"a","kind":"step","agent":"oracle","prompt":"x"}]}`)
 	run := runIDs(loop, "main")[0]
+	// Asked the moment the run has answered: it unregisters before it
+	// hands its answer back, so there is nothing left to let go of.
 	if id, ok := loop.Tasks.DetachChildOf(run); ok || id != "" {
 		t.Errorf("DetachChildOf(finished run) = (%q, %v), want nothing", id, ok)
 	}
