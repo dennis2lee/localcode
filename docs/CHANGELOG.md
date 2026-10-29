@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+A file written into `.git` is asked before the next ordinary git command can run it.
+
+**Fixed**
+
+* A `write_file` or `edit` into `.git` allowed by a rule, such as `core.fsmonitor` written into `.git/config` and run by the next `git status`
+
 ## v0.169.5
 
 The built-in `git *` rule no longer lets git run another command without a question.

@@ -358,6 +358,19 @@ func TestThePermissionPipeline(t *testing.T) {
 		{"deny inside", false, false, false, false, "read_file", "id_rsa", OutsideRead, DecisionDeny, OutsideNone},
 		{"deny under skip_all", true, false, false, false, "read_file", "id_rsa", OutsideRead, DecisionDeny, OutsideNone},
 		{"deny outside", false, false, false, false, "read_file", filepath.Join(filepath.Dir(workspace), "id_rsa"), OutsideRead, DecisionDeny, OutsideNone},
+
+		// A write into .git is asked though the rules allow it: git runs
+		// what its config and hooks name, and git runs unasked. Reading
+		// it is ordinary, and the skips still allow the write, since
+		// either one lets bash run anything anyway.
+		{"write into .git", false, false, false, false, "write_file", ".git/config", OutsideWrite, DecisionAsk, OutsideNone},
+		{"edit into .git", false, false, false, false, "edit", ".git/hooks/pre-commit", OutsideWrite, DecisionAsk, OutsideNone},
+		{"read from .git", false, false, false, false, "read_file", ".git/config", OutsideRead, DecisionAllow, OutsideNone},
+		{"write into .github", false, false, false, false, "write_file", ".github/workflows/ci.yml", OutsideWrite, DecisionAllow, OutsideNone},
+		{"write into .git under skip_tools", false, true, false, false, "write_file", ".git/config", OutsideWrite, DecisionAllow, OutsideNone},
+		{"write into .git under skip_all", true, false, false, false, "write_file", ".git/config", OutsideWrite, DecisionAllow, OutsideNone},
+		{"write into another project's .git with writes outside allowed", false, false, false, true, "write_file", filepath.Join(filepath.Dir(workspace), "other-project", ".git", "config"), OutsideWrite, DecisionAsk, OutsideNone},
+		{"deny into .git", false, false, false, false, "write_file", ".git/id_rsa", OutsideWrite, DecisionDeny, OutsideNone},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			resolver := ComposeResolver(rules, Policy{

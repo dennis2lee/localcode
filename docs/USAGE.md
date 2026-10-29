@@ -673,6 +673,8 @@ Default behavior without any rules:
 
 Ordinary Git commands run without confirmation by default. Git options and subcommands that run another command require confirmation even when an explicit rule allows Git. An explicit tool rule overrides its built-in default.
 
+A `write_file` or `edit` into a `.git` directory, or to a `.git` file, requires confirmation even when a rule allows the write. Git runs what its configuration and hooks name: `core.fsmonitor` in `.git/config` runs on the next `git status`. The check follows symlinks, ignores case, and treats the names Windows and HFS+ read as `.git` (`.git.`, `GIT~1`, `.git::$INDEX_ALLOCATION`, `.g` + U+200C + `it`) as `.git`. Reading `.git` is not affected. `skip_tools` and `skip_all` allow the write, since bash runs any command unasked under either. "Allow for session" covers the same path again; "always" does not stop the question in a later session.
+
 ```json
 {
   "permission": {
@@ -810,7 +812,8 @@ The safe `-c` keys are `user.name`, `user.email`, `core.quotepath`, `init.defaul
 
 The guard does not inspect these sources of behavior:
 
-* Repository configuration and hooks, including files written into `.git/config` or `.git/hooks/pre-commit` before an allowed `git status` or `git commit`.
+* Repository configuration and hooks written by a bash command a rule allows (`cp hook .git/hooks/pre-commit` under a `cp *` rule), or there before the session. A redirect into `.git` is asked like any redirect.
+* A git directory under another name: a bare repository (`HEAD`, `config`, `objects`, `refs`) the model writes and then names with `-C` or `--git-dir`, or one set apart with `--separate-git-dir`.
 * Configuration and hooks in another repository selected by `-C`, `--git-dir`, or `--work-tree`.
 * Existing aliases and `git-<name>` programs on PATH.
 * Configured diff and merge drivers, including `--ext-diff` and `--textconv`.

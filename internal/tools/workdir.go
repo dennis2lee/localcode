@@ -264,7 +264,10 @@ type Outcome struct {
 //     asked whatever the rules said — a rule that allows write_file
 //     everywhere is a statement about this project, not a licence to
 //     edit the one next door.
-//  3. skip_tools over whatever ask is left, then skip_all over
+//  3. A write into a git directory, which is asked whatever the rules
+//     said; see IntoGitDir. After the boundary, which asks its own
+//     question for a .git outside the project.
+//  4. skip_tools over whatever ask is left, then skip_all over
 //     everything.
 //
 // The order is the contract and it has been wrong twice. The boundary
@@ -294,6 +297,10 @@ func ComposeResolver(
 				Dir:       OutsideDir(ctx, q.Subject),
 				Workspace: WorkingDir(ctx),
 			}
+		}
+
+		if d == DecisionAllow && q.Class == OutsideWrite && IntoGitDir(ctx, q.Subject) {
+			d = DecisionAsk
 		}
 
 		if d == DecisionAsk && (p.SkipAll(ctx) || p.SkipTools(ctx)) {
