@@ -95,9 +95,51 @@ func TestIntoGitDirThroughALink(t *testing.T) {
 	if !IntoGitDir(ctx, "loop-a/.git/config") {
 		t.Error("IntoGitDir(\"loop-a/.git/config\") = false: a path that does not resolve still names .git")
 	}
-	// And one that does not name it counts too: where it leads is unknown.
-	if !IntoGitDir(ctx, "loop-a/notes.md") {
-		t.Error("IntoGitDir(\"loop-a/notes.md\") = false: a path that does not resolve could lead anywhere")
+	// One that does not name .git is not counted: the boundary asks about
+	// it as outside, and counting it here made every write through a
+	// Windows junction a question no answer could cover.
+	if IntoGitDir(ctx, "loop-a/notes.md") {
+		t.Error("IntoGitDir(\"loop-a/notes.md\") = true: an unresolvable path is judged by its text")
+	}
+	if !OutsideWorkspace(ctx, "loop-a/notes.md") {
+		t.Error("OutsideWorkspace(\"loop-a/notes.md\") = false: the boundary is what asks about it")
+	}
+}
+
+// A link whose target ends in a separator names a directory, not an
+// element called "": "link/file.txt" with link -> newdir/ is newdir/file.txt.
+func TestALinkToADirectoryWithATrailingSeparator(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need a privilege on Windows")
+	}
+	workspace := t.TempDir()
+	if err := os.Symlink("newdir/", filepath.Join(workspace, "link")); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithWorkingDir(context.Background(), workspace)
+	if IntoGitDir(ctx, "link/file.txt") || OutsideWorkspace(ctx, "link/file.txt") {
+		t.Errorf("link/file.txt: IntoGitDir=%v OutsideWorkspace=%v; it is newdir/file.txt in the workspace",
+			IntoGitDir(ctx, "link/file.txt"), OutsideWorkspace(ctx, "link/file.txt"))
+	}
+}
+
+// A glob is judged by the pattern it runs, which resolve cleans: "*/.."
+// is gone before anything is listed.
+func TestAGlobIsJudgedByThePatternItRuns(t *testing.T) {
+	workspace := t.TempDir()
+	root := filepath.Dir(workspace)
+	for pattern, want := range map[string]string{
+		workspace + "/*/../../secret/*":  filepath.Join(root, "secret"),
+		workspace + "/**/../../secret/*": filepath.Join(root, "secret"),
+		"*/../../secret/*":               filepath.Join("..", "secret"),
+		"src/**/*.go":                    "src",
+		"*.go":                           ".",
+		"":                               "",
+	} {
+		input, _ := json.Marshal(map[string]string{"pattern": pattern})
+		if got := (Glob{}).Subject(input); got != want {
+			t.Errorf("Glob subject of %q = %q, want %q", pattern, got, want)
+		}
 	}
 }
 
@@ -202,11 +244,87 @@ func TestSplitLastElement(t *testing.T) {
 		"/a/h/../x": {"/a/h/..", "x"},
 		"a":         {".", "a"},
 		"a/b":       {"a", "b"},
-		"/a/b/":     {"/a/b", ""},
+		"/a/b/":     {"/a", "b"},
+		"/a/b//":    {"/a", "b"},
+		"newdir/":   {".", "newdir"},
 	} {
 		parent, base := splitLastElement(path)
 		if parent != want[0] || base != want[1] {
 			t.Errorf("splitLastElement(%q) = %q, %q; want %q, %q", path, parent, base, want[0], want[1])
+		}
+	}
+}
+
+// A write into .git is a question asked every time, and says so, so no
+// remembered answer covers it. Nothing else is.
+func TestAGitDirQuestionIsMarked(t *testing.T) {
+	workspace := t.TempDir()
+	ctx := WithWorkingDir(context.Background(), workspace)
+	off := func(context.Context) bool { return false }
+	resolver := ComposeResolver(
+		func(context.Context, string, string, bool) Decision { return DecisionAllow },
+		Policy{SkipAll: off, SkipTools: off, OutsideAllowed: func(context.Context, OutsideClass) bool { return false }},
+	)
+	other := filepath.Join(filepath.Dir(workspace), "other-project")
+	for _, tc := range []struct {
+		subject string
+		gitDir  bool
+	}{
+		{".git/config", true},
+		{filepath.Join(other, ".git", "config"), true},
+		{"src/main.go", false},
+		{filepath.Join(other, "main.go"), false},
+	} {
+		got := resolver(ctx, Query{Tool: "write_file", Subject: tc.subject, Static: true, Class: OutsideWrite})
+		if got.GitDir != tc.gitDir {
+			t.Errorf("%s: GitDir = %v, want %v", tc.subject, got.GitDir, tc.gitDir)
+		}
+	}
+}
+
+// git reads its per-user configuration in every repository, so a write
+// there is a write into every .git at once.
+func TestGitUserConfigIsAGitDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("HOME spelling")
+	}
+	real := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(real, home); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+	ctx := WithWorkingDir(context.Background(), t.TempDir())
+
+	for _, path := range []string{
+		filepath.Join(home, ".gitconfig"), filepath.Join(home, ".GITCONFIG"),
+		filepath.Join(real, ".gitconfig"),
+		filepath.Join(home, ".config", "git", "config"),
+		filepath.Join(home, ".config", "git", "attributes"),
+		filepath.Join(real, ".config", "git", "ignore"),
+	} {
+		if !IntoGitDir(ctx, path) {
+			t.Errorf("IntoGitDir(%q) = false: git reads it in every repository", path)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".gitconfig.bak"), filepath.Join(home, "notes.md"),
+		filepath.Join(home, ".config", "gitx", "config"), filepath.Join(home, ".config", "git"+"hub", "hosts.yml"),
+	} {
+		if IntoGitDir(ctx, path) {
+			t.Errorf("IntoGitDir(%q) = true, want false", path)
+		}
+	}
+
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "custom.cfg"))
+	for _, path := range []string{
+		filepath.Join(home, "xdg", "git", "config"), filepath.Join(home, "custom.cfg"),
+	} {
+		if !IntoGitDir(ctx, path) {
+			t.Errorf("IntoGitDir(%q) = false with XDG_CONFIG_HOME and GIT_CONFIG_GLOBAL set", path)
 		}
 	}
 }

@@ -227,9 +227,13 @@ func resolvePhysical(path string) (string, error) {
 
 // splitLastElement is filepath.Split without the cleaning filepath.Dir
 // does: the parent is the text before the last separator, the root kept
-// whole, and "." for a relative path of one element.
+// whole, and "." for a relative path of one element. Trailing separators
+// are not an element: a link to "newdir/" names newdir.
 func splitLastElement(p string) (parent, base string) {
 	vol := len(filepath.VolumeName(p))
+	for len(p) > vol+1 && os.IsPathSeparator(p[len(p)-1]) {
+		p = p[:len(p)-1]
+	}
 	i := len(p) - 1
 	for i >= vol && !os.IsPathSeparator(p[i]) {
 		i--
@@ -293,6 +297,12 @@ type Outcome struct {
 	// unless Outside is set.
 	Dir       string
 	Workspace string
+	// GitDir is set when the question is a write into a git directory.
+	// It is asked every time (Ask.Once): a remembered answer is keyed by
+	// how a path is spelled, and a file approved for the session can be
+	// replaced by a link into .git, which git's own allowed commands can
+	// check out. An answer covers the one write.
+	GitDir bool
 }
 
 // ComposeResolver is the whole permission pipeline in its required order.
@@ -338,8 +348,8 @@ func ComposeResolver(
 				// "allow writes in other-project", given for its
 				// main.go, would cover other-project/.git/config too;
 				// asked here, it would cover the whole .git. A plain
-				// answer covers the one path.
-				return Outcome{Decision: DecisionAsk}
+				// answer covers the one write.
+				return Outcome{Decision: DecisionAsk, GitDir: true}
 			}
 			return Outcome{
 				Decision:  DecisionAsk,
@@ -356,6 +366,6 @@ func ComposeResolver(
 		if d == DecisionAsk && (p.SkipAll(ctx) || p.SkipTools(ctx)) {
 			return Outcome{Decision: DecisionAllow}
 		}
-		return Outcome{Decision: d}
+		return Outcome{Decision: d, GitDir: gitWrite}
 	}
 }

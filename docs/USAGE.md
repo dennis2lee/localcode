@@ -811,8 +811,11 @@ The safe `-c` keys are `user.name`, `user.email`, `core.quotepath`, `init.defaul
 The guard does not inspect these sources of behavior:
 
 * Repository configuration and hooks written by a bash command a rule allows (`cp hook .git/hooks/pre-commit` under a `cp *` rule), or there before the session. A redirect into `.git` is asked like any redirect.
-* Hooks git runs from outside `.git`: a `core.hooksPath` directory in the project (husky's `.husky`), a `.git/hooks` that is a symlink into the project, and the files a hook manager reads (`.pre-commit-config.yaml`, `lefthook.yml`). A write to one of them runs on the next allowed `git commit`. To be asked before every commit, add `{ "match": "git commit*", "decision": "ask" }` to the `bash` rules.
-* A git directory under another name: a bare repository (`HEAD`, `config`, `objects`, `refs`) the model writes and then names with `-C` or `--git-dir`, or one set apart with `--separate-git-dir`.
+* Hooks git runs from outside `.git`: a `core.hooksPath` directory in the project (husky's `.husky`), a `.git/hooks` that is a symlink into the project, and the files a hook manager reads (`.pre-commit-config.yaml`, `lefthook.yml`). A write to one of them runs on the next allowed `git commit`, `git checkout`, `git merge`, `git rebase` or `git push`. To be asked before git can run a hook, write `bash` rules that ask for `git *` and then allow the subcommands to run unasked, such as `git status*`, `git diff*`, `git log*` and `git show*`. The last matching rule wins, and a line with git's own options before the subcommand (`git -C . commit`) matches only `git *`.
+* A git directory under another name: a bare repository (`HEAD`, `config`, `objects`, `refs`) the model writes and then names with `-C` or `--git-dir`, one set apart with `--separate-git-dir`, or the bare repository a worktree shares (`git worktree add` run in `proj.git`). Outside the project the workspace boundary asks about a write there, and "allow writes in this directory" for it covers it.
+* A hard link to a file in `.git`, made before the session or by a bash command a rule allows.
+* git's system configuration (`/etc/gitconfig`, and on Windows `C:\ProgramData\Git\config` and the one in the Git installation). Writing it usually needs administrator rights.
+* A path through a Windows junction. It does not resolve, so it is judged by its text, and the workspace boundary asks about it as outside the project.
 * Configuration and hooks in another repository selected by `-C`, `--git-dir`, or `--work-tree`.
 * Existing aliases and `git-<name>` programs on PATH.
 * Configured diff and merge drivers, including `--ext-diff` and `--textconv`.
@@ -821,16 +824,16 @@ The guard does not inspect these sources of behavior:
 * External merge strategies selected by `git merge -s <name>`.
 * A git command behind a wrapper such as `nohup git` or `time git`. A rule for the wrapper decides it. The built-in rule allows no wrapper.
 
-A `write_file` or `edit` into a `.git` directory, or to a `.git` file, requires confirmation even when a rule allows the write. Git runs what its configuration and hooks name: `core.fsmonitor` written into `.git/config` runs on the next `git status`.
+A `write_file` or `edit` into a `.git` directory, to a `.git` file, or to git's per-user configuration requires confirmation even when a rule allows the write. Git runs what its configuration and hooks name: `core.fsmonitor` written into `.git/config` runs on the next `git status`. The per-user configuration is `~/.gitconfig`, the file `GIT_CONFIG_GLOBAL` names, and everything in `$XDG_CONFIG_HOME/git` (`~/.config/git` when unset); git reads it in every repository.
 
-* The path is judged after `..` is taken off its text, and again where its symlinks lead. A path that cannot be resolved, such as a symlink loop or a Windows junction, counts as `.git`.
+* The path is judged after `..` is taken off its text, and again where its symlinks lead. A path that cannot be resolved, such as a symlink loop, is judged by its text.
 * A component is `.git` in any case and in the spellings Windows and HFS+ read as `.git`: `.git.`, `.git::$INDEX_ALLOCATION`, `GIT~1`, and `.g` + U+200C + `it`.
 * Outside the project the question is a plain one. "Allow writes in this directory" for another project does not cover its `.git`.
 * Reading `.git` is not affected.
-* Inside the project, `skip_tools` and `skip_all` allow the write, since bash runs any command unasked under either. Outside it, only `skip_all` does.
-* "Allow for session" covers the same path, spelled the same way. "Always" also writes a rule, and a later session asks again for that path.
+* Inside the project, `skip_tools` and `skip_all` allow the write, since bash runs any command unasked under either. Outside it, `skip_all` allows it, and `skip_tools` does once writing outside the project is allowed.
+* The question is asked for each write and offers no "for the session" or "always". A remembered answer is kept by how a path is spelled, and a file approved earlier can be replaced by a link into `.git`: git's own allowed commands (`hash-object`, `update-index`, `checkout`) can check one out.
 
-Every file tool takes `..` off a path's text before it uses it, an absolute path as a relative one: `/proj/link/../x` is `/proj/x`, wherever `link` points. The workspace boundary and the `.git` check judge that same path.
+Every file tool takes `..` and trailing separators off a path's text before it uses it, an absolute path as a relative one: `/proj/link/../x` is `/proj/x`, wherever `link` points. The workspace boundary and the `.git` check judge that same path. The glob tool judges its pattern the same way, so `/proj/*/../../secret/*` is a question about `/secret`.
 
 ### Answering a permission prompt: once, this session, or always
 

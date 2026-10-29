@@ -2,16 +2,18 @@
 
 ## Unreleased
 
-A file written into `.git` is asked before the next ordinary git command can run it.
+A file written into `.git` is asked, each time, before the next ordinary git command can run it.
 
 **Fixed**
 
-* A `write_file` or `edit` into `.git` allowed by a rule, such as `core.fsmonitor` written into `.git/config` and run by the next `git status`
+* A `write_file` or `edit` into `.git` or `~/.gitconfig` allowed by a rule, such as `core.fsmonitor` written into `.git/config` and run by the next `git status`
 * An absolute file tool path with `..` after a symlink (`/proj/link/../x`) written or read where the link leads, not at the path the workspace boundary judged
+* A glob pattern with a wildcard before `..` (`*/../../secret/*`) listing files outside the project without a question
 
 **Changed**
 
-* An absolute file tool path has `..` taken off its text, as a relative one already had
+* An absolute file tool path has `..` and trailing separators taken off its text, as a relative one already had
+* A question that is asked each time is not answered by an earlier "allow for session" for the same text
 
 ## v0.169.5
 

@@ -249,9 +249,12 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 		}
 
 		// An earlier "allow for this session" (or "always") already covers
-		// this call, so don't ask again.
+		// this call, so don't ask again. Not a question asked every time:
+		// its answer covers one use, and so does nothing remembered. A
+		// write into .git is one (tools.Outcome.GitDir), and a grant for
+		// "notes.txt" must not cover notes.txt once it is a link into .git.
 		rule := config.PermissionRuleFor(toolName, subject)
-		if b.coveredBySession(sessionID, toolName, subject, rule) {
+		if !ask.Once && b.coveredBySession(sessionID, toolName, subject, rule) {
 			return true, nil
 		}
 		// A directory this conversation already approved leaving the

@@ -550,7 +550,7 @@ func (r *Registry) gate(ctx context.Context, name string, t Tool, input json.Raw
 			Outside:     outcome.Outside,
 			Dir:         outcome.Dir,
 			Workspace:   outcome.Workspace,
-			Once:        once,
+			Once:        once || outcome.GitDir,
 		})
 		var refused *RefusedError
 		if errors.As(err, &refused) {
