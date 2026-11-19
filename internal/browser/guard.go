@@ -25,7 +25,21 @@ const UserAgentMark = "LocalcodeBrowser"
 // whatever led there: a navigate, a redirect, a click, a frame, back and
 // forward, a tab a link opened, the panel's own address bar.
 
-var autoAttach = map[string]any{"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}
+// autoAttach attaches every new target the browser opens, paused until
+// the guard has set it up, except the browser's own: its interface pages
+// ("browser_ui", such as the address bar's suggestion popup each new window
+// makes) load no web content, and one held paused could stall the window it
+// belongs to, and the page in it. The rest of the filter is the protocol's
+// default.
+var autoAttach = map[string]any{
+	"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
+	"filter": []map[string]any{
+		{"type": "browser_ui", "exclude": true},
+		{"type": "browser", "exclude": true},
+		{"type": "tab", "exclude": true},
+		{},
+	},
+}
 
 // guard starts watching every target p's browser opens.
 func (m *Manager) guard(p *process) {

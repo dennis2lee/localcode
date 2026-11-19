@@ -2,6 +2,7 @@ package browser
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"image/png"
 	"net/http"
@@ -434,5 +435,44 @@ func TestNoPreloadingLeavesTheRestOfThePreferences(t *testing.T) {
 	}
 	if out, _ := os.ReadFile(filepath.Join(fresh, "Preferences")); !strings.Contains(string(out), `"network_prediction_options":2`) {
 		t.Errorf("a fresh profile's Preferences: %s", out)
+	}
+}
+
+// The browser's own interface pages are not attached, so none is held
+// paused: each new window makes one (the address bar's suggestion popup),
+// and on a loaded machine one held paused stalled the page in its window
+// for a minute, both in a new tab a click opened and in a tab opened
+// beside another.
+func TestTheBrowsersOwnInterfaceIsNotHeld(t *testing.T) {
+	m := testManager(t)
+	ctx := ctxFor(t)
+	if _, err := m.Tab(ctx, "first"); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	attached := map[string]int{}
+	m.proc.conn.On("", "Target.attachedToTarget", func(p json.RawMessage) {
+		var ev struct {
+			TargetInfo struct {
+				Type string `json:"type"`
+			} `json:"targetInfo"`
+		}
+		json.Unmarshal(p, &ev)
+		mu.Lock()
+		attached[ev.TargetInfo.Type]++
+		mu.Unlock()
+	})
+	for _, conv := range []string{"second", "third", "fourth"} {
+		if _, err := m.Tab(ctx, conv); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if attached["page"] == 0 {
+		t.Fatalf("no page was attached for three new tabs; the test is not testing anything: %v", attached)
+	}
+	if n := attached["browser_ui"]; n != 0 {
+		t.Errorf("the browser's own interface was attached %d time(s): %v", n, attached)
 	}
 }
