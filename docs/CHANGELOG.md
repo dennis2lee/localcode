@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.169.7
 
 A bash deny rule reaches the command behind a prefix, a wrapper, a command string or a substitution.
 
