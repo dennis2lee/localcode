@@ -224,6 +224,13 @@ func (d *Daemon) handleBrowserImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("this daemon has no browser"))
 		return
 	}
+	// Only with the browser on, which is when the settings window offers
+	// the button: copying somebody's whole profile is not something a
+	// stray request should do while the feature is off.
+	if !d.Loop.Config.BrowserLive() {
+		writeError(w, http.StatusConflict, errors.New("the browser is off; turn it on first"))
+		return
+	}
 	rep, err := d.Browser.Import()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)

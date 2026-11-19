@@ -214,4 +214,11 @@ func TestTheSettingTurnsTheBrowserOnAndOff(t *testing.T) {
 	if d.Loop.Config.BrowserLive() {
 		t.Error("still on after turning it off")
 	}
+	// Copying somebody's profile is not something a request does while
+	// the feature is off.
+	imp := postBrowserJSON(t, srv.URL+"/api/browser/import", map[string]any{})
+	imp.Body.Close()
+	if imp.StatusCode != http.StatusConflict {
+		t.Errorf("import with the browser off = %d, want 409", imp.StatusCode)
+	}
 }

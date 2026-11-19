@@ -131,7 +131,8 @@ A session object in answers is `{"id", "agent", "title", "workspace",
 `GET /api/settings` answers the whole snapshot, so a client applies
 state instead of merging events: `auto_compact_enabled`,
 `auto_compact_percent`, `keep_going`, `fold_thinking`, `muse_profiles`,
-`repeat_limit`, `smart_agent`, `orchestrate`, `model_invocable`,
+`repeat_limit`, `smart_agent`, `browser`, `browser_available`,
+`orchestrate`, `model_invocable`,
 `model_commands`, `orchestrate_roster`, `show_tps`, `show_thinking`,
 `show_timestamps`, `auto_delegate`, `auto_delegate_agent`,
 `auto_delegate_match`, `skip_permissions`, `permission_rules`,
@@ -145,6 +146,8 @@ re-reads this endpoint on load.
 | `GET /api/settings` | nothing | `200` the snapshot above | none |
 | `POST /api/settings/auto-delegate` | `{"enabled"?, "agent"?, "match"?}`; pointers, so one field can move alone | `204` | `400` unknown agent or fewer than two agents configured; `400` bad body (text error); `500` applied for this run but not persisted (text error) |
 | `POST /api/settings/smart-agent` | `{"enabled"}` | `200 {"smart_agent", "applied": true, "persisted", "error"?}`; `applied` is always true, `persisted` is the part that can fail | `400` bad body (text error) |
+| `POST /api/settings/browser` | `{"enabled"}`; off also quits the browser | `200 {"browser", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
+| `POST /api/browser/import` | nothing | `200 {"from", "profile", "skipped"}`: copies the person's Chrome or Edge profile in again and restarts the browser, closing every tab | `404` no browser in this daemon; `409` the browser setting is off; `400` no profile to copy |
 | `POST /api/settings/orchestrate` | `{"enabled"}` | `200 {"orchestrate", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/model-invocable` | `{"enabled"}` | `200 {"model_invocable", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/keep-going` | `{"enabled"}` | `204` | `400` bad body (text error); `500` applied but not persisted (text error) |
@@ -232,6 +235,20 @@ follows the `schedule.*` events on that conversation's own stream.
 | `POST /api/sessions/{id}/schedules/{sid}/seen` | nothing | `204`; the third state of the row's light. An unknown booking is still `204` | `404` no scheduler |
 | `POST /api/sessions/{id}/schedules/{sid}/rename` | `{"name"}`; empty clears it | `200` the entry | `400` bad body (text error); `404` no scheduler or no such booking |
 | `DELETE /api/sessions/{id}/schedules/{sid}` | nothing | `204`; also removes the run session it left behind, best effort | `404` no scheduler or no such booking |
+
+### Browser (per session)
+
+The desktop window's browser panel. The frame stream is also how the
+daemon knows a window is showing the conversation: the model is offered
+the `browser` tool only while one is open. Every route answers `404`
+when the daemon has no browser or the session is unknown.
+
+| Method and path | Takes | Answers | Errors |
+|---|---|---|---|
+| `GET /api/sessions/{id}/browser` | nothing | `200 {"has_tab", "url"?, "title"?, "width", "height"}`; `width` and `height` are the page size every coordinate is in | `404` |
+| `GET /api/sessions/{id}/browser/stream` | nothing | `200 multipart/x-mixed-replace`, one JPEG per part, as long as the client holds it open. Waits while the conversation has no tab, and starts no browser | `404` |
+| `POST /api/sessions/{id}/browser/navigate` | `{"url"}`, or `{"action": "back"\|"forward"\|"reload"}`; starts the browser and opens the tab when there is none | `200 {"url", "title"}` | `400` the page could not load or an unknown action; `503` the browser could not start |
+| `POST /api/sessions/{id}/browser/input` | one of `{"mouse": {"type", "x", "y", "button"?, "clickCount"?, "deltaX"?, "deltaY"?, "modifiers"?}}`, `{"key": {"type", "key", "code", "text"?, "keyCode"?, "modifiers"?}}`, `{"text"}`, in page pixels | `204` | `400` bad event; `409` no tab |
 
 ### Effort and model (per session)
 

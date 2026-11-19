@@ -328,6 +328,7 @@ var RegisteredToolNames = []string{
 	"session_read",
 	"Command",
 	"Verdict",
+	"browser",
 	"Debate",
 	"update_plan",
 	"ask_user",

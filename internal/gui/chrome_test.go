@@ -367,6 +367,48 @@ func boundNames(t *testing.T) map[string]string {
 	return bound
 }
 
+// initValues is every window.lc* value an Init script in this package
+// sets, such as window.lcGUI, keyed to the file that sets it. A value the
+// window puts on every page, not a function it binds: the page reads it.
+var initAssign = regexp.MustCompile(`window\.(lc[A-Z]\w*)\s*=`)
+
+func initValues(t *testing.T) map[string]string {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := map[string]string{}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), f, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", f, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) != 1 {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Init" {
+				return true
+			}
+			if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if js, err := strconv.Unquote(lit.Value); err == nil {
+					for _, m := range initAssign.FindAllStringSubmatch(js, -1) {
+						set[m[1]] = f
+					}
+				}
+			}
+			return true
+		})
+	}
+	return set
+}
+
 // And the function the page calls is the one Go binds.
 //
 // The command strings are checked above; the name they travel through is
@@ -403,8 +445,19 @@ func TestTheFunctionsThePageCallsAreTheOnesGoBinds(t *testing.T) {
 	if len(called) == 0 {
 		t.Fatal("no window.lc* in the page scripts; this test no longer reads what it thinks it reads")
 	}
+	// A value an Init script sets (window.lcGUI) is the other half of the
+	// same contract: the page reads it, and nothing binds it.
+	initSet := initValues(t)
+	for name, file := range initSet {
+		if !strings.Contains(js, "window."+name) {
+			t.Errorf("%s sets window.%s on every page and no page script reads it", file, name)
+		}
+	}
 	reported := map[string]bool{}
 	for _, m := range called {
+		if _, ok := initSet[m[1]]; ok {
+			continue
+		}
 		if _, ok := bound[m[1]]; !ok && !reported[m[1]] {
 			reported[m[1]] = true
 			t.Errorf("the page calls window.%s and this package does not bind it", m[1])

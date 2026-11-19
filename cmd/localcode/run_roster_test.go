@@ -33,6 +33,8 @@ var leftOutOfARun = map[string]string{
 	"Verdict": "a debate reviewer's tool, and a run cannot hold a debate",
 	"ask_user": "there is nobody at the keyboard in a pipe, so the question " +
 		"could only block until the turn gave up",
+	"browser": "offered only to a conversation a GUI window is showing, " +
+		"and a run has no window",
 }
 
 func TestTheOneShotRosterDiffersFromTheDaemonsOnlyOnPurpose(t *testing.T) {

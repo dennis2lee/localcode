@@ -241,3 +241,31 @@ func TestParseKeys(t *testing.T) {
 		}
 	}
 }
+
+// A browser a dead daemon left running on the profile is closed by the
+// next start, which would otherwise hand itself over to it and exit.
+func TestAStartClosesTheBrowserAnEarlierRunLeft(t *testing.T) {
+	first := testManager(t)
+	ctx := ctxFor(t)
+	if _, err := first.Tab(ctx, "c"); err != nil {
+		t.Fatal(err)
+	}
+	// The daemon that owned it is gone without closing it: nothing calls
+	// first.Close, and its browser goes on running.
+	left := first.proc
+	t.Cleanup(left.kill) // whatever the outcome, no browser outlives the test
+	first.mu.Lock()
+	first.proc = nil
+	first.mu.Unlock()
+
+	second := NewManager(Options{DataDir: first.opts.DataDir})
+	defer second.Close()
+	if _, err := second.Tab(ctx, "c"); err != nil {
+		t.Fatalf("the second start failed: %v", err)
+	}
+	select {
+	case <-left.exited:
+	case <-time.After(10 * time.Second):
+		t.Error("the browser the earlier run left is still running")
+	}
+}

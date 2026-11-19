@@ -51,6 +51,7 @@ func launchArgs(dataDir, profile string) []string {
 // start launches the browser at path on dataDir and connects to it.
 func start(ctx context.Context, path, dataDir, profile string) (*process, error) {
 	portFile := filepath.Join(dataDir, "DevToolsActivePort")
+	closeStale(portFile)
 	// Left by an earlier run, it names a port nobody is listening on.
 	_ = os.Remove(portFile)
 
@@ -100,6 +101,44 @@ func waitForPort(ctx context.Context, portFile string, exited <-chan struct{}) (
 			return "", errors.New("the browser did not open its debugging port within 30s")
 		case <-tick.C:
 		}
+	}
+}
+
+// closeStale asks a browser an earlier run left on this profile to quit.
+//
+// A daemon that was killed, or crashed, never closed its browser: the
+// browser runs in a process group of its own and does not die with it.
+// It keeps the profile locked, and a new one started on the same profile
+// hands itself over to it and exits, so nothing would work until somebody
+// found and killed it by hand. Its DevToolsActivePort is still in the
+// profile directory, and the browser listening there is the one to close:
+// over its own protocol, which is the same call on every platform.
+func closeStale(portFile string) {
+	url, ok := readPortFile(portFile)
+	if !ok {
+		return
+	}
+	conn, err := cdp.Dial(url)
+	if err != nil {
+		return // nobody there: the file is all that is left
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	_ = conn.Call(ctx, "", "Browser.close", nil, nil)
+	cancel()
+	select {
+	case <-conn.Done():
+	case <-time.After(5 * time.Second):
+	}
+	_ = conn.Close()
+	// The profile lock goes with the process; give it a moment.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if c, err := cdp.Dial(url); err != nil {
+			return
+		} else {
+			c.Close()
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

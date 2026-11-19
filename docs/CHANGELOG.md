@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+The model can work a web page in a browser shown in the desktop window's right panel.
+
+**Added**
+
+* A `browser` tool: open, read, screenshot, click, type, key and scroll in Chrome or Edge, offered in a conversation open in the desktop window
+* A browser panel at the top of the right panel: the page as it changes, an address bar, and clicks and keys passed to the page
+* The `browser` setting (settings window, `/browser`, config.json) and `browser_path`
+* A copy of your Chrome or Edge profile in `~/.localcode/browser`, logins included, and "copy Chrome profile again"
+
 ## v0.169.7
 
 A bash deny rule reaches the command behind a prefix, a wrapper, a command string or a substitution.

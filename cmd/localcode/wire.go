@@ -341,7 +341,10 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// unconditionally and hidden per turn, like the tools above: whether
 	// it is offered depends on a setting that moves and on a GUI window
 	// showing the conversation. Nothing starts until it is used.
-	browserManager := browser.NewManager(browser.Options{ChromePath: cfg.BrowserPath})
+	browserManager := browser.NewManager(browser.Options{
+		ChromePath: cfg.BrowserPath,
+		DataDir:    filepath.Join(e.home, ".localcode", "browser"),
+	})
 	registry.Register(agent.NewBrowserTool(loop, browserManager))
 
 	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)

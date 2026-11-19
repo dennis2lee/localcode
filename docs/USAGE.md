@@ -21,7 +21,7 @@ LocalCode supports interactive TUI, Web UI, desktop, daemon, and one-shot CLI wo
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [What stop reaches](#what-stop-reaches), [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [Shell escape](#shell-escape), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/clear](#clear), [/rewind](#rewind), [Sampling](#sampling-temperature-top_p-top_k), [/review](#review), [/redo](#redo), [/model-invocable](#model-invocable), [/usage totals](#usage-totals), [/export](#export), [/mcps](#mcps), [What the transcript shows](#what-the-transcript-shows), [Where localcode may connect](#where-localcode-may-connect), [What a session log holds](#what-a-session-log-holds-and-who-can-read-it), [/llm-doctor](#llm-doctor), [/context](#context), [The switches](#the-switches), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Archive](#archiving-a-conversation), [Referring to another conversation](#referring-to-another-conversation-with-name), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
 | [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Pasting an image](#pasting-an-image), [Status bar](#status-bar-under-the-prompt), [Settings](#settings), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn), [Redirecting a turn](#redirecting-a-turn-while-it-runs) |
-| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Leaving the project](#leaving-the-project), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Debate](#debate), [Effort](#effort), [Zoom and what a reload keeps](#zoom-and-what-a-reload-keeps), [Debug log](#debug-log), [Scheduled tasks](#scheduled-tasks), [Repeating tasks](#repeating-tasks), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm), [Checking for updates](#checking-for-updates) |
+| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Browser](#browser), [Leaving the project](#leaving-the-project), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Debate](#debate), [Effort](#effort), [Zoom and what a reload keeps](#zoom-and-what-a-reload-keeps), [Debug log](#debug-log), [Scheduled tasks](#scheduled-tasks), [Repeating tasks](#repeating-tasks), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm), [Checking for updates](#checking-for-updates) |
 | [Known limitations](#known-limitations) | |
 
 ## Part 1. Getting started
@@ -420,6 +420,8 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `hooks` | Shell commands run at lifecycle points. See [Hooks](#hooks). |
 | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `smart_agent` | Turns on the work-order prompt, enhanced tools, fallback, the turn log, cache markers and credential-path checks. It delegates nothing. Off unless set to true; also `/config smart_agent` and the settings window. See [Smart Agent](#smart-agent). |
+| `browser` | Gives the model a web browser, shown in the desktop window's right panel. Off unless set to true; also `/browser` and the settings window. See [Browser](#browser). |
+| `browser_path` | The browser to run instead of the Chrome or Edge found in the usual places. |
 | `model_invocable` | The switch for whether the model may run commands itself. Off unless set; `/model-invocable` toggles it. On opens nothing by itself: each built-in must be named in `model_commands`, and each custom command or skill must opt in from its own frontmatter. See [/model-invocable](#model-invocable). |
 | `model_commands` | Which built-in commands the model may run, each with its leading slash. Empty, the default, means none. Inert while `model_invocable` is off. |
 | `auto_compact_enabled` | Automatic compaction past the threshold. Opencode spelling `compaction.auto` is also accepted. On unless set to false; `/auto-compact` toggles it. |
@@ -1753,6 +1755,7 @@ The following daemon commands work in both clients.
 | Command | Setting | What it does |
 |---|---|---|
 | `/smart-agent` | `smart_agent` | The work-order prompt, the enhanced tools (paged reads, `update_plan`, `ask_user`), the fallback chain, the trace, the prompt cache markers and the guards. It delegates nothing. See [Smart Agent](#smart-agent). |
+| `/browser` | `browser` | The web browser shown in the desktop window's right panel, for the model to work in. See [Browser](#browser). |
 | `/orchestrate` | `orchestrate` | Delegation: the specialist roster, `Task`, the background pair, the delegation policy and the Orchestrate tool. Reports the agents it can delegate to, or says why there are none. See [Orchestration](#orchestration). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also on the settings Muse tab. |
@@ -1820,6 +1823,7 @@ These commands are recognized by the client or the daemon rather than sent to th
 | `/tasks` | **TUI.** Lists background tasks in this session. The Web UI has the right panel instead. See [`/tasks`](#tasks). |
 | `/smart-agent` | Toggles the Smart Agent bundle and saves the choice. `/smart-agent on\|off` sets it outright. Answered by the daemon, so both clients have it. See [The switches](#the-switches). |
 | `/auto-delegate` | Toggles auto-delegation the same way. |
+| `/browser` | Toggles the browser the same way. Off closes the browser and every tab in it. See [Browser](#browser). |
 | `/permission-skip-all` | Allows every prompt in this conversation, the workspace boundary included. |
 | `/permission-skip-tools` | Allows every tool prompt in this conversation, and still asks before a path leaves the workspace. |
 | `/read-outside` | Reading outside the workspace: `on`, `off`, or `mem-clear` to forget the directories approved at a prompt. See [Leaving the project](#leaving-the-project). |
@@ -2264,6 +2268,7 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | `bash` | Yes, except default Git allowance | Shell command with a two-minute default timeout. Reports exit status, empty output, timeout, and cancellation separately. `grep` 1, `diff` 1, and `test` 1 are ordinary results; `grep` 2 is an error. See [Python on Windows](#python-on-windows). |
 | `Skill` | No | Load a skill body by name. Registered only when skills exist. |
 | `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. One run at a time per directory, so a concurrent panel of reviewers does not start several copies of your test suite in one tree; a call that queued says so. |
+| `browser` | No | Work a web page in the browser shown in the desktop window's right panel: open, read, screenshot, click, type, key, scroll. Offered only with the browser setting on and the conversation open in the desktop window. A deny rule matches the page's URL. See [Browser](#browser). |
 | `session_read` | No | Read another conversation on this daemon: `mode=summary` for what it concluded and which files it touched, `mode=transcript` for its messages a page at a time. Not offered to a delegated sub agent. See [Referring to another conversation](#referring-to-another-conversation-with-name) |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server. Never in a turn `localcode run` builds itself, which connects no MCP servers; a `--session` turn routed to a running daemon has the daemon's. |
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only with [orchestration](#orchestration) on and 2 or more agents to delegate to. |
@@ -2766,6 +2771,46 @@ Smart Agent denies `read_file`, `view_image`, `write_file`, and `edit` for crede
 ```
 
 The credential-path check does not parse shell commands. `bash` remains subject to its own permission rules.
+
+### Browser
+
+The model can work a web page the way a person does, in a browser shown at the top of the desktop window's right panel. The person can watch it and take over at any point.
+
+| Item | Behavior |
+|---|---|
+| Turning it on | The settings window's Browser section, `/browser on`, or `"browser": true` in config.json. Off unless set. |
+| Where it works | The desktop window only. The model is offered the `browser` tool while the setting is on and the conversation is open in a desktop window. A Web UI in another browser, the TUI and `localcode run` never have it. |
+| Browser | Google Chrome, or Microsoft Edge when Chrome is not installed. `browser_path` names another one. It runs with no window of its own; the panel is its window. |
+| Profile | The first use copies your last used Chrome (or Edge) profile to `~/.localcode/browser`: cookies, saved passwords, site storage and preferences. History, extensions and caches are not copied. "copy Chrome profile again" in the settings window copies it again for sites you signed in to since, and closes every tab. A file your running browser holds locked is skipped and named; close that browser and copy again for it. |
+| Conversations | One browser for the daemon, so every conversation shares the copied logins. Each conversation has its own tab for as long as it exists. A link that opens a new tab moves the conversation to it, and closing that tab moves it back. Deleting the conversation closes its tabs. |
+| Questions | None: the model opens pages, clicks and types, passwords included, without asking. A `deny` rule for `browser` keeps a site out of reach: `{"browser": [{"match": "*bank*", "decision": "deny"}]}` refuses a `navigate` to a matching URL and every other action on a matching page, such as one a click led to. |
+| Ending | The browser starts at its first use and quits when the setting is turned off, when the window closes, or when localcode exits. A browser a crashed run left on the profile is closed by the next start. |
+
+Everything the copied profile is signed in to is reachable by the model. Use the browser setting where that is acceptable, and deny the sites it must not touch.
+
+The panel shows the page from a stream of frames. A click, the wheel, keys and a paste on it go to the page. The address bar opens what is typed into it and starts the browser if it is not running; back, forward and reload act on the page.
+
+The `browser` tool's actions:
+
+| Action | Input | What it does |
+|---|---|---|
+| `navigate` | `url` | Opens the URL. A bare host gets `https://`. |
+| `back`, `forward`, `reload` | | History and reload. |
+| `read` | | The URL, title, text (up to 15,000 characters), and every visible element that can be clicked or typed into, numbered `[n]` (up to 250). A password field reads as `(filled)`, never its value. |
+| `screenshot` | | An image of the visible page. Refused, with a pointer to `read`, for a model that is not sent images. |
+| `click` | `ref`, or `x` and `y` | Clicks element `[ref]` from the last `read`, scrolled into view, or a point. |
+| `type` | `text`, optional `ref` | Types the text where the focus is, or into element `[ref]` after clicking it. |
+| `key` | `keys` | A key or combination: `Enter`, `Tab`, `Escape`, `ctrl+a`, `shift+Tab`. |
+| `scroll` | `direction`, optional `amount`, `ref` | Scrolls up, down, left or right by `amount` steps (default 3). |
+| `wait` | `seconds` | Waits up to 10 seconds. |
+
+Limits:
+
+* Every page renders at 1280x800.
+* A JavaScript dialog (`alert`, `confirm`, `prompt`) is answered OK at once, and the next result names it.
+* Downloads and file pickers are not handled.
+* Some sites refuse a browser with no window.
+* On Windows a file the running Edge or Chrome holds open cannot be copied. The import report names it.
 
 ### Leaving the project
 
