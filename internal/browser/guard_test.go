@@ -45,7 +45,8 @@ func newGuardSite(t *testing.T) *guardSite {
 <link rel="preload" as="fetch" href="/bank/preload" crossorigin>
 <script type="speculationrules">{"prefetch": [{"source": "list", "urls": ["/bank/spec-prefetch"]}], "prerender": [{"source": "list", "urls": ["/bank/spec-prerender"]}]}</script>
 <img src="/bank/img.png">
-<script>fetch('/bank/fetch').catch(() => {}); navigator.sendBeacon('/bank/beacon', 'x');</script>`)
+<script>fetch('/bank/fetch').catch(() => {}); navigator.sendBeacon('/bank/beacon', 'x');
+try { new EventSource('/bank/events'); } catch (e) {}</script>`)
 		case "/sw.js":
 			w.Header().Set("Content-Type", "text/javascript")
 			fmt.Fprint(w, `self.addEventListener('fetch', (e) => e.respondWith(fetch(e.request)));`)
@@ -136,9 +137,11 @@ func TestADeniedPageIsNeverLoaded(t *testing.T) {
 	}
 }
 
-// A denied site gets nothing from the browser, not only no page load: no
-// prefetch or prerender a page asks for (the browser makes those itself,
-// outside the guard, so preloading is off), and no image, fetch or beacon.
+// A denied site gets no HTTP request from the browser, not only no page
+// load: no prefetch or prerender a page asks for (the browser makes those
+// itself, outside the guard, so preloading is off), and no image, fetch,
+// beacon or event stream. A WebSocket is not covered: the interception the
+// guard uses does not see one, and USAGE.md says so.
 func TestADeniedSiteGetsNoRequestAtAll(t *testing.T) {
 	m := guardedManager(t)
 	ctx := ctxFor(t)
@@ -154,8 +157,25 @@ func TestADeniedSiteGetsNoRequestAtAll(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 	if site.reached("/bank") {
 		site.mu.Lock()
-		defer site.mu.Unlock()
 		t.Errorf("the denied site was sent a request: %v", site.seen)
+		site.mu.Unlock()
+	}
+
+	// Again after a restart, on the profile the browser has now written
+	// itself, Secure Preferences included: preloading stays off.
+	m.Close()
+	tab, err = m.Tab(ctx, "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tab.Navigate(ctx, site.URL+"/ahead"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if site.reached("/bank") {
+		site.mu.Lock()
+		t.Errorf("after a restart the denied site was sent a request: %v", site.seen)
+		site.mu.Unlock()
 	}
 }
 

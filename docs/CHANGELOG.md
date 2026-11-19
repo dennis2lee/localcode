@@ -11,7 +11,7 @@ The model can work a web page in a browser shown in the desktop window's right p
 * A browser panel at the top of the right panel: the page as it changes, an address bar, and clicks, drags, keys, shortcuts and paste passed to the page
 * The `browser` setting (settings window, `/browser`, config.json) and `browser_path`
 * A copy of your Chrome or Edge profile in `~/.localcode/browser`, logins included, and "copy Chrome profile again"
-* `deny` rules for `browser`, top-level and every agent's, enforced on every request the browser makes: a matching URL gets no request, by any route
+* `deny` rules for `browser`, top-level and every agent's, enforced on every HTTP request the browser makes: a matching URL gets no request, by any route (WebSockets are not checked)
 * Preloading (prefetch, speculation rules, prerender) off in the browser's profile
 * A refusal, on every daemon route, of requests from the model's own browser
 
