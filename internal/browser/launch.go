@@ -244,7 +244,9 @@ func noPreloading(profileDir string) error {
 		// past what a float64 carries exactly.
 		dec := json.NewDecoder(bytes.NewReader(data))
 		dec.UseNumber()
-		if dec.Decode(&prefs) != nil {
+		// A file that is not an object, "null" included, is started
+		// over: the browser rewrites the rest on its first run.
+		if dec.Decode(&prefs) != nil || prefs == nil {
 			prefs = map[string]any{}
 		}
 	} else if !os.IsNotExist(err) {

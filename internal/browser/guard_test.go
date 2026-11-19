@@ -382,6 +382,16 @@ func TestNoPreloadingLeavesTheRestOfThePreferences(t *testing.T) {
 			t.Errorf("Preferences lack %s: %s", want, out)
 		}
 	}
+	// A file that is not an object is started over, null included.
+	for _, bad := range []string{"null", "[]", `"x"`, "", "{"} {
+		os.WriteFile(filepath.Join(dir, "Preferences"), []byte(bad), 0o600)
+		if err := noPreloading(dir); err != nil {
+			t.Errorf("Preferences %q: %v", bad, err)
+		}
+		if out, _ := os.ReadFile(filepath.Join(dir, "Preferences")); !strings.Contains(string(out), `"network_prediction_options":2`) {
+			t.Errorf("Preferences %q became %s", bad, out)
+		}
+	}
 	// A profile with no Preferences yet gets one.
 	fresh := filepath.Join(t.TempDir(), "Default")
 	if err := noPreloading(fresh); err != nil {

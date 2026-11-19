@@ -313,6 +313,22 @@ c.putImageData(d, 0, 0);</script>`)
 	if !res.Refused || strings.Contains(res.Content, "Press") {
 		t.Errorf("read on a page a rule denied after it loaded: %+v", res)
 	}
+	// The same refusal whoever runs the turn: an agent's allow does not
+	// lift the top-level deny, and another agent's deny counts.
+	loop.Config.Agents = map[string]config.AgentConfig{
+		"web": {Permission: map[string]config.ToolPermission{BrowserToolName: {Rules: []config.PermissionRule{{Match: "*/later*", Decision: config.DecisionAllow}}}}},
+	}
+	asWeb := config.WithAgent(ctx, "web")
+	if res := tool.Execute(asWeb, json.RawMessage(`{"action":"read"}`)); !res.Refused {
+		t.Errorf("an agent's allow lifted the top-level deny on an open page: %+v", res)
+	}
+	loop.Config.Permissions = config.Permissions{}
+	loop.Config.Agents = map[string]config.AgentConfig{
+		"other": {Permission: map[string]config.ToolPermission{BrowserToolName: {Rules: []config.PermissionRule{{Match: "*/later*", Decision: config.DecisionDeny}}}}},
+	}
+	if res := call(map[string]any{"action": "read"}); !res.Refused {
+		t.Errorf("another agent's deny did not count on an open page: %+v", res)
+	}
 
 	// The setting going off in the middle of a turn takes the tool away
 	// at the next call.

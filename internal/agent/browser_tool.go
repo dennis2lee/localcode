@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"localcode/internal/browser"
-	"localcode/internal/config"
 	"localcode/internal/provider"
 	"localcode/internal/tools"
 )
@@ -198,7 +197,10 @@ func (t BrowserTool) denied(ctx context.Context, tab *browser.Tab) string {
 	if err != nil || loc.URL == "" {
 		return ""
 	}
-	if t.loop.Config.ResolvePermissionFor(ctx, BrowserToolName, loc.URL, false) == config.DecisionDeny {
+	// The browser's own rule, not the running agent's: every agent shares
+	// the browser, so what any rule denies is denied here as it is to the
+	// guard, and an agent's allow does not lift a top-level deny.
+	if t.loop.Config.DeniedAnywhere(BrowserToolName, loc.URL) {
 		// The site, not the URL: a query string can carry what the rule
 		// was written to keep from the model.
 		return fmt.Sprintf("the page on %s is denied by a permission rule for %q; navigate somewhere else", siteOf(loc.URL), BrowserToolName)
