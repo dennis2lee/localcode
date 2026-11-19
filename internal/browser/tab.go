@@ -26,6 +26,8 @@ type Tab struct {
 	viewers map[chan []byte]bool
 	casting bool
 	frame   []byte // the latest screencast frame, JPEG
+
+	castMu sync.Mutex // orders screencast starts and stops; see Watch
 }
 
 // openTab creates a page and attaches to it.
@@ -297,12 +299,16 @@ func (t *Tab) Capture(ctx context.Context, s Shot) (Captured, error) {
 	switch {
 	case s.Ref > 0:
 		var r *struct{ X, Y, W, H float64 }
+		// The element's box in the page's own coordinates, less any part
+		// above or left of the page, which is never drawn: a clip that
+		// starts there comes back blank.
 		script := `(() => {
   const el = document.querySelector('[data-lc-ref="` + strconv.Itoa(s.Ref) + `"]');
   if (!el) return null;
   el.scrollIntoView({block: 'center', inline: 'center'});
   const r = el.getBoundingClientRect();
-  return {X: r.left + scrollX, Y: r.top + scrollY, W: r.width, H: r.height};
+  const x = Math.max(r.left + scrollX, 0), y = Math.max(r.top + scrollY, 0);
+  return {X: x, Y: y, W: r.right + scrollX - x, H: r.bottom + scrollY - y};
 })()`
 		if err := t.eval(ctx, script, &r); err != nil {
 			return out, err
@@ -312,6 +318,9 @@ func (t *Tab) Capture(ctx context.Context, s Shot) (Captured, error) {
 		}
 		if r.W < 1 || r.H < 1 {
 			return out, fmt.Errorf("element %d has no size to capture", s.Ref)
+		}
+		if r.H > MaxShotHeight {
+			r.H, out.Cut = MaxShotHeight, true
 		}
 		params["clip"] = map[string]any{"x": r.X, "y": r.Y, "width": r.W, "height": r.H, "scale": 1}
 		params["captureBeyondViewport"] = true
@@ -388,6 +397,12 @@ func (t *Tab) eval(ctx context.Context, expression string, out any) error {
 // watching.
 func (t *Tab) Watch(ctx context.Context) (frames <-chan []byte, stop func(), err error) {
 	ch := make(chan []byte, 2)
+	// Held from the decision to start to the browser's answer, as stop
+	// holds it from the decision to stop: a start and a stop then reach
+	// the browser in the order they were decided, and a stop from the
+	// viewer that left never lands after the start for the one arriving.
+	t.castMu.Lock()
+	defer t.castMu.Unlock()
 	t.mu.Lock()
 	t.viewers[ch] = true
 	first := t.frame
@@ -417,9 +432,11 @@ func (t *Tab) Watch(ctx context.Context) (frames <-chan []byte, stop func(), err
 	var once sync.Once
 	stop = func() {
 		once.Do(func() {
+			t.castMu.Lock()
+			defer t.castMu.Unlock()
 			t.mu.Lock()
 			delete(t.viewers, ch)
-			last := len(t.viewers) == 0
+			last := len(t.viewers) == 0 && t.casting
 			if last {
 				t.casting = false
 			}

@@ -557,6 +557,28 @@ func (c *Config) resolveOne(ctx context.Context, toolName, subject string, stati
 	return d
 }
 
+// DeniedAnywhere reports whether a rule denies subject for toolName at the
+// top level or in any agent's own permission block. It is the answer for
+// something every agent shares, such as the one browser all conversations
+// use, where a request cannot be told apart by the agent it acts for: what
+// any rule denies stays denied, and an agent's allow does not lift a
+// top-level deny there.
+func (c *Config) DeniedAnywhere(toolName, subject string) bool {
+	c.permMu.RLock()
+	denied := false
+	for _, agentCfg := range c.Agents {
+		if len(agentCfg.Permission) == 0 {
+			continue
+		}
+		if d, matched := resolveRules(agentCfg.Permission, toolName, subject, subject); matched && d == DecisionDeny {
+			denied = true
+			break
+		}
+	}
+	c.permMu.RUnlock()
+	return denied || c.ResolvePermission(toolName, subject, false) == DecisionDeny
+}
+
 // resolveRules resolves toolName and subject against a permissions map,
 // following the exact precedence: an exact rule for toolName first, then
 // any aliases covering toolName (strictest decision wins), then a "*"

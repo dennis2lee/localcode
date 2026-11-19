@@ -243,10 +243,11 @@ follows the `schedule.*` events on that conversation's own stream.
 
 The desktop window's browser panel. The frame stream is also how the
 daemon knows a window is showing the conversation: the model is offered
-the `browser` tool only while one is open. Every route answers `404`
-when the daemon has no browser or the session is unknown. Every route
-but the snapshot route answers `409` while the browser setting is off,
-so nothing starts the browser and no stream counts as watching.
+the `browser` tool only while one is open. Every route but the snapshot
+route answers `404` when the daemon has no browser, and every route
+answers `404` when the session is unknown. The stream, navigate and
+input routes answer `409` while the browser setting is off, so nothing
+starts the browser and no stream counts as watching.
 
 The daemon answers `403` to any request, on every route, whose
 User-Agent contains `LocalcodeBrowser`. That is every request the
@@ -258,7 +259,7 @@ model's browser sends, so a page it opens cannot drive the API.
 | `GET /api/sessions/{id}/browser/stream` | nothing | `200 multipart/x-mixed-replace`, one JPEG per part, as long as the client holds it open. Waits while the conversation has no tab, and starts no browser | `404`; `409` the setting is off |
 | `POST /api/sessions/{id}/browser/navigate` | `{"url"}` (`http`, `https`, or `about:blank`), or `{"action": "back"\|"forward"\|"reload"}`; starts the browser and opens the tab when there is none | `200 {"url", "title"}` | `400` the page could not load, an address of another scheme, or an unknown action; `403` a deny rule for `browser` covers the page or one a redirect led to, and it was not loaded; `409` the setting is off; `503` the browser could not start |
 | `POST /api/sessions/{id}/browser/input` | one of `{"mouse": {"type", "x", "y", "button"?, "buttons"?, "clickCount"?, "deltaX"?, "deltaY"?, "modifiers"?}}`, `{"key": {"type", "key", "code", "text"?, "keyCode"?, "modifiers"?, "commands"?}}`, `{"text"}`, in page pixels. `buttons` is the held buttons as a mask (left 1, right 2, middle 4); a move with one held is a drag. `commands` is editing commands for the key: `selectAll`, `copy`, `cut`, `paste`, `undo`, `redo` | `204` | `400` bad event or another command; `409` the setting is off, or no tab |
-| `GET /api/sessions/{id}/snapshots/{name}` | nothing | `200 image/png`: a snapshot the `browser` tool saved, from the conversation's working directory's `.localcode/snapshots/`. `name` is the file name `tool.end` gave in `snapshot` | `404` no such conversation, a name not in the tool's own shape (`YYYYMMDD-HHMMSS-NNN.png`), no such file, or a file that is not a regular one |
+| `GET /api/sessions/{id}/snapshots/{name}` | nothing | `200 image/png`: a snapshot the `browser` tool saved, from `.localcode/snapshots/` under the conversation's working directory, or under the home directory for a conversation with none. A snapshot saved before the conversation moved to another working directory is found where its `tool.end` says it was saved. `name` is the file name `tool.end` gave in `snapshot` | `404` no such conversation, a name not in the tool's own shape (`YYYYMMDD-HHMMSS-NNN.png`), no such file, or a file that is not a regular one |
 
 ### Effort and model (per session)
 

@@ -18,6 +18,7 @@ import (
 	"localcode/internal/agent"
 	"localcode/internal/browser"
 	"localcode/internal/config"
+	"localcode/internal/events"
 )
 
 func browserDaemon(t *testing.T) (*Daemon, *httptest.Server, string) {
@@ -349,6 +350,82 @@ func TestTheSnapshotRouteServesOnlyCaptures(t *testing.T) {
 	}
 	if code, _, _ := get("/api/sessions/nobody/snapshots/20261119-101500-001.png"); code != http.StatusNotFound {
 		t.Errorf("a conversation that does not exist = %d, want 404", code)
+	}
+}
+
+// A conversation with no working directory (no workspace, no project)
+// has its captures under the home directory, and the route finds them
+// there: the tool and the route ask the same function.
+func TestTheSnapshotRouteFindsACaptureWithNoWorkingDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	d, srv, _ := browserDaemon(t)
+	if _, err := d.Loop.Store.CreateSession("nowhere", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	d.Loop.ProjectDir = ""
+	if dir := d.Loop.SessionDir("nowhere"); dir != "" {
+		t.Fatalf("the conversation has a working directory, %q; the test is not testing anything", dir)
+	}
+	dir, err := agent.SnapshotDir("")
+	if err != nil || !strings.HasPrefix(dir, home) {
+		t.Fatalf("SnapshotDir(\"\") = %q, %v; want under %s", dir, err, home)
+	}
+	os.MkdirAll(dir, 0o755)
+	if err := os.WriteFile(filepath.Join(dir, "20261119-101500-001.png"), []byte("\x89PNG"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Get(srv.URL + "/api/sessions/nowhere/snapshots/20261119-101500-001.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("a capture saved with no working directory = %d, want 200", resp.StatusCode)
+	}
+}
+
+// A snapshot taken before the conversation moved to another working
+// directory still shows: the route finds it where its tool.end says it
+// was saved, and only in a .localcode snapshots directory.
+func TestASnapshotStillShowsAfterTheWorkspaceMoves(t *testing.T) {
+	d, srv, id := browserDaemon(t)
+	dir, _ := agent.SnapshotDir(d.Loop.SessionDir(id))
+	os.MkdirAll(dir, 0o755)
+	const name = "20261119-101500-001.png"
+	saved := filepath.Join(dir, name)
+	if err := os.WriteFile(saved, []byte("\x89PNG"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d.Loop.Store.Append(id, events.TypeToolEnd, map[string]any{"tool_use_id": "t1", "content": "saved", "snapshot": saved})
+	// A tool.end naming a file of the same name outside a snapshots
+	// directory is not followed.
+	stray := filepath.Join(t.TempDir(), "20261119-101500-002.png")
+	os.WriteFile(stray, []byte("\x89PNG"), 0o644)
+	d.Loop.Store.Append(id, events.TypeToolEnd, map[string]any{"tool_use_id": "t2", "content": "x", "snapshot": stray})
+
+	moved := postBrowserJSON(t, srv.URL+"/api/workspace", map[string]string{"path": t.TempDir(), "session_id": id})
+	moved.Body.Close()
+	if moved.StatusCode != http.StatusOK {
+		t.Fatalf("workspace move: %d", moved.StatusCode)
+	}
+	if now, _ := agent.SnapshotDir(d.Loop.SessionDir(id)); now == dir {
+		t.Fatal("the conversation did not move; the test is not testing anything")
+	}
+	get := func(name string) int {
+		resp, err := http.Get(srv.URL + "/api/sessions/" + id + "/snapshots/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := get(name); code != http.StatusOK {
+		t.Errorf("a snapshot from before the move = %d, want 200", code)
+	}
+	if code := get("20261119-101500-002.png"); code != http.StatusNotFound {
+		t.Errorf("a file outside a snapshots directory = %d, want 404", code)
 	}
 }
 

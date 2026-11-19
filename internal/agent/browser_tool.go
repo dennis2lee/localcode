@@ -365,33 +365,29 @@ func formatSnapshot(s browser.Snapshot) string {
 }
 
 // BrowserBlock is the browser's guard as the deny rules for "browser"
-// say it: true for a URL a rule denies. The browser asks it on every page
-// load, so a rule added while the browser runs applies to the next page.
+// say it: true for a URL a rule denies, at the top level or in any agent's
+// own block, since every conversation and agent shares the one browser.
+// The browser asks it on every request, so a rule added while the browser
+// runs applies to the next one.
 func BrowserBlock(l *Loop) func(url string) bool {
 	return func(url string) bool {
-		return l.Config.ResolvePermission(BrowserToolName, url, false) == config.DecisionDeny
+		return l.Config.DeniedAnywhere(BrowserToolName, url)
 	}
 }
 
-// snapshotDir is where a conversation's captures are saved: the
-// working directory's .localcode/snapshots (the workspace, or else the
-// project), or ~/.localcode/snapshots for a turn with neither.
-func snapshotDir(ctx context.Context) (string, error) {
-	if dir := tools.WorkingDir(ctx); dir != "" {
-		return SnapshotDir(dir), nil
+// SnapshotDir is where the browser tool saves the captures of a
+// conversation whose working directory is dir, and where the daemon
+// serves them from: dir's .localcode/snapshots, or ~/.localcode/snapshots
+// for a conversation with no working directory.
+func SnapshotDir(dir string) (string, error) {
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = home
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return SnapshotDir(home), nil
-}
-
-// SnapshotDir is where the browser tool saves captures for a conversation
-// whose working directory is dir. The daemon serves them from the same
-// place.
-func SnapshotDir(dir string) string {
-	return filepath.Join(dir, ".localcode", "snapshots")
+	return filepath.Join(dir, ".localcode", "snapshots"), nil
 }
 
 // snapshotName is the shape of a capture's file name, which is also what
@@ -407,12 +403,18 @@ func (t BrowserTool) snapshot(ctx context.Context, tab *browser.Tab, in browserI
 	if err != nil {
 		return tools.Result{}, err
 	}
-	dir, err := snapshotDir(ctx)
+	dir, err := SnapshotDir(tools.WorkingDir(ctx))
 	if err != nil {
 		return tools.Result{}, err
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return tools.Result{}, err
+	}
+	// A project's .localcode is often committed, and a snapshot of a
+	// signed-in page is not something to commit by accident.
+	if f, err := os.OpenFile(filepath.Join(dir, ".gitignore"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644); err == nil {
+		_, _ = f.WriteString("# Browser snapshots localcode saved; never committed.\n*\n")
+		_ = f.Close()
 	}
 	var path string
 	now := time.Now()
@@ -447,10 +449,19 @@ func (t BrowserTool) snapshot(ctx context.Context, tab *browser.Tab, in browserI
 		text += fmt.Sprintf(" The page is taller than %d pixels; only its top was taken.", browser.MaxShotHeight)
 	}
 	res := tools.Result{Content: text, Snapshot: path}
-	if viewsImages(ctx) {
-		res.Images = []provider.Block{provider.ImageBlock("image/png", shot.PNG)}
-	} else {
+	switch {
+	case !viewsImages(ctx):
 		res.Content += " This model is not sent images, so it has the file and not the picture; read describes the page in text."
+	case len(shot.PNG) > tools.MaxViewImageBytes || shot.Width > maxSnapshotSide || shot.Height > maxSnapshotSide:
+		// A model's server refuses an image past these, and an image it
+		// refuses stays in the history, failing every turn after.
+		res.Content += fmt.Sprintf(" It is too big to send to the model (%d bytes; the limits are %d bytes and %d pixels a side), so it has the file and not the picture; the visible page or one element is smaller.", len(shot.PNG), tools.MaxViewImageBytes, maxSnapshotSide)
+	default:
+		res.Images = []provider.Block{provider.ImageBlock("image/png", shot.PNG)}
 	}
 	return res, nil
 }
+
+// maxSnapshotSide is the longest side of a snapshot the model is sent: the
+// most the Anthropic API takes.
+const maxSnapshotSide = 8000

@@ -150,6 +150,18 @@ func TestTheBrowserToolWorksAPageAndHonoursADeny(t *testing.T) {
 			http.Redirect(w, r, "/blocked?token=abc", http.StatusFound)
 			return
 		}
+		if r.URL.Path == "/long" {
+			fmt.Fprint(w, `<!doctype html><title>Long</title><style>body{margin:0}</style><div style="height:12000px;background:linear-gradient(red,blue)"></div>`)
+			return
+		}
+		if r.URL.Path == "/busy" {
+			// Noise, which a PNG cannot make small: over 5 MB at 1280x1400.
+			fmt.Fprint(w, `<!doctype html><title>Busy</title><style>body{margin:0}</style><canvas id=c width=1280 height=1400 style="display:block"></canvas><script>
+const c = document.getElementById('c').getContext('2d'); const d = c.createImageData(1280, 1400);
+for (let i = 0; i < d.data.length; i++) d.data[i] = (i % 4 === 3) ? 255 : (Math.random() * 256) | 0;
+c.putImageData(d, 0, 0);</script>`)
+			return
+		}
 		fmt.Fprint(w, `<!doctype html><title>Start</title><body style="margin:0">`+
 			`<button style="width:120px;height:40px" onclick="document.title='clicked'">Press</button>`+
 			`<a href="/blocked?token=abc">go</a><div style="height:3000px"></div></body>`)
@@ -211,6 +223,9 @@ func TestTheBrowserToolWorksAPageAndHonoursADeny(t *testing.T) {
 	if filepath.Dir(shot.Snapshot) != filepath.Join(work, ".localcode", "snapshots") {
 		t.Errorf("saved to %s, not the conversation's working directory", shot.Snapshot)
 	}
+	if ignore, _ := os.ReadFile(filepath.Join(work, ".localcode", "snapshots", ".gitignore")); !strings.Contains(string(ignore), "\n*\n") {
+		t.Errorf("the snapshot directory does not keep itself out of git: %q", ignore)
+	}
 	assertPNG := func(path string) (w, h int) {
 		t.Helper()
 		data, err := os.ReadFile(path)
@@ -242,6 +257,22 @@ func TestTheBrowserToolWorksAPageAndHonoursADeny(t *testing.T) {
 	if res := call(map[string]any{"action": "screenshot", "ref": 99}); !res.IsError {
 		t.Errorf("a snapshot of an element that is not there: %+v", res)
 	}
+
+	// A snapshot past what a model's server takes (8000 pixels a side, or
+	// view_image's byte limit) is saved, and the model gets the file and
+	// not the picture.
+	for _, page := range []string{"/long", "/busy"} {
+		call(map[string]any{"action": "navigate", "url": site.URL + page})
+		big := tool.Execute(withViewsImages(ctx, true), json.RawMessage(`{"action":"screenshot","full_page":true}`))
+		if big.IsError || len(big.Images) != 0 || big.Snapshot == "" || !strings.Contains(big.Content, "too big") {
+			t.Errorf("full page of %s for a model that is sent images: images=%d %q", page, len(big.Images), big.Content)
+		}
+		if _, err := os.Stat(big.Snapshot); err != nil {
+			t.Errorf("full page of %s was not saved: %v", page, err)
+		}
+	}
+	call(map[string]any{"action": "navigate", "url": site.URL})
+	call(map[string]any{"action": "read"})
 
 	// The deny rule's subject for navigate is the URL.
 	if got := tool.Subject(json.RawMessage(`{"action":"navigate","url":"` + site.URL + `/blocked"}`)); got != site.URL+"/blocked" {
@@ -308,6 +339,18 @@ func TestBrowserBlockIsTheDenyRules(t *testing.T) {
 	if block("https://ask.example/") || block("https://example.com/") {
 		t.Error("a URL no deny rule matches is blocked")
 	}
+	// An agent's own deny reaches the shared browser, and an agent's
+	// allow does not lift a top-level deny there.
+	loop.Config.Agents = map[string]config.AgentConfig{
+		"web":   {Permission: map[string]config.ToolPermission{BrowserToolName: {Rules: []config.PermissionRule{{Match: "*shop*", Decision: config.DecisionDeny}}}}},
+		"agent": {Permission: map[string]config.ToolPermission{BrowserToolName: {Rules: []config.PermissionRule{{Match: "*bank*", Decision: config.DecisionAllow}}}}},
+	}
+	if !block("https://shop.example/") {
+		t.Error("an agent's deny rule does not reach the guard")
+	}
+	if !block("https://bank.example/") {
+		t.Error("an agent's allow lifted a top-level deny in the shared browser")
+	}
 }
 
 func TestSnapshotNamesAreWhatTheDaemonServes(t *testing.T) {
@@ -318,7 +361,11 @@ func TestSnapshotNamesAreWhatTheDaemonServes(t *testing.T) {
 			t.Errorf("%q is not a name the daemon's snapshot route serves", name)
 		}
 	}
-	if got := SnapshotDir("/w"); got != filepath.Join("/w", ".localcode", "snapshots") {
-		t.Errorf("SnapshotDir = %q", got)
+	if got, _ := SnapshotDir("/w"); got != filepath.Join("/w", ".localcode", "snapshots") {
+		t.Errorf("SnapshotDir(/w) = %q", got)
+	}
+	home, _ := os.UserHomeDir()
+	if got, _ := SnapshotDir(""); got != filepath.Join(home, ".localcode", "snapshots") {
+		t.Errorf("SnapshotDir with no working directory = %q, want under the home directory", got)
 	}
 }

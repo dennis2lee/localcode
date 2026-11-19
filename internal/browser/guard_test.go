@@ -37,6 +37,26 @@ func newGuardSite(t *testing.T) *guardSite {
 			http.Redirect(w, r, "/bank/home", http.StatusFound)
 		case "/framed":
 			fmt.Fprint(w, `<!doctype html><title>Framed</title><iframe src="/bank/frame"></iframe>`)
+		case "/ahead":
+			// Every way a page has the browser contact a URL other than
+			// loading it: ahead of a click, as a resource, from script.
+			fmt.Fprint(w, `<!doctype html><title>Ahead</title>
+<link rel="prefetch" href="/bank/link-prefetch">
+<link rel="preload" as="fetch" href="/bank/preload" crossorigin>
+<script type="speculationrules">{"prefetch": [{"source": "list", "urls": ["/bank/spec-prefetch"]}], "prerender": [{"source": "list", "urls": ["/bank/spec-prerender"]}]}</script>
+<img src="/bank/img.png">
+<script>fetch('/bank/fetch').catch(() => {}); navigator.sendBeacon('/bank/beacon', 'x');</script>`)
+		case "/sw.js":
+			w.Header().Set("Content-Type", "text/javascript")
+			fmt.Fprint(w, `self.addEventListener('fetch', (e) => e.respondWith(fetch(e.request)));`)
+		case "/worker":
+			// A service worker: its script is fetched before the worker
+			// is a target the guard can set up, and it then answers the
+			// page's own requests.
+			fmt.Fprint(w, `<!doctype html><title>Worker</title><script>
+navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready)
+  .then(() => fetch('/after-worker')).then(() => { document.title = 'worked'; });
+</script>`)
 		case "/tall":
 			fmt.Fprint(w, `<!doctype html><title>Tall</title><style>body{margin:0}</style><div style="height:3000px;background:linear-gradient(red,blue)"></div><button id=b style="width:120px;height:40px">Small</button>`)
 		default:
@@ -98,8 +118,44 @@ func TestADeniedPageIsNeverLoaded(t *testing.T) {
 			}
 		}
 	}
+	// A navigation a service worker answers with its own fetch: the page
+	// is under an allowed origin's worker, and the denied path is not.
+	tab.Navigate(ctx, site.URL+"/worker")
+	deadline := time.Now().Add(5 * time.Second)
+	for !site.reached("/after-worker") && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !site.reached("/after-worker") {
+		t.Fatal("the service worker never answered; the test is not testing it")
+	}
+	if err := tab.Navigate(ctx, site.URL+"/bank/under-worker"); err == nil {
+		t.Error("navigating to a denied page a service worker answers succeeded")
+	}
 	if site.reached("/bank") {
 		t.Errorf("a denied page was requested: %v", site.seen)
+	}
+}
+
+// A denied site gets nothing from the browser, not only no page load: no
+// prefetch or prerender a page asks for (the browser makes those itself,
+// outside the guard, so preloading is off), and no image, fetch or beacon.
+func TestADeniedSiteGetsNoRequestAtAll(t *testing.T) {
+	m := guardedManager(t)
+	ctx := ctxFor(t)
+	site := newGuardSite(t)
+	tab, err := m.Tab(ctx, "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tab.Navigate(ctx, site.URL+"/ahead"); err != nil {
+		t.Fatal(err)
+	}
+	// Prefetch waits for an idle moment.
+	time.Sleep(1500 * time.Millisecond)
+	if site.reached("/bank") {
+		site.mu.Lock()
+		defer site.mu.Unlock()
+		t.Errorf("the denied site was sent a request: %v", site.seen)
 	}
 }
 
@@ -114,7 +170,14 @@ func TestEveryRequestCarriesTheMark(t *testing.T) {
 		t.Fatal(err)
 	}
 	tab.Navigate(ctx, site.URL+"/framed")
-	time.Sleep(300 * time.Millisecond)
+	tab.Navigate(ctx, site.URL+"/worker")
+	deadline := time.Now().Add(5 * time.Second)
+	for !site.reached("/after-worker") && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !site.reached("/sw.js") {
+		t.Fatal("the service worker's script was never fetched; the test is not testing it")
+	}
 	site.mu.Lock()
 	defer site.mu.Unlock()
 	if len(site.agents) < 2 {
@@ -217,5 +280,94 @@ func TestLaunchArgsKeepAFreshProfileOffTheKeychain(t *testing.T) {
 	}
 	if has(launchArgs("/d", "Default", true), want) {
 		t.Errorf("an imported profile is started with %s, so its cookies cannot be decrypted", want)
+	}
+}
+
+// The guard registers handlers for every target it attaches: each frame
+// from another site, each worker. They go when the target does, so a
+// page that keeps making and dropping frames does not grow them.
+func TestTheGuardForgetsTargetsThatAreGone(t *testing.T) {
+	m := testManager(t)
+	ctx := ctxFor(t)
+	// Another site: "localhost" and "127.0.0.1" are different sites, so
+	// its frame is a process and a target of its own.
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!doctype html><p>framed</p>`)
+	}))
+	defer other.Close()
+	otherURL := strings.Replace(other.URL, "127.0.0.1", "localhost", 1)
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<!doctype html><title>Churn</title><script>
+async function churn(n) {
+  for (let i = 0; i < n; i++) {
+    const f = document.createElement('iframe');
+    f.src = %q;
+    document.body.appendChild(f);
+    await new Promise((r) => f.onload = r);
+    const w = new Worker(URL.createObjectURL(new Blob(['postMessage(1)'])));
+    await new Promise((r) => w.onmessage = r);
+    w.terminate();
+    f.remove();
+  }
+  document.title = 'done ' + n;
+}
+</script>`, otherURL)
+	}))
+	defer site.Close()
+
+	tab, err := m.Tab(ctx, "churn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tab.Navigate(ctx, site.URL); err != nil {
+		t.Fatal(err)
+	}
+	conn := m.proc.conn
+	run := func(n int) {
+		t.Helper()
+		if err := tab.eval(ctx, fmt.Sprintf("churn(%d)", n), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settled := func() int {
+		// Detach events trail the page's own work a little.
+		time.Sleep(500 * time.Millisecond)
+		return conn.HandlerCount()
+	}
+	run(2)
+	before := settled()
+	run(20)
+	after := settled()
+	if after > before+2 {
+		t.Errorf("handlers went from %d to %d over 20 frames and workers that came and went", before, after)
+	}
+}
+
+// Preloading goes off in the profile, and nothing else in it changes:
+// not a setting, not a number too long for a float64.
+func TestNoPreloadingLeavesTheRestOfThePreferences(t *testing.T) {
+	dir := t.TempDir()
+	in := `{"net":{"network_prediction_options":0,"other":true},"profile":{"last_engagement_time":"13350000000000001","exit_type":"Normal"},"big":13350000000000001}`
+	if err := os.WriteFile(filepath.Join(dir, "Preferences"), []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := noPreloading(dir); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(filepath.Join(dir, "Preferences"))
+	for _, want := range []string{`"network_prediction_options":2`, `"other":true`, `"exit_type":"Normal"`, `"big":13350000000000001`, `"last_engagement_time":"13350000000000001"`} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("Preferences lack %s: %s", want, out)
+		}
+	}
+	// A profile with no Preferences yet gets one.
+	fresh := filepath.Join(t.TempDir(), "Default")
+	if err := noPreloading(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := os.ReadFile(filepath.Join(fresh, "Preferences")); !strings.Contains(string(out), `"network_prediction_options":2`) {
+		t.Errorf("a fresh profile's Preferences: %s", out)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"localcode/internal/cdp"
 )
 
 // UserAgentMark is in the User-Agent of every request the model's browser
@@ -18,8 +20,8 @@ const UserAgentMark = "LocalcodeBrowser"
 
 // The guard: every target the browser opens (a page, a frame in a process
 // of its own, a worker) is attached before it runs a line of script, given
-// the marked user agent, and has its document loads checked against
-// Options.Block before they are sent. A denied site is then never loaded,
+// the marked user agent, and has every request it makes checked against
+// Options.Block before it is sent. A denied site is then never loaded,
 // whatever led there: a navigate, a redirect, a click, a frame, back and
 // forward, a tab a link opened, the panel's own address bar.
 
@@ -36,6 +38,7 @@ func (m *Manager) guard(p *process) {
 	p.userAgent = markedUserAgent(version.UserAgent)
 
 	p.conn.On("", "Target.attachedToTarget", func(params json.RawMessage) { go m.guardTarget(p, params) })
+	p.conn.On("", "Target.detachedFromTarget", func(params json.RawMessage) { forgetDetached(p.conn, params) })
 	_ = p.conn.Call(ctx, "", "Target.setAutoAttach", autoAttach, nil)
 }
 
@@ -77,18 +80,19 @@ func (m *Manager) guardTarget(p *process, params json.RawMessage) {
 	switch ev.TargetInfo.Type {
 	case "page", "iframe", "worker", "shared_worker", "service_worker":
 		pending = append(pending, conn.Go(ctx, sess, "Network.setUserAgentOverride", map[string]any{"userAgent": p.userAgent}))
-		if ev.TargetInfo.Type == "page" || ev.TargetInfo.Type == "iframe" {
-			conn.On(sess, "Fetch.requestPaused", func(pp json.RawMessage) { go m.decide(p, sess, pp) })
-			// A frame from another site runs in a process of its own, as
-			// a target of its own, and is only attached if asked for.
-			conn.On(sess, "Target.attachedToTarget", func(pp json.RawMessage) { go m.guardTarget(p, pp) })
-			pending = append(pending,
-				conn.Go(ctx, sess, "Fetch.enable", map[string]any{
-					"patterns": []map[string]any{{"urlPattern": "*", "resourceType": "Document", "requestStage": "Request"}},
-				}),
-				conn.Go(ctx, sess, "Target.setAutoAttach", autoAttach),
-			)
-		}
+		// Every request, not only pages: an allowed page's image, script
+		// or fetch pointed at a denied site would reach it with the
+		// profile's cookies as surely as a page load.
+		conn.On(sess, "Fetch.requestPaused", func(pp json.RawMessage) { go m.decide(p, sess, pp) })
+		pending = append(pending, conn.Go(ctx, sess, "Fetch.enable", map[string]any{
+			"patterns": []map[string]any{{"urlPattern": "*", "requestStage": "Request"}},
+		}))
+		// A frame from another site runs in a process of its own, as a
+		// target of its own, and is only attached if asked for; so is a
+		// worker a page starts.
+		conn.On(sess, "Target.attachedToTarget", func(pp json.RawMessage) { go m.guardTarget(p, pp) })
+		conn.On(sess, "Target.detachedFromTarget", func(pp json.RawMessage) { forgetDetached(conn, pp) })
+		pending = append(pending, conn.Go(ctx, sess, "Target.setAutoAttach", autoAttach))
 	}
 	if ev.WaitingForDebugger {
 		pending = append(pending, conn.Go(ctx, sess, "Runtime.runIfWaitingForDebugger", nil))
@@ -98,12 +102,25 @@ func (m *Manager) guardTarget(p *process, params json.RawMessage) {
 	}
 }
 
-// decide lets one paused document request go, or fails it.
+// forgetDetached drops the handlers of a session whose target is gone: a
+// frame removed, a worker ended, a tab closed. Each target the guard
+// attaches registers its own, and a long-lived browser attaches many.
+func forgetDetached(conn *cdp.Conn, params json.RawMessage) {
+	var ev struct {
+		SessionID string `json:"sessionId"`
+	}
+	if json.Unmarshal(params, &ev) == nil && ev.SessionID != "" {
+		conn.Forget(ev.SessionID)
+	}
+}
+
+// decide lets one paused request go, or fails it.
 func (m *Manager) decide(p *process, sess string, params json.RawMessage) {
 	var ev struct {
 		RequestID string `json:"requestId"`
 		Request   struct {
-			URL string `json:"url"`
+			URL     string            `json:"url"`
+			Headers map[string]string `json:"headers"`
 		} `json:"request"`
 	}
 	if json.Unmarshal(params, &ev) != nil || ev.RequestID == "" {
@@ -115,5 +132,27 @@ func (m *Manager) decide(p *process, sess string, params json.RawMessage) {
 		_ = p.conn.Call(ctx, sess, "Fetch.failRequest", map[string]any{"requestId": ev.RequestID, "errorReason": "BlockedByClient"}, nil)
 		return
 	}
-	_ = p.conn.Call(ctx, sess, "Fetch.continueRequest", map[string]any{"requestId": ev.RequestID}, nil)
+	cont := map[string]any{"requestId": ev.RequestID}
+	// A request sent before its target was attached, such as the fetch of
+	// a service worker's own script, went out with the browser's own user
+	// agent: it gets the marked one here.
+	if ua := userAgentOf(ev.Request.Headers); !strings.Contains(ua, UserAgentMark) && p.userAgent != "" {
+		headers := []map[string]string{}
+		for name, value := range ev.Request.Headers {
+			if !strings.EqualFold(name, "User-Agent") {
+				headers = append(headers, map[string]string{"name": name, "value": value})
+			}
+		}
+		cont["headers"] = append(headers, map[string]string{"name": "User-Agent", "value": p.userAgent})
+	}
+	_ = p.conn.Call(ctx, sess, "Fetch.continueRequest", cont, nil)
+}
+
+func userAgentOf(headers map[string]string) string {
+	for name, value := range headers {
+		if strings.EqualFold(name, "User-Agent") {
+			return value
+		}
+	}
+	return ""
 }

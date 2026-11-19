@@ -16,6 +16,7 @@ import (
 	"localcode/internal/agent"
 	"localcode/internal/browser"
 	"localcode/internal/config"
+	"localcode/internal/events"
 )
 
 // The browser panel's side of the daemon.
@@ -340,6 +341,30 @@ var snapshotFile = regexp.MustCompile(`^[0-9]{8}-[0-9]{6}-[0-9]{3,}\.png$`)
 
 // handleSnapshot serves a capture the browser tool saved, for the
 // transcript to show under the call that took it.
+// recordedSnapshot is the path a tool.end in the conversation's log gives
+// for the snapshot called name, or "". Only a path in a .localcode
+// snapshots directory, which is the only place the tool saves.
+func (d *Daemon) recordedSnapshot(id, name string) string {
+	evs, err := d.Loop.Store.Events(id, 0)
+	if err != nil {
+		return ""
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		if evs[i].Type != events.TypeToolEnd {
+			continue
+		}
+		path, _ := evs[i].Data["snapshot"].(string)
+		if path == "" || !filepath.IsAbs(path) || filepath.Base(path) != name {
+			continue
+		}
+		dir := filepath.Dir(path)
+		if filepath.Base(dir) == "snapshots" && filepath.Base(filepath.Dir(dir)) == ".localcode" {
+			return path
+		}
+	}
+	return ""
+}
+
 func (d *Daemon) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if !snapshotFile.MatchString(name) {
@@ -351,13 +376,25 @@ func (d *Daemon) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	// The same directory the tool saved into: the conversation's working
-	// directory, which is its workspace or else the project.
-	path := filepath.Join(agent.SnapshotDir(d.Loop.SessionDir(id)), name)
-	if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() {
+	serve := func(path string) bool {
+		fi, err := os.Lstat(path)
+		if err != nil || !fi.Mode().IsRegular() {
+			return false
+		}
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("Cache-Control", "no-store")
 		http.ServeFile(w, r, path)
+		return true
+	}
+	// The same directory the tool saved into: under the conversation's
+	// working directory (its workspace, or else the project), or under
+	// the home directory with neither.
+	if dir, err := agent.SnapshotDir(d.Loop.SessionDir(id)); err == nil && serve(filepath.Join(dir, name)) {
+		return
+	}
+	// Taken before the conversation moved to another working directory:
+	// the call's tool.end names where it was saved.
+	if path := d.recordedSnapshot(id, name); path != "" && serve(path) {
 		return
 	}
 	writeError(w, http.StatusNotFound, errors.New("no such snapshot"))

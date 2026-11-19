@@ -2,7 +2,9 @@ package browser
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -95,6 +97,9 @@ func start(ctx context.Context, path, dataDir, profile string, imported bool) (*
 	closeStale(portFile)
 	// Left by an earlier run, it names a port nobody is listening on.
 	_ = os.Remove(portFile)
+	if err := noPreloading(filepath.Join(dataDir, profile)); err != nil {
+		return nil, fmt.Errorf("set up the profile: %w", err)
+	}
 
 	cmd := exec.Command(path, launchArgs(dataDir, profile, imported)...)
 	childproc.Hide(cmd)
@@ -223,4 +228,41 @@ func (p *process) kill() {
 	case <-p.exited:
 	case <-time.After(3 * time.Second):
 	}
+}
+
+// noPreloading turns off the browser's "Preload pages" setting in the
+// profile's Preferences, before the browser reads them. With it on, a
+// page can have the browser fetch another page ahead of a click (link
+// prefetch, speculation rules, prerender). The browser makes those
+// requests itself, outside what the guard can see, so a page could have
+// a denied site fetched with the profile's cookies.
+func noPreloading(profileDir string) error {
+	path := filepath.Join(profileDir, "Preferences")
+	prefs := map[string]any{}
+	if data, err := os.ReadFile(path); err == nil {
+		// Numbers kept as written: the file holds times in microseconds,
+		// past what a float64 carries exactly.
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.UseNumber()
+		if dec.Decode(&prefs) != nil {
+			prefs = map[string]any{}
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	net, _ := prefs["net"].(map[string]any)
+	if net == nil {
+		net = map[string]any{}
+	}
+	// 2 is "never" (chrome::NetworkPredictionOptions).
+	net["network_prediction_options"] = 2
+	prefs["net"] = net
+	data, err := json.Marshal(prefs)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }

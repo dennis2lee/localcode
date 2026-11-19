@@ -83,6 +83,18 @@ func (c *Conn) On(session, method string, fn func(params json.RawMessage)) {
 	c.handlers[key] = append(c.handlers[key], fn)
 }
 
+// HandlerCount is how many event handlers are registered, over every
+// session: what a test watches to see handlers go with their targets.
+func (c *Conn) HandlerCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, fns := range c.handlers {
+		n += len(fns)
+	}
+	return n
+}
+
 // Forget drops every handler registered for session, for a page that is
 // gone.
 func (c *Conn) Forget(session string) {
