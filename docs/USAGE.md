@@ -773,6 +773,19 @@ The panel and commands save changes with the session. Background tasks follow th
 
 `bash` rules apply to each command segment. LocalCode splits unquoted `&&`, `||`, `;`, `|`, `&`, and newlines. Every segment must resolve to `allow`; any `deny` rejects the full line. Separators that are quoted or backslash-escaped remain part of their command.
 
+A deny also checks command text after leading shell control words and assignments, recognized wrappers, shell `-c` strings, `su -c`, `watch`, `eval`, and `find` execution actions. It checks command and process substitution bodies outside single quotes. A command word is also tried by its program's base name, so `/bin/rm -rf x` and `RM -rf x` are denied by `rm *`. These checks only add denies. An allow still depends on the segment's own text. Nested command strings and substitution bodies are checked through four levels.
+
+The wrapper list is `denyReachWrappers` in [internal/config/deny_reach.go](../internal/config/deny_reach.go). Common entries include `command`, `exec`, `nohup`, `sudo`, `env`, `timeout`, `nice`, and `xargs`. After a wrapper, every later word is tried as the start of a command. This can deny an argument that is not executed: `xargs echo rm -rf x` is denied by `rm *`.
+
+Deny reach does not determine commands from:
+
+* A command built at run time, such as `$CMD` or `$(echo rm)`.
+* A function or alias defined earlier.
+* A script file.
+* An interpreter's own code, such as `python -c`.
+* A wrapper outside the recognized list.
+* A command git runs for an alias or configuration (`git -c alias.x='!rm -rf x' x`). The git guard asks for these, and `skip_all` allows them.
+
 A line is split once more for each other way a shell can read its quotes, and the segments of every split are checked:
 
 | Construct in the line | Extra split |
@@ -789,7 +802,7 @@ The cost falls on a line that has one of the last two constructs and also a quot
 * The line is asked. "Allow for session" covers that same line again, and no other line like it.
 * A `deny` rule can match the text after a quoted separator. Under a `deny` for `rm *`, `git commit -m "a; rm b" # note` is denied.
 
-Command substitution, output redirection, unquoted parentheses and Git command execution forms never auto-allow. Shell forms include `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, `>>`, and an unquoted `(`. In zsh, unquoted parentheses in a word act as glob qualifiers that run code, such as `*(e:'...')`. In other POSIX shells, they define subshells or extglobs. These forms require confirmation even when a rule allows the command. With `skip_all`, a line whose every segment resolves to `allow` runs with the construct in it. An explicit `deny` still denies in every mode. For these forms, "allow for session" covers only the answered line. A broader session grant does not cover another such line. A stored "always" allow rule does not bypass this check.
+Command substitution, output redirection, unquoted parentheses and Git command execution forms never auto-allow. Shell forms include `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, `>>`, and an unquoted `(`. In zsh, unquoted parentheses in a word act as glob qualifiers that run code, such as `*(e:'...')`. In other POSIX shells, they define subshells or extglobs. These forms require confirmation even when a rule allows the command. With `skip_all`, a line whose every segment resolves to `allow` runs with the construct in it. A matched `deny` rejects the line even with `skip_all` or `skip_permissions`, within the deny reach limits above. For these forms, "allow for session" covers only the answered line. A broader session grant does not cover another such line. A stored "always" allow rule does not bypass this check.
 
 The Git guard asks for these forms:
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+A bash deny rule reaches the command behind a prefix, a wrapper, a command string or a substitution.
+
+**Fixed**
+
+* A bash deny rule bypassed under `skip_all` by a prefix, wrapper, command string, `find -exec` or substitution: `then rm -rf x`, `nohup rm -rf x`, `sh -c 'rm -rf x'`, `echo $(rm -rf x)`, `/bin/rm -rf x`
+
+**Changed**
+
+* Every word after a wrapper tried against deny rules, so `xargs echo rm -rf x` is denied by `rm *`
+
 ## v0.169.6
 
 A file written into `.git` is asked, each time, before the next ordinary git command can run it.

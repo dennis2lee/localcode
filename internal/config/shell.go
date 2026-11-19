@@ -114,11 +114,14 @@ func (c *Config) resolveSegment(ctx context.Context, segment string, staticRequi
 	ctx = context.WithValue(ctx, shellSegmentKey{}, strings.TrimSpace(segment))
 	raw := c.resolveOne(ctx, BashToolName, segment, staticRequiresPermission)
 	unquoted := unquoteShellText(segment)
-	if unquoted == segment {
-		return raw
+	norm := raw
+	if unquoted != segment {
+		norm = c.resolveOne(ctx, BashToolName, unquoted, staticRequiresPermission)
 	}
-	norm := c.resolveOne(ctx, BashToolName, unquoted, staticRequiresPermission)
 	if raw == DecisionDeny || norm == DecisionDeny {
+		return DecisionDeny
+	}
+	if c.denyReaches(ctx, segment, staticRequiresPermission) {
 		return DecisionDeny
 	}
 	if raw == DecisionAllow && norm == DecisionAllow {
