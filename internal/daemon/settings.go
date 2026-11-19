@@ -34,6 +34,8 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"muse_profiles":        d.Loop.MuseProfiles(),
 		"repeat_limit":         d.Loop.RepeatLimit(),
 		"smart_agent":          d.Loop.SmartAgentEnabled(),
+		"browser":              d.Loop.Config.BrowserLive(),
+		"browser_available":    d.Browser != nil,
 		"orchestrate":          d.Loop.OrchestrateEnabled(),
 		"model_invocable":      d.Loop.ModelInvocableEnabled(),
 		"model_commands":       d.Loop.ModelCommandNames(),

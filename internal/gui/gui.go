@@ -80,6 +80,11 @@ func Launch(title string, start func(progress func(string), setVersion func(stri
 	if cmd := windowControls(uintptr(w.Window())); cmd != nil {
 		w.Bind("lcWindowCommand", cmd)
 	}
+	// Every page this window loads knows it is in the desktop window, which
+	// is the one place the Web UI draws the browser panel: the browser is
+	// a GUI feature, shown beside the conversation it works for. Not
+	// lcWindowCommand, which a window that keeps its OS frame never binds.
+	w.Init("window.lcGUI = true;")
 
 	// Written by the start goroutine, read after Run returns — the window
 	// closing is what synchronizes them, since Run does not return until

@@ -118,8 +118,16 @@ func (t *Tab) close(ctx context.Context) {
 	t.conn.Forget(t.session)
 }
 
-// takeDialogs returns and clears the dialogs answered since the last call.
-func (t *Tab) takeDialogs() []string {
+// Settle gives an action a moment to take effect: a click or a key that
+// starts a navigation has the new page loaded, up to 5s, before the model
+// is told where it is.
+func (t *Tab) Settle(ctx context.Context) {
+	time.Sleep(300 * time.Millisecond)
+	t.waitLoaded(ctx, 5*time.Second)
+}
+
+// TakeDialogs returns and clears the dialogs answered since the last call.
+func (t *Tab) TakeDialogs() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	d := t.dialogs

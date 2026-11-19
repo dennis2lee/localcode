@@ -277,6 +277,25 @@
   </div>
   <div class="resizer" id="resize-right" title="drag to resize"></div>
   <aside id="right-panel">
+    <!--
+      The browser the model works in. Desktop window only, and only while
+      the setting is on: see js/browser.js. The page is shown from a stream
+      of frames; clicks, the wheel and keys on it go to the page, so the
+      person can take over at any point.
+    -->
+    <div class="side-section browser-section" id="browser-section" hidden>
+      <h2>Browser</h2>
+      <div class="browser-bar">
+        <button class="icon-btn browser-nav" id="browser-back" title="back"><svg class="ico ico-flip"><use href="#i-chev-r"/></svg></button>
+        <button class="icon-btn browser-nav" id="browser-forward" title="forward"><svg class="ico"><use href="#i-chev-r"/></svg></button>
+        <button class="icon-btn browser-nav" id="browser-reload" title="reload">reload</button>
+        <input id="browser-url" type="text" placeholder="address, then Enter" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="browser-frame">
+        <img id="browser-view" alt="" tabindex="0" draggable="false">
+        <p class="note browser-empty" id="browser-empty">No page yet. Type an address above, or ask the model to use the browser.</p>
+      </div>
+    </div>
     <div class="side-section">
       <h2>Background tasks</h2>
       <div id="tasks"></div>
@@ -534,6 +553,23 @@
            warning, and empty (and hidden) whenever there is nothing
            wrong. -->
       <p class="note warn" id="smart-agent-warn" hidden></p>
+    </div>
+
+    <!--
+      The browser. Shown only in the desktop window, the only place it can
+      be used: the panel that shows it is drawn there and nowhere else.
+    -->
+    <div id="browser-settings" hidden>
+      <h4 class="settings-section">Browser</h4>
+      <div class="settings-field">
+        <div class="check-row">
+          <input type="checkbox" id="browser-checkbox">
+          <label for="browser-checkbox">Let the model use a web browser, shown in the right panel, signed in with a copy of your Chrome profile</label>
+        </div>
+        <p class="note" id="browser-note"></p>
+        <p class="note warn" id="browser-warn" hidden></p>
+        <button class="icon-btn" id="browser-import-btn" title="copy your everyday Chrome profile in again, for sites you signed in to since; the browser restarts">copy Chrome profile again</button>
+      </div>
     </div>
 
     <!--

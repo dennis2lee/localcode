@@ -252,6 +252,14 @@ type Loop struct {
 	// in the permission broker, which is above this package.
 	ForgetOutside func(sessionID string, class tools.OutsideClass) int
 
+	// BrowserViewing reports whether a GUI window is showing this
+	// conversation's browser panel right now. The browser tool is offered
+	// only then: see hiddenTools. Nil (no daemon, no GUI) means never.
+	BrowserViewing func(sessionID string) bool
+	// CloseBrowser quits the browser, for "/browser off". Nil when there
+	// is none.
+	CloseBrowser func()
+
 	// SetSkills replaces the skill list and its prompt index together,
 	// under the loop's own lock, which matters now that "/reset-skills"
 	// can swap them while turns are running. The exported fields stay as

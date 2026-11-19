@@ -19,6 +19,7 @@ import (
 	"os"
 
 	"localcode/internal/agent"
+	"localcode/internal/browser"
 	"localcode/internal/events"
 	"localcode/internal/mcp"
 	"localcode/internal/provider"
@@ -30,6 +31,11 @@ type Daemon struct {
 	Broker  *agent.PermissionBroker
 	Tasks   *agent.TaskManager
 	Version string
+
+	// Browser is the browser the model works in, shown in the GUI's
+	// right panel. Nil when the daemon was built without one.
+	Browser        *browser.Manager
+	browserViewers browserViewers
 
 	// mcpMu guards MCP, which "/reset-mcp" can swap while requests are
 	// reading it.
@@ -242,6 +248,12 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)
 	d.mux.HandleFunc("POST /api/settings/auto-delegate", d.handleSetAutoDelegate)
 	d.mux.HandleFunc("POST /api/settings/smart-agent", d.handleSetSmartAgent)
+	d.mux.HandleFunc("POST /api/settings/browser", d.handleSetBrowser)
+	d.mux.HandleFunc("POST /api/browser/import", d.handleBrowserImport)
+	d.mux.HandleFunc("GET /api/sessions/{id}/browser", d.handleBrowserState)
+	d.mux.HandleFunc("GET /api/sessions/{id}/browser/stream", d.handleBrowserStream)
+	d.mux.HandleFunc("POST /api/sessions/{id}/browser/navigate", d.handleBrowserNavigate)
+	d.mux.HandleFunc("POST /api/sessions/{id}/browser/input", d.handleBrowserInput)
 	d.mux.HandleFunc("POST /api/settings/orchestrate", d.handleSetOrchestrate)
 	d.mux.HandleFunc("POST /api/settings/model-invocable", d.handleSetModelInvocable)
 	d.mux.HandleFunc("POST /api/settings/keep-going", d.handleSetKeepGoing)
@@ -330,6 +342,7 @@ func (d *Daemon) announceSettings() {
 			"show_tps":             d.Loop.ShowTPS(),
 			"auto_delegate":        d.Loop.AutoDelegateEnabled(),
 			"smart_agent":          d.Loop.SmartAgentEnabled(),
+			"browser":              d.Loop.Config.BrowserLive(),
 			"skip_permissions":     d.Loop.Config.PermissionsSkipped(),
 			"keep_going":           d.Loop.KeepGoingEnabled(),
 			"fold_thinking":        d.Loop.FoldThinkingEnabled(),

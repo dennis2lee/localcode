@@ -305,6 +305,19 @@ func SetSmartAgentInFile(path string, enabled bool) error {
 	})
 }
 
+// SetBrowserInFile writes the top-level "browser" key, leaving every other
+// key untouched.
+func SetBrowserInFile(path string, enabled bool) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal browser: %w", err)
+		}
+		raw["browser"] = encoded
+		return nil
+	})
+}
+
 // SetOrchestrateInFile writes the top-level "orchestrate" key, leaving
 // every other key untouched.
 //

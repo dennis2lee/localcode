@@ -140,6 +140,22 @@ func (c *Config) SetSmartAgentRuntime(v bool) {
 	c.SmartAgent = &v
 }
 
+// BrowserLive reports whether the browser is on right now, read the same
+// way and for the same reasons as SmartAgentLive.
+func (c *Config) BrowserLive() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.Browser != nil && *c.Browser
+}
+
+// SetBrowserRuntime changes the live browser setting. The in-memory
+// counterpart to SetBrowserInFile.
+func (c *Config) SetBrowserRuntime(v bool) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.Browser = &v
+}
+
 // OrchestrateLive reports whether the Orchestrate tool is on right now,
 // read the same way and for the same reasons as SmartAgentLive.
 func (c *Config) OrchestrateLive() bool {

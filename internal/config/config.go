@@ -192,6 +192,17 @@ type Config struct {
 	// settings panel.
 	SmartAgent *bool `json:"smart_agent,omitempty"`
 
+	// Browser gives the model a web browser to work in, shown in the GUI's
+	// right panel: Chrome (or Edge) started by localcode with no window,
+	// on a profile copied from the person's own. Offered only to a
+	// conversation open in a GUI window. Off unless set; toggled from the
+	// settings window and "/browser on|off". See internal/browser.
+	Browser *bool `json:"browser,omitempty"`
+
+	// BrowserPath is the browser to run instead of the Chrome or Edge
+	// localcode finds in the usual places.
+	BrowserPath string `json:"browser_path,omitempty"`
+
 	// Orchestrate turns on the Orchestrate tool: a plan of delegated
 	// stages, authored by filling in that tool's input schema and run by a
 	// Go loop rather than by the model deciding one step at a time. See

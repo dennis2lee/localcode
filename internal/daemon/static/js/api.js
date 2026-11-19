@@ -169,6 +169,8 @@ export const answerQuestion = (sessionID, id, answer) =>
 
 export const setAutoDelegate = (patch) => api('POST', '/api/settings/auto-delegate', patch);
 export const setSmartAgent = (enabled) => api('POST', '/api/settings/smart-agent', { enabled });
+export const setBrowser = (enabled) => api('POST', '/api/settings/browser', { enabled });
+export const importBrowserProfile = () => api('POST', '/api/browser/import');
 export const setOrchestrate = (enabled) => api('POST', '/api/settings/orchestrate', { enabled });
 export const setModelInvocable = (enabled) => api('POST', '/api/settings/model-invocable', { enabled });
 export const archiveSession = (id) => api('POST', `/api/sessions/${id}/archive`);

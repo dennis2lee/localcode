@@ -849,6 +849,33 @@ aside.left {
 .side-section { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
 .side-section:last-child { border-bottom: 0; margin-bottom: 0; }
 .side-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+/* The browser. The page fills the panel's width at the page's own
+   proportions (1280x800), so one point on the image is one point on the
+   page: js/browser.js pagePoint relies on it. A panel narrower than a
+   readable page is widened while the browser is in it. */
+#right-panel:has(#browser-section:not([hidden])) { min-width: 440px; }
+.browser-bar { display: flex; gap: 4px; align-items: center; margin: 10px 0 8px; }
+.browser-bar .browser-nav { padding: 2px 6px; }
+.ico-flip { transform: scaleX(-1); }
+#browser-url {
+  flex: 1; min-width: 0;
+  background: var(--raised); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-ctl);
+  padding: 2px 6px; font: inherit; font-size: var(--t-ui);
+}
+.browser-frame { position: relative; }
+#browser-view {
+  display: block; width: 100%; aspect-ratio: 1280 / 800;
+  background: var(--ink); border: 1px solid var(--border); border-radius: var(--r-ctl);
+  outline: none;
+}
+#browser-view:focus { border-color: var(--interactive); }
+.browser-empty {
+  position: absolute; inset: 0; margin: 0; padding: 12px;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  pointer-events: none;
+}
+.browser-empty[hidden] { display: none; }
 aside h2 {
   font-size: var(--t-cap);
   letter-spacing: .14em;

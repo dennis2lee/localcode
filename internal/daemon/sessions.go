@@ -599,6 +599,9 @@ func (d *Daemon) forgetDeleted(ids []string) {
 		if d.Loop.Schedules != nil {
 			d.Loop.Schedules.ForgetSession(sid)
 		}
+		if d.Browser != nil {
+			d.Browser.CloseTab(sid)
+		}
 	}
 	d.announceDeleted(ids...)
 }

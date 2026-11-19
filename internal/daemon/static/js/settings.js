@@ -10,6 +10,7 @@
 import {
   settingsModalEl, settingsBtn, settingsCloseBtn, settingsTabs,
   smartAgentCheckbox, smartAgentNoteEl, smartAgentWarnEl,
+  browserSettingsEl, browserCheckbox, browserNoteEl, browserWarnEl, browserImportBtn,
   orchestrateCheckbox, orchestrateNoteEl, orchestrateWarnEl,
   modelInvocableCheckbox, modelInvocableNoteEl, modelInvocableWarnEl,
   keepGoingCheckbox, keepGoingWarnEl,
@@ -22,6 +23,7 @@ import { askConfirm } from './prompt.js';
 import { app } from './state.js';
 import * as apiClient from './api.js';
 import { wireTypography, renderTypography } from './typography.js';
+import { inGUI, renderBrowserPanel } from './browser.js';
 
 export const settings = new Modal(settingsModalEl);
 
@@ -68,6 +70,7 @@ export function openSettings() {
   renderTypography();
   selectSettingsTab(settingsTabs.length ? settingsTabs[0].name : '');
   renderSmartAgent();
+  renderBrowserSetting();
   renderOrchestrate();
   renderModelInvocable();
   renderKeepGoing();
@@ -220,6 +223,61 @@ function renderSmartAgent(warning) {
     return;
   }
   smartAgentNoteEl.textContent = 'On. Turn log in ~/.localcode/trace.';
+}
+
+// The browser.
+//
+// Only in the desktop window, which is the only place it can be used: the
+// panel that shows the page is drawn there and nowhere else, and the model
+// is offered the browser only while that panel is showing.
+
+function renderBrowserSetting(warning) {
+  browserSettingsEl.hidden = !inGUI();
+  browserCheckbox.checked = !!app.browser;
+  browserImportBtn.hidden = !app.browser;
+  browserWarnEl.textContent = warning || '';
+  browserWarnEl.hidden = !warning;
+  browserNoteEl.textContent = app.browser
+    ? 'On. The browser runs on its own copy of your Chrome profile in ~/.localcode/browser, and asks nothing before it acts. A deny rule for "browser" keeps a site out of reach.'
+    : 'Off.';
+}
+
+// refreshBrowserIfOpen redraws the switch when it was changed elsewhere.
+export function refreshBrowserIfOpen() {
+  if (settings.isOpen) renderBrowserSetting();
+}
+
+async function toggleBrowser() {
+  const enabled = browserCheckbox.checked;
+  browserCheckbox.disabled = true;
+  try {
+    const res = await apiClient.setBrowser(enabled);
+    app.browser = res && 'browser' in res ? !!res.browser : enabled;
+    renderBrowserSetting(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
+    renderBrowserPanel();
+  } catch (err) {
+    browserCheckbox.checked = !enabled;
+    browserNoteEl.textContent = `Not changed: ${err}`;
+  } finally {
+    browserCheckbox.disabled = false;
+  }
+}
+
+async function importBrowserProfile() {
+  browserImportBtn.disabled = true;
+  try {
+    const rep = await apiClient.importBrowserProfile();
+    const skipped = rep && rep.skipped && rep.skipped.length
+      ? ` Not copied, held by the running browser: ${rep.skipped.join(', ')}. Close Chrome and copy again for those.`
+      : '';
+    browserNoteEl.textContent = `Copied from ${rep ? rep.from : 'your profile'}. Every conversation's tab was closed.${skipped}`;
+  } catch (err) {
+    browserNoteEl.textContent = `Not copied: ${err}`;
+  } finally {
+    browserImportBtn.disabled = false;
+  }
 }
 
 // Orchestration.
@@ -549,6 +607,8 @@ export function initSettings() {
     if (e.key === 'Escape' && settings.isOpen) settings.close();
   });
   smartAgentCheckbox.addEventListener('change', toggleSmartAgent);
+  browserCheckbox.addEventListener('change', toggleBrowser);
+  browserImportBtn.addEventListener('click', importBrowserProfile);
   orchestrateCheckbox.addEventListener('change', toggleOrchestrate);
   modelInvocableCheckbox.addEventListener('change', toggleModelInvocable);
   keepGoingCheckbox.addEventListener('change', toggleKeepGoing);

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"localcode/internal/agent"
+	"localcode/internal/browser"
 	"localcode/internal/commands"
 	"localcode/internal/config"
 	"localcode/internal/credentials"
@@ -336,8 +337,17 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// "/reset-skills" can change, neither of which a registry read at
 	// startup can answer. See Loop.hiddenTools.
 	registry.Register(agent.NewCommandTool(loop))
+	// The browser shown in the GUI's right panel. Registered
+	// unconditionally and hidden per turn, like the tools above: whether
+	// it is offered depends on a setting that moves and on a GUI window
+	// showing the conversation. Nothing starts until it is used.
+	browserManager := browser.NewManager(browser.Options{ChromePath: cfg.BrowserPath})
+	registry.Register(agent.NewBrowserTool(loop, browserManager))
 
 	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
+	d.Browser = browserManager
+	loop.BrowserViewing = d.BrowserViewing
+	loop.CloseBrowser = browserManager.Close
 
 	// "/update": the same install the settings window's button performs,
 	// reached from the prompt box so the TUI has it too. The daemon owns
@@ -467,6 +477,9 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		if loop.Schedules != nil {
 			loop.Schedules.Disarm()
 		}
+		// The browser is a child process, and one left running holds its
+		// profile directory locked against the next daemon's.
+		browserManager.Close()
 		closeMCPServers()
 		if loop.Trace != nil {
 			loop.Trace.Close()

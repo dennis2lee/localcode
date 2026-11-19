@@ -46,6 +46,7 @@ import { wirePromptDialog, askText, askConfirm, anyPromptOpen } from './prompt.j
 import { initResizers } from './resize.js';
 import { tryComplete, resetCompletion } from './complete.js';
 import { initSettings, settings } from './settings.js';
+import { initBrowserPanel, renderBrowserPanel } from './browser.js';
 
 agentSelectEl.addEventListener('change', async () => {
   const name = agentSelectEl.value;
@@ -320,6 +321,7 @@ function initWindowControls() {
 
 async function init() {
   initWindowControls();
+  initBrowserPanel();
   initResizers();
   initSettings();
   wirePromptDialog();
@@ -343,6 +345,9 @@ async function init() {
   // reads both the settings and the agent list, and whichever of those two
   // landed second would otherwise decide what it shows.
   renderStatusBar();
+  // Likewise the browser panel: the conversation can open before the
+  // setting that decides whether the panel is drawn has arrived.
+  renderBrowserPanel();
 
   // The section stays collapsed by default: it is where things go to be
   // out of the way. What it does not do any more is stay unloaded, for
@@ -409,6 +414,7 @@ export { forkSession } from './sessions.js';
 export { setPanelWidth } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
+export { renderBrowserPanel, pagePoint, keyEventFor, modifierBits, browserShown, inGUI } from './browser.js';
 export { loadSessions, renderSessionList, selectSession, deleteSessionConfirm, reorderList, landsBelow, groupLandsBelow, dropGroupOn, wireSessionDragGuard, dropSessionOn, sessionMatchesFilter, dropSessionOnGroupHeader, dropSessionToUngroupedTop, promptCreateGroup, promptRenameGroup, promptDeleteGroup, readCollapsedGroups, writeCollapsedGroups } from './sessions.js';
 export {
   openFind, closeFind, findIsOpen, stepFind, runFind, findRefresh,

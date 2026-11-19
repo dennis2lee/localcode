@@ -78,9 +78,9 @@ func (t *Tab) Read(ctx context.Context) (Snapshot, error) {
 	return s, err
 }
 
-// refPoint scrolls the element Read numbered ref into view and returns its
+// RefPoint scrolls the element Read numbered ref into view and returns its
 // centre in viewport pixels.
-func (t *Tab) refPoint(ctx context.Context, ref int) (x, y float64, err error) {
+func (t *Tab) RefPoint(ctx context.Context, ref int) (x, y float64, err error) {
 	var p *struct{ X, Y float64 }
 	script := `(() => {
   const el = document.querySelector('[data-lc-ref="` + strconv.Itoa(ref) + `"]');
@@ -100,7 +100,7 @@ func (t *Tab) refPoint(ctx context.Context, ref int) (x, y float64, err error) {
 
 // ClickRef clicks the element Read numbered ref, the way a mouse would.
 func (t *Tab) ClickRef(ctx context.Context, ref int) error {
-	x, y, err := t.refPoint(ctx, ref)
+	x, y, err := t.RefPoint(ctx, ref)
 	if err != nil {
 		return err
 	}

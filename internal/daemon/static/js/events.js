@@ -16,7 +16,8 @@ import {
   applyEffort,
 } from './modals.js';
 import { applyScheduleEvent, applyRunActivity } from './schedules.js';
-import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen, refreshModelInvocableIfOpen } from './settings.js';
+import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen, refreshModelInvocableIfOpen, refreshBrowserIfOpen } from './settings.js';
+import { renderBrowserPanel } from './browser.js';
 import { refreshTaskViewStatus, taskDeleted } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
@@ -451,6 +452,11 @@ const handlers = {
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
     }
+    if (typeof d.browser === 'boolean' && d.browser !== app.browser) {
+      app.browser = d.browser;
+      renderBrowserPanel();
+      refreshBrowserIfOpen();
+    }
     if (rosterMayHaveChanged) loadAgents();
   },
   // Daemon-wide, and the live half of every switch: a toggle typed at
@@ -482,6 +488,11 @@ const handlers = {
     if (typeof d.smart_agent === 'boolean') {
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
+    }
+    if (typeof d.browser === 'boolean' && d.browser !== app.browser) {
+      app.browser = d.browser;
+      renderBrowserPanel();
+      refreshBrowserIfOpen();
     }
     if (typeof d.keep_going === 'boolean') {
       app.keepGoing = d.keep_going;

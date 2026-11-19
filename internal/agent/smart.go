@@ -409,6 +409,13 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	if !viewsImages(ctx) {
 		hidden[tools.ViewImageName] = true
 	}
+	// The browser is for a conversation somebody is watching in the GUI,
+	// where the panel shows it and they can take it over. Off, or with no
+	// GUI window on this conversation, the tool is not offered: a page the
+	// model works in where nobody can see it is not what was asked for.
+	if !l.browserOffered(ctx) {
+		hidden[BrowserToolName] = true
+	}
 	// Answer belongs to one role in one situation: a stage that declared
 	// what it returns, which is given it explicitly through the pinned
 	// allowlist. Offered to anyone else it is a tool that can only refuse.

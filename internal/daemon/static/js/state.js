@@ -51,6 +51,9 @@ export const app = {
   autoDelegateAgent: '',      // '' when config.json has no auto_delegate block
   autoDelegateMatch: [],      // glob patterns that qualify a prompt for delegation
   smartAgent: false,
+  // The browser setting: whether the model may use the browser shown in
+  // the desktop window's right panel. See browser.js.
+  browser: false,
   orchestrate: false,         // the Orchestrate tool, a separate switch
   modelInvocable: false,      // whether the model may run this session's commands
   modelCommands: [],          // which ones it may run, with their slashes
