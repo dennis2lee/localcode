@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.170.0
 
 The model can work a web page in a browser shown in the desktop window's right panel.
 
