@@ -11,10 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"localcode/internal/agent"
 	"localcode/internal/browser"
+	"localcode/internal/config"
 )
 
 func browserDaemon(t *testing.T) (*Daemon, *httptest.Server, string) {
@@ -26,7 +29,8 @@ func browserDaemon(t *testing.T) (*Daemon, *httptest.Server, string) {
 	if err := os.WriteFile(filepath.Join(dir, "localcode-profile"), []byte("Default\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	d.Browser = browser.NewManager(browser.Options{DataDir: dir})
+	// The guard as cmd/localcode wires it.
+	d.Browser = browser.NewManager(browser.Options{DataDir: dir, Block: agent.BrowserBlock(d.Loop)})
 	t.Cleanup(d.Browser.Close)
 	d.Loop.Config.SetBrowserRuntime(true)
 	srv := httptest.NewServer(d.Handler())
@@ -191,6 +195,43 @@ func TestThePanelDrivesThePage(t *testing.T) {
 	del.Body.Close()
 	if d.Browser.Existing(id) != nil {
 		t.Error("the deleted conversation's tab is still open")
+	}
+}
+
+// The panel's address bar is held to the deny rules like the model: a
+// denied page is never loaded, so it is never sent the profile's cookies.
+func TestThePanelCannotOpenADeniedPage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a browser")
+	}
+	if _, err := browser.Find(""); err != nil {
+		t.Skip("no Chrome or Edge here")
+	}
+	d, srv, id := browserDaemon(t)
+	var hits []string
+	var mu sync.Mutex
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!doctype html><title>Page</title>`)
+	}))
+	defer site.Close()
+	d.Loop.Config.Permissions = config.Permissions{agent.BrowserToolName: config.ToolPermission{Rules: []config.PermissionRule{
+		{Match: "*/blocked*", Decision: config.DecisionDeny},
+	}}}
+	resp := postBrowserJSON(t, srv.URL+"/api/sessions/"+id+"/browser/navigate", map[string]string{"url": site.URL + "/blocked"})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("the panel's navigate to a denied page = %d, want 403", resp.StatusCode)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, h := range hits {
+		if h == "/blocked" {
+			t.Errorf("the denied page was requested: %v", hits)
+		}
 	}
 }
 

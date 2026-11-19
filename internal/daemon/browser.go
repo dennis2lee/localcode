@@ -213,6 +213,10 @@ func (d *Daemon) handleBrowserNavigate(w http.ResponseWriter, r *http.Request) {
 	default:
 		err = fmt.Errorf("unknown action %q", req.Action)
 	}
+	if errors.Is(err, browser.ErrBlocked) {
+		writeError(w, http.StatusForbidden, errors.New(`a permission rule for "browser" denies that page, and it was not loaded`))
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

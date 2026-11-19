@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -168,7 +169,18 @@ func (t BrowserTool) Execute(ctx context.Context, input json.RawMessage) tools.R
 
 	res, err := t.act(ctx, tab, in)
 	if err != nil {
+		// The guard failed a load a deny rule covers: a redirect, or a
+		// link the page followed. Said as the rule's refusal, which it is.
+		if errors.Is(err, browser.ErrBlocked) {
+			return tools.Result{Content: fmt.Sprintf("%s: it led to a page a permission rule for %q denies, and that page was not loaded; navigate somewhere else", in.Action, BrowserToolName), IsError: true, Refused: true}
+		}
 		return browserError("%s: %v", in.Action, err)
+	}
+	// An action that led to a denied page (a click on a link, a script
+	// that moved the page) found it not loaded. Its result would name
+	// the page's full address, which the rule keeps from the model too.
+	if refusal := t.denied(ctx, tab); refusal != "" {
+		return tools.Result{Content: fmt.Sprintf("%s: it led to a page that was not loaded: %s", in.Action, refusal), IsError: true, Refused: true}
 	}
 	if dialogs := tab.TakeDialogs(); len(dialogs) > 0 {
 		res.Content += "\nThe page showed a dialog, answered OK: " + strings.Join(dialogs, "; ")
@@ -350,6 +362,15 @@ func formatSnapshot(s browser.Snapshot) string {
 		b.WriteString("\n(cut short; scroll and read again for more)")
 	}
 	return b.String()
+}
+
+// BrowserBlock is the browser's guard as the deny rules for "browser"
+// say it: true for a URL a rule denies. The browser asks it on every page
+// load, so a rule added while the browser runs applies to the next page.
+func BrowserBlock(l *Loop) func(url string) bool {
+	return func(url string) bool {
+		return l.Config.ResolvePermission(BrowserToolName, url, false) == config.DecisionDeny
+	}
 }
 
 // snapshotDir is where a conversation's captures are saved: the

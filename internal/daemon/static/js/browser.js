@@ -25,6 +25,7 @@ let lastMove = 0;
 let reconnectTimer = null;
 let daemonLost = false;  // the last location poll failed
 let dragging = false;    // a button went down on the view and is still held
+let lastPasteKey = 0;    // when a paste shortcut last went to the page
 
 // inGUI is whether this page is in the desktop window.
 export function inGUI() {
@@ -315,13 +316,21 @@ export function initBrowserPanel() {
   view.addEventListener('contextmenu', (e) => e.preventDefault());
   view.addEventListener('keydown', (e) => {
     e.preventDefault();
-    sendInput({ key: keyEventFor(e, true) });
+    const key = keyEventFor(e, true);
+    if (key.commands && key.commands[0] === 'paste') lastPasteKey = Date.now();
+    sendInput({ key });
   });
   view.addEventListener('keyup', (e) => {
     e.preventDefault();
     sendInput({ key: keyEventFor(e, false) });
   });
+  // A paste from the Edit menu. One right behind a paste shortcut is the
+  // same paste, which the page has already done from the clipboard.
   view.addEventListener('paste', (e) => {
+    if (Date.now() - lastPasteKey < 1000) {
+      e.preventDefault();
+      return;
+    }
     const text = e.clipboardData && e.clipboardData.getData('text');
     if (text) {
       e.preventDefault();

@@ -199,6 +199,26 @@ test('a shortcut carries the editing command, by the platform\'s own modifier', 
     'a key coming up carries the command a second time');
 });
 
+test('a paste shortcut pastes once, from the page\'s side', async () => {
+  const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
+  const view = app.el('browser-view');
+  const down = view.fire('keydown', { key: 'v', code: 'KeyV', keyCode: 86, ctrlKey: true });
+  assert.equal(down.defaultPrevented, true);
+  // The Edit menu's paste arriving behind it is the same paste.
+  view.fire('paste', { clipboardData: { getData: () => 'copied' } });
+  await app.settle();
+  const sent = app.callsTo('POST', '/api/sessions/sess-1/browser/input').map((c) => c.body);
+  assert.equal(sent.length, 1, JSON.stringify(sent));
+  assert.deepEqual([...sent[0].key.commands], ['paste']);
+
+  // A paste from the menu alone sends the text.
+  const app2 = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
+  app2.el('browser-view').fire('paste', { clipboardData: { getData: () => 'copied' } });
+  await app2.settle();
+  const sent2 = app2.callsTo('POST', '/api/sessions/sess-1/browser/input').map((c) => c.body);
+  assert.deepEqual(sent2.map((b) => b.text), ['copied']);
+});
+
 test('a broken stream opens again after a pause', async () => {
   const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
   const view = app.el('browser-view');

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -137,15 +138,21 @@ func TestTheBrowserToolWorksAPageAndHonoursADeny(t *testing.T) {
 	if _, err := browser.Find(""); err != nil {
 		t.Skip("no Chrome or Edge here")
 	}
+	var blockedHits atomic.Int32
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		if r.URL.Path == "/blocked" {
+			blockedHits.Add(1)
 			fmt.Fprint(w, `<!doctype html><title>Blocked</title><p>secret</p>`)
+			return
+		}
+		if r.URL.Path == "/redirect" {
+			http.Redirect(w, r, "/blocked?token=abc", http.StatusFound)
 			return
 		}
 		fmt.Fprint(w, `<!doctype html><title>Start</title><body style="margin:0">`+
 			`<button style="width:120px;height:40px" onclick="document.title='clicked'">Press</button>`+
-			`<a href="/blocked">go</a><div style="height:3000px"></div></body>`)
+			`<a href="/blocked?token=abc">go</a><div style="height:3000px"></div></body>`)
 	}))
 	defer site.Close()
 
@@ -153,13 +160,13 @@ func TestTheBrowserToolWorksAPageAndHonoursADeny(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "localcode-profile"), []byte("Default\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	manager := browser.NewManager(browser.Options{DataDir: dir})
-	defer manager.Close()
-
 	loop := newSmartLoop(t, "http://127.0.0.1:1")
 	loop.Config.Permissions = config.Permissions{BrowserToolName: config.ToolPermission{Rules: []config.PermissionRule{
 		{Match: "*/blocked*", Decision: config.DecisionDeny},
 	}}}
+	// The guard as cmd/localcode wires it.
+	manager := browser.NewManager(browser.Options{DataDir: dir, Block: BrowserBlock(loop)})
+	defer manager.Close()
 	watching := false
 	loop.BrowserViewing = func(string) bool { return watching }
 	loop.Config.SetBrowserRuntime(true)
@@ -243,16 +250,37 @@ func TestTheBrowserToolWorksAPageAndHonoursADeny(t *testing.T) {
 	if loop.Config.ResolvePermission(BrowserToolName, site.URL+"/blocked", false) != config.DecisionDeny {
 		t.Fatal("the rule does not deny the blocked URL; the test is not testing anything")
 	}
-	// A click that leads there is not a navigate, so the action after it
-	// is what is refused.
+	// A click on a link there, and a navigate that redirects there, are
+	// refused as the rule's refusals, the page is never requested, and
+	// the result does not give its address.
 	call(map[string]any{"action": "read"})
-	tab := manager.Existing("s1")
-	if err := tab.Navigate(ctx, site.URL+"/blocked"); err != nil {
-		t.Fatal(err)
+	for _, c := range []map[string]any{
+		{"action": "click", "ref": 2},
+		{"action": "navigate", "url": site.URL + "/redirect"},
+	} {
+		res := call(c)
+		if !res.Refused || strings.Contains(res.Content, "token=abc") || strings.Contains(res.Content, "/blocked") {
+			t.Errorf("%v: %+v", c, res)
+		}
+		// Back to an allowed page.
+		call(map[string]any{"action": "navigate", "url": site.URL})
+		call(map[string]any{"action": "read"})
 	}
+	if n := blockedHits.Load(); n != 0 {
+		t.Errorf("the denied page was requested %d time(s)", n)
+	}
+	// A page loaded before a rule denied it is refused from then on: the
+	// check behind the guard, for a page already open.
+	if res := call(map[string]any{"action": "navigate", "url": site.URL + "/later"}); res.IsError {
+		t.Fatalf("navigate /later: %+v", res)
+	}
+	loop.Config.Permissions = config.Permissions{BrowserToolName: config.ToolPermission{Rules: []config.PermissionRule{
+		{Match: "*/blocked*", Decision: config.DecisionDeny},
+		{Match: "*/later*", Decision: config.DecisionDeny},
+	}}}
 	res := call(map[string]any{"action": "read"})
-	if !res.Refused || strings.Contains(res.Content, "secret") {
-		t.Errorf("read on a denied page: %+v", res)
+	if !res.Refused || strings.Contains(res.Content, "Press") {
+		t.Errorf("read on a page a rule denied after it loaded: %+v", res)
 	}
 
 	// The setting going off in the middle of a turn takes the tool away
@@ -260,6 +288,25 @@ func TestTheBrowserToolWorksAPageAndHonoursADeny(t *testing.T) {
 	loop.Config.SetBrowserRuntime(false)
 	if res := call(map[string]any{"action": "read"}); !res.Refused {
 		t.Errorf("a call after the setting went off: %+v", res)
+	}
+}
+
+func TestBrowserBlockIsTheDenyRules(t *testing.T) {
+	loop := newSmartLoop(t, "http://127.0.0.1:1")
+	block := BrowserBlock(loop)
+	if block("https://bank.example/") {
+		t.Error("blocked with no rule")
+	}
+	// Read on every call, so a rule added later applies.
+	loop.Config.Permissions = config.Permissions{BrowserToolName: config.ToolPermission{Rules: []config.PermissionRule{
+		{Match: "*bank*", Decision: config.DecisionDeny},
+		{Match: "*ask*", Decision: config.DecisionAsk},
+	}}}
+	if !block("https://bank.example/") {
+		t.Error("a denied URL is not blocked")
+	}
+	if block("https://ask.example/") || block("https://example.com/") {
+		t.Error("a URL no deny rule matches is blocked")
 	}
 }
 

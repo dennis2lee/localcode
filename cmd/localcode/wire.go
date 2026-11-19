@@ -344,14 +344,11 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	//
 	// Block is the browser's own guard: a page the "browser" deny rules
 	// name is never loaded, whatever led there (a redirect, a click, a
-	// frame, the panel's address bar). The rules are read on every load,
-	// so a rule added while the browser runs applies to the next page.
+	// frame, the panel's address bar).
 	browserManager := browser.NewManager(browser.Options{
 		ChromePath: cfg.BrowserPath,
 		DataDir:    filepath.Join(e.home, ".localcode", "browser"),
-		Block: func(url string) bool {
-			return loop.Config.ResolvePermission(agent.BrowserToolName, url, false) == config.DecisionDeny
-		},
+		Block:      agent.BrowserBlock(loop),
 	})
 	registry.Register(agent.NewBrowserTool(loop, browserManager))
 

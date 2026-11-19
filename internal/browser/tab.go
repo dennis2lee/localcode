@@ -184,6 +184,10 @@ func NormalizeURL(raw string) (string, error) {
 	return "", fmt.Errorf("only http and https pages can be opened, not %s:", u.Scheme)
 }
 
+// ErrBlocked is a load the guard failed: Options.Block said no to the
+// page, or to one a redirect led to.
+var ErrBlocked = errors.New("a rule blocks that page, and it was not loaded")
+
 // Navigate loads target and waits for it to finish loading, up to 20s.
 func (t *Tab) Navigate(ctx context.Context, target string) error {
 	url, err := NormalizeURL(target)
@@ -195,6 +199,11 @@ func (t *Tab) Navigate(ctx context.Context, target string) error {
 	}
 	if err := t.conn.Call(ctx, t.session, "Page.navigate", map[string]any{"url": url}, &res); err != nil {
 		return err
+	}
+	if res.ErrorText == "net::ERR_BLOCKED_BY_CLIENT" {
+		// The only client here that blocks is the guard: the copied
+		// profile carries no extensions.
+		return ErrBlocked
 	}
 	if res.ErrorText != "" {
 		return fmt.Errorf("could not load %s: %s", url, res.ErrorText)
