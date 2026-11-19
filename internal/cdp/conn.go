@@ -96,22 +96,50 @@ func (c *Conn) Forget(session string) {
 	}
 }
 
+// Go sends method with params to session now, and returns a channel that
+// gets the answer (nil, or the error) later. Commands sent with Go reach
+// the browser in the order they were sent, which is what a target paused
+// before its first script needs: its setup is answered only once it runs,
+// so the setup and the command that lets it run go out together, and the
+// answers are collected after.
+func (c *Conn) Go(ctx context.Context, session, method string, params any) <-chan error {
+	done := make(chan error, 1)
+	ch, id, err := c.send(session, method, params)
+	if err != nil {
+		done <- err
+		return done
+	}
+	go func() {
+		done <- c.await(ctx, id, ch, nil)
+	}()
+	return done
+}
+
 // Call sends method with params to session and decodes the result into out
 // (which may be nil). It returns when the browser answers, ctx ends, or the
 // connection does.
 func (c *Conn) Call(ctx context.Context, session, method string, params, out any) error {
+	ch, id, err := c.send(session, method, params)
+	if err != nil {
+		return err
+	}
+	return c.await(ctx, id, ch, out)
+}
+
+// send writes one command and registers for its answer.
+func (c *Conn) send(session, method string, params any) (chan reply, int64, error) {
 	c.mu.Lock()
 	if c.err != nil {
 		err := c.err
 		c.mu.Unlock()
-		return err
+		return nil, 0, err
 	}
 	c.nextID++
 	id := c.nextID
 	ch := make(chan reply, 1)
 	c.pending[id] = pendingCall{method: method, ch: ch}
-	c.mu.Unlock()
-
+	// Written while the lock is held, so two sends reach the browser in
+	// the order they were made.
 	msg := map[string]any{"id": id, "method": method}
 	if params != nil {
 		msg["params"] = params
@@ -123,10 +151,16 @@ func (c *Conn) Call(ctx context.Context, session, method string, params, out any
 	if err == nil {
 		err = c.ws.writeText(data)
 	}
+	c.mu.Unlock()
 	if err != nil {
 		c.drop(id)
-		return err
+		return nil, 0, err
 	}
+	return ch, id, nil
+}
+
+// await waits for the answer to command id.
+func (c *Conn) await(ctx context.Context, id int64, ch chan reply, out any) error {
 	select {
 	case r := <-ch:
 		if r.err != nil {

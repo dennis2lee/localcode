@@ -666,6 +666,9 @@ func (d *Daemon) handleDeleteAllSessions(w http.ResponseWriter, r *http.Request)
 		if d.Loop.Schedules != nil {
 			d.Loop.Schedules.ForgetSession(sid)
 		}
+		if d.Browser != nil {
+			d.Browser.CloseTab(sid)
+		}
 	}
 	d.announceDeleted(currentIDs...)
 	w.WriteHeader(http.StatusNoContent)

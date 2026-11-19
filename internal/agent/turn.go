@@ -1081,6 +1081,9 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		if len(attached) > 0 {
 			endData["images"] = eventImages(attached)
 		}
+		if res.Snapshot != "" {
+			endData["snapshot"] = res.Snapshot
+		}
 		l.Store.Append(sessionID, events.TypeToolEnd, endData)
 		// The result is part of what every later request says, and it
 		// is the least trusted text in any of them. Nothing is recorded

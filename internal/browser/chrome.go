@@ -15,6 +15,7 @@ package browser
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,12 +37,18 @@ type Install struct {
 }
 
 // ErrNotFound is returned when neither Chrome nor Edge is installed.
-var ErrNotFound = errors.New("no Chrome or Edge found; install Google Chrome, or set browser.chrome_path in config.json")
+var ErrNotFound = errors.New("no Chrome or Edge found; install Google Chrome, or set browser_path in config.json")
 
 // Find returns the browser to run: override when set, otherwise Chrome,
 // then Edge, in the places each installs itself.
 func Find(override string) (Install, error) {
 	if override != "" {
+		// Absolute only: a relative path would be resolved against
+		// wherever the daemon happened to start, which is not a place
+		// anybody chose.
+		if !filepath.IsAbs(override) {
+			return Install{}, fmt.Errorf("browser_path %q is not an absolute path", override)
+		}
 		if _, err := os.Stat(override); err != nil {
 			return Install{}, err
 		}

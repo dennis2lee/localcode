@@ -522,7 +522,7 @@ function appendDiff(row, rows) {
   return wrap;
 }
 
-export function finishToolCall(toolUseID, content, isError) {
+export function finishToolCall(toolUseID, content, isError, snapshot) {
   const entry = session.toolRows.get(toolUseID);
   if (!entry) return;
   session.toolRows.delete(toolUseID);
@@ -539,7 +539,28 @@ export function finishToolCall(toolUseID, content, isError) {
     stateEl.textContent = isError ? 'failed' : resultSize(text);
     detail.textContent = `${detail.textContent}\n\n${text}`;
     if (rows && rows.length > 0) appendDiff(row, rows);
+    if (snapshot) appendSnapshot(row, snapshot);
   });
+}
+
+// snapshotURL is where the daemon serves a capture the browser tool saved,
+// by its file name: the daemon finds it in the conversation's own
+// snapshot directory and serves nothing else.
+export function snapshotURL(sessionID, path) {
+  const name = String(path).split(/[\\/]/).pop();
+  return `/api/sessions/${encodeURIComponent(sessionID)}/snapshots/${encodeURIComponent(name)}`;
+}
+
+// appendSnapshot shows a capture under the call that took it, so the
+// person sees what the model saw, now and when the conversation is opened
+// again. Shown, not folded into the call's detail: it is the point of the
+// call.
+function appendSnapshot(row, path) {
+  const img = document.createElement('img');
+  img.className = 'tool-snapshot';
+  img.alt = 'browser snapshot';
+  img.setAttribute('src', snapshotURL(session.sessionID, path));
+  row.appendChild(img);
 }
 
 // abandonRunningToolCalls closes out every row still spinning.

@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,17 +27,26 @@ const (
 
 // process is one running browser and the connection to it.
 type process struct {
-	cmd     *exec.Cmd
-	conn    *cdp.Conn
-	dataDir string
-	exited  chan struct{}
+	cmd       *exec.Cmd
+	conn      *cdp.Conn
+	dataDir   string
+	exited    chan struct{}
+	userAgent string // what every target is told to send; see guard
 }
 
 // launchArgs are the browser's command line. No window (the panel is the
 // window), the profile localcode keeps, and a debugging port the browser
 // picks and writes to DevToolsActivePort in the profile directory.
-func launchArgs(dataDir, profile string) []string {
-	return []string{
+//
+// imported is whether the profile came from the person's own browser. One
+// that did needs the system's secret store, where the key its cookies and
+// passwords are encrypted with lives. One that did not is better off
+// without it: on macOS a browser on a new profile asks the keychain for a
+// key it does not have, and waits on a dialog nobody may be there to
+// answer, with every page load behind it. Such a profile keeps its own
+// key in a store of Chrome's own instead.
+func launchArgs(dataDir, profile string, imported bool) []string {
+	args := []string{
 		"--remote-debugging-port=0",
 		"--user-data-dir=" + dataDir,
 		"--profile-directory=" + profile,
@@ -44,18 +55,48 @@ func launchArgs(dataDir, profile string) []string {
 		"--no-default-browser-check",
 		"--hide-crash-restore-bubble",
 		fmt.Sprintf("--window-size=%d,%d", ViewportWidth, ViewportHeight),
-		"about:blank",
 	}
+	if !imported {
+		switch runtime.GOOS {
+		case "darwin":
+			args = append(args, "--use-mock-keychain")
+		case "linux":
+			args = append(args, "--password-store=basic")
+		}
+	}
+	return append(args, "about:blank")
+}
+
+// ownerFile names the process whose browser runs on the profile.
+const ownerFile = "localcode-owner"
+
+// ErrInUse is a browser on this profile that a live localcode is using:
+// another desktop window's, which every window's daemon shares the
+// profile with.
+type ErrInUse struct{ PID int }
+
+func (e ErrInUse) Error() string {
+	return fmt.Sprintf("the browser is in use by another localcode (process %d); close that window, or use the browser there", e.PID)
 }
 
 // start launches the browser at path on dataDir and connects to it.
-func start(ctx context.Context, path, dataDir, profile string) (*process, error) {
+func start(ctx context.Context, path, dataDir, profile string, imported bool) (*process, error) {
 	portFile := filepath.Join(dataDir, "DevToolsActivePort")
+	// A browser on this profile that a live localcode is using is that
+	// localcode's: closing it would take its conversations' tabs. Only
+	// one whose owner is gone, or that nobody claimed, is left over.
+	if data, err := os.ReadFile(filepath.Join(dataDir, ownerFile)); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid != os.Getpid() && pidAlive(pid) {
+			if _, ok := readPortFile(portFile); ok {
+				return nil, ErrInUse{PID: pid}
+			}
+		}
+	}
 	closeStale(portFile)
 	// Left by an earlier run, it names a port nobody is listening on.
 	_ = os.Remove(portFile)
 
-	cmd := exec.Command(path, launchArgs(dataDir, profile)...)
+	cmd := exec.Command(path, launchArgs(dataDir, profile, imported)...)
 	childproc.Hide(cmd)
 	childproc.NewGroup(cmd)
 	if err := cmd.Start(); err != nil {
@@ -78,6 +119,7 @@ func start(ctx context.Context, path, dataDir, profile string) (*process, error)
 		return nil, fmt.Errorf("connect to the browser: %w", err)
 	}
 	p.conn = conn
+	_ = os.WriteFile(filepath.Join(dataDir, ownerFile), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
 	return p, nil
 }
 

@@ -15,11 +15,12 @@ import (
 // person signed in (cookies, the stores sites keep their own login state
 // in), the passwords Chrome saved, and the preferences. Caches, history,
 // extensions and the rest are left behind: they are most of a profile's
-// size, and none of them is a login.
+// size, and none of them is a login. So is Web Data, which holds the
+// payment cards and addresses autofill offers: signing in to a site is
+// what was asked for, paying with the person's card is not.
 var profileEntries = []string{
 	"Cookies", "Cookies-journal", "Network",
 	"Login Data", "Login Data-journal", "Login Data For Account", "Login Data For Account-journal",
-	"Web Data", "Web Data-journal", "Account Web Data", "Account Web Data-journal",
 	"Preferences", "Secure Preferences",
 	"Local Storage", "Session Storage", "IndexedDB",
 }
@@ -44,7 +45,7 @@ func LastUsedProfile(userDataDir string) string {
 		} `json:"profile"`
 	}
 	if json.Unmarshal(data, &st) != nil || st.Profile.LastUsed == "" ||
-		strings.ContainsAny(st.Profile.LastUsed, `/\`) || st.Profile.LastUsed == ".." {
+		strings.ContainsAny(st.Profile.LastUsed, `/\`) || st.Profile.LastUsed == ".." || st.Profile.LastUsed == "." {
 		return "Default"
 	}
 	return st.Profile.LastUsed

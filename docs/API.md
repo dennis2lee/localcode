@@ -132,12 +132,15 @@ A session object in answers is `{"id", "agent", "title", "workspace",
 state instead of merging events: `auto_compact_enabled`,
 `auto_compact_percent`, `keep_going`, `fold_thinking`, `muse_profiles`,
 `repeat_limit`, `smart_agent`, `browser`, `browser_available`,
-`orchestrate`, `model_invocable`,
+`browser_import`, `orchestrate`, `model_invocable`,
 `model_commands`, `orchestrate_roster`, `show_tps`, `show_thinking`,
 `show_timestamps`, `auto_delegate`, `auto_delegate_agent`,
 `auto_delegate_match`, `skip_permissions`, `permission_rules`,
 `can_edit_permissions`. `muse_profiles` lists the profiles whose model ID
-contains `muse`, sorted, and is `[]` when none does. Changes are announced
+contains `muse`, sorted, and is `[]` when none does. `browser_available`
+is whether a Chrome or Edge was found to run. `browser_import` is
+`{"from", "profile", "skipped"}` for the last copy of the person's
+profile, or `null` before the first. Changes are announced
 on the broadcast as `settings.changed`; a client that was not connected
 re-reads this endpoint on load.
 
@@ -241,14 +244,21 @@ follows the `schedule.*` events on that conversation's own stream.
 The desktop window's browser panel. The frame stream is also how the
 daemon knows a window is showing the conversation: the model is offered
 the `browser` tool only while one is open. Every route answers `404`
-when the daemon has no browser or the session is unknown.
+when the daemon has no browser or the session is unknown. Every route
+but the snapshot route answers `409` while the browser setting is off,
+so nothing starts the browser and no stream counts as watching.
+
+The daemon answers `403` to any request, on every route, whose
+User-Agent contains `LocalcodeBrowser`. That is every request the
+model's browser sends, so a page it opens cannot drive the API.
 
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
 | `GET /api/sessions/{id}/browser` | nothing | `200 {"has_tab", "url"?, "title"?, "width", "height"}`; `width` and `height` are the page size every coordinate is in | `404` |
-| `GET /api/sessions/{id}/browser/stream` | nothing | `200 multipart/x-mixed-replace`, one JPEG per part, as long as the client holds it open. Waits while the conversation has no tab, and starts no browser | `404` |
-| `POST /api/sessions/{id}/browser/navigate` | `{"url"}`, or `{"action": "back"\|"forward"\|"reload"}`; starts the browser and opens the tab when there is none | `200 {"url", "title"}` | `400` the page could not load or an unknown action; `503` the browser could not start |
-| `POST /api/sessions/{id}/browser/input` | one of `{"mouse": {"type", "x", "y", "button"?, "clickCount"?, "deltaX"?, "deltaY"?, "modifiers"?}}`, `{"key": {"type", "key", "code", "text"?, "keyCode"?, "modifiers"?}}`, `{"text"}`, in page pixels | `204` | `400` bad event; `409` no tab |
+| `GET /api/sessions/{id}/browser/stream` | nothing | `200 multipart/x-mixed-replace`, one JPEG per part, as long as the client holds it open. Waits while the conversation has no tab, and starts no browser | `404`; `409` the setting is off |
+| `POST /api/sessions/{id}/browser/navigate` | `{"url"}` (`http`, `https`, or `about:blank`), or `{"action": "back"\|"forward"\|"reload"}`; starts the browser and opens the tab when there is none | `200 {"url", "title"}` | `400` the page could not load, an address of another scheme, or an unknown action; `409` the setting is off; `503` the browser could not start |
+| `POST /api/sessions/{id}/browser/input` | one of `{"mouse": {"type", "x", "y", "button"?, "buttons"?, "clickCount"?, "deltaX"?, "deltaY"?, "modifiers"?}}`, `{"key": {"type", "key", "code", "text"?, "keyCode"?, "modifiers"?, "commands"?}}`, `{"text"}`, in page pixels. `buttons` is the held buttons as a mask (left 1, right 2, middle 4); a move with one held is a drag. `commands` is editing commands for the key: `selectAll`, `copy`, `cut`, `paste`, `undo`, `redo` | `204` | `400` bad event or another command; `409` the setting is off, or no tab |
+| `GET /api/sessions/{id}/snapshots/{name}` | nothing | `200 image/png`: a snapshot the `browser` tool saved, from the conversation's working directory's `.localcode/snapshots/`. `name` is the file name `tool.end` gave in `snapshot` | `404` no such conversation, a name not in the tool's own shape (`YYYYMMDD-HHMMSS-NNN.png`), no such file, or a file that is not a regular one |
 
 ### Effort and model (per session)
 
@@ -315,7 +325,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `message.user` | `{"text", "model_text"?, "local"?, "auto"?, "images"?}`. `local: true` was answered without a model call and is skipped rebuilding history. `auto: true` marks a message localcode sent for the user: the keep_going nudge, or a debate's reviews handed to the author. Clients do not draw it as typed. `images` is `[{"media_type", "data"}]`, the images sent with the message |
 | `message.part.delta` | `{"text"}` fragment of a streaming reply |
 | `message.part.end` | `{"text", "failed"?, "shell_command"?}` the finished reply text; one turn has several when tools ran. `failed: true` closes a reply whose stream died before it finished: the text is on the record and not in the history, which is rebuilt without it. `text` is empty when the stream died after a tool call and before any text; the calls a failed reply started never ran. A log written before this key existed rebuilds such a reply into the history as finished. `shell_command` names the `!` command whose output `text` is |
-| `tool.start`, `tool.end` | a tool call and its result |
+| `tool.start`, `tool.end` | a tool call and its result. `tool.end` carries `snapshot`, the saved file's path, when the call was a `browser` snapshot; a client shows it from the snapshot route |
 | `permission.request` | a tool approval question; answered at `POST /api/sessions/{id}/permissions/{permId}` |
 | `permission.resolved` | how it was answered |
 | `permission.forgotten` | `{"class": "read" or "write"}`; remembered directories dropped |

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -141,17 +143,52 @@ type Location struct {
 	Title string `json:"title"`
 }
 
-// Location reports the page's URL and title.
+// Location reports the page's URL and title, from the browser rather
+// than from a script in the page, which the page could break.
 func (t *Tab) Location(ctx context.Context) (Location, error) {
-	var loc Location
-	err := t.eval(ctx, `({url: location.href, title: document.title})`, &loc)
-	return loc, err
+	var res struct {
+		TargetInfo struct {
+			URL   string `json:"url"`
+			Title string `json:"title"`
+		} `json:"targetInfo"`
+	}
+	if err := t.conn.Call(ctx, "", "Target.getTargetInfo", map[string]any{"targetId": t.targetID}, &res); err != nil {
+		return Location{}, err
+	}
+	return Location{URL: res.TargetInfo.URL, Title: res.TargetInfo.Title}, nil
 }
 
-// Navigate loads url and waits for it to finish loading, up to 20s.
-func (t *Tab) Navigate(ctx context.Context, url string) error {
-	if !strings.Contains(url, "://") && !strings.HasPrefix(url, "about:") && !strings.HasPrefix(url, "data:") {
-		url = "https://" + url
+// NormalizeURL is url as Navigate opens it: a bare host gets https://. It
+// refuses every scheme but http and https, and about:blank: a file: URL
+// would read the disk past the workspace boundary, and a javascript: one
+// runs script in whatever page is open, denied or not.
+func NormalizeURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "about:blank" {
+		return raw, nil
+	}
+	if !strings.Contains(raw, "://") && !strings.HasPrefix(strings.ToLower(raw), "javascript:") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("not a URL: %v", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		if u.Host == "" {
+			return "", fmt.Errorf("%q has no host", raw)
+		}
+		return u.String(), nil
+	}
+	return "", fmt.Errorf("only http and https pages can be opened, not %s:", u.Scheme)
+}
+
+// Navigate loads target and waits for it to finish loading, up to 20s.
+func (t *Tab) Navigate(ctx context.Context, target string) error {
+	url, err := NormalizeURL(target)
+	if err != nil {
+		return err
 	}
 	var res struct {
 		ErrorText string `json:"errorText"`
@@ -221,13 +258,88 @@ func (t *Tab) Reload(ctx context.Context) error {
 
 // Screenshot is the visible part of the page as PNG.
 func (t *Tab) Screenshot(ctx context.Context) ([]byte, error) {
+	shot, err := t.Capture(ctx, Shot{})
+	return shot.PNG, err
+}
+
+// MaxShotHeight bounds a full-page capture. A page that scrolls for ever
+// (a feed) would otherwise be an image no model and no disk wants.
+const MaxShotHeight = 16384
+
+// Shot is what Capture is asked for: the visible page (the zero value),
+// the whole page (FullPage), or one element Read numbered (Ref).
+type Shot struct {
+	FullPage bool
+	Ref      int
+}
+
+// Captured is a capture and its size in pixels. Cut is set when a full
+// page was taller than MaxShotHeight and only its top was taken.
+type Captured struct {
+	PNG           []byte
+	Width, Height int
+	Cut           bool
+}
+
+// Capture takes a PNG of the page as s asks.
+func (t *Tab) Capture(ctx context.Context, s Shot) (Captured, error) {
+	params := map[string]any{"format": "png"}
+	out := Captured{Width: ViewportWidth, Height: ViewportHeight}
+	switch {
+	case s.Ref > 0:
+		var r *struct{ X, Y, W, H float64 }
+		script := `(() => {
+  const el = document.querySelector('[data-lc-ref="` + strconv.Itoa(s.Ref) + `"]');
+  if (!el) return null;
+  el.scrollIntoView({block: 'center', inline: 'center'});
+  const r = el.getBoundingClientRect();
+  return {X: r.left + scrollX, Y: r.top + scrollY, W: r.width, H: r.height};
+})()`
+		if err := t.eval(ctx, script, &r); err != nil {
+			return out, err
+		}
+		if r == nil {
+			return out, fmt.Errorf("element %d is not on the page any more; read the page again", s.Ref)
+		}
+		if r.W < 1 || r.H < 1 {
+			return out, fmt.Errorf("element %d has no size to capture", s.Ref)
+		}
+		params["clip"] = map[string]any{"x": r.X, "y": r.Y, "width": r.W, "height": r.H, "scale": 1}
+		params["captureBeyondViewport"] = true
+		out.Width, out.Height = int(r.W+0.5), int(r.H+0.5)
+	case s.FullPage:
+		var m struct {
+			CSSContentSize struct {
+				Width  float64 `json:"width"`
+				Height float64 `json:"height"`
+			} `json:"cssContentSize"`
+		}
+		if err := t.conn.Call(ctx, t.session, "Page.getLayoutMetrics", nil, &m); err != nil {
+			return out, err
+		}
+		w, h := m.CSSContentSize.Width, m.CSSContentSize.Height
+		if w < ViewportWidth {
+			w = ViewportWidth
+		}
+		if h < 1 {
+			h = ViewportHeight
+		}
+		if h > MaxShotHeight {
+			h, out.Cut = MaxShotHeight, true
+		}
+		params["clip"] = map[string]any{"x": 0, "y": 0, "width": w, "height": h, "scale": 1}
+		params["captureBeyondViewport"] = true
+		out.Width, out.Height = int(w+0.5), int(h+0.5)
+	}
 	var res struct {
 		Data string `json:"data"`
 	}
-	if err := t.conn.Call(ctx, t.session, "Page.captureScreenshot", map[string]any{"format": "png"}, &res); err != nil {
-		return nil, err
+	if err := t.conn.Call(ctx, t.session, "Page.captureScreenshot", params, &res); err != nil {
+		return out, err
 	}
-	return base64.StdEncoding.DecodeString(res.Data)
+	png, err := base64.StdEncoding.DecodeString(res.Data)
+	out.PNG = png
+	return out, err
 }
 
 // eval runs expression in the page and decodes its value into out.
@@ -274,12 +386,18 @@ func (t *Tab) Watch(ctx context.Context) (frames <-chan []byte, stop func(), err
 	t.casting = true
 	t.mu.Unlock()
 	if first != nil {
-		ch <- first
+		// Not blocking: a frame may already have filled the buffer.
+		select {
+		case ch <- first:
+		default:
+		}
 	}
 	if needStart {
+		// "already active" is a screencast a viewer that just left has
+		// not stopped yet: it is running, which is what was asked for.
 		if err := t.conn.Call(ctx, t.session, "Page.startScreencast", map[string]any{
 			"format": "jpeg", "quality": 70, "maxWidth": ViewportWidth, "maxHeight": ViewportHeight,
-		}, nil); err != nil {
+		}, nil); err != nil && !strings.Contains(err.Error(), "already active") {
 			t.mu.Lock()
 			delete(t.viewers, ch)
 			t.casting = false

@@ -22,22 +22,63 @@ func DefaultDataDir() (string, error) {
 }
 
 // profileNameFile records which profile name the import brought over, so
-// later starts open the same one.
+// later starts open the same one, and on its second line whether it was
+// imported ("imported") or started empty: see launchArgs.
 const profileNameFile = "localcode-profile"
 
 // Options configure a Manager.
 type Options struct {
 	ChromePath string // a browser to run instead of the one Find picks
 	DataDir    string // the profile directory; DefaultDataDir when empty
+	// Block reports whether a page (a top-level document or a frame's)
+	// may not load: a deny rule covers it. Asked of every document
+	// request the browser makes, redirects and frames included, so a
+	// denied site is never loaded rather than refused after the fact.
+	Block func(url string) bool
 }
 
 // Manager owns the one browser and every conversation's tab in it.
 type Manager struct {
 	opts Options
 
-	mu    sync.Mutex
-	proc  *process
-	convs map[string]*convTabs
+	mu         sync.Mutex
+	proc       *process
+	convs      map[string]*convTabs
+	lastImport *ImportReport
+}
+
+// LastImport is what the most recent copy of the person's profile did,
+// nil before the first.
+func (m *Manager) LastImport() *ImportReport {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastImport == nil {
+		return nil
+	}
+	r := *m.lastImport
+	return &r
+}
+
+// alive reports whether the browser is up. Called with m.mu.
+func (m *Manager) alive() bool {
+	if m.proc == nil {
+		return false
+	}
+	select {
+	case <-m.proc.conn.Done():
+		return false
+	default:
+		return true
+	}
+}
+
+// dropAll forgets every conversation's tabs, telling anyone watching one.
+// Called with m.mu.
+func (m *Manager) dropAll() {
+	for _, c := range m.convs {
+		close(c.changed)
+	}
+	m.convs = map[string]*convTabs{}
 }
 
 // convTabs is a conversation's pages: the one it works in is the last. A
@@ -58,6 +99,13 @@ func (c *convTabs) current() *Tab {
 // for.
 func NewManager(opts Options) *Manager {
 	return &Manager{opts: opts, convs: map[string]*convTabs{}}
+}
+
+// Available is whether there is a browser to start: a Chrome or Edge
+// install, or the one browser_path names.
+func (m *Manager) Available() bool {
+	_, err := Find(m.opts.ChromePath)
+	return err == nil
 }
 
 func (m *Manager) dataDir() (string, error) {
@@ -87,9 +135,13 @@ func (m *Manager) Tab(ctx context.Context, conv string) (*Tab, error) {
 }
 
 // Existing returns conv's tab if it has one, without starting anything.
+// Nil once the browser has gone away, whatever tab it had.
 func (m *Manager) Existing(conv string) *Tab {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if !m.alive() {
+		return nil
+	}
 	if c := m.convs[conv]; c != nil {
 		return c.current()
 	}
@@ -99,16 +151,15 @@ func (m *Manager) Existing(conv string) *Tab {
 // ensureRunning starts the browser if it is not running. Called with m.mu.
 func (m *Manager) ensureRunning(ctx context.Context) error {
 	if m.proc != nil {
-		select {
-		case <-m.proc.conn.Done():
-			// It went away (crashed, or someone quit it); every tab went
-			// with it.
-			m.proc.kill()
-			m.proc = nil
-			m.convs = map[string]*convTabs{}
-		default:
+		if m.alive() {
 			return nil
 		}
+		// It went away (crashed, or someone quit it); every tab went with
+		// it, and whoever is watching one is told, so they move on to
+		// the next browser rather than waiting on a dead page.
+		m.proc.kill()
+		m.proc = nil
+		m.dropAll()
 	}
 	install, err := Find(m.opts.ChromePath)
 	if err != nil {
@@ -118,42 +169,56 @@ func (m *Manager) ensureRunning(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	profile, err := m.ensureProfile(install, dir)
+	profile, imported, err := m.ensureProfile(install, dir)
 	if err != nil {
 		return err
 	}
-	p, err := start(ctx, install.Path, dir, profile)
+	p, err := start(ctx, install.Path, dir, profile, imported)
 	if err != nil {
 		return err
 	}
 	m.proc = p
 	m.watchTargets(p)
+	m.guard(p)
 	return nil
 }
 
 // ensureProfile seeds dir from the person's everyday profile the first
-// time, and returns the profile name to open. Called with m.mu.
-func (m *Manager) ensureProfile(install Install, dir string) (string, error) {
+// time, and returns the profile name to open and whether it was imported.
+// Called with m.mu.
+func (m *Manager) ensureProfile(install Install, dir string) (string, bool, error) {
 	if data, err := os.ReadFile(filepath.Join(dir, profileNameFile)); err == nil {
-		if name := strings.TrimSpace(string(data)); name != "" {
-			return name, nil
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		if name := strings.TrimSpace(lines[0]); name != "" {
+			return name, len(lines) > 1 && strings.TrimSpace(lines[1]) == "imported", nil
 		}
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
+		return "", false, err
 	}
-	name := "Default"
+	name, imported := "Default", false
 	src := UserDataDir(install.Kind, runtime.GOOS, os.Getenv)
 	if _, err := os.Stat(src); err == nil {
 		name = LastUsedProfile(src)
-		if _, err := ImportProfile(src, name, dir); err != nil {
+		if rep, err := ImportProfile(src, name, dir); err == nil {
+			imported = true
+			m.lastImport = &rep
+		} else {
 			name = "Default"
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, profileNameFile), []byte(name+"\n"), 0o600); err != nil {
-		return "", err
+	if err := writeProfileName(dir, name, imported); err != nil {
+		return "", false, err
 	}
-	return name, nil
+	return name, imported, nil
+}
+
+func writeProfileName(dir, name string, imported bool) error {
+	how := "fresh"
+	if imported {
+		how = "imported"
+	}
+	return os.WriteFile(filepath.Join(dir, profileNameFile), []byte(name+"\n"+how+"\n"), 0o600)
 }
 
 // Import copies the person's everyday profile in again, for logins made
@@ -178,7 +243,8 @@ func (m *Manager) Import() (ImportReport, error) {
 	if err != nil {
 		return rep, err
 	}
-	return rep, os.WriteFile(filepath.Join(dir, profileNameFile), []byte(name+"\n"), 0o600)
+	m.lastImport = &rep
+	return rep, writeProfileName(dir, name, true)
 }
 
 // watchTargets follows pages a conversation's tab opens (a link with
@@ -292,10 +358,7 @@ func (m *Manager) stopLocked() {
 	}
 	m.proc.close()
 	m.proc = nil
-	for _, c := range m.convs {
-		close(c.changed)
-	}
-	m.convs = map[string]*convTabs{}
+	m.dropAll()
 }
 
 // Watch streams the frames of conv's current tab to the panel, following

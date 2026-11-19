@@ -81,6 +81,11 @@ type Result struct {
 	// text on one of the three wires (OpenAI's), so the images ride
 	// beside the results rather than inside one. See view_image.go.
 	Images []provider.Block
+	// Snapshot is an image file this call saved that the transcript
+	// shows under the call, for the person to see what the model saw.
+	// The browser tool's captures. Recorded in the tool's end event, so it
+	// is shown again after a restart.
+	Snapshot string
 }
 
 // ResultSource is one contributor's material inside a Result's Content:

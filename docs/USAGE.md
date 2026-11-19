@@ -1682,6 +1682,7 @@ Permission rules answer "which tool, on which path". They say nothing about dest
 |---|---|
 | A shell command's own connections | `curl`, a package manager, a test suite that calls an API: a separate process with its own sockets. Nothing inside this program can stop those. Refusing to *run* commands whose names look networked would be theatre — a script, a different binary name, or a here-document defeats it in seconds. What bounds them is the permission prompt on `bash`, and below that the operating system: a firewall, a network namespace, or a proxy the child inherits. |
 | An MCP server started as a subprocess | Same reason: it is a child process. A *remote* MCP server is reached by localcode itself and is covered. |
+| The [browser](#browser)'s pages | Chrome or Edge is a child process and opens its own connections. What bounds it is a `deny` rule for `browser`: a page it matches is never loaded. The browser is off unless the setting is on. |
 
 ### What a session log holds, and who can read it
 
@@ -2781,14 +2782,16 @@ The model can work a web page the way a person does, in a browser shown at the t
 | Turning it on | The settings window's Browser section, `/browser on`, or `"browser": true` in config.json. Off unless set. |
 | Where it works | The desktop window only. The model is offered the `browser` tool while the setting is on and the conversation is open in a desktop window. A Web UI in another browser, the TUI and `localcode run` never have it. |
 | Browser | Google Chrome, or Microsoft Edge when Chrome is not installed. `browser_path` names another one. It runs with no window of its own; the panel is its window. |
-| Profile | The first use copies your last used Chrome (or Edge) profile to `~/.localcode/browser`: cookies, saved passwords, site storage and preferences. History, extensions and caches are not copied. "copy Chrome profile again" in the settings window copies it again for sites you signed in to since, and closes every tab. A file your running browser holds locked is skipped and named; close that browser and copy again for it. |
+| Profile | The first use copies your last used Chrome (or Edge) profile to `~/.localcode/browser`: cookies, saved passwords, site storage and preferences. History, extensions, caches, and autofill data (addresses and payment cards) are not copied. "copy Chrome profile again" in the settings window copies it again for sites you signed in to since, and closes every tab. A file your running browser holds locked is skipped and named in the settings window; close that browser and copy again for it. With no profile to copy, the browser starts on an empty one, which keeps its passwords in the profile rather than in the system keychain. |
 | Conversations | One browser for the daemon, so every conversation shares the copied logins. Each conversation has its own tab for as long as it exists. A link that opens a new tab moves the conversation to it, and closing that tab moves it back. Deleting the conversation closes its tabs. |
-| Questions | None: the model opens pages, clicks and types, passwords included, without asking. A `deny` rule for `browser` keeps a site out of reach: `{"browser": [{"match": "*bank*", "decision": "deny"}]}` refuses a `navigate` to a matching URL and every other action on a matching page, such as one a click led to. |
-| Ending | The browser starts at its first use and quits when the setting is turned off, when the window closes, or when localcode exits. A browser a crashed run left on the profile is closed by the next start. |
+| Questions | None: the model opens pages, clicks and types, passwords included, without asking. A `deny` rule for `browser` keeps a site out of reach: `{"browser": [{"match": "*bank*", "decision": "deny"}]}`. A matching page is never loaded, whatever leads there: a `navigate`, a redirect, a click, a frame, back and forward, a tab a link opened, or the panel's address bar. A `navigate` to it is refused before it is sent. The rules are read on every page load, so a rule added while the browser runs applies to the next page. |
+| Addresses | `http` and `https` only, and `about:blank`. A `file:`, `javascript:` or `data:` address is refused. |
+| localcode itself | Every request the browser sends carries `LocalcodeBrowser` in its User-Agent, and the daemon refuses every request that does. A page the model opens cannot reach localcode's own API on any port a daemon listens on. |
+| Ending | The browser starts at its first use and quits when the setting is turned off, when the window closes, or when localcode exits. A browser a crashed run left on the profile is closed by the next start. A second localcode on the same machine cannot use the browser while the first one runs it: the tool says which process holds it. |
 
 Everything the copied profile is signed in to is reachable by the model. Use the browser setting where that is acceptable, and deny the sites it must not touch.
 
-The panel shows the page from a stream of frames. A click, the wheel, keys and a paste on it go to the page. The address bar opens what is typed into it and starts the browser if it is not running; back, forward and reload act on the page.
+The panel shows the page from a stream of frames. A click, a drag, the wheel, keys and a paste on it go to the page. Cmd (macOS) or Ctrl (elsewhere) with A, C, X, V, Z act on the page: copy and paste use the system clipboard. A character typed with Option or AltGr types that character. The address bar opens what is typed into it and starts the browser if it is not running; back, forward and reload act on the page. A stream that breaks, such as on a daemon restart, opens again.
 
 The `browser` tool's actions:
 
@@ -2797,7 +2800,7 @@ The `browser` tool's actions:
 | `navigate` | `url` | Opens the URL. A bare host gets `https://`. |
 | `back`, `forward`, `reload` | | History and reload. |
 | `read` | | The URL, title, text (up to 15,000 characters), and every visible element that can be clicked or typed into, numbered `[n]` (up to 250). A password field reads as `(filled)`, never its value. |
-| `screenshot` | | An image of the visible page. Refused, with a pointer to `read`, for a model that is not sent images. |
+| `screenshot` | optional `full_page`, `ref` | A snapshot: the visible page, the whole page (`full_page`, up to 16,384 pixels tall), or element `[ref]` from the last `read`. Saved as a PNG under the conversation's working directory in `.localcode/snapshots/`, and shown under the call in the conversation. A model that is sent images gets the image; any other model gets the file's path and size. |
 | `click` | `ref`, or `x` and `y` | Clicks element `[ref]` from the last `read`, scrolled into view, or a point. |
 | `type` | `text`, optional `ref` | Types the text where the focus is, or into element `[ref]` after clicking it. |
 | `key` | `keys` | A key or combination: `Enter`, `Tab`, `Escape`, `ctrl+a`, `shift+Tab`. |

@@ -341,9 +341,17 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// unconditionally and hidden per turn, like the tools above: whether
 	// it is offered depends on a setting that moves and on a GUI window
 	// showing the conversation. Nothing starts until it is used.
+	//
+	// Block is the browser's own guard: a page the "browser" deny rules
+	// name is never loaded, whatever led there (a redirect, a click, a
+	// frame, the panel's address bar). The rules are read on every load,
+	// so a rule added while the browser runs applies to the next page.
 	browserManager := browser.NewManager(browser.Options{
 		ChromePath: cfg.BrowserPath,
 		DataDir:    filepath.Join(e.home, ".localcode", "browser"),
+		Block: func(url string) bool {
+			return loop.Config.ResolvePermission(agent.BrowserToolName, url, false) == config.DecisionDeny
+		},
 	})
 	registry.Register(agent.NewBrowserTool(loop, browserManager))
 

@@ -876,6 +876,11 @@ aside.left {
   pointer-events: none;
 }
 .browser-empty[hidden] { display: none; }
+/* A capture the browser tool saved, under the call that took it. */
+.tool-snapshot {
+  display: block; max-width: min(100%, 640px); margin: 6px 0 2px;
+  border: 1px solid var(--border); border-radius: var(--r-ctl);
+}
 aside h2 {
   font-size: var(--t-cap);
   letter-spacing: .14em;

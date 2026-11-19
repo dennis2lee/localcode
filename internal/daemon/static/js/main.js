@@ -414,7 +414,9 @@ export { forkSession } from './sessions.js';
 export { setPanelWidth } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
-export { renderBrowserPanel, pagePoint, keyEventFor, modifierBits, browserShown, inGUI } from './browser.js';
+export { renderBrowserPanel, pagePoint, keyEventFor, editCommandFor, modifierBits, browserShown, inGUI } from './browser.js';
+export { snapshotURL } from './transcript.js';
+export { importNote } from './settings.js';
 export { loadSessions, renderSessionList, selectSession, deleteSessionConfirm, reorderList, landsBelow, groupLandsBelow, dropGroupOn, wireSessionDragGuard, dropSessionOn, sessionMatchesFilter, dropSessionOnGroupHeader, dropSessionToUngroupedTop, promptCreateGroup, promptRenameGroup, promptDeleteGroup, readCollapsedGroups, writeCollapsedGroups } from './sessions.js';
 export {
   openFind, closeFind, findIsOpen, stepFind, runFind, findRefresh,

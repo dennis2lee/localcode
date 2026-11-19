@@ -213,7 +213,7 @@ const handlers = {
   },
   'tool.end': (d) => {
     session.runningTool = '';
-    finishToolCall(d.tool_use_id, d.content, d.is_error);
+    finishToolCall(d.tool_use_id, d.content, d.is_error, d.snapshot);
   },
   // The screen always holds the oldest unresolved request: a newer
   // arrival queues behind it, and a resolution for any other id leaves

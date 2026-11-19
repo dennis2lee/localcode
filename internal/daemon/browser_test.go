@@ -28,9 +28,11 @@ func browserDaemon(t *testing.T) (*Daemon, *httptest.Server, string) {
 	}
 	d.Browser = browser.NewManager(browser.Options{DataDir: dir})
 	t.Cleanup(d.Browser.Close)
+	d.Loop.Config.SetBrowserRuntime(true)
 	srv := httptest.NewServer(d.Handler())
 	t.Cleanup(srv.Close)
-	if _, err := d.Loop.Store.CreateSession("b1", "", "general-purpose", true); err != nil {
+	// A workspace of its own, which is where its snapshots are saved.
+	if _, err := d.Loop.Store.CreateSessionIn("b1", "", "general-purpose", t.TempDir(), true); err != nil {
 		t.Fatal(err)
 	}
 	return d, srv, "b1"
@@ -192,8 +194,126 @@ func TestThePanelDrivesThePage(t *testing.T) {
 	}
 }
 
+// With the setting off the panel's routes refuse, so nothing opens the
+// browser and no stream makes a conversation count as watched.
+func TestThePanelRoutesRefuseWithTheSettingOff(t *testing.T) {
+	d, srv, id := browserDaemon(t)
+	d.Loop.Config.SetBrowserRuntime(false)
+	base := srv.URL + "/api/sessions/" + id + "/browser"
+	stream, err := http.Get(base + "/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream.Body.Close()
+	if stream.StatusCode != http.StatusConflict {
+		t.Errorf("stream with the setting off = %d, want 409", stream.StatusCode)
+	}
+	for _, c := range []struct {
+		path string
+		body any
+	}{
+		{"/navigate", map[string]string{"url": "https://example.com/"}},
+		{"/input", map[string]any{"text": "x"}},
+	} {
+		resp := postBrowserJSON(t, base+c.path, c.body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusConflict {
+			t.Errorf("POST %s with the setting off = %d, want 409", c.path, resp.StatusCode)
+		}
+	}
+	if d.BrowserViewing(id) || d.Browser.Existing(id) != nil {
+		t.Error("a refused request left the conversation watched or with a tab")
+	}
+}
+
+// Nothing the model's browser sends gets an answer: not a page it opened,
+// not a script on one, on any route.
+func TestTheDaemonRefusesItsOwnBrowser(t *testing.T) {
+	_, srv, id := browserDaemon(t)
+	ua := "Mozilla/5.0 (Macintosh) Chrome/142.0.0.0 Safari/537.36 " + browser.UserAgentMark
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/api/settings"},
+		{http.MethodPost, "/api/settings/skip_permissions"},
+		{http.MethodGet, "/api/sessions/" + id + "/browser"},
+		{http.MethodGet, "/"},
+	} {
+		req, _ := http.NewRequest(c.method, srv.URL+c.path, strings.NewReader(`{"enabled":true}`))
+		req.Header.Set("User-Agent", ua)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s %s from the model's browser = %d, want 403", c.method, c.path, resp.StatusCode)
+		}
+	}
+	// The same request without the mark is answered.
+	resp, err := http.Get(srv.URL + "/api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /api/settings = %d", resp.StatusCode)
+	}
+}
+
+// The snapshot route serves a capture the tool saved for the conversation
+// and nothing else: only a name in the tool's own shape, only from the
+// conversation's snapshot directory, never through a link.
+func TestTheSnapshotRouteServesOnlyCaptures(t *testing.T) {
+	d, srv, id := browserDaemon(t)
+	dir := filepath.Join(d.Loop.SessionDir(id), ".localcode", "snapshots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	png := []byte("\x89PNG\r\n\x1a\nfake")
+	if err := os.WriteFile(filepath.Join(dir, "20261119-101500-001.png"), png, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	os.WriteFile(secret, []byte("secret"), 0o600)
+	if err := os.Symlink(secret, filepath.Join(dir, "20261119-101500-002.png")); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "notes.png"), []byte("not a capture"), 0o644)
+
+	get := func(path string) (int, string, string) {
+		t.Helper()
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var b bytes.Buffer
+		b.ReadFrom(resp.Body)
+		return resp.StatusCode, resp.Header.Get("Content-Type"), b.String()
+	}
+	base := "/api/sessions/" + id + "/snapshots/"
+	if code, ct, body := get(base + "20261119-101500-001.png"); code != http.StatusOK || ct != "image/png" || body != string(png) {
+		t.Errorf("a saved capture: %d %q %q", code, ct, body)
+	}
+	for _, name := range []string{
+		"20261119-101500-002.png", // a link out of the directory
+		"20261119-101500-003.png", // not there
+		"notes.png",               // not a capture's name
+		"..%2F..%2Fsecret.txt",
+		"20261119-101500-001.png.txt",
+	} {
+		if code, _, body := get(base + name); code != http.StatusNotFound || strings.Contains(body, "secret") {
+			t.Errorf("GET %s = %d %q, want 404", name, code, body)
+		}
+	}
+	if code, _, _ := get("/api/sessions/nobody/snapshots/20261119-101500-001.png"); code != http.StatusNotFound {
+		t.Errorf("a conversation that does not exist = %d, want 404", code)
+	}
+}
+
 func TestTheSettingTurnsTheBrowserOnAndOff(t *testing.T) {
 	d, srv, _ := browserDaemon(t)
+	d.Loop.Config.SetBrowserRuntime(false)
 	resp := postBrowserJSON(t, srv.URL+"/api/settings/browser", map[string]bool{"enabled": true})
 	resp.Body.Close()
 	if !d.Loop.Config.BrowserLive() {
@@ -206,8 +326,9 @@ func TestTheSettingTurnsTheBrowserOnAndOff(t *testing.T) {
 	var s map[string]any
 	json.NewDecoder(get.Body).Decode(&s)
 	get.Body.Close()
-	if s["browser"] != true || s["browser_available"] != true {
-		t.Errorf("settings report browser=%v available=%v", s["browser"], s["browser_available"])
+	_, findErr := browser.Find("")
+	if s["browser"] != true || s["browser_available"] != (findErr == nil) {
+		t.Errorf("settings report browser=%v available=%v; a browser is installed here: %v", s["browser"], s["browser_available"], findErr == nil)
 	}
 	resp = postBrowserJSON(t, srv.URL+"/api/settings/browser", map[string]bool{"enabled": false})
 	resp.Body.Close()

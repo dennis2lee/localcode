@@ -6,10 +6,13 @@ The model can work a web page in a browser shown in the desktop window's right p
 
 **Added**
 
-* A `browser` tool: open, read, screenshot, click, type, key and scroll in Chrome or Edge, offered in a conversation open in the desktop window
-* A browser panel at the top of the right panel: the page as it changes, an address bar, and clicks and keys passed to the page
+* A `browser` tool: open, read, click, type, key and scroll in Chrome or Edge, offered in a conversation open in the desktop window
+* Browser snapshots: the visible page, the whole page, or one element, saved under `.localcode/snapshots/` and shown under the call in the conversation
+* A browser panel at the top of the right panel: the page as it changes, an address bar, and clicks, drags, keys, shortcuts and paste passed to the page
 * The `browser` setting (settings window, `/browser`, config.json) and `browser_path`
 * A copy of your Chrome or Edge profile in `~/.localcode/browser`, logins included, and "copy Chrome profile again"
+* `deny` rules for `browser` enforced on every page load: a matching page never loads, by any route
+* A refusal, on every daemon route, of requests from the model's own browser
 
 ## v0.169.7
 

@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -56,10 +59,10 @@ Actions:
 - navigate {url}: open a URL.
 - back, forward, reload.
 - read: the page's URL, title, text, and every visible element that can be clicked or typed into, numbered [n]. Numbers change when the page does; read again after anything that changes it.
-- screenshot: an image of what is visible.
+- screenshot {full_page?, ref?}: a snapshot of the page, saved as a PNG file in the workspace and shown to the user in the conversation; the result names the file. The visible part by default, the whole page with full_page, or only element [ref]. A model that is sent images also gets the image.
 - click {ref} or {x, y}: click element [ref] from the last read, or the point (x, y) on the page.
 - type {text, ref?}: type text, passwords included, into element [ref] (clicked first) or wherever the focus is.
-- key {keys}: press a key or a combination: "Enter", "Tab", "Escape", "ctrl+a", "shift+Tab".
+- key {keys}: press a key or a combination: "Enter", "Tab", "Escape", "shift+Tab", "ctrl+a" (select all, on every platform).
 - scroll {direction, amount?, ref?}: scroll up, down, left or right by amount steps (default 3), over element [ref] or the middle of the page.
 - wait {seconds}: wait up to 10 seconds for the page to change.
 
@@ -76,7 +79,8 @@ func (BrowserTool) InputSchema() json.RawMessage {
 "keys":{"type":"string"},
 "direction":{"type":"string","enum":["up","down","left","right"]},
 "amount":{"type":"integer"},
-"seconds":{"type":"number"}
+"seconds":{"type":"number"},
+"full_page":{"type":"boolean","description":"screenshot: the whole page, not only the visible part"}
 },"required":["action"]}`)
 }
 
@@ -94,6 +98,11 @@ func (BrowserTool) Subject(input json.RawMessage) string {
 	}
 	if json.Unmarshal(input, &in) != nil || in.Action != "navigate" {
 		return ""
+	}
+	// As Navigate will open it, so a rule written for "https://bank*"
+	// matches the bare "bank.com" the model may have typed.
+	if u, err := browser.NormalizeURL(in.URL); err == nil {
+		return u
 	}
 	return in.URL
 }
@@ -122,6 +131,7 @@ type browserInput struct {
 	Direction string   `json:"direction"`
 	Amount    int      `json:"amount"`
 	Seconds   float64  `json:"seconds"`
+	FullPage  bool     `json:"full_page"`
 }
 
 func browserError(format string, args ...any) tools.Result {
@@ -136,6 +146,13 @@ func (t BrowserTool) Execute(ctx context.Context, input json.RawMessage) tools.R
 	sessionID, ok := SessionIDFromContext(ctx)
 	if !ok {
 		return browserError("the browser has no conversation to belong to")
+	}
+	// Asked again on every call, not only when the turn's tools were
+	// chosen: the setting can go off and the window close in the middle
+	// of a turn, and an agent whose own tools list names "browser" is
+	// handed the tool without the offering rule being asked at all.
+	if t.loop == nil || !t.loop.browserOffered(ctx) {
+		return tools.Result{Content: "the browser is not available: it is off, or this conversation is not open in the desktop window", IsError: true, Refused: true}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -170,9 +187,19 @@ func (t BrowserTool) denied(ctx context.Context, tab *browser.Tab) string {
 		return ""
 	}
 	if t.loop.Config.ResolvePermissionFor(ctx, BrowserToolName, loc.URL, false) == config.DecisionDeny {
-		return fmt.Sprintf("the page at %s is denied by a permission rule for %q; navigate somewhere else", loc.URL, BrowserToolName)
+		// The site, not the URL: a query string can carry what the rule
+		// was written to keep from the model.
+		return fmt.Sprintf("the page on %s is denied by a permission rule for %q; navigate somewhere else", siteOf(loc.URL), BrowserToolName)
 	}
 	return ""
+}
+
+// siteOf is a URL's scheme and host.
+func siteOf(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Scheme + "://" + u.Host
+	}
+	return "this page"
 }
 
 func (t BrowserTool) act(ctx context.Context, tab *browser.Tab, in browserInput) (tools.Result, error) {
@@ -206,18 +233,7 @@ func (t BrowserTool) act(ctx context.Context, tab *browser.Tab, in browserInput)
 		}
 		return tools.Result{Content: formatSnapshot(snap)}, nil
 	case "screenshot":
-		if !viewsImages(ctx) {
-			return tools.Result{}, fmt.Errorf("this model is not sent images; use read to see the page")
-		}
-		png, err := tab.Screenshot(ctx)
-		if err != nil {
-			return tools.Result{}, err
-		}
-		loc, _ := tab.Location(ctx)
-		return tools.Result{
-			Content: fmt.Sprintf("Screenshot of %s (%s), %dx%d.", loc.URL, loc.Title, browser.ViewportWidth, browser.ViewportHeight),
-			Images:  []provider.Block{provider.ImageBlock("image/png", png)},
-		}, nil
+		return t.snapshot(ctx, tab, in)
 	case "click":
 		switch {
 		case in.Ref > 0:
@@ -334,4 +350,86 @@ func formatSnapshot(s browser.Snapshot) string {
 		b.WriteString("\n(cut short; scroll and read again for more)")
 	}
 	return b.String()
+}
+
+// snapshotDir is where a conversation's captures are saved: the
+// working directory's .localcode/snapshots (the workspace, or else the
+// project), or ~/.localcode/snapshots for a turn with neither.
+func snapshotDir(ctx context.Context) (string, error) {
+	if dir := tools.WorkingDir(ctx); dir != "" {
+		return SnapshotDir(dir), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return SnapshotDir(home), nil
+}
+
+// SnapshotDir is where the browser tool saves captures for a conversation
+// whose working directory is dir. The daemon serves them from the same
+// place.
+func SnapshotDir(dir string) string {
+	return filepath.Join(dir, ".localcode", "snapshots")
+}
+
+// snapshotName is the shape of a capture's file name, which is also what
+// the daemon's route for showing one accepts.
+func snapshotName(now time.Time, seq int) string {
+	return fmt.Sprintf("%s-%03d.png", now.Format("20060102-150405"), seq)
+}
+
+// snapshot captures the page, saves it, shows it in the conversation, and
+// gives it to a model that is sent images.
+func (t BrowserTool) snapshot(ctx context.Context, tab *browser.Tab, in browserInput) (tools.Result, error) {
+	shot, err := tab.Capture(ctx, browser.Shot{FullPage: in.FullPage, Ref: in.Ref})
+	if err != nil {
+		return tools.Result{}, err
+	}
+	dir, err := snapshotDir(ctx)
+	if err != nil {
+		return tools.Result{}, err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return tools.Result{}, err
+	}
+	var path string
+	now := time.Now()
+	for seq := 1; ; seq++ {
+		path = filepath.Join(dir, snapshotName(now, seq))
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return tools.Result{}, err
+		}
+		_, werr := f.Write(shot.PNG)
+		if cerr := f.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			return tools.Result{}, werr
+		}
+		break
+	}
+	loc, _ := tab.Location(ctx)
+	what := "the visible page"
+	switch {
+	case in.Ref > 0:
+		what = fmt.Sprintf("element [%d]", in.Ref)
+	case in.FullPage:
+		what = "the whole page"
+	}
+	text := fmt.Sprintf("Snapshot of %s of %s (%s), %dx%d, saved to %s.", what, loc.URL, loc.Title, shot.Width, shot.Height, path)
+	if shot.Cut {
+		text += fmt.Sprintf(" The page is taller than %d pixels; only its top was taken.", browser.MaxShotHeight)
+	}
+	res := tools.Result{Content: text, Snapshot: path}
+	if viewsImages(ctx) {
+		res.Images = []provider.Block{provider.ImageBlock("image/png", shot.PNG)}
+	} else {
+		res.Content += " This model is not sent images, so it has the file and not the picture; read describes the page in text."
+	}
+	return res, nil
 }

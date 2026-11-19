@@ -231,14 +231,27 @@ function renderSmartAgent(warning) {
 // panel that shows the page is drawn there and nowhere else, and the model
 // is offered the browser only while that panel is showing.
 
+// importNote says what a copy of the person's profile did.
+export function importNote(rep) {
+  if (!rep) return '';
+  const skipped = rep.skipped && rep.skipped.length
+    ? ` Not copied, held by the running browser: ${rep.skipped.join(', ')}. Close Chrome and copy again for those.`
+    : '';
+  return `Last copied from ${rep.from}.${skipped}`;
+}
+
 function renderBrowserSetting(warning) {
   browserSettingsEl.hidden = !inGUI();
   browserCheckbox.checked = !!app.browser;
   browserImportBtn.hidden = !app.browser;
+  if (!warning && !app.browserAvailable) {
+    warning = 'No Chrome or Microsoft Edge found on this computer. Install one, or set browser_path in config.json.';
+  }
   browserWarnEl.textContent = warning || '';
   browserWarnEl.hidden = !warning;
+  const copied = importNote(app.browserImport);
   browserNoteEl.textContent = app.browser
-    ? 'On. The browser runs on its own copy of your Chrome profile in ~/.localcode/browser, and asks nothing before it acts. A deny rule for "browser" keeps a site out of reach.'
+    ? `On. The browser runs on its own copy of your Chrome profile in ~/.localcode/browser, and asks nothing before it acts. A deny rule for "browser" keeps a site out of reach.${copied ? ` ${copied}` : ''}`
     : 'Off.';
 }
 
@@ -269,10 +282,8 @@ async function importBrowserProfile() {
   browserImportBtn.disabled = true;
   try {
     const rep = await apiClient.importBrowserProfile();
-    const skipped = rep && rep.skipped && rep.skipped.length
-      ? ` Not copied, held by the running browser: ${rep.skipped.join(', ')}. Close Chrome and copy again for those.`
-      : '';
-    browserNoteEl.textContent = `Copied from ${rep ? rep.from : 'your profile'}. Every conversation's tab was closed.${skipped}`;
+    if (rep && rep.from) app.browserImport = { from: rep.from, profile: rep.profile, skipped: rep.skipped || [] };
+    browserNoteEl.textContent = `Copied. Every conversation's tab was closed. ${importNote(app.browserImport)}`.trim();
   } catch (err) {
     browserNoteEl.textContent = `Not copied: ${err}`;
   } finally {

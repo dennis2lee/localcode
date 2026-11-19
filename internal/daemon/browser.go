@@ -6,9 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
+	"localcode/internal/agent"
 	"localcode/internal/browser"
 	"localcode/internal/config"
 )
@@ -20,6 +25,25 @@ import (
 // browser tool is offered to a conversation only while that stream is
 // open (Loop.BrowserViewing). One connection says both things, so the
 // two cannot disagree.
+
+// refuseTheModelsBrowser turns away every request the model's browser
+// makes (browser.UserAgentMark is in its User-Agent), on every route.
+//
+// The browser asks nothing before it acts, and it runs on the machine the
+// daemon listens on. Without this, a page the model opened, or the model
+// told by one, could open this API at whatever port it is on and turn
+// every permission prompt off, add allow rules, or drive another
+// conversation's tab; and could read every conversation through the Web
+// UI the daemon serves.
+func refuseTheModelsBrowser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.UserAgent(), browser.UserAgentMark) {
+			http.Error(w, "localcode does not answer its own browser", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // browserViewers counts the open frame streams per conversation.
 type browserViewers struct {
@@ -66,12 +90,26 @@ func (d *Daemon) browserFor(w http.ResponseWriter, r *http.Request) (string, boo
 	return id, true
 }
 
+// browserOn is browserFor for a route that starts or drives the browser:
+// with the setting off it does neither, as the model's tool does not.
+func (d *Daemon) browserOn(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id, ok := d.browserFor(w, r)
+	if !ok {
+		return "", false
+	}
+	if !d.Loop.Config.BrowserLive() {
+		writeError(w, http.StatusConflict, errors.New("the browser is off; turn it on in the settings window or with /browser on"))
+		return "", false
+	}
+	return id, true
+}
+
 // handleBrowserStream serves the conversation's tab as a stream of JPEG
 // frames (multipart/x-mixed-replace, which an <img> shows as it arrives).
 // It waits while there is no tab yet, so the panel can open it first and
 // see the page the moment the model or the person opens one.
 func (d *Daemon) handleBrowserStream(w http.ResponseWriter, r *http.Request) {
-	id, ok := d.browserFor(w, r)
+	id, ok := d.browserOn(w, r)
 	if !ok {
 		return
 	}
@@ -105,8 +143,16 @@ func (d *Daemon) handleBrowserStream(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		// Returns when the tab closes; the loop then waits for the next.
+		// Returns when the tab closes or the browser goes away; the loop
+		// then waits for the next. Never straight back: a tab on a browser
+		// that just died answers at once with an error, and a loop with no
+		// pause spun on it.
 		_ = d.Browser.Watch(ctx, id, write)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(300 * time.Millisecond):
+		}
 	}
 }
 
@@ -132,7 +178,7 @@ func (d *Daemon) handleBrowserState(w http.ResponseWriter, r *http.Request) {
 // and reload buttons. It opens the tab if the conversation has none, so
 // the person can start the browser themselves.
 func (d *Daemon) handleBrowserNavigate(w http.ResponseWriter, r *http.Request) {
-	id, ok := d.browserFor(w, r)
+	id, ok := d.browserOn(w, r)
 	if !ok {
 		return
 	}
@@ -178,7 +224,7 @@ func (d *Daemon) handleBrowserNavigate(w http.ResponseWriter, r *http.Request) {
 // handleBrowserInput is the person clicking, scrolling and typing in the
 // panel: one event per request, in the page's own pixels.
 func (d *Daemon) handleBrowserInput(w http.ResponseWriter, r *http.Request) {
-	id, ok := d.browserFor(w, r)
+	id, ok := d.browserOn(w, r)
 	if !ok {
 		return
 	}
@@ -239,6 +285,23 @@ func (d *Daemon) handleBrowserImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"from": rep.From, "profile": rep.Profile, "skipped": rep.Skipped})
 }
 
+// browserImport is what the last copy of the person's profile did, for
+// the settings window to say, nil before the first.
+func (d *Daemon) browserImport() map[string]any {
+	if d.Browser == nil {
+		return nil
+	}
+	rep := d.Browser.LastImport()
+	if rep == nil {
+		return nil
+	}
+	skipped := rep.Skipped
+	if skipped == nil {
+		skipped = []string{}
+	}
+	return map[string]any{"from": rep.From, "profile": rep.Profile, "skipped": skipped}
+}
+
 // handleSetBrowser turns the browser on or off live and persists it, with
 // the same two-part answer as the Smart Agent switch.
 func (d *Daemon) handleSetBrowser(w http.ResponseWriter, r *http.Request) {
@@ -264,4 +327,34 @@ func (d *Daemon) handleSetBrowser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// snapshotFile is the name a browser capture is saved under (see the
+// browser tool's snapshotName), and nothing else: the route below serves
+// files from a directory by name, and a name is all it may be given.
+var snapshotFile = regexp.MustCompile(`^[0-9]{8}-[0-9]{6}-[0-9]{3,}\.png$`)
+
+// handleSnapshot serves a capture the browser tool saved, for the
+// transcript to show under the call that took it.
+func (d *Daemon) handleSnapshot(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !snapshotFile.MatchString(name) {
+		writeError(w, http.StatusNotFound, errors.New("no such snapshot"))
+		return
+	}
+	id := r.PathValue("id")
+	if _, err := d.Loop.Store.Get(id); err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	// The same directory the tool saved into: the conversation's working
+	// directory, which is its workspace or else the project.
+	path := filepath.Join(agent.SnapshotDir(d.Loop.SessionDir(id)), name)
+	if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() {
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "no-store")
+		http.ServeFile(w, r, path)
+		return
+	}
+	writeError(w, http.StatusNotFound, errors.New("no such snapshot"))
 }

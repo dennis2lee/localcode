@@ -236,7 +236,9 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 	return d
 }
 
-func (d *Daemon) Handler() http.Handler { return CanonicalWrites(d.ownershipGate(d.mux)) }
+func (d *Daemon) Handler() http.Handler {
+	return refuseTheModelsBrowser(CanonicalWrites(d.ownershipGate(d.mux)))
+}
 
 func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/version", d.handleVersion)
@@ -254,6 +256,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/sessions/{id}/browser/stream", d.handleBrowserStream)
 	d.mux.HandleFunc("POST /api/sessions/{id}/browser/navigate", d.handleBrowserNavigate)
 	d.mux.HandleFunc("POST /api/sessions/{id}/browser/input", d.handleBrowserInput)
+	d.mux.HandleFunc("GET /api/sessions/{id}/snapshots/{name}", d.handleSnapshot)
 	d.mux.HandleFunc("POST /api/settings/orchestrate", d.handleSetOrchestrate)
 	d.mux.HandleFunc("POST /api/settings/model-invocable", d.handleSetModelInvocable)
 	d.mux.HandleFunc("POST /api/settings/keep-going", d.handleSetKeepGoing)

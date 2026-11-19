@@ -54,6 +54,10 @@ export const app = {
   // The browser setting: whether the model may use the browser shown in
   // the desktop window's right panel. See browser.js.
   browser: false,
+  // Whether the daemon found a Chrome or Edge to run, and what the last
+  // copy of the person's profile did (from, profile, skipped), or null.
+  browserAvailable: true,
+  browserImport: null,
   orchestrate: false,         // the Orchestrate tool, a separate switch
   modelInvocable: false,      // whether the model may run this session's commands
   modelCommands: [],          // which ones it may run, with their slashes

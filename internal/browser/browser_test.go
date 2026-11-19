@@ -106,6 +106,25 @@ func TestTheModelWorksAPage(t *testing.T) {
 		t.Errorf("after typing and clicking, the page says %q", snap.Text)
 	}
 
+	// Select all replaces what is in the field, by Ctrl and by Cmd, on
+	// every platform: the key carries the editing command, which is what
+	// the browser on macOS acts on.
+	for _, c := range []struct{ combo, name string }{{"ctrl+a", "Grace"}, {"cmd+a", "Lin"}} {
+		if err := tab.ClickRef(ctx, refNamed(t, snap, "Your name")); err != nil {
+			t.Fatal(err)
+		}
+		if err := tab.Press(ctx, c.combo); err != nil {
+			t.Fatal(err)
+		}
+		tab.Type(ctx, c.name)
+		snap, _ = tab.Read(ctx)
+		for _, e := range snap.Elements {
+			if e.Name == "Your name" && e.Value != c.name {
+				t.Errorf("after %s and typing %q the field holds %q", c.combo, c.name, e.Value)
+			}
+		}
+	}
+
 	// A password is typed like anything else, and never read back.
 	if err := tab.ClickRef(ctx, refNamed(t, snap, "Password")); err != nil {
 		t.Fatal(err)
@@ -267,5 +286,38 @@ func TestAStartClosesTheBrowserAnEarlierRunLeft(t *testing.T) {
 	case <-left.exited:
 	case <-time.After(10 * time.Second):
 		t.Error("the browser the earlier run left is still running")
+	}
+}
+
+// A shortcut the model presses carries its editing command, Ctrl or Cmd
+// alike, since the browser on macOS does not act on Cmd+A from the key
+// alone; anything with Alt held, or no shortcut modifier, carries none.
+func TestAShortcutCarriesItsEditingCommand(t *testing.T) {
+	for _, c := range []struct {
+		combo string
+		want  string
+	}{
+		{"ctrl+a", "selectAll"}, {"cmd+a", "selectAll"}, {"ctrl+c", "copy"},
+		{"cmd+x", "cut"}, {"ctrl+z", "undo"}, {"ctrl+shift+z", "redo"}, {"ctrl+y", "redo"},
+		{"a", ""}, {"shift+a", ""}, {"ctrl+alt+a", ""}, {"ctrl+b", ""},
+	} {
+		def, mods, err := parseKeys(c.combo)
+		if err != nil {
+			t.Fatalf("parseKeys(%q): %v", c.combo, err)
+		}
+		got := commandsFor(def.key, mods)
+		if (c.want == "" && len(got) != 0) || (c.want != "" && (len(got) != 1 || got[0] != c.want)) {
+			t.Errorf("%s carries %v, want %q", c.combo, got, c.want)
+		}
+	}
+}
+
+// The panel's key events carry only editing commands, so a request that
+// names some other command of the browser's is refused before it is sent.
+func TestAKeyEventCarriesOnlyEditingCommands(t *testing.T) {
+	tab := &Tab{}
+	err := tab.KeyEvent(context.Background(), KeyEvent{Type: "rawKeyDown", Key: "a", Commands: []string{"insertHTML"}})
+	if err == nil || !strings.Contains(err.Error(), "insertHTML") {
+		t.Errorf("a key event with an unknown command: %v", err)
 	}
 }

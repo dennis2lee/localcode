@@ -96,6 +96,8 @@ export async function loadSettings() {
     app.autoDelegateMatch = s.auto_delegate_match || [];
     app.smartAgent = !!s.smart_agent;
     app.browser = !!s.browser;
+    app.browserAvailable = s.browser_available !== false;
+    app.browserImport = s.browser_import || null;
     app.orchestrate = !!s.orchestrate;
     app.modelInvocable = !!s.model_invocable;
     app.modelCommands = Array.isArray(s.model_commands) ? s.model_commands : [];

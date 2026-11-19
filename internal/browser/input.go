@@ -135,6 +135,9 @@ type MouseEvent struct {
 	DeltaX     float64 `json:"deltaX,omitempty"`
 	DeltaY     float64 `json:"deltaY,omitempty"`
 	Modifiers  int     `json:"modifiers,omitempty"`
+	// Buttons are the buttons held, as a bit mask (left 1, right 2,
+	// middle 4). A move with a button held is a drag.
+	Buttons int `json:"buttons,omitempty"`
 }
 
 // Mouse dispatches one mouse event.
@@ -152,6 +155,9 @@ func (t *Tab) Mouse(ctx context.Context, e MouseEvent) error {
 	}
 	if e.ClickCount > 0 {
 		params["clickCount"] = e.ClickCount
+	}
+	if e.Buttons != 0 {
+		params["buttons"] = e.Buttons
 	}
 	if e.Type == "mouseWheel" {
 		params["deltaX"], params["deltaY"] = e.DeltaX, e.DeltaY
@@ -181,6 +187,37 @@ type KeyEvent struct {
 	Text      string `json:"text,omitempty"`
 	KeyCode   int    `json:"keyCode,omitempty"`
 	Modifiers int    `json:"modifiers,omitempty"`
+	// Commands are editing commands the key stands for ("selectAll").
+	// A browser with no window has no menu to turn Cmd+A into one, so on
+	// macOS a shortcut is a key press that does nothing unless they come
+	// with it.
+	Commands []string `json:"commands,omitempty"`
+}
+
+// editingCommands is what a shortcut means as an editing command, keyed
+// by the lower-case key, for Ctrl (or Cmd) and the key; "Z" is with Shift.
+var editingCommands = map[string]string{"a": "selectAll", "c": "copy", "x": "cut", "z": "undo", "Z": "redo", "y": "redo"}
+
+// panelCommands are the editing commands a key event may carry: the
+// ones above, and paste, which the panel sends for the person's own
+// Cmd+V or Ctrl+V so the page reads the clipboard itself.
+var panelCommands = map[string]bool{"selectAll": true, "copy": true, "cut": true, "paste": true, "undo": true, "redo": true}
+
+// commandsFor is the editing command a key with its modifiers stands for,
+// if any: Ctrl or Cmd with one of the keys above, and nothing else held
+// but Shift.
+func commandsFor(key string, mods int) []string {
+	if mods&(ModCtrl|ModMeta) == 0 || mods&ModAlt != 0 {
+		return nil
+	}
+	k := strings.ToLower(key)
+	if mods&ModShift != 0 && k == "z" {
+		k = "Z"
+	}
+	if c, ok := editingCommands[k]; ok {
+		return []string{c}
+	}
+	return nil
 }
 
 // KeyEvent dispatches one key event as the panel saw it.
@@ -190,6 +227,11 @@ func (t *Tab) KeyEvent(ctx context.Context, e KeyEvent) error {
 	default:
 		return fmt.Errorf("unknown key event %q", e.Type)
 	}
+	for _, c := range e.Commands {
+		if !panelCommands[c] {
+			return fmt.Errorf("unknown editing command %q", c)
+		}
+	}
 	params := map[string]any{"type": e.Type, "key": e.Key, "code": e.Code, "modifiers": e.Modifiers}
 	if e.KeyCode != 0 {
 		params["windowsVirtualKeyCode"] = e.KeyCode
@@ -198,6 +240,9 @@ func (t *Tab) KeyEvent(ctx context.Context, e KeyEvent) error {
 	if e.Text != "" {
 		params["text"] = e.Text
 		params["unmodifiedText"] = e.Text
+	}
+	if len(e.Commands) > 0 {
+		params["commands"] = e.Commands
 	}
 	return t.conn.Call(ctx, t.session, "Input.dispatchKeyEvent", params, nil)
 }
@@ -281,7 +326,7 @@ func (t *Tab) Press(ctx context.Context, combo string) error {
 	if err != nil {
 		return err
 	}
-	down := KeyEvent{Type: "keyDown", Key: def.key, Code: def.code, KeyCode: def.keyCode, Modifiers: mods, Text: def.text}
+	down := KeyEvent{Type: "keyDown", Key: def.key, Code: def.code, KeyCode: def.keyCode, Modifiers: mods, Text: def.text, Commands: commandsFor(def.key, mods)}
 	if def.text == "" {
 		down.Type = "rawKeyDown"
 	}

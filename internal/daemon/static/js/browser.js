@@ -22,6 +22,9 @@ const el = (id) => document.getElementById(id);
 let streamFor = null;   // the conversation the <img> is streaming
 let pollTimer = null;
 let lastMove = 0;
+let reconnectTimer = null;
+let daemonLost = false;  // the last location poll failed
+let dragging = false;    // a button went down on the view and is still held
 
 // inGUI is whether this page is in the desktop window.
 export function inGUI() {
@@ -53,27 +56,106 @@ export function modifierBits(e) {
 
 const BUTTONS = ['left', 'middle', 'right'];
 
-// keyEventFor is a DOM key event as the daemon passes it to the page. A
-// printable key with no Ctrl, Alt or Meta carries its text, so it types;
-// everything else is a key press with no text, so Ctrl+A selects rather
-// than typing an "a".
-export function keyEventFor(e, down) {
-  const mods = modifierBits(e);
+// isMac is whether the shortcuts here are the Command ones.
+export function isMac() {
+  return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '');
+}
+
+const SHORTCUTS = { a: 'selectAll', c: 'copy', x: 'cut', v: 'paste' };
+
+// editCommandFor is the editing command a shortcut stands for, sent with
+// the key so the page carries it out: the browser does not take Cmd+C or
+// Cmd+V from a key event alone on macOS. Paste is the page reading the
+// clipboard itself, so the person's Cmd+V pastes what they copied.
+export function editCommandFor(e, mac = isMac()) {
+  const primary = mac ? e.metaKey : e.ctrlKey;
+  const other = mac ? e.ctrlKey : e.metaKey;
+  if (!primary || other || e.altKey || typeof e.key !== 'string') return '';
+  const k = e.key.toLowerCase();
+  if (k === 'z') return e.shiftKey ? 'redo' : 'undo';
+  if (k === 'y' && !mac) return 'redo';
+  return SHORTCUTS[k] || '';
+}
+
+// keyEventFor is a DOM key event as the daemon passes it to the page.
+//
+// A printable key carries its text, so it types, unless a shortcut
+// modifier is held: Ctrl+A selects rather than typing an "a". A
+// character the keyboard layout composed with Option (macOS) or AltGr
+// (Ctrl+Alt elsewhere) is text too, sent without those modifiers, so the
+// page sees the character the person typed. Enter types a line break
+// only on its own or with Shift; Ctrl+Enter or Cmd+Enter is a key press.
+export function keyEventFor(e, down, mac = isMac()) {
+  let mods = modifierBits(e);
   const printable = typeof e.key === 'string' && [...e.key].length === 1;
-  const text = down && printable && !(mods & (1 | 2 | 4)) ? e.key : (down && e.key === 'Enter' ? '\r' : '');
+  const altGraph = (typeof e.getModifierState === 'function' && e.getModifierState('AltGraph')) || (!!e.ctrlKey && !!e.altKey);
+  const composes = mac ? !e.metaKey && !e.ctrlKey : !e.metaKey && (altGraph || (!e.ctrlKey && !e.altKey));
+  let text = '';
+  if (down && printable && composes) {
+    text = e.key;
+    mods &= 8;
+  } else if (down && e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    text = '\r';
+  }
   let type = 'keyUp';
   if (down) type = text ? 'keyDown' : 'rawKeyDown';
-  return { type, key: e.key, code: e.code || '', keyCode: e.keyCode || 0, text, modifiers: mods };
+  const ev = { type, key: e.key, code: e.code || '', keyCode: e.keyCode || 0, text, modifiers: mods };
+  const command = down ? editCommandFor(e, mac) : '';
+  if (command) ev.commands = [command];
+  return ev;
+}
+
+// Input goes to the daemon one request at a time, in order: requests
+// sent side by side can arrive in any order, and a release that overtakes
+// its press is a click the page never sees.
+let inputChain = Promise.resolve();
+let queuedMove = null;
+
+function postInput(id, body) {
+  return api('POST', `/api/sessions/${id}/browser/input`, body).catch(() => {});
 }
 
 function sendInput(body) {
-  if (!session.sessionID) return Promise.resolve();
-  return api('POST', `/api/sessions/${session.sessionID}/browser/input`, body).catch(() => {});
+  const id = session.sessionID;
+  if (!id) return Promise.resolve();
+  inputChain = inputChain.then(() => postInput(id, body));
+  return inputChain;
+}
+
+// sendMove queues a pointer move, replacing one still waiting its turn:
+// only where the pointer is now matters.
+function sendMove(body) {
+  const id = session.sessionID;
+  if (!id) return;
+  if (queuedMove && queuedMove.id === id) {
+    queuedMove.body = body;
+    return;
+  }
+  const slot = { id, body };
+  queuedMove = slot;
+  inputChain = inputChain.then(() => {
+    if (queuedMove === slot) queuedMove = null;
+    return postInput(slot.id, slot.body);
+  });
 }
 
 function showEmpty(hasPage) {
   const empty = el('browser-empty');
   if (empty) empty.hidden = hasPage;
+}
+
+// reconnect opens the frame stream again after it broke (the daemon
+// restarted, the connection dropped), if the panel still shows the same
+// conversation. The query only makes the address new, so the <img>
+// fetches it again.
+function reconnect(delay) {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    const view = el('browser-view');
+    if (!view || !browserShown() || streamFor !== session.sessionID) return;
+    view.setAttribute('src', `/api/sessions/${streamFor}/browser/stream?r=${Date.now()}`);
+  }, delay);
 }
 
 async function refreshLocation() {
@@ -82,12 +164,18 @@ async function refreshLocation() {
   try {
     const st = await api('GET', `/api/sessions/${id}/browser`);
     if (id !== session.sessionID) return;
+    if (daemonLost) {
+      // The daemon is back; the stream it had open went with it.
+      daemonLost = false;
+      reconnect(0);
+    }
     showEmpty(!!st.has_tab);
     const url = el('browser-url');
     // Not while the person is typing an address into it.
     if (url && document.activeElement !== url && st.url && st.url !== 'about:blank') url.value = st.url;
   } catch {
     // The daemon may be restarting; the next tick tries again.
+    daemonLost = true;
   }
 }
 
@@ -110,6 +198,10 @@ export function renderBrowserPanel() {
     if (pollTimer) {
       clearInterval(pollTimer);
       pollTimer = null;
+    }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
     return;
   }
@@ -158,30 +250,68 @@ export function initBrowserPanel() {
   el('browser-forward')?.addEventListener('click', () => navigate({ action: 'forward' }));
   el('browser-reload')?.addEventListener('click', () => navigate({ action: 'reload' }));
 
-  const point = (e) => pagePoint(e.offsetX, e.offsetY, view.clientWidth, view.clientHeight);
+  // A point on the view, in the page's pixels. From the pointer's place in
+  // the window where the view can say where it is, so a drag that leaves
+  // the view still lands on the page's edge; from the event's own offset
+  // otherwise.
+  const point = (e) => {
+    if (typeof view.getBoundingClientRect === 'function' && typeof e.clientX === 'number') {
+      const r = view.getBoundingClientRect();
+      return pagePoint(e.clientX - r.left - (view.clientLeft || 0), e.clientY - r.top - (view.clientTop || 0), view.clientWidth, view.clientHeight);
+    }
+    return pagePoint(e.offsetX, e.offsetY, view.clientWidth, view.clientHeight);
+  };
+  const button = (e) => BUTTONS[e.button] || 'left';
+  // Hover effects need moves, and a page does not need sixty a second.
+  const move = (e, held) => {
+    const now = Date.now();
+    if (now - lastMove < 30) return;
+    lastMove = now;
+    const p = point(e);
+    const mouse = { type: 'mouseMoved', x: p.x, y: p.y, modifiers: modifierBits(e) };
+    // A move with a button held is a drag: the page is told which.
+    if (held && e.buttons) {
+      mouse.buttons = e.buttons;
+      mouse.button = e.buttons & 1 ? 'left' : (e.buttons & 2 ? 'right' : 'middle');
+    }
+    sendMove({ mouse });
+  };
+  // While a button is held the window follows the pointer, so a drag that
+  // leaves the view goes on, and its release is never lost: a page that
+  // missed it would go on thinking the button is down.
+  const onDragMove = (e) => move(e, true);
+  const onDragEnd = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    window.removeEventListener('mousemove', onDragMove);
+    window.removeEventListener('mouseup', onDragEnd);
+    const p = point(e);
+    sendInput({ mouse: { type: 'mouseReleased', x: p.x, y: p.y, button: button(e), buttons: e.buttons || 0, clickCount: e.detail || 1, modifiers: modifierBits(e) } });
+  };
   view.addEventListener('mousedown', (e) => {
     e.preventDefault();
     view.focus();
     const p = point(e);
-    sendInput({ mouse: { type: 'mousePressed', x: p.x, y: p.y, button: BUTTONS[e.button] || 'left', clickCount: e.detail || 1, modifiers: modifierBits(e) } });
-  });
-  view.addEventListener('mouseup', (e) => {
-    const p = point(e);
-    sendInput({ mouse: { type: 'mouseReleased', x: p.x, y: p.y, button: BUTTONS[e.button] || 'left', clickCount: e.detail || 1, modifiers: modifierBits(e) } });
+    sendInput({ mouse: { type: 'mousePressed', x: p.x, y: p.y, button: button(e), buttons: e.buttons || 0, clickCount: e.detail || 1, modifiers: modifierBits(e) } });
+    if (!dragging) {
+      dragging = true;
+      window.addEventListener('mousemove', onDragMove);
+      window.addEventListener('mouseup', onDragEnd);
+    }
   });
   view.addEventListener('mousemove', (e) => {
-    // Hover effects need moves, and a page does not need sixty a second.
-    const now = Date.now();
-    if (now - lastMove < 50) return;
-    lastMove = now;
-    const p = point(e);
-    sendInput({ mouse: { type: 'mouseMoved', x: p.x, y: p.y, modifiers: modifierBits(e) } });
+    if (!dragging) move(e, false);
   });
   view.addEventListener('wheel', (e) => {
     e.preventDefault();
     const p = point(e);
-    sendInput({ mouse: { type: 'mouseWheel', x: p.x, y: p.y, deltaX: e.deltaX, deltaY: e.deltaY, modifiers: modifierBits(e) } });
+    // A wheel that counts in lines or pages, as a page counts pixels.
+    const unit = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? PAGE_HEIGHT : 1);
+    sendInput({ mouse: { type: 'mouseWheel', x: p.x, y: p.y, deltaX: e.deltaX * unit, deltaY: e.deltaY * unit, modifiers: modifierBits(e) } });
   }, { passive: false });
+  // A stream that broke is opened again, after a pause so a daemon that
+  // is down is not asked for it in a tight loop.
+  view.addEventListener('error', () => reconnect(2000));
   view.addEventListener('contextmenu', (e) => e.preventDefault());
   view.addEventListener('keydown', (e) => {
     e.preventDefault();
