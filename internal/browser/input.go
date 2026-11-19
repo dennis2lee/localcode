@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -162,7 +163,32 @@ func (t *Tab) Mouse(ctx context.Context, e MouseEvent) error {
 	if e.Type == "mouseWheel" {
 		params["deltaX"], params["deltaY"] = e.DeltaX, e.DeltaY
 	}
-	return t.conn.Call(ctx, t.session, "Input.dispatchMouseEvent", params, nil)
+	return t.input(ctx, "Input.dispatchMouseEvent", params)
+}
+
+// inputAckWait is how long an input event waits for the browser to say
+// the page took it.
+const inputAckWait = 5 * time.Second
+
+// input sends one input event and waits a while for the browser's
+// answer, which comes once the page has handled the event. A click that
+// opens a tab in a new window has, on a loaded machine, had that answer
+// held back for over a minute although the event had been delivered and
+// the new tab had loaded. The event is sent either way, and later
+// commands reach the browser after it, so after the wait the call goes
+// on as if answered.
+func (t *Tab) input(ctx context.Context, method string, params map[string]any) error {
+	done := t.conn.Go(ctx, t.session, method, params)
+	timer := time.NewTimer(inputAckWait)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Scroll turns the wheel at x, y by dx, dy pixels.
@@ -244,7 +270,7 @@ func (t *Tab) KeyEvent(ctx context.Context, e KeyEvent) error {
 	if len(e.Commands) > 0 {
 		params["commands"] = e.Commands
 	}
-	return t.conn.Call(ctx, t.session, "Input.dispatchKeyEvent", params, nil)
+	return t.input(ctx, "Input.dispatchKeyEvent", params)
 }
 
 // Modifier bits, as the DevTools protocol numbers them.

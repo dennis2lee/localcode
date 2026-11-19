@@ -221,8 +221,13 @@ func (t *Tab) waitLoaded(ctx context.Context, d time.Duration) {
 	deadline := time.Now().Add(d)
 	time.Sleep(150 * time.Millisecond)
 	for time.Now().Before(deadline) {
+		// Each look bounded on its own, so a page that does not answer
+		// is waited for until the deadline and no longer.
 		var state string
-		if t.eval(ctx, `document.readyState`, &state) == nil && state == "complete" {
+		lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		err := t.eval(lctx, `document.readyState`, &state)
+		cancel()
+		if err == nil && state == "complete" {
 			return
 		}
 		select {
