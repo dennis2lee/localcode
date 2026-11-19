@@ -328,6 +328,12 @@ func (b Block) ImageBytes() []byte { return b.Data }
 // still one request, and it is the request a model has to accept.
 const MaxImageBytesPerMessage = 10 * 1024 * 1024
 
+// MaxImagesPerRequest caps the images one request carries, over the whole
+// history. Bedrock's Converse API takes 20 images in a request, and the
+// Anthropic API takes none over 2000 pixels on a side once there are more
+// than 20, so 20 keeps every image within both.
+const MaxImagesPerRequest = 20
+
 // SupportedImageMediaType reports whether all three adapters can carry
 // this type. A function of the media type alone, so the table below is a
 // table and not three fixtures.

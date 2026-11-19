@@ -563,14 +563,19 @@ func (c *Config) resolveOne(ctx context.Context, toolName, subject string, stati
 // use, where a request cannot be told apart by the agent it acts for: what
 // any rule denies stays denied, and an agent's allow does not lift a
 // top-level deny there.
+//
+// Of an agent's block, only rules that name toolName count. A persona
+// shut down with "*": "deny" keeps itself from the tool, which it is
+// refused anyway; it does not close the shared thing for every agent.
 func (c *Config) DeniedAnywhere(toolName, subject string) bool {
 	c.permMu.RLock()
 	denied := false
 	for _, agentCfg := range c.Agents {
-		if len(agentCfg.Permission) == 0 {
+		tp, ok := agentCfg.Permission[toolName]
+		if !ok {
 			continue
 		}
-		if d, matched := resolveRules(agentCfg.Permission, toolName, subject, subject); matched && d == DecisionDeny {
+		if d, matched := tp.resolveFor(subject, subject); matched && d == DecisionDeny {
 			denied = true
 			break
 		}

@@ -119,13 +119,51 @@ func (l *Loop) requestHistory(ctx context.Context, sessionID string) []provider.
 	return asSent(ctx, sendableHistory(l.history(sessionID)))
 }
 
-// asSent is msgs as the model of ctx's turn is sent them: as they are, or
-// with a note in place of each image.
+// asSent is msgs as the model of ctx's turn is sent them: with the newest
+// images, or with a note in place of each image.
 func asSent(ctx context.Context, msgs []provider.Message) []provider.Message {
 	if viewsImages(ctx) {
-		return msgs
+		return newestImages(msgs, provider.MaxImagesPerRequest)
 	}
 	return imagesAsText(msgs)
+}
+
+// newestImages is msgs with only the newest n images, and a note in place
+// of each older one. A conversation that keeps taking snapshots, or keeps
+// pasting screenshots, would otherwise reach a request no server takes,
+// and every turn after it would fail the same way. The stored history
+// keeps every image; a message changed here gets a new block slice.
+func newestImages(msgs []provider.Message, n int) []provider.Message {
+	seen := 0
+	var out []provider.Message
+	for i := len(msgs) - 1; i >= 0; i-- {
+		var content []provider.Block
+		for j := len(msgs[i].Content) - 1; j >= 0; j-- {
+			b := msgs[i].Content[j]
+			if b.Type != provider.BlockImage {
+				continue
+			}
+			seen++
+			if seen <= n {
+				continue
+			}
+			if content == nil {
+				content = append([]provider.Block(nil), msgs[i].Content...)
+			}
+			content[j] = provider.TextBlock(fmt.Sprintf(
+				"[An image (%s) was here. It was left out: a request carries at most %d images, and newer ones took its place.]", b.MediaType, n))
+		}
+		if content != nil {
+			if out == nil {
+				out = append([]provider.Message(nil), msgs...)
+			}
+			out[i].Content = content
+		}
+	}
+	if out == nil {
+		return msgs
+	}
+	return out
 }
 
 // imagesAsText is msgs with each image replaced by a sentence saying it was

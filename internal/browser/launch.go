@@ -56,6 +56,10 @@ func launchArgs(dataDir, profile string, imported bool) []string {
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--hide-crash-restore-bubble",
+		// A page can have the browser download a URL in the background
+		// with no page to watch: the browser makes that request itself,
+		// outside the guard and without its user agent.
+		"--disable-features=BackgroundFetch",
 		fmt.Sprintf("--window-size=%d,%d", ViewportWidth, ViewportHeight),
 	}
 	if !imported {

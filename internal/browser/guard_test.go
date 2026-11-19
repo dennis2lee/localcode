@@ -50,6 +50,21 @@ try { new EventSource('/bank/events'); } catch (e) {}</script>`)
 		case "/sw.js":
 			w.Header().Set("Content-Type", "text/javascript")
 			fmt.Fprint(w, `self.addEventListener('fetch', (e) => e.respondWith(fetch(e.request)));`)
+		case "/np-sw.js":
+			// Navigation preload: the browser sends the navigation's
+			// request itself while the worker starts, and the worker
+			// answers with that response.
+			w.Header().Set("Content-Type", "text/javascript")
+			fmt.Fprint(w, `self.addEventListener('activate', (e) => e.waitUntil(self.registration.navigationPreload.enable().then(() => self.clients.claim())));
+self.addEventListener('fetch', (e) => { if (e.request.mode === 'navigate') e.respondWith(e.preloadResponse.then((r) => r || fetch(e.request))); });`)
+		case "/np-worker":
+			fmt.Fprint(w, `<!doctype html><title>Preload</title><script>
+navigator.serviceWorker.register('/np-sw.js', {scope: '/np/'}).then((reg) => new Promise((done) => {
+  const sw = reg.installing || reg.waiting || reg.active;
+  if (sw.state === 'activated') return done();
+  sw.addEventListener('statechange', () => { if (sw.state === 'activated') done(); });
+})).then(() => fetch('/after-np'));
+</script>`)
 		case "/worker":
 			// A service worker: its script is fetched before the worker
 			// is a target the guard can set up, and it then answers the
@@ -131,6 +146,26 @@ func TestADeniedPageIsNeverLoaded(t *testing.T) {
 	}
 	if err := tab.Navigate(ctx, site.URL+"/bank/under-worker"); err == nil {
 		t.Error("navigating to a denied page a service worker answers succeeded")
+	}
+	// A worker that answers navigations from navigation preload.
+	tab.Navigate(ctx, site.URL+"/np-worker")
+	deadline = time.Now().Add(5 * time.Second)
+	for !site.reached("/after-np") && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !site.reached("/after-np") {
+		t.Fatal("the preloading worker never activated; the test is not testing it")
+	}
+	if err := tab.Navigate(ctx, site.URL+"/np/bank/preloaded"); err == nil {
+		t.Error("navigating to a denied page under a preloading worker succeeded")
+	}
+	if site.reached("/np/bank") {
+		t.Errorf("a denied page was requested by navigation preload: %v", site.seen)
+	}
+	// Background Fetch, which downloads outside the page, is not there.
+	var bgf string
+	if err := tab.eval(ctx, "typeof BackgroundFetchManager", &bgf); err != nil || bgf != "undefined" {
+		t.Errorf("Background Fetch is available to pages: %q, %v", bgf, err)
 	}
 	if site.reached("/bank") {
 		t.Errorf("a denied page was requested: %v", site.seen)

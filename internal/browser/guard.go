@@ -87,6 +87,15 @@ func (m *Manager) guardTarget(p *process, params json.RawMessage) {
 		pending = append(pending, conn.Go(ctx, sess, "Fetch.enable", map[string]any{
 			"patterns": []map[string]any{{"urlPattern": "*", "requestStage": "Request"}},
 		}))
+		// A page's requests skip its service worker. A worker can answer
+		// a navigation from a request the browser makes for it (navigation
+		// preload) or from its cache, and neither is a request the guard
+		// sees; without the worker, each is the page's own.
+		if ev.TargetInfo.Type == "page" || ev.TargetInfo.Type == "iframe" {
+			pending = append(pending,
+				conn.Go(ctx, sess, "Network.enable", map[string]any{"maxTotalBufferSize": 0, "maxResourceBufferSize": 0}),
+				conn.Go(ctx, sess, "Network.setBypassServiceWorker", map[string]any{"bypass": true}))
+		}
 		// A frame from another site runs in a process of its own, as a
 		// target of its own, and is only attached if asked for; so is a
 		// worker a page starts.

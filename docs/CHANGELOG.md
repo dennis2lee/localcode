@@ -12,8 +12,12 @@ The model can work a web page in a browser shown in the desktop window's right p
 * The `browser` setting (settings window, `/browser`, config.json) and `browser_path`
 * A copy of your Chrome or Edge profile in `~/.localcode/browser`, logins included, and "copy Chrome profile again"
 * `deny` rules for `browser`, top-level and every agent's, enforced on every HTTP request the browser makes: a matching URL gets no request, by any route (WebSockets are not checked)
-* Preloading (prefetch, speculation rules, prerender) off in the browser's profile
+* Preloading (prefetch, speculation rules, prerender) and Background Fetch off in the browser, and service workers bypassed by its pages
 * A refusal, on every daemon route, of requests from the model's own browser
+
+**Changed**
+
+* A request carries the newest 20 images of a conversation, with a note in place of each older one
 
 ## v0.169.7
 

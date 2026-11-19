@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -267,5 +268,44 @@ func TestAnAgentWithoutTheToolIsNotMarkedAsViewingImages(t *testing.T) {
 	}
 	if len(loop.specialists(ctx)) == 0 {
 		t.Fatal("no specialists to check")
+	}
+}
+
+// A request carries the newest 20 images and a note for each older one,
+// and the stored history keeps them all.
+func TestARequestCarriesTheNewestTwentyImages(t *testing.T) {
+	var msgs []provider.Message
+	for i := 0; i < 25; i++ {
+		msgs = append(msgs, provider.Message{Role: provider.RoleUser, Content: []provider.Block{
+			provider.TextBlock(fmt.Sprintf("shot %d", i)),
+			provider.ImageBlock("image/png", []byte{byte(i)}),
+		}})
+	}
+	sent := asSent(withViewsImages(context.Background(), true), msgs)
+	images, notes := 0, 0
+	for i, m := range sent {
+		for _, b := range m.Content {
+			switch {
+			case b.Type == provider.BlockImage:
+				images++
+				if i < 5 {
+					t.Errorf("message %d, one of the five oldest, kept its image", i)
+				}
+			case strings.Contains(b.Text, "at most 20 images"):
+				notes++
+			}
+		}
+	}
+	if images != provider.MaxImagesPerRequest || notes != 5 {
+		t.Errorf("sent %d images and %d notes; want 20 and 5", images, notes)
+	}
+	for i, m := range msgs {
+		if m.Content[1].Type != provider.BlockImage {
+			t.Fatalf("the stored history lost message %d's image", i)
+		}
+	}
+	// Twenty or fewer go as they are.
+	if got := asSent(withViewsImages(context.Background(), true), msgs[5:]); &got[0] != &msgs[5] {
+		t.Error("a history within the limit was copied")
 	}
 }

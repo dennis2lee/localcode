@@ -367,6 +367,14 @@ func TestBrowserBlockIsTheDenyRules(t *testing.T) {
 	if !block("https://bank.example/") {
 		t.Error("an agent's allow lifted a top-level deny in the shared browser")
 	}
+	// A persona shut down with a catch-all deny keeps only itself away.
+	loop.Config.Permissions = config.Permissions{}
+	loop.Config.Agents = map[string]config.AgentConfig{
+		"quiet": {Permission: map[string]config.ToolPermission{"*": {Rules: []config.PermissionRule{{Match: "*", Decision: config.DecisionDeny}}}}},
+	}
+	if block("https://example.com/") {
+		t.Error("one agent's catch-all deny closed the shared browser")
+	}
 }
 
 func TestSnapshotNamesAreWhatTheDaemonServes(t *testing.T) {
