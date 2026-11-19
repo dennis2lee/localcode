@@ -61,6 +61,18 @@ func launchArgs(dataDir, profile string, imported bool) []string {
 		// outside the guard and without its user agent.
 		"--disable-features=BackgroundFetch",
 		fmt.Sprintf("--window-size=%d,%d", ViewportWidth, ViewportHeight),
+		// Every conversation's tab is in a window of its own, and all but
+		// one are behind another. A browser slows, and under memory
+		// pressure stops, a page whose window is hidden: on a loaded
+		// machine a click whose new tab covered its page never finished,
+		// and a page opened beside another stopped answering. Every tab
+		// is one the model or the person may be working in.
+		"--disable-renderer-backgrounding",
+		"--disable-backgrounding-occluded-windows",
+		"--disable-background-timer-throttling",
+		// The copied profile may be signed in to the person's browser
+		// account. The model's browsing is not synced to it.
+		"--disable-sync",
 	}
 	if !imported {
 		switch runtime.GOOS {

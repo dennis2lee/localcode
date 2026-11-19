@@ -28,9 +28,8 @@ const UserAgentMark = "LocalcodeBrowser"
 // autoAttach attaches every new target the browser opens, paused until
 // the guard has set it up, except the browser's own: its interface pages
 // ("browser_ui", such as the address bar's suggestion popup each new window
-// makes) load no web content, and one held paused could stall the window it
-// belongs to, and the page in it. The rest of the filter is the protocol's
-// default.
+// makes) load no web content, so there is nothing to guard and no reason
+// to hold them. The rest of the filter is the protocol's default.
 var autoAttach = map[string]any{
 	"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
 	"filter": []map[string]any{

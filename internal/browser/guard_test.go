@@ -318,6 +318,17 @@ func TestABrowserAnotherLocalcodeUsesIsLeftAlone(t *testing.T) {
 	}
 }
 
+// Every tab keeps running behind another window, and the copied profile
+// does not sync.
+func TestLaunchArgsKeepEveryTabRunning(t *testing.T) {
+	args := strings.Join(launchArgs("/d", "Default", true), " ")
+	for _, flag := range []string{"--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows", "--disable-background-timer-throttling", "--disable-sync"} {
+		if !strings.Contains(args, flag) {
+			t.Errorf("the browser is started without %s", flag)
+		}
+	}
+}
+
 func TestLaunchArgsKeepAFreshProfileOffTheKeychain(t *testing.T) {
 	has := func(args []string, flag string) bool {
 		for _, a := range args {
@@ -440,9 +451,7 @@ func TestNoPreloadingLeavesTheRestOfThePreferences(t *testing.T) {
 
 // The browser's own interface pages are not attached, so none is held
 // paused: each new window makes one (the address bar's suggestion popup),
-// and on a loaded machine one held paused stalled the page in its window
-// for a minute, both in a new tab a click opened and in a tab opened
-// beside another.
+// and it loads no web content for the guard to check.
 func TestTheBrowsersOwnInterfaceIsNotHeld(t *testing.T) {
 	m := testManager(t)
 	ctx := ctxFor(t)
