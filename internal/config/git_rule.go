@@ -60,6 +60,13 @@ func shellWords(segment string) []shellWord {
 				i++
 				text.WriteRune(runes[i])
 			}
+		case r == '$' && i+1 < len(runes) && runes[i+1] == '\'':
+			// $'...', decoded the way bash, zsh and ksh decode it, so
+			// $'rm' is rm to a deny rule. Still marked as expanding: a
+			// shell without it reads "$" and a quoted string, and the
+			// git rule asks rather than pick a reading.
+			started, expands = true, true
+			i = decodeANSIC(runes, i+2, &text)
 		case r == '\'' || r == '"':
 			started = true
 			quote = r
@@ -300,4 +307,79 @@ func gitConfigRead(words []shellWord) bool {
 	// option's value is counted as an operand too, which can only make a
 	// read look like a write and ask, never the other way.
 	return read || len(operands) == 1
+}
+
+// decodeANSIC writes the body of a $'...' that starts at runes[i] into b,
+// with its backslash escapes decoded, and returns the index of the closing
+// quote (or the last rune when there is none).
+func decodeANSIC(runes []rune, i int, b *strings.Builder) int {
+	simple := map[rune]rune{'n': '\n', 't': '\t', 'r': '\r', 'a': '\a', 'b': '\b', 'f': '\f', 'v': '\v',
+		'e': 0x1b, 'E': 0x1b, '\\': '\\', '\'': '\'', '"': '"', '?': '?'}
+	for ; i < len(runes); i++ {
+		r := runes[i]
+		if r == '\'' {
+			return i
+		}
+		if r != '\\' || i+1 >= len(runes) {
+			b.WriteRune(r)
+			continue
+		}
+		i++
+		e := runes[i]
+		if v, ok := simple[e]; ok {
+			b.WriteRune(v)
+			continue
+		}
+		digits := func(max int, base int, ok func(rune) bool) (rune, int) {
+			v, n := rune(0), 0
+			for n < max && i+1+n < len(runes) && ok(runes[i+1+n]) {
+				d := runes[i+1+n]
+				switch {
+				case d >= '0' && d <= '9':
+					v = v*rune(base) + d - '0'
+				case d >= 'a' && d <= 'f':
+					v = v*rune(base) + d - 'a' + 10
+				default:
+					v = v*rune(base) + d - 'A' + 10
+				}
+				n++
+			}
+			return v, n
+		}
+		hex := func(r rune) bool {
+			return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+		}
+		switch {
+		case e >= '0' && e <= '7':
+			i--
+			v, n := digits(3, 8, func(r rune) bool { return r >= '0' && r <= '7' })
+			b.WriteRune(v)
+			i += n
+		case e == 'x':
+			v, n := digits(2, 16, hex)
+			if n == 0 {
+				b.WriteString("\\x")
+				continue
+			}
+			b.WriteRune(v)
+			i += n
+		case e == 'u' || e == 'U':
+			max := 4
+			if e == 'U' {
+				max = 8
+			}
+			v, n := digits(max, 16, hex)
+			if n == 0 {
+				b.WriteRune('\\')
+				b.WriteRune(e)
+				continue
+			}
+			b.WriteRune(v)
+			i += n
+		default:
+			b.WriteRune('\\')
+			b.WriteRune(e)
+		}
+	}
+	return len(runes) - 1
 }

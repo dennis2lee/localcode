@@ -82,54 +82,107 @@ func (c *Config) denyReaches(ctx context.Context, segment string, staticRequires
 		return false
 	}
 
+	// denied checks one command text, and the same text without the ")"
+	// that closes a subshell ("(rm x)", "( rm x )").
+	denied := func(text string) bool {
+		for _, t := range []string{text, strings.TrimRight(text, ") ")} {
+			if t == segment || t == "" {
+				continue
+			}
+			tctx := context.WithValue(ctx, shellSegmentKey{}, t)
+			if c.resolveOneStrict(tctx, BashToolName, t, staticRequiresPermission) == DecisionDeny {
+				return true
+			}
+		}
+		return false
+	}
+
 	// Slices in this queue always get shorter. Deduplication also avoids
 	// revisiting a nested wrapper's suffixes through every outer wrapper.
-	pending := [][]shellWord{shellWords(segment)}
+	type item struct {
+		words []shellWord
+		// stdinArgs marks a command xargs runs: it gets its arguments
+		// from input, so "xargs rm" runs rm with some, and "rm *" has to
+		// see one to match.
+		stdinArgs bool
+	}
+	pending := []item{{words: shellWords(segment)}}
 	seen := make(map[string]bool)
 	for len(pending) > 0 {
-		words := denyReachLeading(pending[0])
+		it := pending[0]
+		words := denyReachLeading(it.words)
 		pending = pending[1:]
 		if len(words) == 0 {
 			continue
 		}
 		candidate := denyReachText(words)
+		if it.stdinArgs {
+			candidate += " _"
+		}
 		if seen[candidate] {
 			continue
 		}
 		seen[candidate] = true
-		if candidate != segment {
-			candidateCtx := context.WithValue(ctx, shellSegmentKey{}, candidate)
-			if c.resolveOneStrict(candidateCtx, BashToolName, candidate, staticRequiresPermission) == DecisionDeny {
-				return true
-			}
+		if denied(candidate) {
+			return true
 		}
 		program := normalizeProgram(words[0].text)
 		// The program by the name a rule gives it: "/bin/rm" and "RM" (on
 		// a file system that ignores case) run rm, and "rm *" names rm.
-		if program != words[0].text {
-			named := program + strings.TrimPrefix(candidate, words[0].text)
-			namedCtx := context.WithValue(ctx, shellSegmentKey{}, named)
-			if c.resolveOneStrict(namedCtx, BashToolName, named, staticRequiresPermission) == DecisionDeny {
-				return true
-			}
+		if program != words[0].text && denied(program+strings.TrimPrefix(candidate, words[0].text)) {
+			return true
 		}
 		if denyReachWrappers[program] {
 			for j := 1; j < len(words); j++ {
-				pending = append(pending, words[j:])
+				pending = append(pending, item{words: words[j:], stdinArgs: program == "xargs"})
 			}
+		}
+		// The word after an option, past a "--" that ends the options.
+		after := func(j int) (string, bool) {
+			if j+1 < len(words) && words[j+1].text == "--" {
+				j++
+			}
+			if j+1 < len(words) {
+				return words[j+1].text, true
+			}
+			return "", false
 		}
 		switch program {
 		case "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "su":
-			for j := 1; j+1 < len(words); j++ {
+			for j := 1; j < len(words); j++ {
 				option := words[j].text
 				if strings.HasPrefix(option, "-") && !strings.HasPrefix(option, "--") && strings.Contains(option, "c") {
-					if lineDenied(words[j+1].text) {
+					if script, ok := after(j); ok && lineDenied(script) {
 						return true
 					}
 				}
 			}
+		case "env":
+			// -S splits one string into the command line it runs.
+			for j := 1; j < len(words); j++ {
+				w := words[j].text
+				if rest, ok := strings.CutPrefix(w, "--split-string="); ok {
+					if lineDenied(rest) {
+						return true
+					}
+					continue
+				}
+				if w == "-S" || w == "--split-string" {
+					if script, ok := after(j); ok && lineDenied(script) {
+						return true
+					}
+					continue
+				}
+				if strings.HasPrefix(w, "-S") && len(w) > 2 && lineDenied(w[2:]) {
+					return true
+				}
+			}
 		case "eval":
-			if lineDenied(denyReachText(words[1:])) {
+			rest := words[1:]
+			if len(rest) > 0 && rest[0].text == "--" {
+				rest = rest[1:]
+			}
+			if lineDenied(denyReachText(rest)) {
 				return true
 			}
 		case "watch":
@@ -155,7 +208,7 @@ func (c *Config) denyReaches(ctx context.Context, segment string, staticRequires
 					for end < len(words) && words[end].text != ";" && words[end].text != "+" {
 						end++
 					}
-					pending = append(pending, words[j+1:end])
+					pending = append(pending, item{words: words[j+1 : end]})
 					j = end
 				}
 			}

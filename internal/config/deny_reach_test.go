@@ -56,6 +56,14 @@ var denyReachCases = []struct {
 	{`sudo /bin/rm -rf x`, true, [2]Decision{DecisionAsk, DecisionAllow}},
 	{`RM -rf x`, true, [2]Decision{DecisionAsk, DecisionAllow}},
 	{`busybox sh -c 'rm -rf x'`, true, [2]Decision{DecisionAsk, DecisionAllow}},
+	{`bash -c -- 'rm -rf x'`, true, [2]Decision{DecisionAsk, DecisionAllow}},
+	{`eval -- rm -rf x`, true, [2]Decision{DecisionAsk, DecisionAllow}},
+	{`$'rm' -rf x`, true, [2]Decision{DecisionAsk, DecisionAllow}},
+	{`bash -c $'rm -rf x'`, true, [2]Decision{DecisionAsk, DecisionAllow}},
+	{`sudo $'r\x6d' -rf x`, true, [2]Decision{DecisionAsk, DecisionAllow}},
+	{`env -S "sudo rm -rf x"`, true, [2]Decision{DecisionAsk, DecisionAllow}},
+	{`env --split-string="rm -rf x"`, true, [2]Decision{DecisionAsk, DecisionAllow}},
+	{`echo x | xargs rm`, true, [2]Decision{DecisionAsk, DecisionAllow}},
 	{`ls /bin/rm`, false, [2]Decision{DecisionAsk, DecisionAllow}},
 	{`/usr/bin/git status`, false, [2]Decision{DecisionAsk, DecisionAllow}},
 	{`echo rm -rf x`, false, [2]Decision{DecisionAsk, DecisionAllow}},
@@ -260,6 +268,18 @@ func TestDenyReachLimitsAndLiterals(t *testing.T) {
 		cfg := denyReachConfig(true, PermissionRule{Match: "rm *", Decision: DecisionDeny})
 		if got := cfg.ResolvePermission(BashToolName, line, true); got != DecisionAllow {
 			t.Errorf("%q got %s", line, got)
+		}
+	}
+}
+
+// A rule for one exact command reaches it inside a subshell written
+// against its words: "(touch marker)" runs "touch marker".
+func TestDenyReachExactRuleInsideParens(t *testing.T) {
+	on := true
+	cfg := Config{SkipPermissions: &on, Permissions: Permissions{BashToolName: ToolPermission{Rules: []PermissionRule{{Match: "touch marker", Decision: DecisionDeny}}}}}
+	for _, line := range []string{`(touch marker)`, `( touch marker )`, `((touch marker))`} {
+		if got := cfg.ResolvePermission(BashToolName, line, true); got != DecisionDeny {
+			t.Errorf("%q = %s, want deny", line, got)
 		}
 	}
 }
