@@ -2173,7 +2173,9 @@ The profile's `vision` key decides, and a model it leaves unset is asked.
 
 * **A model that is not sent images:** each image is replaced by a note to the model saying an image was there. The transcript shows a notice naming the model, the reason (for example its answer to the test image), and the profile to change.
 * **Images already in the conversation:** the same rule applies on every request. A conversation moved with `/model` to a model that cannot see goes on, and moving back sends the images again.
-* **A model that is sent images and refuses them:** the turn fails with a hint to set `"vision": false` on its profile or to switch with `/model`. Sending the message again does not help, because the image is in the conversation. A refusal about an image's size is not read as a model without vision, and has no such hint.
+* **A model that is sent images and refuses them:** the turn fails with a hint to set `"vision": false` on its profile or to switch with `/model`. A refusal about an image's size is not read as a model without vision, and has no such hint.
+  * A model that passed the test image is asked again on the next turn. When it now refuses, the next turn sends a note in place of each image and goes on.
+  * A model sent images by `"vision": true` or by being a Claude model is not asked. Sending the message again does not help, because the image is in the conversation.
 
 A pasted image is stored in the conversation, so it is still there after a restart, which is also why a session log with images is much larger than one without. [Compaction](#compact) drops them: an image cannot go into a text summary, so the summary says how many were omitted and the model keeps knowing a picture was discussed without still holding it.
 

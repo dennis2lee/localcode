@@ -39,7 +39,7 @@ type VisionProbe struct {
 const visionProbeQuestion = "What colour is this image? Answer with one word."
 
 // visionProbeMaxTokens is room for a reasoning model to think before it
-// answers. The probe stops reading as soon as the answer names the colour.
+// answers.
 const visionProbeMaxTokens = 4096
 
 // visionProbeColour matches the answer. A whole word, so "coloured" is not
@@ -84,8 +84,6 @@ var visionProbeImage = sync.OnceValue(func() []byte {
 // that passes has also shown that this provider's wire form for an image
 // reaches this server intact.
 func ProbeVision(ctx context.Context, p Provider, model string) (VisionProbe, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	stream, err := p.Chat(ctx, ChatRequest{
 		Model:     model,
 		MaxTokens: visionProbeMaxTokens,
@@ -100,26 +98,27 @@ func ProbeVision(ctx context.Context, p Provider, model string) (VisionProbe, er
 		}
 		return VisionProbe{}, err
 	}
+	// The whole answer, read to its end. Judged as it arrived, a reply
+	// was judged on where the server happened to split it: "red" with
+	// "acted." still to come, or "Red" with "? I cannot see an image"
+	// still to come, read as seeing.
 	var answer strings.Builder
 	var streamErr error
 	for ev := range stream {
 		switch ev.Type {
 		case EventTextDelta:
 			answer.WriteString(ev.TextDelta)
-			if seesColour(answer.String()) {
-				// Answered. The rest of a long reply is not needed, and
-				// the stream closes once the request is cancelled.
-				cancel()
-			}
 		case EventError:
 			if streamErr == nil {
 				streamErr = ev.Err
 			}
 		}
 	}
-	said := strings.TrimSpace(answer.String())
-	if seesColour(said) {
-		return VisionProbe{Sees: true, Answer: clipAnswer(said)}, nil
+	// A stream that ended because the probe's time ran out, or its
+	// turn's, was cut short: what it had said is not its answer. An
+	// adapter closes the stream on a cancel without always saying why.
+	if err := ctx.Err(); err != nil {
+		return VisionProbe{}, err
 	}
 	if streamErr != nil {
 		if isVisionRefusal(streamErr) {
@@ -127,8 +126,12 @@ func ProbeVision(ctx context.Context, p Provider, model string) (VisionProbe, er
 		}
 		return VisionProbe{}, streamErr
 	}
-	if said == "" {
+	said := strings.TrimSpace(answer.String())
+	switch {
+	case said == "":
 		return VisionProbe{}, errNoVisionAnswer
+	case seesColour(said):
+		return VisionProbe{Sees: true, Answer: clipAnswer(said)}, nil
 	}
 	return VisionProbe{Answer: clipAnswer(said)}, nil
 }

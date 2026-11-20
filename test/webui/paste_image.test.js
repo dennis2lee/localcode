@@ -212,6 +212,37 @@ test('a copy that is still too big as PNG goes as JPEG, and one too big as both 
   }
 });
 
+// Found in review: a canvas that could not be made or drawn on left the
+// decoded bitmap, over 100 MB at 9000x4000, to the garbage collector.
+for (const [failure, says] of [
+  ['the canvas cannot be made', /could not read image: Error: allocation failed/],
+  ['the canvas has no 2d context', /this page cannot make a smaller copy/],
+  ['drawing throws', /could not read image: Error: draw failed/],
+]) {
+  test(`the decoded bitmap is released when ${failure}`, async () => {
+    let closed = 0;
+    const app = await load({
+      globals: {
+        createImageBitmap: async () => ({ width: 9000, height: 4000, close() { closed++; } }),
+        OffscreenCanvas: class {
+          constructor() {
+            if (failure === 'the canvas cannot be made') throw new Error('allocation failed');
+          }
+          getContext() {
+            if (failure === 'the canvas has no 2d context') return null;
+            return { drawImage() { throw new Error('draw failed'); } };
+          }
+        },
+      },
+    });
+    app.el('input').fire('paste', { clipboardData: { items: [makeImageItem('image/png', 6000000, 'big')] } });
+    await app.settle();
+    assert.equal(app.internals.getAttachedImages().length, 0);
+    assert.match(app.transcript(), says);
+    assert.equal(closed, 1, 'the bitmap must be released once');
+  });
+}
+
 test('an image within the limits is attached as it is, without a copy', async () => {
   const { seen, globals } = scalingGlobals(1920, 1080, () => 1);
   const app = await load({ globals });

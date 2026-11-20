@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"image/png"
-	"strings"
 	"testing"
 	"time"
 )
@@ -126,21 +125,36 @@ func TestProbeVisionAsksWithOneSmallImage(t *testing.T) {
 	}
 }
 
-// The probe stops reading once the colour is named: a model that would
-// go on at length does not hold the turn that asked.
-func TestProbeVisionStopsReadingOnceAnswered(t *testing.T) {
-	p := &probeScript{deltas: []string{"Red"}, endless: true}
-	done := make(chan VisionProbe, 1)
-	go func() {
-		got, _ := ProbeVision(context.Background(), p, "m")
-		done <- got
-	}()
-	select {
-	case got := <-done:
-		if !got.Sees || !strings.HasPrefix(got.Answer, "Red") || len([]rune(got.Answer)) > 81 {
-			t.Errorf("got %+v", got)
+// The answer is judged whole, however the server splits it: a word cut
+// at "red" is not the colour, and a denial that follows the colour is
+// still a denial.
+func TestProbeVisionJudgesTheWholeAnswer(t *testing.T) {
+	cases := []struct {
+		deltas []string
+		sees   bool
+	}{
+		{[]string{"The attachment was red", "acted."}, false},
+		{[]string{"Red", "? I cannot see an image, so I cannot tell."}, false},
+		{[]string{"R", "e", "d"}, true},
+		{[]string{"It is ", "red", "."}, true},
+	}
+	for _, c := range cases {
+		got, err := ProbeVision(context.Background(), &probeScript{deltas: c.deltas}, "m")
+		if err != nil || got.Sees != c.sees {
+			t.Errorf("%q: %+v, %v; want sees=%v", c.deltas, got, err, c.sees)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the probe read on after the answer")
+	}
+}
+
+// A probe whose time ran out mid-answer has no answer: what it had said
+// is returned as the probe's error, not as a "no".
+func TestProbeVisionCutShortIsNoAnswer(t *testing.T) {
+	for _, deltas := range [][]string{{"The image is"}, {"Red"}} {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		got, err := ProbeVision(ctx, &probeScript{deltas: deltas, endless: true}, "m")
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) || got.Sees || got.Answer != "" {
+			t.Errorf("%q then nothing: %+v, %v; want the deadline as the error", deltas, got, err)
+		}
 	}
 }

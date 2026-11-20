@@ -391,13 +391,16 @@ async function fitImage(file, mediaType) {
   const cannot = { error: `image not attached: it is ${what} (${limit}), and this page cannot make a smaller copy` };
   if (!bitmap) return cannot;
   const { w, h } = fitWithin(bitmap.width, bitmap.height, SHRINK_SIDE);
-  const canvas = newCanvas(w, h);
-  if (!canvas) {
+  // The decoded bitmap is released however this ends: a 9000x4000 one is
+  // over 100 MB, and the likeliest failure here is running out of room.
+  let canvas;
+  try {
+    canvas = newCanvas(w, h);
+    if (!canvas || !canvas.ctx) return cannot;
+    canvas.ctx.drawImage(bitmap, 0, 0, w, h);
+  } finally {
     if (typeof bitmap.close === 'function') bitmap.close();
-    return cannot;
   }
-  canvas.ctx.drawImage(bitmap, 0, 0, w, h);
-  if (typeof bitmap.close === 'function') bitmap.close();
   for (const [type, quality] of [['image/png', undefined], ['image/jpeg', 0.9], ['image/jpeg', 0.75]]) {
     const blob = await canvas.encode(type, quality);
     if (blob && blob.size <= MAX_ONE_IMAGE_BYTES) return { file: blob, mediaType: type, scaled: { w, h } };
