@@ -13,6 +13,9 @@ Every web address the model writes is a link that opens in your own browser, and
 * A link in the desktop window on macOS or Linux doing nothing when clicked: opened in the system's default browser, held to the same rules as on Windows
 * A `[text](address)` link whose text is another web address: shown with the address it opens beside it, each opening itself
 * A `[text](address)` address cut at its first `)` (`/wiki/Function_(mathematics)`)
+* A code block written inside a `[text](address)` address, which put the block's HTML inside the link's `href` and let model text add attributes to the link
+* Inline code holding a double-backtick span (`` `a``b``c` ``), which left a placeholder character in the output
+* `$\toString$` and other names every object inherits, printed as JavaScript source by the math reader
 * A permission decision taking the permission lock twice: a settings change (a rule added, Smart Agent, skip permissions or the browser switched) made between the two left every later permission decision waiting, the browser's check of each request a page made included
 
 ## v0.173.0
