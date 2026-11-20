@@ -35,8 +35,8 @@ func smartHome(t *testing.T, modelURL string, extra string) string {
 	cfg := fmt.Sprintf(`{
 	  "providers": {"local": {"type": "openai-compat", "base_url": %q}},
 	  "profiles": {
-	    "balanced": {"provider": "local", "model": "the-default-model"},
-	    "fast": {"provider": "local", "model": "the-fast-model"}
+	    "balanced": {"provider": "local", "model": "the-default-model", "vision": false},
+	    "fast": {"provider": "local", "model": "the-fast-model", "vision": false}
 	  },
 	  "default_profile": "balanced",
 	  "agents": {"general-purpose": {"profile": "balanced"}}%s

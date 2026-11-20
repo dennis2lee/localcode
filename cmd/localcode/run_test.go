@@ -99,7 +99,9 @@ func (f *fakeModel) sawTools() []string {
 
 // runHome lays down a config and a project with an AGENTS.md in it, and
 // points HOME and the working directory at them, so a run in this test is
-// a run in a project of its own.
+// a run in a project of its own. The profiles say "vision", so a run is
+// not preceded by a test image: these tests count and read the requests
+// a turn makes.
 func runHome(t *testing.T, modelURL string) string {
 	t.Helper()
 	home := t.TempDir()
@@ -109,8 +111,8 @@ func runHome(t *testing.T, modelURL string) string {
 	cfg := fmt.Sprintf(`{
 	  "providers": {"local": {"type": "openai-compat", "base_url": %q}},
 	  "profiles": {
-	    "balanced": {"provider": "local", "model": "the-default-model"},
-	    "fast": {"provider": "local", "model": "the-fast-model"}
+	    "balanced": {"provider": "local", "model": "the-default-model", "vision": false},
+	    "fast": {"provider": "local", "model": "the-fast-model", "vision": false}
 	  },
 	  "default_profile": "balanced",
 	  "agents": {"general-purpose": {"profile": "balanced"}}
@@ -548,7 +550,7 @@ func TestTheJSONUsageCountsTheSubAgents(t *testing.T) {
 	}
 	cfg := fmt.Sprintf(`{
 	  "providers": {"local": {"type": "openai-compat", "base_url": %q}},
-	  "profiles": {"balanced": {"provider": "local", "model": "m"}},
+	  "profiles": {"balanced": {"provider": "local", "model": "m", "vision": false}},
 	  "default_profile": "balanced",
 	  "orchestrate": true,
 	  "agents": {
