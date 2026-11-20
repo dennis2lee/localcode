@@ -849,11 +849,23 @@ aside.left {
 .side-section { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
 .side-section:last-child { border-bottom: 0; margin-bottom: 0; }
 .side-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-/* The browser. The page fills the panel's width at the page's own
-   proportions (1280x800), so one point on the image is one point on the
-   page: js/browser.js pagePoint relies on it. A panel narrower than a
-   readable page is widened while the browser is in it. */
-#right-panel:has(#browser-section:not([hidden])) { min-width: 440px; }
+/* The browser, in its own column between the transcript and the tasks
+   panel. The page fills the panel's width at the page's own proportions
+   (1280x800), so one point on the image is one point on the page:
+   js/browser.js pagePoint relies on it.
+   It is the one panel that shrinks with the window, down to the minimum
+   js/resize.js BROWSER_BOUNDS holds a drag to, and while it is shown the
+   transcript keeps resize.js CENTER_MIN: a page wide enough to read is
+   the panel most likely to have been dragged wider than a smaller window
+   has room for, and the transcript is what it would otherwise take the
+   room from. */
+#browser-panel {
+  width: 600px;
+  min-width: 360px;
+  flex-shrink: 1;
+}
+#browser-panel[hidden], #resize-browser[hidden] { display: none; }
+main:has(> #browser-panel:not([hidden])) > #center { min-width: 280px; }
 .browser-bar { display: flex; gap: 4px; align-items: center; margin: 10px 0 8px; }
 .browser-bar .browser-nav { padding: 2px 6px; }
 .ico-flip { transform: scaleX(-1); }
@@ -863,7 +875,11 @@ aside.left {
   border: 1px solid var(--border); border-radius: var(--r-ctl);
   padding: 2px 6px; font: inherit; font-size: var(--t-ui);
 }
-.browser-frame { position: relative; }
+/* The frame's own ground shows while the view is stale: just after a
+   switch to another conversation, the <img> would go on showing the last
+   frame of the conversation before until the new stream sends one. */
+.browser-frame { position: relative; background: var(--ink); border-radius: var(--r-ctl); }
+#browser-view.stale { opacity: 0; }
 #browser-view {
   display: block; width: 100%; aspect-ratio: 1280 / 800;
   background: var(--ink); border: 1px solid var(--border); border-radius: var(--r-ctl);

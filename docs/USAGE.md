@@ -420,7 +420,7 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `hooks` | Shell commands run at lifecycle points. See [Hooks](#hooks). |
 | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `smart_agent` | Turns on the work-order prompt, enhanced tools, fallback, the turn log, cache markers and credential-path checks. It delegates nothing. Off unless set to true; also `/config smart_agent` and the settings window. See [Smart Agent](#smart-agent). |
-| `browser` | Gives the model a web browser, shown in the desktop window's right panel. Off unless set to true; also `/browser` and the settings window. See [Browser](#browser). |
+| `browser` | Gives the model a web browser, shown in the desktop window's browser panel. Off unless set to true; also `/browser` and the settings window. See [Browser](#browser). |
 | `browser_path` | The browser to run instead of the Chrome or Edge found in the usual places. |
 | `model_invocable` | The switch for whether the model may run commands itself. Off unless set; `/model-invocable` toggles it. On opens nothing by itself: each built-in must be named in `model_commands`, and each custom command or skill must opt in from its own frontmatter. See [/model-invocable](#model-invocable). |
 | `model_commands` | Which built-in commands the model may run, each with its leading slash. Empty, the default, means none. Inert while `model_invocable` is off. |
@@ -1756,7 +1756,7 @@ The following daemon commands work in both clients.
 | Command | Setting | What it does |
 |---|---|---|
 | `/smart-agent` | `smart_agent` | The work-order prompt, the enhanced tools (paged reads, `update_plan`, `ask_user`), the fallback chain, the trace, the prompt cache markers and the guards. It delegates nothing. See [Smart Agent](#smart-agent). |
-| `/browser` | `browser` | The web browser shown in the desktop window's right panel, for the model to work in. See [Browser](#browser). |
+| `/browser` | `browser` | The web browser shown in the desktop window's browser panel, for the model to work in. See [Browser](#browser). |
 | `/orchestrate` | `orchestrate` | Delegation: the specialist roster, `Task`, the background pair, the delegation policy and the Orchestrate tool. Reports the agents it can delegate to, or says why there are none. See [Orchestration](#orchestration). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also on the settings Muse tab. |
@@ -2037,19 +2037,24 @@ If one session fails to restore, for example a corrupt `.meta.json`, the rest st
 
 ## Part 6. Web UI
 
-The Web UI shares daemon sessions with the TUI and desktop window. The left panel manages sessions. The right panel shows background tasks, scheduled tasks and MCP servers. Status and permission controls are below the prompt.
+The Web UI shares daemon sessions with the TUI and desktop window. The left panel manages sessions. The right panel shows background tasks, scheduled tasks and MCP servers. In the desktop window with the [browser](#browser) on, the browser panel sits between the conversation and the right panel. Status and permission controls are below the prompt.
 
 ### Resizing and hiding the side panels
 
 | Action | How |
 |---|---|
-| Resize a panel | Drag the hairline between it and the transcript |
+| Resize a panel | Drag the hairline between it and the transcript. The browser panel's hairline is on its left edge. |
 | Back to the default width | Double-click that same handle |
-| Hide or show a panel | The toggle button in the header, at the far left for the session panel and the far right for the tasks/MCP panel |
+| Hide or show a panel | The toggle button in the header, at the far left for the session panel and the far right for the tasks/MCP panel. The browser panel has no toggle: it is shown while the browser setting is on. |
 
 Panel width and visibility persist in the browser or desktop window.
 
-Minimum panel width: 160px. Use the toggle to hide a panel.
+| Panel | Default | Drag range |
+|---|---|---|
+| Sessions, tasks/MCP | 260px, 280px | 160px to 640px |
+| Browser | 600px | 360px to 1306px. At 1306px the page is shown at its own 1280 pixels. |
+
+A drag does not narrow the transcript below 280px. While the browser panel is shown, a window too narrow for every panel narrows the browser panel first, down to 360px, and the transcript keeps 280px. Use a toggle to hide a panel.
 
 ### Left panel: sessions
 
@@ -2298,7 +2303,7 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | `bash` | Yes, except default Git allowance | Shell command with a two-minute default timeout. Reports exit status, empty output, timeout, and cancellation separately. `grep` 1, `diff` 1, and `test` 1 are ordinary results; `grep` 2 is an error. See [Python on Windows](#python-on-windows). |
 | `Skill` | No | Load a skill body by name. Registered only when skills exist. |
 | `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. One run at a time per directory, so a concurrent panel of reviewers does not start several copies of your test suite in one tree; a call that queued says so. |
-| `browser` | No | Work a web page in the browser shown in the desktop window's right panel: open, read, screenshot, click, type, key, scroll. Offered only with the browser setting on and the conversation open in the desktop window. A deny rule matches the page's URL. See [Browser](#browser). |
+| `browser` | No | Work a web page in the browser shown in the desktop window's browser panel: open, read, screenshot, click, type, key, scroll. Offered only with the browser setting on and the conversation open in the desktop window. A deny rule matches the page's URL. See [Browser](#browser). |
 | `session_read` | No | Read another conversation on this daemon: `mode=summary` for what it concluded and which files it touched, `mode=transcript` for its messages a page at a time. Not offered to a delegated sub agent. See [Referring to another conversation](#referring-to-another-conversation-with-name) |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server. Never in a turn `localcode run` builds itself, which connects no MCP servers; a `--session` turn routed to a running daemon has the daemon's. |
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only with [orchestration](#orchestration) on and 2 or more agents to delegate to. |
@@ -2804,7 +2809,7 @@ The credential-path check does not parse shell commands. `bash` remains subject 
 
 ### Browser
 
-The model can work a web page the way a person does, in a browser shown at the top of the desktop window's right panel. The person can watch it and take over at any point.
+The model can work a web page the way a person does, in a browser shown in the desktop window's browser panel, between the conversation and the right panel. The person can watch it and take over at any point.
 
 | Item | Behavior |
 |---|---|
@@ -2812,7 +2817,7 @@ The model can work a web page the way a person does, in a browser shown at the t
 | Where it works | The desktop window only. The model is offered the `browser` tool while the setting is on and the conversation is open in a desktop window. A Web UI in another browser, the TUI and `localcode run` never have it. |
 | Browser | Google Chrome, or Microsoft Edge when Chrome is not installed. `browser_path` names another one. It runs with no window of its own; the panel is its window. |
 | Profile | The first use copies your last used Chrome (or Edge) profile to `~/.localcode/browser`: cookies, saved passwords, site storage and preferences. History, extensions, caches, and autofill data (addresses and payment cards) are not copied. "copy Chrome profile again" in the settings window copies it again for sites you signed in to since, and closes every tab. A file your running browser holds locked is skipped and named in the settings window; close that browser and copy again for it. With no profile to copy, the browser starts on an empty one, which keeps its passwords in the profile rather than in the system keychain. Sync is off: the model's browsing is not synced to a browser account the copy is signed in to. |
-| Conversations | One browser for the daemon, so every conversation shares the copied logins. Each conversation has its own tab for as long as it exists. A link that opens a new tab moves the conversation to it, and closing that tab moves it back. Deleting the conversation closes its tabs. |
+| Conversations | One browser for the daemon, so every conversation shares the copied logins. Each conversation has its own tab for as long as it exists, and the panel shows the tab of the conversation on screen. Opening another conversation shows that conversation's page, or no page if it has none. Nothing from the conversation before stays in the panel: its last frame, its address, an error from its address bar. A link that opens a new tab moves the conversation to it, and closing that tab moves it back. Deleting the conversation closes its tabs. |
 | Questions | None: the model opens pages, clicks and types, passwords included, without asking. A `deny` rule for `browser` keeps a site out of reach: `{"browser": [{"match": "*bank*", "decision": "deny"}]}`. The browser sends no HTTP request to a matching URL, whatever leads there: a `navigate`, a redirect, a click, a frame, back and forward, a tab a link opened, a service worker, an image or script on an allowed page, or the panel's address bar. A WebSocket an allowed page opens is not checked: the browser's DevTools interception, which the check is built on, does not see WebSockets. A `navigate` to it is refused before it is sent, and an action that leads there is refused naming only the site. The rules are read on every request, so a rule added while the browser runs applies to the next one. A page already open when its rule was added stays on screen, and the model's every action on it is refused. |
 | Agents' rules | Every conversation and agent shares the one browser, so the browser refuses what any rule denies: the top-level `permission` block, or an agent's own rules for `browser`. An agent's `allow` does not lift a top-level `deny` for the browser. An agent's catch-all (`"*"`) rule applies to that agent only. |
 | Requests the browser makes itself | Turned off, because the deny rules cannot see them. Preloading is off in the browser's profile, so a page cannot have another page fetched ahead of a click (link prefetch, speculation rules, prerender). Background Fetch is off. A page's requests skip its service worker, so a worker cannot answer a navigation from navigation preload or from its cache. A request the browser starts on its own that is not named here is not checked. |
@@ -2822,7 +2827,7 @@ The model can work a web page the way a person does, in a browser shown at the t
 
 Everything the copied profile is signed in to is reachable by the model. Use the browser setting where that is acceptable, and deny the sites it must not touch.
 
-The panel shows the page from a stream of frames. A click, a drag, the wheel, keys and a paste on it go to the page. Cmd (macOS) or Ctrl (elsewhere) with A, C, X, V, Z act on the page: copy and paste use the system clipboard. A character typed with Option or AltGr types that character. The address bar opens what is typed into it and starts the browser if it is not running; back, forward and reload act on the page. A stream that breaks, such as on a daemon restart, opens again.
+The panel shows the page from a stream of frames. Drag its left edge to resize it; see [Resizing and hiding the side panels](#resizing-and-hiding-the-side-panels). A click, a drag, the wheel, keys and a paste on it go to the page. Cmd (macOS) or Ctrl (elsewhere) with A, C, X, V, Z act on the page: copy and paste use the system clipboard. A character typed with Option or AltGr types that character. The address bar opens what is typed into it and starts the browser if it is not running; back, forward and reload act on the page. A stream that breaks, such as on a daemon restart, opens again.
 
 The `browser` tool's actions:
 

@@ -411,10 +411,10 @@ export { renderSchedules, applyScheduleEvent, loadSchedules, openScheduleDetails
 export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace, renderPermissionRulesList } from './modals.js';
 export { usageView, openUsage, closeUsage, figuresOf, totalOf } from './usage.js';
 export { forkSession } from './sessions.js';
-export { setPanelWidth } from './resize.js';
+export { setPanelWidth, CENTER_MIN } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
-export { renderBrowserPanel, pagePoint, keyEventFor, editCommandFor, modifierBits, browserShown, inGUI } from './browser.js';
+export { renderBrowserPanel, STALE_FALLBACK_MS, pagePoint, keyEventFor, editCommandFor, modifierBits, browserShown, inGUI } from './browser.js';
 export { snapshotURL } from './transcript.js';
 export { importNote } from './settings.js';
 export { loadSessions, renderSessionList, selectSession, deleteSessionConfirm, reorderList, landsBelow, groupLandsBelow, dropGroupOn, wireSessionDragGuard, dropSessionOn, sessionMatchesFilter, dropSessionOnGroupHeader, dropSessionToUngroupedTop, promptCreateGroup, promptRenameGroup, promptDeleteGroup, readCollapsedGroups, writeCollapsedGroups } from './sessions.js';

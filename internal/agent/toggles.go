@@ -96,7 +96,7 @@ func (l *Loop) routeBrowser(sessionID, text string) (bool, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "browser: %s", onOff(want))
 	if want {
-		b.WriteString("\nThe model is offered the browser in a conversation open in the desktop window, where it is shown in the right panel.")
+		b.WriteString("\nThe model is offered the browser in a conversation open in the desktop window, where it is shown in the browser panel beside the conversation, one tab per conversation.")
 	}
 	b.WriteString(l.persist(func(path string) error { return config.SetBrowserInFile(path, want) }))
 
@@ -410,7 +410,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "memory", Description: "show what memory holds and where; tidy asks the model to merge, correct and retire notes", Usage: "[tidy]"},
 		{Name: "config", Description: "show settings, or change one with /config <name> on|off", Usage: "[<name> on|off]"},
 		{Name: "smart-agent", Description: "turn the Smart Agent bundle on or off", Usage: "[on|off]"},
-		{Name: "browser", Description: "let the model use the web browser shown in the desktop window's right panel", Usage: "[on|off]"},
+		{Name: "browser", Description: "let the model use the web browser shown in the desktop window's browser panel", Usage: "[on|off]"},
 		{Name: "orchestrate", Description: "turn delegation on or off: the specialists, Task, TaskBackground, TaskCollect and Orchestrate", Usage: "[on|off]"},
 		{Name: "workflow", Description: "saved orchestration plans: list them, show one, run one by name, resume a run, save the last plan, delete one", Usage: "[list|show <name>|run <name> [args]|resume [run]|save <name>|delete <name>]"},
 		{Name: "auto-delegate", Description: "turn auto-delegation on or off", Usage: "[on|off]"},

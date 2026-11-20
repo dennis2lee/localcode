@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.173.0
+
+The desktop window's browser has a column of its own, and each conversation's browser panel shows only that conversation's page.
+
+**Changed**
+
+* The browser panel: a column of its own between the conversation and the right panel, 600px wide, resizable from 360px to 1306px by its left edge, double-click for the default
+* A panel drag: stopped where the transcript would go below 280px
+* A window too narrow for every panel: the browser panel narrowed first, down to 360px
+
+**Fixed**
+
+* The last frame of the conversation before, shown in the browser panel of the next conversation opened: until that conversation's first frame, and for good when it has no page
+* An address bar answer or error, written into the panel of a conversation opened while it was on its way
+* An address bar error, left in the empty note of every conversation opened after it
+
 ## v0.172.0
 
 A conversation goes on when a model's server takes fewer images in a request than the conversation holds.

@@ -109,3 +109,64 @@ test('the two toggles are independent and both survive a reload', async () => {
   assert.ok(reopened.el('right-panel').classList.contains('collapsed'));
   assert.ok(!reopened.el('left-panel').classList.contains('collapsed'));
 });
+
+// The browser panel sits between the transcript and the right panel, with
+// its handle on its left edge: it grows as the pointer moves left, like
+// the right panel, and has bounds of its own, because a page needs more
+// room than a list of tasks.
+test('the browser panel has its own handle and its own bounds', async () => {
+  const app = await load();
+  const panel = app.el('browser-panel');
+  panel.style.width = '600px';
+  drag(app, 'resize-browser', 900, 700);
+  assert.equal(panel.style.width, '800px');
+
+  // Up to the width that shows a 1280-pixel page at its own pixels, and
+  // no narrower than a page can still be read and clicked on.
+  drag(app, 'resize-browser', 800, -2000);
+  assert.equal(panel.style.width, '1306px');
+  drag(app, 'resize-browser', 0, 3000);
+  assert.equal(panel.style.width, '360px');
+
+  // The side panels keep theirs.
+  assert.ok(!app.el('right-panel').style.width);
+});
+
+test('the browser panel width survives a reload, and double-click puts the default back', async () => {
+  const app = await load();
+  app.el('browser-panel').style.width = '600px';
+  drag(app, 'resize-browser', 900, 800);
+  assert.equal(JSON.parse(app.storage.get('localcode.panelWidths')).browser, 700);
+
+  const reopened = await load({ localStorage: { 'localcode.panelWidths': JSON.stringify({ browser: 700 }) } });
+  assert.equal(reopened.el('browser-panel').style.width, '700px');
+  reopened.el('resize-browser').fire('dblclick');
+  assert.equal(reopened.el('browser-panel').style.width, '');
+});
+
+// However wide a panel may be, a drag does not take the transcript below
+// CENTER_MIN: the transcript is the content, and a wide browser panel on
+// a small window would otherwise leave none of it.
+test('a drag leaves the transcript its minimum width', async () => {
+  const app = await load();
+  const { CENTER_MIN } = app.internals;
+  const panel = app.el('browser-panel');
+  panel.style.width = '600px';
+  app.el('center').style.width = `${CENTER_MIN + 220}px`;
+  drag(app, 'resize-browser', 900, 500);
+  assert.equal(panel.style.width, '820px', 'the panel took the transcript below its minimum');
+
+  // A transcript already under it gives no more, but a drag can still
+  // hand room back to it.
+  app.el('center').style.width = `${CENTER_MIN - 40}px`;
+  drag(app, 'resize-browser', 900, 800);
+  assert.equal(panel.style.width, '820px', 'a drag that could not widen it made it narrower');
+  drag(app, 'resize-browser', 900, 1000);
+  assert.equal(panel.style.width, '720px');
+
+  // The same holds for the side panels.
+  app.el('center').style.width = `${CENTER_MIN + 100}px`;
+  app.el('left-panel').style.width = '260px';
+  drag(app, 'resize-left', 260, 600);
+  assert.equal(app.el('left-panel').style.width, '360px');
+});

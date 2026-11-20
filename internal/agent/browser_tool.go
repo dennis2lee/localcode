@@ -53,7 +53,7 @@ func NewBrowserTool(loop *Loop, manager *browser.Manager) BrowserTool {
 func (BrowserTool) Name() string { return BrowserToolName }
 
 func (BrowserTool) Description() string {
-	return fmt.Sprintf(`Use a web browser the way a person does. It is shown to the user in the app's right panel, and they can click and type in it too. The page is %dx%d pixels.
+	return fmt.Sprintf(`Use a web browser the way a person does. It is shown to the user in a panel of the app beside the conversation, and they can click and type in it too. The page is %dx%d pixels.
 
 Actions:
 - navigate {url}: open a URL.

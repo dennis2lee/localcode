@@ -1,6 +1,7 @@
 'use strict';
 
-// The browser panel in the right panel.
+// The browser panel, in its own column between the conversation and the
+// tasks panel.
 //
 // Drawn only in the desktop window and only while the setting is on, and
 // its frame stream is what tells the daemon a GUI window is showing the
@@ -25,20 +26,21 @@ const settingsWith = (extra) => ({
 
 test('outside the desktop window there is no panel, even with the setting on', async () => {
   const app = await load({ routes: settingsWith({ browser: true }) });
-  assert.equal(app.el('browser-section').hidden, true);
+  assert.equal(app.el('browser-panel').hidden, true);
   assert.equal(app.el('browser-view').getAttribute('src'), null,
     'a stream opened outside the GUI would offer the model a browser nobody can see');
 });
 
 test('in the desktop window with the setting off there is no panel', async () => {
   const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: false }) });
-  assert.equal(app.el('browser-section').hidden, true);
+  assert.equal(app.el('browser-panel').hidden, true);
   assert.equal(app.el('browser-view').getAttribute('src'), null);
 });
 
 test('in the desktop window with it on, the panel streams the conversation on screen', async () => {
   const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
-  assert.equal(app.el('browser-section').hidden, false);
+  assert.equal(app.el('browser-panel').hidden, false);
+  assert.equal(app.el('resize-browser').hidden, false, 'the panel is shown without its drag handle');
   assert.equal(app.el('browser-view').getAttribute('src'), '/api/sessions/sess-1/browser/stream');
 });
 
@@ -46,7 +48,8 @@ test('turning the setting off elsewhere closes the stream', async () => {
   const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
   app.internals.applyEvent({ type: 'settings.changed', data: { browser: false } });
   await app.settle();
-  assert.equal(app.el('browser-section').hidden, true);
+  assert.equal(app.el('browser-panel').hidden, true);
+  assert.equal(app.el('resize-browser').hidden, true, 'a handle for a panel that is not there is a dead strip');
   assert.equal(app.el('browser-view').getAttribute('src'), null,
     'the stream stayed open, so the daemon would go on offering the browser');
 });
@@ -56,6 +59,107 @@ test('opening another conversation points the stream at it', async () => {
   app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
   await app.settle();
   assert.equal(app.el('browser-view').getAttribute('src'), '/api/sessions/sess-2/browser/stream');
+});
+
+// Every conversation has its own tab, so each shows its own page. The
+// stream of a conversation with no tab sends nothing, and an <img> whose
+// source changes goes on showing its last picture until the new source
+// sends one: without the stale state, the conversation opened next shows
+// the page of the one before.
+const perConversation = (tabs) => ({
+  ...settingsWith({ browser: true }),
+  'GET /api/sessions/*/browser': (_body, { path }) => {
+    const id = path.split('/')[3];
+    const url = tabs[id];
+    return url ? { has_tab: true, url, title: id } : { has_tab: false, width: 1280, height: 800 };
+  },
+});
+
+test('each conversation shows its own page, never the one before', async () => {
+  const app = await load({ globals: { lcGUI: true }, routes: perConversation({ 'sess-1': 'https://one.example/' }) });
+  const view = app.el('browser-view');
+  view.fire('load');
+  await app.settle();
+  assert.equal(view.classList.contains('stale'), false);
+  assert.equal(app.el('browser-url').value, 'https://one.example/');
+
+  app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  assert.equal(view.getAttribute('src'), '/api/sessions/sess-2/browser/stream');
+  assert.equal(view.classList.contains('stale'), true,
+    'the view went on showing the first conversation\'s page in the second');
+  assert.equal(app.el('browser-url').value, '', 'the address bar kept the first conversation\'s address');
+  assert.equal(app.el('browser-empty').hidden, false, 'the second conversation has no page, and the panel did not say so');
+
+  // Its own first frame shows it.
+  view.fire('load');
+  assert.equal(view.classList.contains('stale'), false);
+});
+
+test('a conversation with a page shows it from its first frame, not from the location poll', async () => {
+  let now = 1_000_000;
+  class ClockDate extends Date { static now() { return now; } }
+  const app = await load({
+    globals: { lcGUI: true, Date: ClockDate },
+    routes: perConversation({ 'sess-1': 'https://one.example/', 'sess-2': 'https://two.example/' }),
+  });
+  const view = app.el('browser-view');
+  view.fire('load');
+  app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  assert.equal(app.el('browser-url').value, 'https://two.example/');
+  assert.equal(view.classList.contains('stale'), true,
+    'the poll that found the tab showed the view before its first frame, so the page before was on screen');
+
+  // An engine that fires no load event for a part of a stream still shows
+  // it, from a poll a while after the switch.
+  now += app.internals.STALE_FALLBACK_MS;
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  assert.equal(view.classList.contains('stale'), false);
+});
+
+test('an address bar answer for one conversation does not land in another', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      ...perConversation({}),
+      'POST /api/sessions/*/browser/navigate': () => gate.then(() => ({ url: 'https://one.example/' })),
+    },
+  });
+  const url = app.el('browser-url');
+  url.value = 'one.example';
+  url.fire('keydown', { key: 'Enter' });
+  app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  release();
+  await app.settle();
+  assert.equal(url.value, '', 'the first conversation\'s address was written into the second one\'s bar');
+  assert.equal(app.el('browser-empty').hidden, false);
+});
+
+test('a failed open in one conversation is not reported in the next', async () => {
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      ...perConversation({}),
+      'POST /api/sessions/*/browser/navigate': { status: 503, body: { error: 'no browser' } },
+    },
+  });
+  const empty = app.el('browser-empty');
+  const words = 'No page yet.';
+  empty.textContent = words;
+  const url = app.el('browser-url');
+  url.value = 'one.example';
+  url.fire('keydown', { key: 'Enter' });
+  await app.settle();
+  assert.match(empty.textContent, /^Could not open it/);
+
+  app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  assert.equal(empty.textContent, words, 'the first conversation\'s error was shown in the second');
 });
 
 test('the address bar opens what is typed into it', async () => {
@@ -222,10 +326,13 @@ test('a paste shortcut pastes once, from the page\'s side', async () => {
 test('a broken stream opens again after a pause', async () => {
   const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
   const view = app.el('browser-view');
+  view.fire('load');
   const realTimeout = setTimeout;
   view.fire('error');
   await new Promise((r) => realTimeout(r, 2100));
   assert.match(view.getAttribute('src'), /^\/api\/sessions\/sess-1\/browser\/stream\?r=\d+$/);
+  assert.equal(view.classList.contains('stale'), false,
+    'the same conversation\'s stream opened again is not another conversation\'s page');
 });
 
 test('a snapshot the tool saved shows under its call, now and on replay', async () => {
@@ -288,5 +395,5 @@ test('the settings switch is in the desktop window only, and tells the daemon', 
   const calls = app.callsTo('POST', '/api/settings/browser');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].body.enabled, true);
-  assert.equal(app.el('browser-section').hidden, false, 'turning it on did not draw the panel');
+  assert.equal(app.el('browser-panel').hidden, false, 'turning it on did not draw the panel');
 });

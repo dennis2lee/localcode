@@ -1,6 +1,11 @@
-// The browser panel: the page the model works in, shown at the top of the
-// right panel in the desktop window, where the person can watch it and
-// take it over.
+// The browser panel: the page the model works in, shown in a column of
+// its own between the conversation and the tasks panel in the desktop
+// window, where the person can watch it and take it over.
+//
+// Every conversation has its own tab (internal/browser Manager.Tab), and
+// the panel shows the one of the conversation on screen: opening another
+// conversation points the stream at that conversation's tab, and nothing
+// the panel showed or was told for the one before carries over.
 //
 // Drawn only in the GUI window (window.lcGUI, set by the window before any
 // page script runs) and only while the browser setting is on. The frame
@@ -26,6 +31,16 @@ let reconnectTimer = null;
 let daemonLost = false;  // the last location poll failed
 let dragging = false;    // a button went down on the view and is still held
 let lastPasteKey = 0;    // when a paste shortcut last went to the page
+let switchedAt = 0;      // when the stream was last pointed at another conversation
+let emptyText = null;    // the empty note's own words, kept before an error first replaces them
+
+// How long after a switch a location poll that finds a tab shows the
+// view even though no frame has been seen to arrive. The view is shown on
+// the new stream's first frame (the <img>'s load event); this is for an
+// engine that does not fire one for a part of a multipart stream, so the
+// view cannot stay blank. Shorter than the poll interval, so it is the
+// first poll after the immediate one that shows it.
+export const STALE_FALLBACK_MS = 1500;
 
 // inGUI is whether this page is in the desktop window.
 export function inGUI() {
@@ -145,6 +160,22 @@ function showEmpty(hasPage) {
   if (empty) empty.hidden = hasPage;
 }
 
+// restoreEmptyText puts the empty note's own words back, in place of an
+// error an address-bar open left there.
+function restoreEmptyText() {
+  const empty = el('browser-empty');
+  if (empty && emptyText !== null) empty.textContent = emptyText;
+}
+
+// setStale hides the view's picture, or shows it again. Stale from a
+// switch to another conversation until that conversation's stream sends
+// a frame: until then the <img> goes on showing the last frame of the
+// conversation before, which is another conversation's page.
+function setStale(stale) {
+  const view = el('browser-view');
+  if (view) view.classList.toggle('stale', stale);
+}
+
 // reconnect opens the frame stream again after it broke (the daemon
 // restarted, the connection dropped), if the panel still shows the same
 // conversation. The query only makes the address new, so the <img>
@@ -171,6 +202,7 @@ async function refreshLocation() {
       reconnect(0);
     }
     showEmpty(!!st.has_tab);
+    if (st.has_tab && Date.now() - switchedAt >= STALE_FALLBACK_MS) setStale(false);
     const url = el('browser-url');
     // Not while the person is typing an address into it.
     if (url && document.activeElement !== url && st.url && st.url !== 'about:blank') url.value = st.url;
@@ -184,11 +216,13 @@ async function refreshLocation() {
 // the conversation on screen. Called when the setting changes and when a
 // conversation is opened.
 export function renderBrowserPanel() {
-  const section = el('browser-section');
+  const panel = el('browser-panel');
   const view = el('browser-view');
-  if (!section || !view) return;
+  if (!panel || !view) return;
   const shown = browserShown();
-  section.hidden = !shown;
+  panel.hidden = !shown;
+  const handle = el('resize-browser');
+  if (handle) handle.hidden = !shown;
   if (!shown) {
     if (streamFor !== null) {
       // Dropping the source ends the stream, and with it the daemon's
@@ -211,24 +245,35 @@ export function renderBrowserPanel() {
     // Through the attribute, which is what removeAttribute above takes
     // away again.
     view.setAttribute('src', `/api/sessions/${streamFor}/browser/stream`);
+    switchedAt = Date.now();
+    setStale(true);
     const url = el('browser-url');
     if (url) url.value = '';
+    restoreEmptyText();
     showEmpty(false);
   }
   if (!pollTimer) pollTimer = setInterval(refreshLocation, 2000);
   refreshLocation();
 }
 
+// navigate is the address bar and the back, forward and reload buttons.
+// The answer can take seconds (the browser may be starting), so it is
+// shown only if the panel still shows the conversation it was asked for.
 async function navigate(body) {
-  if (!session.sessionID) return;
+  const id = session.sessionID;
+  if (!id) return;
   try {
-    const res = await api('POST', `/api/sessions/${session.sessionID}/browser/navigate`, body);
+    const res = await api('POST', `/api/sessions/${id}/browser/navigate`, body);
+    if (id !== session.sessionID) return;
+    restoreEmptyText();
     showEmpty(false);
     const url = el('browser-url');
     if (url && res && res.url) url.value = res.url;
   } catch (err) {
+    if (id !== session.sessionID) return;
     const empty = el('browser-empty');
     if (empty) {
+      if (emptyText === null) emptyText = empty.textContent;
       empty.textContent = `Could not open it: ${err.message || err}`;
       empty.hidden = false;
     }
@@ -313,6 +358,9 @@ export function initBrowserPanel() {
   // A stream that broke is opened again, after a pause so a daemon that
   // is down is not asked for it in a tight loop.
   view.addEventListener('error', () => reconnect(2000));
+  // A frame arrived on the stream the view is on, so what it shows is the
+  // conversation on screen.
+  view.addEventListener('load', () => setStale(false));
   view.addEventListener('contextmenu', (e) => e.preventDefault());
   view.addEventListener('keydown', (e) => {
     e.preventDefault();

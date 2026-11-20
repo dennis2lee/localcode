@@ -1,8 +1,8 @@
 // Package browser runs a Chrome (or Edge) for the model to work in, the
 // way a person would: it looks at the page, clicks, types and scrolls. The
 // browser is started by localcode with no window of its own; the GUI shows
-// it in the right panel from a stream of frames, and the person can click
-// and type in that view too.
+// it in a panel of its own beside the conversation from a stream of
+// frames, and the person can click and type in that view too.
 //
 // One browser serves the whole daemon, so every conversation shares its
 // logins, and each conversation has its own tab, kept for as long as the

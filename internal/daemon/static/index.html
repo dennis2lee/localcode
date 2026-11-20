@@ -275,15 +275,19 @@
       <button id="send">Send</button>
     </footer>
   </div>
-  <div class="resizer" id="resize-right" title="drag to resize"></div>
-  <aside id="right-panel">
-    <!--
-      The browser the model works in. Desktop window only, and only while
-      the setting is on: see js/browser.js. The page is shown from a stream
-      of frames; clicks, the wheel and keys on it go to the page, so the
-      person can take over at any point.
-    -->
-    <div class="side-section browser-section" id="browser-section" hidden>
+  <!--
+    The browser the model works in, in a column of its own between the
+    conversation and the tasks / MCP panel: a page needs more width than
+    a list of tasks, and sharing one column held the tasks panel at the
+    page's width. Desktop window only, and only while the setting
+    is on: js/browser.js shows and hides it with its handle. It shows the
+    tab of the conversation on screen; every conversation has its own. The
+    page is shown from a stream of frames; clicks, the wheel and keys on it
+    go to the page, so the person can take over at any point.
+  -->
+  <div class="resizer" id="resize-browser" title="drag to resize" hidden></div>
+  <aside id="browser-panel" hidden>
+    <div class="side-section browser-section" id="browser-section">
       <h2>Browser</h2>
       <div class="browser-bar">
         <button class="icon-btn browser-nav" id="browser-back" title="back"><svg class="ico ico-flip"><use href="#i-chev-r"/></svg></button>
@@ -296,6 +300,9 @@
         <p class="note browser-empty" id="browser-empty">No page yet. Type an address above, or ask the model to use the browser.</p>
       </div>
     </div>
+  </aside>
+  <div class="resizer" id="resize-right" title="drag to resize"></div>
+  <aside id="right-panel">
     <div class="side-section">
       <h2>Background tasks</h2>
       <div id="tasks"></div>
@@ -564,7 +571,7 @@
       <div class="settings-field">
         <div class="check-row">
           <input type="checkbox" id="browser-checkbox">
-          <label for="browser-checkbox">Let the model use a web browser, shown in the right panel, signed in with a copy of your Chrome profile</label>
+          <label for="browser-checkbox">Let the model use a web browser, shown in its own panel beside the conversation, signed in with a copy of your Chrome profile</label>
         </div>
         <p class="note" id="browser-note"></p>
         <p class="note warn" id="browser-warn" hidden></p>
