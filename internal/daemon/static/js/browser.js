@@ -32,6 +32,9 @@ let daemonLost = false;  // the last location poll failed
 let dragging = false;    // a button went down on the view and is still held
 let lastPasteKey = 0;    // when a paste shortcut last went to the page
 let tabSeenAt = 0;       // when a location poll of this visit first found a tab
+let visitHadTab = false; // a location poll of this visit found a tab
+let navSeq = 0;          // address bar requests made, so only the newest one's answer is used
+let navAnswers = 0;      // address bar answers used, so a poll asked before one is dropped
 
 // visit counts the panel's showings of a conversation: it moves on when
 // the stream is pointed at a conversation and when the panel is hidden.
@@ -194,6 +197,9 @@ function setStale(stale) {
 // fetches it again.
 function reconnect(delay) {
   if (reconnectTimer) return;
+  // The stream opened again is a new one: the fallback waits for a tab
+  // seen after it, as after a switch.
+  tabSeenAt = 0;
   const asked = visit;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
@@ -207,9 +213,13 @@ async function refreshLocation() {
   if (!browserShown()) return;
   const id = session.sessionID;
   const asked = visit;
+  // An address bar answer that arrives while the poll is on its way is
+  // newer than what the poll will say: the poll is dropped, and the next
+  // one asks again.
+  const answers = navAnswers;
   try {
     const st = await api('GET', `/api/sessions/${id}/browser`);
-    if (asked !== visit || id !== session.sessionID) return;
+    if (asked !== visit || id !== session.sessionID || answers !== navAnswers) return;
     if (daemonLost) {
       // The daemon is back; the stream it had open went with it.
       daemonLost = false;
@@ -217,8 +227,10 @@ async function refreshLocation() {
     }
     showEmpty(!!st.has_tab);
     if (!st.has_tab) {
+      if (visitHadTab) tabGone();
       tabSeenAt = 0;
     } else if (!tabSeenAt) {
+      visitHadTab = true;
       tabSeenAt = Date.now();
     } else if (Date.now() - tabSeenAt >= STALE_FALLBACK_MS) {
       setStale(false);
@@ -230,6 +242,24 @@ async function refreshLocation() {
     // The daemon may be restarting; the next tick tries again.
     if (asked === visit) daemonLost = true;
   }
+}
+
+// tabGone starts the visit over when the conversation's tab closed under
+// it (the browser restarted, or the profile was copied again). The view
+// still holds the closed tab's last frame, and an answer still on its way
+// is about the closed tab. A tab opened next sends its frames on the same
+// stream, and an <img> fires load once for a stream, at its first frame,
+// so the stream is opened again: the next tab's first frame is then that
+// stream's first, and shows the view.
+function tabGone() {
+  visit += 1;
+  visitHadTab = false;
+  setStale(true);
+  restoreEmptyText();
+  const url = el('browser-url');
+  if (url && document.activeElement !== url) url.value = '';
+  const view = el('browser-view');
+  if (view && streamFor) view.setAttribute('src', `/api/sessions/${streamFor}/browser/stream?r=${Date.now()}`);
 }
 
 // renderBrowserPanel shows or hides the panel and points its stream at
@@ -272,6 +302,7 @@ export function renderBrowserPanel() {
     daemonLost = false;
     streamFor = session.sessionID;
     tabSeenAt = 0;
+    visitHadTab = false;
     setStale(true);
     // Through the attribute, which is what removeAttribute above takes
     // away again.
@@ -292,16 +323,23 @@ async function navigate(body) {
   const id = session.sessionID;
   if (!id) return;
   const asked = visit;
+  // Only the newest request's answer is used: an older one that comes back
+  // later, a failure from a slow host above all, is about a page the
+  // person has already moved on from.
+  const n = ++navSeq;
+  const current = () => asked === visit && id === session.sessionID && n === navSeq;
   try {
     const res = await api('POST', `/api/sessions/${id}/browser/navigate`, body);
-    if (asked !== visit || id !== session.sessionID) return;
+    if (!current()) return;
+    navAnswers += 1;
     restoreEmptyText();
     // There is a page now: the note goes.
     showEmpty(true);
     const url = el('browser-url');
     if (url && res && res.url) url.value = res.url;
   } catch (err) {
-    if (asked !== visit || id !== session.sessionID) return;
+    if (!current()) return;
+    navAnswers += 1;
     const empty = el('browser-empty');
     if (empty) {
       if (emptyText === null) emptyText = empty.textContent;
@@ -394,7 +432,15 @@ export function initBrowserPanel() {
   // for: one the stream before queued in the moment of a switch would show
   // the view early. An engine fires a stream's load once, at its first
   // frame, so that takes a switch in the same instant as that frame.
-  view.addEventListener('load', () => setStale(false));
+  // A reconnect still waiting from an error before it is not needed: the
+  // stream is working.
+  view.addEventListener('load', () => {
+    setStale(false);
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  });
   view.addEventListener('contextmenu', (e) => e.preventDefault());
   view.addEventListener('keydown', (e) => {
     e.preventDefault();

@@ -122,19 +122,33 @@ const frameHead = "--" + frameBoundary + "\r\nContent-Type: image/jpeg\r\n\r\n"
 // enough. A stream that wrote each head together with its own frame was
 // one frame behind, and the last frame of a page that stopped changing,
 // or the only one a tab had sent, was never shown.
+//
+// So a stream with frames always has one part open, with no data yet. The
+// first part is opened with the first frame, not before: a stream that
+// ends before any frame (a conversation with no tab) has no part at all.
+// One that ends after frames leaves its last, empty part unfinished; the
+// stream ends only when the client has gone, so nobody reads it.
 type frameStream struct {
-	w     io.Writer
-	flush func()
+	w      io.Writer
+	flush  func()
+	opened bool
 }
 
-// open writes the first part's head, before any frame.
-func (s frameStream) open() {
-	_, _ = io.WriteString(s.w, frameHead)
+// open sends the response headers, before any frame.
+func (s *frameStream) open() {
 	s.flush()
 }
 
-// frame writes a frame and the head of the part after it.
-func (s frameStream) frame(jpeg []byte) {
+// frame writes a frame and the head of the part after it. An empty frame
+// is not one: it would be an empty part, an image with no data.
+func (s *frameStream) frame(jpeg []byte) {
+	if len(jpeg) == 0 {
+		return
+	}
+	if !s.opened {
+		_, _ = io.WriteString(s.w, frameHead)
+		s.opened = true
+	}
 	_, _ = s.w.Write(jpeg)
 	_, _ = io.WriteString(s.w, "\r\n"+frameHead)
 	s.flush()
@@ -160,7 +174,7 @@ func (d *Daemon) handleBrowserStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary="+frameBoundary)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	stream := frameStream{w: w, flush: flusher.Flush}
+	stream := &frameStream{w: w, flush: flusher.Flush}
 	stream.open()
 
 	ctx := r.Context()

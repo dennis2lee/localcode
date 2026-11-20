@@ -2827,7 +2827,7 @@ The model can work a web page the way a person does, in a browser shown in the d
 
 Everything the copied profile is signed in to is reachable by the model. Use the browser setting where that is acceptable, and deny the sites it must not touch.
 
-The panel shows the page from a stream of frames. Drag its left edge to resize it; see [Resizing and hiding the side panels](#resizing-and-hiding-the-side-panels). A click, a drag, the wheel, keys and a paste on it go to the page. Cmd (macOS) or Ctrl (elsewhere) with A, C, X, V, Z act on the page: copy and paste use the system clipboard. A character typed with Option or AltGr types that character. The address bar opens what is typed into it and starts the browser if it is not running; back, forward and reload act on the page. A stream that breaks, such as on a daemon restart, opens again.
+The panel shows the page from a stream of frames. A tab that closes, such as when the browser restarts, leaves "No page yet" rather than its last frame. Drag its left edge to resize it; see [Resizing and hiding the side panels](#resizing-and-hiding-the-side-panels). A click, a drag, the wheel, keys and a paste on it go to the page. Cmd (macOS) or Ctrl (elsewhere) with A, C, X, V, Z act on the page: copy and paste use the system clipboard. A character typed with Option or AltGr types that character. The address bar opens what is typed into it and starts the browser if it is not running; back, forward and reload act on the page. A stream that breaks, such as on a daemon restart, opens again.
 
 The `browser` tool's actions:
 

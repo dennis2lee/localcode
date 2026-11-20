@@ -244,3 +244,18 @@ test('a drag whose panel is hidden under it ends without saving', async () => {
   assert.ok(!saved || JSON.parse(saved).browser === undefined, 'a width nobody chose was remembered');
   assert.equal(app.doc.body.classList.contains('resizing'), false);
 });
+
+// A side panel's toggle can be pressed from the keyboard while its handle
+// is held. The drag ends there too.
+test('a drag whose side panel is collapsed under it ends without saving', async () => {
+  const app = await loadWide();
+  const left = app.el('left-panel');
+  left.style.width = '260px';
+  app.el('resize-left').fire('pointerdown', { button: 0, clientX: 260 });
+  app.doc.fire('pointermove', { clientX: 300 });
+  app.el('toggle-left').click();
+  app.doc.fire('pointermove', { clientX: 380 });
+  app.doc.fire('pointerup', { clientX: 380 });
+  assert.equal(left.style.width, '300px', 'the collapsed panel went on being resized');
+  assert.equal(JSON.parse(app.storage.get('localcode.panelWidths')).left, undefined, 'a width nobody chose was remembered');
+});

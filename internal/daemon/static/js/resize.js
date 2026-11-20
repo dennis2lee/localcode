@@ -88,10 +88,11 @@ function attach(handle, panel, side, key, bounds) {
   let dragging = false;
 
   // A drag ends without saving when its panel goes away under it (the
-  // browser setting turned off mid-drag): a width for a panel that is not
-  // on screen is one nobody chose.
+  // browser setting turned off, or a side panel's toggle pressed from the
+  // keyboard, mid-drag): a width for a panel that is not on screen is one
+  // nobody chose.
   function gone() {
-    return panel.hidden || handle.hidden;
+    return panel.hidden || handle.hidden || panel.classList.contains('collapsed');
   }
 
   function onMove(e) {

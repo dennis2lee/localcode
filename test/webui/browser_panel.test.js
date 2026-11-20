@@ -290,6 +290,174 @@ test('an address bar open that succeeds takes the empty note away', async () => 
   assert.equal(app.el('browser-empty').hidden, true, '"No page yet" was shown over the page just opened');
 });
 
+// A tab can close under the panel without a switch (the browser restarts,
+// the profile is copied again). The view still holds its last frame, and
+// a tab opened next sends its frames on the same stream, where an <img>
+// fires no second load: the stream is opened again for it.
+test('a tab that closes under the panel is not shown again before the next tab\'s first frame', async () => {
+  const tabs = { 'sess-1': 'https://one.example/' };
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: { ...perConversation(tabs), 'POST /api/sessions/*/browser/navigate': { status: 400, body: { error: 'there is no page to go back to' } } },
+  });
+  const view = app.el('browser-view');
+  app.el('browser-empty').textContent = 'No page yet.';
+  view.fire('load');
+  await app.settle();
+  assert.equal(view.classList.contains('stale'), false);
+
+  // An open that failed while the page stayed: its error is in the note,
+  // which the next poll hides again.
+  app.el('browser-back').click();
+  await app.settle();
+  assert.match(app.el('browser-empty').textContent, /^Could not open it/);
+  delete tabs['sess-1'];
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  assert.equal(view.classList.contains('stale'), true, 'the closed tab\'s last frame was left on show');
+  assert.equal(app.el('browser-url').value, '', 'the closed tab\'s address was left in the bar');
+  assert.equal(app.el('browser-empty').textContent, 'No page yet.',
+    'an earlier error came back as the reason there is no page');
+  assert.match(view.getAttribute('src'), /^\/api\/sessions\/sess-1\/browser\/stream\?r=\d+$/,
+    'the stream was not opened again, so the next tab\'s first frame fires no load');
+
+  tabs['sess-1'] = 'https://again.example/';
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  assert.equal(view.classList.contains('stale'), true, 'the next tab was shown before it sent a frame');
+  view.fire('load');
+  assert.equal(view.classList.contains('stale'), false);
+});
+
+test('an address bar answer about a tab that has since closed is dropped', async () => {
+  let finish;
+  const pending = new Promise((r) => { finish = r; });
+  const tabs = { 'sess-1': 'https://one.example/' };
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: { ...perConversation(tabs), 'POST /api/sessions/*/browser/navigate': () => pending },
+  });
+  const url = app.el('browser-url');
+  url.value = 'two.example';
+  url.fire('keydown', { key: 'Enter' });
+  delete tabs['sess-1'];
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  finish({ url: 'https://two.example/' });
+  await app.settle();
+  assert.equal(app.el('browser-empty').hidden, false, 'an answer about the closed tab took "No page yet" away');
+  assert.notEqual(url.value, 'https://two.example/');
+});
+
+// Within one visit, only the newest address bar request's answer is
+// used, and a location poll asked before an address bar answer arrived
+// says less than that answer did.
+test('an older address bar failure that comes back last does not cover the newer page', async () => {
+  let finishFirst;
+  let call = 0;
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      ...perConversation({}),
+      'POST /api/sessions/*/browser/navigate': () => {
+        call += 1;
+        if (call === 1) return new Promise((r) => { finishFirst = r; });
+        return { url: 'https://good.example/' };
+      },
+    },
+  });
+  const url = app.el('browser-url');
+  url.value = 'slow.example';
+  url.fire('keydown', { key: 'Enter' });
+  url.value = 'good.example';
+  url.fire('keydown', { key: 'Enter' });
+  await app.settle();
+  finishFirst({ status: 400, body: { error: 'could not load https://slow.example/' } });
+  await app.settle();
+  assert.equal(app.el('browser-empty').hidden, true, 'the older failure covered the newer page');
+  assert.equal(url.value, 'https://good.example/');
+});
+
+test('a location poll asked before an address bar answer does not undo it', async () => {
+  let finishPoll;
+  let hold = false;
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      ...perConversation({}),
+      'GET /api/sessions/*/browser': () => (hold ? new Promise((r) => { finishPoll = r; }) : { has_tab: false, width: 1280, height: 800 }),
+      'POST /api/sessions/*/browser/navigate': { url: 'https://opened.example/' },
+    },
+  });
+  hold = true;
+  app.internals.renderBrowserPanel();
+  const url = app.el('browser-url');
+  url.value = 'opened.example';
+  url.fire('keydown', { key: 'Enter' });
+  await app.settle();
+  finishPoll({ has_tab: false, width: 1280, height: 800 });
+  await app.settle();
+  assert.equal(app.el('browser-empty').hidden, true, 'a poll from before the page opened put "No page yet" back over it');
+});
+
+// Timers a test runs by hand.
+function handTimers() {
+  const timers = [];
+  return {
+    timers,
+    setTimeout: (fn, delay) => { const t = { fn, delay, cleared: false }; timers.push(t); return t; },
+    clearTimeout: (t) => { if (t) t.cleared = true; },
+  };
+}
+
+test('a stream opened again after the daemon came back waits for its own frame', async () => {
+  let now = 1_000_000;
+  class ClockDate extends Date { static now() { return now; } }
+  const clock = handTimers();
+  let down = false;
+  const tabs = { 'sess-1': 'https://one.example/', 'sess-2': 'https://two.example/' };
+  const app = await load({
+    globals: { lcGUI: true, Date: ClockDate, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout },
+    routes: {
+      ...perConversation(tabs),
+      'GET /api/sessions/*/browser': (_b, { path }) => {
+        if (down) return { networkError: 'daemon restarting' };
+        const id = path.split('/')[3];
+        return tabs[id] ? { has_tab: true, url: tabs[id] } : { has_tab: false };
+      },
+    },
+  });
+  const view = app.el('browser-view');
+  view.fire('load');
+  app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  now += 500;
+  down = true;
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  now += app.internals.STALE_FALLBACK_MS;
+  down = false;
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  assert.ok(clock.timers.some((t) => !t.cleared && t.delay === 0), 'the stream was not opened again');
+  assert.equal(view.classList.contains('stale'), true,
+    'the view was shown before the stream opened again sent a frame, with the first conversation\'s frame in it');
+});
+
+test('a frame on the stream calls off a reconnect still waiting', async () => {
+  const clock = handTimers();
+  const app = await load({
+    globals: { lcGUI: true, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout },
+    routes: perConversation({ 'sess-1': 'https://one.example/' }),
+  });
+  const view = app.el('browser-view');
+  const src = view.getAttribute('src');
+  view.fire('error');
+  view.fire('load');
+  for (const t of clock.timers) if (!t.cleared) t.fn();
+  assert.equal(view.getAttribute('src'), src, 'a reconnect opened a working stream again');
+});
+
 test('the address bar opens what is typed into it', async () => {
   const app = await load({
     globals: { lcGUI: true },

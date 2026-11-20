@@ -9,14 +9,15 @@ The desktop window's browser has a column of its own, and each conversation's br
 * The browser panel: a column of its own between the conversation and the right panel, 600px wide, resizable from 360px to 1307px by its left edge, double-click for the default
 * A panel drag: stopped where the transcript would go below 280px; a side panel's drag can take the browser panel's width above 360px
 * A window too narrow for every panel while the browser panel is shown: the browser panel narrowed first, down to 360px, then the side panels, down to 160px; the transcript kept at 280px
-* The browser panel's "No page yet" note: opaque, so no frame the view still holds shows through it
 
 **Fixed**
 
 * The last frame of the conversation before, shown in the browser panel of the next conversation opened: until that conversation's first frame, and for good when it has no page
 * An address bar answer or error, or a location poll, written into the panel of a conversation opened while it was on its way, the same conversation opened again included
+* An older address bar failure, or a location poll asked before an address bar answer, covering the page a newer one had opened
 * An address bar error, left in the empty note of every conversation opened after it
 * "No page yet" shown over a page the address bar, back, forward or reload had just opened, until the next location poll
+* A tab's last frame after the tab closed (the browser restarted, or the profile was copied again): shown through "No page yet", and again when the next tab opened, before that tab sent a frame
 * The browser panel one frame behind the page: the last frame of a page that stopped changing, or the only frame a tab had sent, never shown
 
 ## v0.172.0

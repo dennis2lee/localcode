@@ -15,10 +15,18 @@ import (
 func TestAFrameIsCompleteAsSoonAsItIsWritten(t *testing.T) {
 	var buf bytes.Buffer
 	flushes := 0
-	s := frameStream{w: &buf, flush: func() { flushes++ }}
+	s := &frameStream{w: &buf, flush: func() { flushes++ }}
 	s.open()
 	if flushes != 1 {
-		t.Fatalf("open flushed %d times; the head has to reach the client before any frame", flushes)
+		t.Fatalf("open flushed %d times; the response headers have to reach the client before any frame", flushes)
+	}
+	// No part before the first frame: a stream that ends with none, as for
+	// a conversation with no tab, would end in an unfinished part. An empty
+	// frame is not a frame.
+	s.frame(nil)
+	s.frame([]byte{})
+	if buf.Len() != 0 {
+		t.Fatalf("before any frame the stream holds %q", buf.String())
 	}
 
 	frames := [][]byte{[]byte("\xff\xd8first frame\xff\xd9"), []byte("\xff\xd8second\r\n--not-a-boundary\xff\xd9")}
