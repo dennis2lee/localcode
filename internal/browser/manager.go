@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"localcode/internal/cdp"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,15 +40,25 @@ type Options struct {
 
 // Manager owns the one browser and every conversation's tab in it.
 //
-// Two locks, for two jobs. mu guards the state: the running browser and
-// every conversation's tabs. It is held to read or change that state and
-// never across anything that waits on the browser, a process or the disk:
-// a slow CDP call for one conversation used to hold every other
-// conversation's browser work behind it (Existing, Tabs, a switch, a
-// close, a stream), for as long as a start or an attach took. startMu
-// orders what changes which browser there is (a start, a profile copy, a
-// close), one at a time, so two conversations asking at once start one
-// browser. It is taken before mu, never while holding it.
+// mu guards the state: the running browser and every conversation's tabs.
+// It is held to read or change that state and never across anything that
+// waits on the browser, a process or the disk: a slow CDP call for one
+// conversation used to hold every other conversation's browser work
+// behind it (Existing, Tabs, a switch, a close, a stream), for as long as
+// a start or an attach took.
+//
+// What one global lock also gave, order, is kept per conversation: each
+// conversation's browser work (opening a tab, attaching a page one of its
+// tabs opened, a page closing, a switch, a close, deleting it) takes a
+// ticket in its queue when it is asked for, a browser event in the order
+// the browser sent it, and runs when its ticket comes up, across its calls
+// to the browser. So a conversation's tabs change in the order its work
+// was asked for, and only its own work waits for it. Existing, Tabs and
+// Watch take no ticket.
+//
+// startMu orders what changes which browser there is (a start, a profile
+// copy, a close), one at a time, so two conversations asking at once
+// start one browser. Lock order: a ticket, then startMu, then mu.
 type Manager struct {
 	opts Options
 
@@ -58,69 +69,89 @@ type Manager struct {
 	convs      map[string]*convTabs
 	lastImport *ImportReport
 
-	// What a call made with mu let go has to find when it takes mu again
-	// to publish its tab, since the state can change in between:
-	//
-	// opening counts each conversation's tab opens in flight, and a
-	// CloseTab of the conversation cancels them: a tab still opening when
-	// its conversation was deleted would otherwise bring the conversation
-	// back.
-	opening map[string]*opening
-	// adopting is each page a link opened that is being attached, and the
-	// conversation it is for: a page that one opens in turn finds its
-	// conversation there before the first is in its list.
+	// queues is each conversation's queue of browser work.
+	queues map[string]*queue
+	// adopting is each page a link opened that is waiting to be attached,
+	// and the conversation it is for: claimed when the browser says it was
+	// created, so a page it opens in turn finds its conversation before it
+	// is in any list. Deleting the conversation drops its claims.
 	adopting map[string]string
-	// gone is the latest pages that closed while in no conversation's
-	// list: one that closes while it attaches gets its close event before
-	// it is published, and is not published.
-	gone     [goneKept]string
-	goneNext int
+	// gone is the pages that closed while in no conversation's list, and
+	// when: a tab this manager opened can close before it is published,
+	// and is not published. Kept for goneFor, longer than any open takes.
+	gone map[string]time.Time
 }
 
-// goneKept is how many closed pages gone remembers, far more than close
-// while a tab attaches.
-const goneKept = 256
+// goneFor is how long a page that closed unlisted is remembered: longer
+// than an open can take (openTab's and attachTab's callers give at most
+// 45 seconds).
+const goneFor = 2 * time.Minute
 
-// opening is one conversation's tab opens in flight.
-type opening struct {
-	n         int
-	cancelled bool
+// queue is one conversation's browser work, in the order it was asked
+// for: tickets are handed out in that order and served one at a time.
+// Its condition is on Manager.mu.
+type queue struct {
+	next, serving uint64
+	turn          *sync.Cond
 }
 
-// beginOpen counts a tab open for conv, and returns what endOpen and the
-// publish check read. Called with m.mu.
-func (m *Manager) beginOpen(conv string) *opening {
-	o := m.opening[conv]
-	if o == nil {
-		o = &opening{}
-		m.opening[conv] = o
+// ticket is conv's next place in its queue. Called with m.mu.
+func (m *Manager) ticket(conv string) (*queue, uint64) {
+	q := m.queues[conv]
+	if q == nil {
+		q = &queue{turn: sync.NewCond(&m.mu)}
+		m.queues[conv] = q
 	}
-	o.n++
-	return o
+	tk := q.next
+	q.next++
+	return q, tk
 }
 
-// endOpen is the end of a tab open beginOpen counted. Called with m.mu.
-func (m *Manager) endOpen(conv string, o *opening) {
-	o.n--
-	if o.n == 0 && m.opening[conv] == o {
-		delete(m.opening, conv)
+// await waits for tk to come up in q. Called without m.mu.
+func (m *Manager) await(q *queue, tk uint64) {
+	m.mu.Lock()
+	for q.serving != tk {
+		q.turn.Wait()
 	}
+	m.mu.Unlock()
+}
+
+// done passes q's turn to the next ticket. Called without m.mu.
+func (m *Manager) done(q *queue) {
+	m.mu.Lock()
+	q.serving++
+	q.turn.Broadcast()
+	m.mu.Unlock()
+}
+
+// queued takes a ticket for conv and waits for it, and returns the
+// function that passes the turn on.
+func (m *Manager) queued(conv string) func() {
+	m.mu.Lock()
+	q, tk := m.ticket(conv)
+	m.mu.Unlock()
+	m.await(q, tk)
+	return func() { m.done(q) }
 }
 
 // wasGone is whether the page targetID closed while in no list. Called
 // with m.mu.
 func (m *Manager) wasGone(targetID string) bool {
-	for _, id := range m.gone {
-		if id != "" && id == targetID {
-			return true
-		}
-	}
-	return false
+	_, ok := m.gone[targetID]
+	return ok
 }
 
-// errClosedMeanwhile is a tab opened for a conversation deleted while it
-// opened.
-var errClosedMeanwhile = errors.New("the conversation was closed while its tab opened")
+// markGone remembers that targetID closed while in no list, and forgets
+// what closed longer ago than goneFor. Called with m.mu.
+func (m *Manager) markGone(targetID string) {
+	now := time.Now()
+	for id, at := range m.gone {
+		if now.Sub(at) > goneFor {
+			delete(m.gone, id)
+		}
+	}
+	m.gone[targetID] = now
+}
 
 // LastImport is what the most recent copy of the person's profile did,
 // nil before the first.
@@ -154,6 +185,7 @@ func (m *Manager) dropAll() {
 		close(c.changed)
 	}
 	m.convs = map[string]*convTabs{}
+	m.adopting = map[string]string{}
 }
 
 // convTabs is a conversation's pages, in the order they were opened, and
@@ -264,7 +296,13 @@ func (c *convTabs) index(targetID string) int {
 // NewManager returns a manager that starts nothing until a tab is asked
 // for.
 func NewManager(opts Options) *Manager {
-	return &Manager{opts: opts, convs: map[string]*convTabs{}, opening: map[string]*opening{}, adopting: map[string]string{}}
+	return &Manager{
+		opts:     opts,
+		convs:    map[string]*convTabs{},
+		queues:   map[string]*queue{},
+		adopting: map[string]string{},
+		gone:     map[string]time.Time{},
+	}
 }
 
 // Available is whether there is a browser to start: a Chrome or Edge
@@ -288,53 +326,46 @@ var errReplaced = errors.New("the browser restarted while the tab opened; try ag
 // Tab returns conv's tab, starting the browser and opening the tab if
 // either is not there yet.
 func (m *Manager) Tab(ctx context.Context, conv string) (*Tab, error) {
-	m.mu.Lock()
-	if c := m.convs[conv]; c != nil && c.current() != nil && m.alive() {
-		t := c.current()
-		m.mu.Unlock()
+	if t := m.Existing(conv); t != nil {
 		return t, nil
 	}
-	o := m.beginOpen(conv)
-	m.mu.Unlock()
-	t, err := m.openFor(ctx, conv, o)
+	defer m.queued(conv)()
+	// A call ahead of this one in the queue may have opened it.
+	if t := m.Existing(conv); t != nil {
+		return t, nil
+	}
+	t, err := m.openFor(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer m.mu.Unlock()
-	// Another call for the same conversation got there first: its tab is
-	// the conversation's, and this one goes.
-	if c := m.convs[conv]; c != nil && c.current() != nil {
-		existing := c.current()
-		go t.close(context.Background())
-		return existing, nil
+	if c := m.convs[conv]; c != nil {
+		c.add(t)
+	} else {
+		m.convs[conv] = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
 	}
-	m.convs[conv] = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
 	return t, nil
 }
 
-// openFor opens a tab for conv on the running browser, starting it if it
-// is not, with m.mu let go throughout, and checks what changed meanwhile:
-// the browser replaced, the conversation closed, the page closed. o is
-// the open beginOpen counted, ended here.
+// openFor opens a tab on the running browser, starting it if it is not,
+// with m.mu let go throughout, then checks what changed meanwhile: the
+// browser replaced, or the page closed before it could be listed. Called
+// in the conversation's turn, so nothing else of its can change.
 //
 // On success it returns with m.mu held, for the caller to publish the tab
-// and let it go: a check made under one hold and a publish under the next
-// would let a close or a delete in between. On failure m.mu is not held
-// and the tab, if one opened, is closed.
-func (m *Manager) openFor(ctx context.Context, conv string, o *opening) (*Tab, error) {
+// and let it go. On failure m.mu is not held and the tab, if one opened,
+// is closed.
+func (m *Manager) openFor(ctx context.Context) (*Tab, error) {
 	p, err := m.running(ctx)
 	var t *Tab
 	if err == nil {
 		t, err = openTab(ctx, p.conn)
 	}
 	m.mu.Lock()
-	m.endOpen(conv, o)
 	switch {
 	case err != nil:
 	case m.proc != p:
 		err = errReplaced
-	case o.cancelled:
-		err = errClosedMeanwhile
 	case m.wasGone(t.targetID):
 		err = errReplaced
 	}
@@ -384,10 +415,8 @@ func (m *Manager) Tabs(ctx context.Context, conv string) []TabInfo {
 // NewTab opens an empty tab for conv and makes it the active one, starting
 // the browser if it is not running.
 func (m *Manager) NewTab(ctx context.Context, conv string) (*Tab, error) {
-	m.mu.Lock()
-	o := m.beginOpen(conv)
-	m.mu.Unlock()
-	t, err := m.openFor(ctx, conv, o)
+	defer m.queued(conv)()
+	t, err := m.openFor(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -402,6 +431,7 @@ func (m *Manager) NewTab(ctx context.Context, conv string) (*Tab, error) {
 
 // ActivateTab makes conv's tab id the one it works in.
 func (m *Manager) ActivateTab(conv, id string) error {
+	defer m.queued(conv)()
 	m.mu.Lock()
 	c := m.convs[conv]
 	// A browser that has gone away took its tabs with it, whatever the
@@ -430,6 +460,7 @@ func (m *Manager) ActivateTab(conv, id string) error {
 // CloseTabID closes conv's tab id. When it was the active one, the tab
 // before it becomes active; when it was the last, conv has none.
 func (m *Manager) CloseTabID(ctx context.Context, conv, id string) error {
+	defer m.queued(conv)()
 	m.mu.Lock()
 	c := m.convs[conv]
 	if c == nil || !m.alive() {
@@ -447,10 +478,11 @@ func (m *Manager) CloseTabID(ctx context.Context, conv, id string) error {
 		delete(m.convs, conv)
 		close(c.changed)
 	}
-	if m.proc != nil {
-		m.proc.conn.Forget(t.session)
-	}
+	conn := m.connLocked()
 	m.mu.Unlock()
+	if conn != nil {
+		conn.Forget(t.session)
+	}
 	t.close(ctx)
 	m.showActive(conv, next)
 	return nil
@@ -607,14 +639,14 @@ func (m *Manager) watchTargets(p *process) {
 		if json.Unmarshal(params, &ev) != nil || ev.TargetInfo.Type != "page" || ev.TargetInfo.OpenerID == "" {
 			return
 		}
-		go m.adopt(p, ev.TargetInfo.OpenerID, ev.TargetInfo.TargetID)
+		m.created(p, ev.TargetInfo.OpenerID, ev.TargetInfo.TargetID)
 	})
 	conn.On("", "Target.targetDestroyed", func(params json.RawMessage) {
 		var ev struct {
 			TargetID string `json:"targetId"`
 		}
 		if json.Unmarshal(params, &ev) == nil {
-			go m.forget(ev.TargetID)
+			m.destroyed(ev.TargetID)
 		}
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -622,99 +654,143 @@ func (m *Manager) watchTargets(p *process) {
 	_ = conn.Call(ctx, "", "Target.setDiscoverTargets", map[string]any{"discover": true}, nil)
 }
 
-// adopt adds a page that one of a conversation's tabs opened (a link
-// with target=_blank, window.open) to that conversation, as its active
-// tab. Opened from any of its tabs, not only the active one: a page in a
-// tab the person switched away from can still open one; and from a page
-// that is itself still being adopted, whose conversation it then is.
-//
-// Attached with m.mu let go, then checked again before it is published:
-// the browser can have been replaced, the conversation closed, or the
-// page closed (its close event then came before it was in any list, and
-// is in gone) while it attached.
-func (m *Manager) adopt(p *process, openerID, targetID string) {
+// owner is the conversation a page belongs to: listed in its tabs, or
+// claimed for it while it waits to be attached. "" for none. Called with
+// m.mu.
+func (m *Manager) owner(targetID string) string {
+	for name, c := range m.convs {
+		if c.index(targetID) >= 0 {
+			return name
+		}
+	}
+	return m.adopting[targetID]
+}
+
+// created is the browser saying a page opened another (a link with
+// target=_blank, window.open). Called in the connection's read loop, in
+// the order the browser sent its events, and quick: it claims the page
+// for the opener's conversation and takes its place in that conversation's
+// queue now, so a page the new one opens in turn finds its conversation,
+// and the pages are added in the order they opened. The attach, which
+// waits on the browser, is adopt's.
+func (m *Manager) created(p *process, openerID, targetID string) {
 	m.mu.Lock()
 	conv := ""
 	if m.proc == p {
-		for name, c := range m.convs {
-			if c.index(openerID) >= 0 {
-				conv = name
-				break
-			}
-		}
-		if conv == "" {
-			conv = m.adopting[openerID]
-		}
+		conv = m.owner(openerID)
 	}
 	if conv == "" {
 		m.mu.Unlock()
 		return
 	}
 	m.adopting[targetID] = conv
+	q, tk := m.ticket(conv)
 	m.mu.Unlock()
+	go m.adopt(p, conv, q, tk, openerID, targetID)
+}
 
+// adopt attaches a page created claimed for conv and adds it as conv's
+// active tab, in conv's turn. Opened from any of its tabs, not only the
+// active one: a page in a tab the person switched away from can still
+// open one. Not added if the conversation was deleted (its claim is
+// gone), the browser replaced, or the page already closed; a
+// conversation whose last tab closed meanwhile has this one as its tab.
+func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, targetID string) {
+	m.await(q, tk)
+	defer m.done(q)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	t, err := attachTab(ctx, p.conn, targetID)
 
 	m.mu.Lock()
-	_, still := m.adopting[targetID]
+	_, claimed := m.adopting[targetID]
 	delete(m.adopting, targetID)
-	c := m.convs[conv]
 	if err != nil {
 		m.mu.Unlock()
 		return
 	}
-	if m.proc != p || c == nil || !still || m.wasGone(targetID) {
+	if m.proc != p || !claimed || m.wasGone(targetID) {
 		m.mu.Unlock()
-		// The page a closed conversation's tab opened is nobody's.
+		// The page a deleted conversation's tab opened is nobody's.
 		t.close(ctx)
 		return
 	}
 	t.opener = openerID
-	c.add(t)
+	if c := m.convs[conv]; c != nil {
+		c.add(t)
+	} else {
+		m.convs[conv] = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
+	}
 	m.mu.Unlock()
 }
 
-// forget drops a page that closed from whichever conversation had it.
-func (m *Manager) forget(targetID string) {
-	var next *Tab
-	var owner string
+// destroyed is the browser saying a page closed. Called in the connection's
+// read loop, in event order, and quick: a page of a conversation (listed,
+// or claimed and waiting to be attached) takes its place in that
+// conversation's queue, behind its attach, and is dropped in its turn; a
+// page of none is remembered in gone, for a tab that closed before it
+// could be listed.
+func (m *Manager) destroyed(targetID string) {
 	m.mu.Lock()
-	for conv, c := range m.convs {
-		i := c.index(targetID)
-		if i < 0 {
-			continue
-		}
-		t := c.tabs[i]
-		next, owner = c.remove(i), conv
-		if m.proc != nil {
-			m.proc.conn.Forget(t.session)
-		}
-		if len(c.tabs) == 0 {
-			delete(m.convs, conv)
-			close(c.changed)
-		}
-		break
+	conv := m.owner(targetID)
+	if conv == "" {
+		m.markGone(targetID)
+		m.mu.Unlock()
+		return
 	}
-	if owner == "" {
-		m.gone[m.goneNext] = targetID
-		m.goneNext = (m.goneNext + 1) % goneKept
-	}
+	q, tk := m.ticket(conv)
 	m.mu.Unlock()
-	m.showActive(owner, next)
+	go m.forget(conv, q, tk, targetID)
 }
 
-// CloseTab closes every page conv has.
+// forget drops a page that closed from conv, in conv's turn.
+func (m *Manager) forget(conv string, q *queue, tk uint64, targetID string) {
+	m.await(q, tk)
+	defer m.done(q)
+	m.mu.Lock()
+	c := m.convs[conv]
+	i := -1
+	if c != nil {
+		i = c.index(targetID)
+	}
+	if i < 0 {
+		// Never attached, or the conversation was deleted: nothing listed.
+		m.markGone(targetID)
+		m.mu.Unlock()
+		return
+	}
+	t := c.tabs[i]
+	next := c.remove(i)
+	if len(c.tabs) == 0 {
+		delete(m.convs, conv)
+		close(c.changed)
+	}
+	conn := m.connLocked()
+	m.mu.Unlock()
+	if conn != nil {
+		conn.Forget(t.session)
+	}
+	m.showActive(conv, next)
+}
+
+// connLocked is the running browser's connection, or nil. Called with
+// m.mu.
+func (m *Manager) connLocked() *cdp.Conn {
+	if m.proc == nil {
+		return nil
+	}
+	return m.proc.conn
+}
+
+// CloseTab closes every page conv has, in its turn: after the work asked
+// for before it, a tab still opening included, so nothing it opens
+// outlives the conversation. Its claims go too, so a page one of its tabs
+// opened is closed rather than adopted.
 func (m *Manager) CloseTab(conv string) {
+	defer m.queued(conv)()
 	m.mu.Lock()
 	c := m.convs[conv]
 	delete(m.convs, conv)
-	// A tab still opening for it is for a conversation that is gone: it
-	// closes when it finds this, instead of bringing the conversation back.
-	if o := m.opening[conv]; o != nil {
-		o.cancelled = true
-	}
 	for target, owner := range m.adopting {
 		if owner == conv {
 			delete(m.adopting, target)

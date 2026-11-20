@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -133,7 +134,7 @@ func TestASlowCallToTheBrowserHoldsNoOtherConversation(t *testing.T) {
 		name, stall string
 		slow        func(m *Manager, p *process)
 	}{
-		{"a link's tab attaching", "Target.attachToTarget", func(m *Manager, p *process) { m.adopt(p, "opener", "popup") }},
+		{"a link's tab attaching", "Target.attachToTarget", func(m *Manager, p *process) { m.created(p, "opener", "popup") }},
 		{"a new tab opening", "Target.createTarget", func(m *Manager, p *process) { m.NewTab(context.Background(), "c1") }},
 		{"a first tab opening", "Target.createTarget", func(m *Manager, p *process) { m.Tab(context.Background(), "c3") }},
 	} {
@@ -207,74 +208,125 @@ func waitHeld(t *testing.T, held <-chan struct{}, what string) {
 	}
 }
 
-func tabIDs(m *Manager, conv string) []string {
+// drained waits for every piece of conv's work asked for so far to end.
+func drained(t *testing.T, m *Manager, conv string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		m.mu.Lock()
+		q := m.queues[conv]
+		idle := q == nil || q.serving == q.next
+		m.mu.Unlock()
+		if idle {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("conversation %s's work never ended", conv)
+}
+
+// tabsOf is conv's tab ids in order, and the active one.
+func tabsOf(m *Manager, conv string) ([]string, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var ids []string
-	if c := m.convs[conv]; c != nil {
-		for _, t := range c.tabs {
-			ids = append(ids, t.targetID)
-		}
+	c := m.convs[conv]
+	if c == nil {
+		return nil, ""
 	}
-	return ids
+	var ids []string
+	for _, t := range c.tabs {
+		ids = append(ids, t.targetID)
+	}
+	return ids, c.current().targetID
 }
 
 // A page that closes while it is being attached gets its close event
-// before it is in any list. It is not published afterwards: a closed page
-// as the active tab would leave the panel and the model on nothing.
+// before it is in any list. It is dropped in its conversation's turn,
+// after the attach, not left as a closed active tab.
 func TestAPageThatClosesWhileItAttachesIsNotPublished(t *testing.T) {
 	m, p, held, release := standIn(t, "Target.attachToTarget")
-	done := make(chan struct{})
-	go func() { m.adopt(p, "A", "B"); close(done) }()
+	m.created(p, "A", "B")
 	waitHeld(t, held, "the attach")
-	m.forget("B")
+	m.destroyed("B")
 	release()
-	<-done
-	if got := tabIDs(m, "c1"); len(got) != 1 || got[0] != "A" {
-		t.Errorf("tabs = %v; the closed page was published", got)
+	drained(t, m, "c1")
+	if got, active := tabsOf(m, "c1"); len(got) != 1 || active != "A" {
+		t.Errorf("tabs = %v, active %s; the closed page was published", got, active)
 	}
 }
 
-// A page opened by a page that is itself still being attached belongs to
-// the same conversation, not to nobody.
-func TestAPageOpenedByOneStillAttachingIsKept(t *testing.T) {
+// Pages opened by pages, the browser's events in order: B by A, then D by
+// B while B is still attaching. Both are the conversation's, in the order
+// they opened, and the last opened is the one it works in, whichever
+// attach the scheduler would have finished first.
+func TestPagesOpenedOneByAnotherKeepTheirOrder(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		m, p, held, release := standIn(t, "Target.attachToTarget")
+		m.created(p, "A", "B")
+		m.created(p, "B", "D")
+		waitHeld(t, held, "the first attach")
+		release()
+		drained(t, m, "c1")
+		got, active := tabsOf(m, "c1")
+		if len(got) != 3 || got[1] != "B" || got[2] != "D" || active != "D" {
+			t.Fatalf("tabs = %v, active %s; want A, B, D with D active", got, active)
+		}
+	}
+}
+
+// The page a popup was opened from can close while the popup attaches.
+// The popup is the conversation's tab, not closed with it.
+func TestAPopupOutlivesItsOpenerClosing(t *testing.T) {
 	m, p, held, release := standIn(t, "Target.attachToTarget")
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); m.adopt(p, "A", "B") }()
-	waitHeld(t, held, "the first attach")
-	go func() { defer wg.Done(); m.adopt(p, "B", "D") }()
-	waitHeld(t, held, "the second attach")
+	m.created(p, "A", "B")
+	waitHeld(t, held, "the attach")
+	m.destroyed("A")
 	release()
-	wg.Wait()
-	got := tabIDs(m, "c1")
-	if len(got) != 3 {
-		t.Errorf("tabs = %v; want A, B and D", got)
+	drained(t, m, "c1")
+	if got, active := tabsOf(m, "c1"); len(got) != 1 || active != "B" {
+		t.Errorf("tabs = %v, active %s; want the popup alone", got, active)
 	}
 }
 
 // A tab still opening when its conversation is deleted does not bring the
-// conversation back.
+// conversation back: the delete waits its turn, behind the open, and
+// closes what it opened.
 func TestATabOpeningForAClosedConversationIsNotPublished(t *testing.T) {
 	m, _, held, release := standIn(t, "Target.createTarget")
-	result := make(chan error, 1)
+	opened := make(chan error, 1)
 	go func() {
 		_, err := m.NewTab(context.Background(), "c1")
-		result <- err
+		opened <- err
 	}()
 	waitHeld(t, held, "the new tab")
-	m.CloseTab("c1")
+	closed := make(chan struct{})
+	go func() { m.CloseTab("c1"); close(closed) }()
 	release()
-	if err := <-result; err == nil {
-		t.Error("a tab opened for a closed conversation was published")
+	<-opened
+	<-closed
+	if got, _ := tabsOf(m, "c1"); got != nil {
+		t.Errorf("the deleted conversation has tabs again: %v", got)
 	}
-	if got := tabIDs(m, "c1"); got != nil {
-		t.Errorf("the closed conversation has tabs again: %v", got)
+}
+
+// A page that closed while in no list is remembered by age, not by
+// count: however many others close meanwhile, it is not forgotten while a
+// tab that is it could still be waiting to be published.
+func TestAClosedPageIsRememberedLongEnough(t *testing.T) {
+	m := NewManager(Options{})
+	for i := 0; i <= 300; i++ {
+		m.destroyed(fmt.Sprintf("x%d", i))
 	}
 	m.mu.Lock()
-	left := len(m.opening)
+	kept := m.wasGone("x0")
+	m.gone["old"] = time.Now().Add(-goneFor - time.Second)
+	m.markGone("new")
+	_, stale := m.gone["old"]
 	m.mu.Unlock()
-	if left != 0 {
-		t.Errorf("%d open(s) still counted after they ended", left)
+	if !kept {
+		t.Error("the first of 301 closed pages was forgotten")
+	}
+	if stale {
+		t.Error("a page closed longer ago than goneFor is still remembered")
 	}
 }
