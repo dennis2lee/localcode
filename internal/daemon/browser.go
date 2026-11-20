@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -105,6 +106,40 @@ func (d *Daemon) browserOn(w http.ResponseWriter, r *http.Request) (string, bool
 	return id, true
 }
 
+const frameBoundary = "lcframe"
+
+// frameHead opens one part of the frame stream. No Content-Length: the
+// head is written before the frame it is for is known, and the boundary
+// ends a part.
+const frameHead = "--" + frameBoundary + "\r\nContent-Type: image/jpeg\r\n\r\n"
+
+// frameStream writes JPEG frames as a multipart/x-mixed-replace body.
+//
+// Each frame is followed at once by the head of the part after it. A
+// browser shows a part of such a stream only once it has the next part's
+// head: Chromium hands an <img> a part's data when the next part's headers
+// are parsed, and neither its Content-Length nor the boundary alone is
+// enough. A stream that wrote each head together with its own frame was
+// one frame behind, and the last frame of a page that stopped changing,
+// or the only one a tab had sent, was never shown.
+type frameStream struct {
+	w     io.Writer
+	flush func()
+}
+
+// open writes the first part's head, before any frame.
+func (s frameStream) open() {
+	_, _ = io.WriteString(s.w, frameHead)
+	s.flush()
+}
+
+// frame writes a frame and the head of the part after it.
+func (s frameStream) frame(jpeg []byte) {
+	_, _ = s.w.Write(jpeg)
+	_, _ = io.WriteString(s.w, "\r\n"+frameHead)
+	s.flush()
+}
+
 // handleBrowserStream serves the conversation's tab as a stream of JPEG
 // frames (multipart/x-mixed-replace, which an <img> shows as it arrives).
 // It waits while there is no tab yet, so the panel can open it first and
@@ -122,19 +157,14 @@ func (d *Daemon) handleBrowserStream(w http.ResponseWriter, r *http.Request) {
 	d.browserViewers.add(id, 1)
 	defer d.browserViewers.add(id, -1)
 
-	const boundary = "lcframe"
-	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary="+boundary)
+	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary="+frameBoundary)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
+	stream := frameStream{w: w, flush: flusher.Flush}
+	stream.open()
 
 	ctx := r.Context()
-	write := func(frame []byte) {
-		fmt.Fprintf(w, "--%s\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", boundary, len(frame))
-		_, _ = w.Write(frame)
-		_, _ = w.Write([]byte("\r\n"))
-		flusher.Flush()
-	}
+	write := stream.frame
 	for ctx.Err() == nil {
 		if d.Browser.Existing(id) == nil {
 			select {

@@ -2043,7 +2043,7 @@ The Web UI shares daemon sessions with the TUI and desktop window. The left pane
 
 | Action | How |
 |---|---|
-| Resize a panel | Drag the hairline between it and the transcript. The browser panel's hairline is on its left edge. |
+| Resize a panel | Drag the hairline on the panel's inner edge: the right edge of the session panel, the left edge of the browser panel and of the tasks/MCP panel. |
 | Back to the default width | Double-click that same handle |
 | Hide or show a panel | The toggle button in the header, at the far left for the session panel and the far right for the tasks/MCP panel. The browser panel has no toggle: it is shown while the browser setting is on. |
 
@@ -2052,9 +2052,9 @@ Panel width and visibility persist in the browser or desktop window.
 | Panel | Default | Drag range |
 |---|---|---|
 | Sessions, tasks/MCP | 260px, 280px | 160px to 640px |
-| Browser | 600px | 360px to 1306px. At 1306px the page is shown at its own 1280 pixels. |
+| Browser | 600px | 360px to 1307px. At 1307px the page is shown at its own 1280 pixels. |
 
-A drag does not narrow the transcript below 280px. While the browser panel is shown, a window too narrow for every panel narrows the browser panel first, down to 360px, and the transcript keeps 280px. Use a toggle to hide a panel.
+A drag does not narrow the transcript below 280px. While the browser panel is shown, a side panel's drag can also take the browser panel's width above 360px. While the browser panel is shown, a window too narrow for every panel narrows the browser panel first, down to 360px, then the side panels, down to 160px. The transcript keeps 280px. Every panel at its minimum takes 972px, which the desktop window's default 1100px width holds. Use a toggle to hide a panel.
 
 ### Left panel: sessions
 

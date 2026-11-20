@@ -464,3 +464,46 @@ func TestTheFunctionsThePageCallsAreTheOnesGoBinds(t *testing.T) {
 		}
 	}
 }
+
+// The browser panel is drawn only in this window, beside the session panel,
+// the transcript and the tasks panel. The window opens at winW, and with
+// every panel at the narrowest the stylesheet lets a window squeeze it to,
+// all four and their three handles have to fit in that: a panel that does
+// not is pushed off the window's right edge, under a horizontal scroll.
+//
+// Untagged for the same reason as the colour check above.
+func TestTheDefaultWindowHoldsEveryPanelWithTheBrowser(t *testing.T) {
+	src, err := os.ReadFile("gui.go")
+	if err != nil {
+		t.Fatalf("read gui.go: %v", err)
+	}
+	css, err := os.ReadFile("../daemon/static/style.css")
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	num := func(what, pattern string, in []byte) int {
+		t.Helper()
+		m := regexp.MustCompile(pattern).FindSubmatch(in)
+		if m == nil {
+			t.Fatalf("cannot find %s (%s)", what, pattern)
+		}
+		n, err := strconv.Atoi(string(m[1]))
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		return n
+	}
+	const shown = `main:has\(> #browser-panel:not\(\[hidden\]\)\) > `
+	winW := num("the window's default width", `winW\s*=\s*(\d+)`, src)
+	handle := num("a handle's width", `\.resizer \{\s*flex: 0 0 (\d+)px`, css)
+	browser := num("the browser panel's minimum", `#browser-panel \{[^}]*min-width: (\d+)px`, css)
+	center := num("the transcript's minimum beside it", shown+`#center \{ min-width: (\d+)px; \}`, css)
+	side := num("the side panels' minimum beside it", shown+`:is\(#left-panel, #right-panel\) \{[^}]*min-width: (\d+)px`, css)
+	if !regexp.MustCompile(shown + `:is\(#left-panel, #right-panel\) \{[^}]*flex-shrink: 1;`).Match(css) {
+		t.Fatal("the side panels do not shrink while the browser panel is shown, so their minimum is not what a window squeezes them to")
+	}
+	if need := 2*side + center + browser + 3*handle; need > winW {
+		t.Errorf("every panel at its minimum needs %dpx (side %d x2, transcript %d, browser %d, handles 3 x %d); the window opens at %dpx",
+			need, side, center, browser, handle, winW)
+	}
+}

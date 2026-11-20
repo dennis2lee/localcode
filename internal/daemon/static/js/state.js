@@ -52,7 +52,7 @@ export const app = {
   autoDelegateMatch: [],      // glob patterns that qualify a prompt for delegation
   smartAgent: false,
   // The browser setting: whether the model may use the browser shown in
-  // the desktop window's right panel. See browser.js.
+  // the desktop window's browser panel. See browser.js.
   browser: false,
   // Whether the daemon found a Chrome or Edge to run, and what the last
   // copy of the person's profile did (from, profile, skipped), or null.

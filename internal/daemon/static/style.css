@@ -853,19 +853,22 @@ aside.left {
    panel. The page fills the panel's width at the page's own proportions
    (1280x800), so one point on the image is one point on the page:
    js/browser.js pagePoint relies on it.
-   It is the one panel that shrinks with the window, down to the minimum
-   js/resize.js BROWSER_BOUNDS holds a drag to, and while it is shown the
-   transcript keeps resize.js CENTER_MIN: a page wide enough to read is
-   the panel most likely to have been dragged wider than a smaller window
-   has room for, and the transcript is what it would otherwise take the
-   room from. */
+   While it is shown, a window too narrow for every panel takes the room
+   from the panels, not from the transcript, which keeps resize.js
+   CENTER_MIN. The browser panel gives first, down to the minimum
+   resize.js BROWSER_BOUNDS holds a drag to: its flex-shrink is a hundred
+   times the side panels', so they give almost nothing until it is there.
+   Then the side panels give, down to resize.js SIDE_BOUNDS.min. Every
+   panel at its minimum is 972px with the handles, which the desktop
+   window's default 1100px holds (internal/gui chrome_test.go). */
 #browser-panel {
   width: 600px;
   min-width: 360px;
-  flex-shrink: 1;
+  flex-shrink: 100;
 }
 #browser-panel[hidden], #resize-browser[hidden] { display: none; }
 main:has(> #browser-panel:not([hidden])) > #center { min-width: 280px; }
+main:has(> #browser-panel:not([hidden])) > :is(#left-panel, #right-panel) { flex-shrink: 1; min-width: 160px; }
 .browser-bar { display: flex; gap: 4px; align-items: center; margin: 10px 0 8px; }
 .browser-bar .browser-nav { padding: 2px 6px; }
 .ico-flip { transform: scaleX(-1); }
@@ -886,8 +889,11 @@ main:has(> #browser-panel:not([hidden])) > #center { min-width: 280px; }
   outline: none;
 }
 #browser-view:focus { border-color: var(--interactive); }
+/* Opaque, so a page the view still holds (the tab closed, or another
+   conversation's last frame) is not read through "No page yet". */
 .browser-empty {
   position: absolute; inset: 0; margin: 0; padding: 12px;
+  background: var(--ink); border-radius: var(--r-ctl);
   display: flex; align-items: center; justify-content: center; text-align: center;
   pointer-events: none;
 }

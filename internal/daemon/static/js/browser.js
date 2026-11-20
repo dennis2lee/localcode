@@ -31,15 +31,27 @@ let reconnectTimer = null;
 let daemonLost = false;  // the last location poll failed
 let dragging = false;    // a button went down on the view and is still held
 let lastPasteKey = 0;    // when a paste shortcut last went to the page
-let switchedAt = 0;      // when the stream was last pointed at another conversation
+let tabSeenAt = 0;       // when a location poll of this visit first found a tab
+
+// visit counts the panel's showings of a conversation: it moves on when
+// the stream is pointed at a conversation and when the panel is hidden.
+// Every answer the panel waits for (a location poll, the address bar, a
+// reconnect's timer) belongs to the visit it was asked in and is dropped
+// in any other. A conversation's id cannot tell them apart: after a switch
+// away and back, an answer to the first visit names the same conversation
+// as the second, and it can say there is a page when that visit's view
+// still holds the other conversation's frame.
+let visit = 0;
 let emptyText = null;    // the empty note's own words, kept before an error first replaces them
 
-// How long after a switch a location poll that finds a tab shows the
-// view even though no frame has been seen to arrive. The view is shown on
-// the new stream's first frame (the <img>'s load event); this is for an
-// engine that does not fire one for a part of a multipart stream, so the
-// view cannot stay blank. Shorter than the poll interval, so it is the
-// first poll after the immediate one that shows it.
+// How long a tab has to have been there before a location poll shows the
+// view though no frame has been seen to arrive. The view is shown on the
+// new stream's first frame (the <img>'s load event); this is for an engine
+// that does not fire one for a part of a multipart stream, so the view
+// cannot stay blank. Counted from the first poll of the visit that found
+// the tab, not from the switch: a tab opened long after the switch has
+// sent no frame when it is first found. Shorter than the poll interval, so
+// it is the next poll after that one that shows it.
 export const STALE_FALLBACK_MS = 1500;
 
 // inGUI is whether this page is in the desktop window.
@@ -182,10 +194,11 @@ function setStale(stale) {
 // fetches it again.
 function reconnect(delay) {
   if (reconnectTimer) return;
+  const asked = visit;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     const view = el('browser-view');
-    if (!view || !browserShown() || streamFor !== session.sessionID) return;
+    if (asked !== visit || !view || !browserShown() || streamFor !== session.sessionID) return;
     view.setAttribute('src', `/api/sessions/${streamFor}/browser/stream?r=${Date.now()}`);
   }, delay);
 }
@@ -193,22 +206,29 @@ function reconnect(delay) {
 async function refreshLocation() {
   if (!browserShown()) return;
   const id = session.sessionID;
+  const asked = visit;
   try {
     const st = await api('GET', `/api/sessions/${id}/browser`);
-    if (id !== session.sessionID) return;
+    if (asked !== visit || id !== session.sessionID) return;
     if (daemonLost) {
       // The daemon is back; the stream it had open went with it.
       daemonLost = false;
       reconnect(0);
     }
     showEmpty(!!st.has_tab);
-    if (st.has_tab && Date.now() - switchedAt >= STALE_FALLBACK_MS) setStale(false);
+    if (!st.has_tab) {
+      tabSeenAt = 0;
+    } else if (!tabSeenAt) {
+      tabSeenAt = Date.now();
+    } else if (Date.now() - tabSeenAt >= STALE_FALLBACK_MS) {
+      setStale(false);
+    }
     const url = el('browser-url');
     // Not while the person is typing an address into it.
     if (url && document.activeElement !== url && st.url && st.url !== 'about:blank') url.value = st.url;
   } catch {
     // The daemon may be restarting; the next tick tries again.
-    daemonLost = true;
+    if (asked === visit) daemonLost = true;
   }
 }
 
@@ -225,6 +245,7 @@ export function renderBrowserPanel() {
   if (handle) handle.hidden = !shown;
   if (!shown) {
     if (streamFor !== null) {
+      visit += 1;
       // Dropping the source ends the stream, and with it the daemon's
       // reason to offer this conversation the browser.
       view.removeAttribute('src');
@@ -241,12 +262,20 @@ export function renderBrowserPanel() {
     return;
   }
   if (streamFor !== session.sessionID) {
+    visit += 1;
+    // A reconnect waiting for the conversation before would hold the one
+    // slot, and drop the reconnect this one may need.
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    daemonLost = false;
     streamFor = session.sessionID;
+    tabSeenAt = 0;
+    setStale(true);
     // Through the attribute, which is what removeAttribute above takes
     // away again.
     view.setAttribute('src', `/api/sessions/${streamFor}/browser/stream`);
-    switchedAt = Date.now();
-    setStale(true);
     const url = el('browser-url');
     if (url) url.value = '';
     restoreEmptyText();
@@ -258,19 +287,21 @@ export function renderBrowserPanel() {
 
 // navigate is the address bar and the back, forward and reload buttons.
 // The answer can take seconds (the browser may be starting), so it is
-// shown only if the panel still shows the conversation it was asked for.
+// shown only in the visit it was asked in.
 async function navigate(body) {
   const id = session.sessionID;
   if (!id) return;
+  const asked = visit;
   try {
     const res = await api('POST', `/api/sessions/${id}/browser/navigate`, body);
-    if (id !== session.sessionID) return;
+    if (asked !== visit || id !== session.sessionID) return;
     restoreEmptyText();
-    showEmpty(false);
+    // There is a page now: the note goes.
+    showEmpty(true);
     const url = el('browser-url');
     if (url && res && res.url) url.value = res.url;
   } catch (err) {
-    if (id !== session.sessionID) return;
+    if (asked !== visit || id !== session.sessionID) return;
     const empty = el('browser-empty');
     if (empty) {
       if (emptyText === null) emptyText = empty.textContent;
@@ -359,7 +390,10 @@ export function initBrowserPanel() {
   // is down is not asked for it in a tight loop.
   view.addEventListener('error', () => reconnect(2000));
   // A frame arrived on the stream the view is on, so what it shows is the
-  // conversation on screen.
+  // conversation on screen. The event does not say which stream it is
+  // for: one the stream before queued in the moment of a switch would show
+  // the view early. An engine fires a stream's load once, at its first
+  // frame, so that takes a switch in the same instant as that frame.
   view.addEventListener('load', () => setStale(false));
   view.addEventListener('contextmenu', (e) => e.preventDefault());
   view.addEventListener('keydown', (e) => {

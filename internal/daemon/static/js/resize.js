@@ -18,10 +18,11 @@ export const SIDE_BOUNDS = { min: 160, max: 640 };
 
 // The browser panel shows a page rendered at 1280 pixels wide (see
 // js/browser.js PAGE_WIDTH). Its maximum is the width that shows that page
-// at its own pixels: the page, the image's 1px border on either side, and
-// the panel's 12px padding on either side. Below its minimum the page is
-// too small to read or to click on.
-export const BROWSER_BOUNDS = { min: 360, max: 1280 + 2 + 24 };
+// at its own pixels: the page, the image's 1px border on either side, the
+// panel's 12px padding on either side, and the panel's own 1px left border
+// (every box here is border-box). Below its minimum the page is too small
+// to read or to click on.
+export const BROWSER_BOUNDS = { min: 360, max: 1280 + 2 + 24 + 1 };
 
 // What a drag leaves the transcript, however wide the panel being dragged
 // is allowed to be. A window narrower than every panel's width put
@@ -58,13 +59,22 @@ export function setPanelWidth(panel, px, bounds = SIDE_BOUNDS) {
   panel.style.width = `${clamp(px, bounds)}px`;
 }
 
-// roomInCenter is how much wider a panel can get before the transcript is
-// narrower than CENTER_MIN. Infinity when the transcript's width is not
-// known (zero: not laid out, or a test page without layout).
-function roomInCenter() {
-  const w = centerEl ? centerEl.offsetWidth : 0;
-  if (!(w > 0)) return Infinity;
-  return Math.max(0, w - CENTER_MIN);
+const widthOf = (el) => Number(el && el.offsetWidth) || 0;
+
+// roomFor is how much wider panel can get before the transcript is
+// narrower than CENTER_MIN. The transcript is always laid out, so a width
+// of zero is a transcript the panels have squeezed out, which has no room
+// to give. While the browser panel is shown, a side panel can also take
+// what the browser panel has above its minimum: the stylesheet shrinks the
+// browser panel before the transcript. The browser panel's own drag gets
+// only the transcript's room, so widening it never squeezes the side
+// panels.
+function roomFor(panel) {
+  let room = Math.max(0, widthOf(centerEl) - CENTER_MIN);
+  if (browserPanel && panel !== browserPanel && !browserPanel.hidden) {
+    room += Math.max(0, widthOf(browserPanel) - BROWSER_BOUNDS.min);
+  }
+  return room;
 }
 
 // A handle drags one panel. side is which edge of that panel the handle
@@ -74,11 +84,22 @@ function attach(handle, panel, side, key, bounds) {
   if (!handle || !panel) return;
   let startX = 0;
   let startWidth = 0;
-  let room = Infinity;
+  let room = 0;
   let dragging = false;
+
+  // A drag ends without saving when its panel goes away under it (the
+  // browser setting turned off mid-drag): a width for a panel that is not
+  // on screen is one nobody chose.
+  function gone() {
+    return panel.hidden || handle.hidden;
+  }
 
   function onMove(e) {
     if (!dragging) return;
+    if (gone()) {
+      end(false);
+      return;
+    }
     const delta = side === 'left' ? e.clientX - startX : startX - e.clientX;
     // Growing is limited by the room the transcript has; shrinking is not,
     // so a drag that started with the transcript already narrow can still
@@ -87,14 +108,18 @@ function attach(handle, panel, side, key, bounds) {
     setPanelWidth(panel, startWidth + (delta > 0 ? Math.min(delta, room) : delta), bounds);
   }
 
-  function onUp() {
-    if (!dragging) return;
+  function end(save) {
     dragging = false;
     handle.classList.remove('dragging');
     document.body.classList.remove('resizing');
     document.removeEventListener('pointermove', onMove);
     document.removeEventListener('pointerup', onUp);
-    store({ [key]: parseInt(panel.style.width, 10) });
+    if (save) store({ [key]: parseInt(panel.style.width, 10) });
+  }
+
+  function onUp() {
+    if (!dragging) return;
+    end(!gone());
   }
 
   handle.addEventListener('pointerdown', (e) => {
@@ -104,7 +129,7 @@ function attach(handle, panel, side, key, bounds) {
     dragging = true;
     startX = e.clientX;
     startWidth = panel.offsetWidth || parseInt(panel.style.width, 10) || bounds.min;
-    room = roomInCenter();
+    room = roomFor(panel);
     handle.classList.add('dragging');
     document.body.classList.add('resizing');
     // Listeners go on the document, not the handle: the pointer moves

@@ -193,7 +193,7 @@ type Config struct {
 	SmartAgent *bool `json:"smart_agent,omitempty"`
 
 	// Browser gives the model a web browser to work in, shown in the GUI's
-	// right panel: Chrome (or Edge) started by localcode with no window,
+	// browser panel: Chrome (or Edge) started by localcode with no window,
 	// on a profile copied from the person's own. Offered only to a
 	// conversation open in a GUI window. Off unless set; toggled from the
 	// settings window and "/browser on|off". See internal/browser.

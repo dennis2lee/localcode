@@ -162,6 +162,134 @@ test('a failed open in one conversation is not reported in the next', async () =
   assert.equal(empty.textContent, words, 'the first conversation\'s error was shown in the second');
 });
 
+// A conversation's id does not tell one visit of it from the next. An
+// answer asked for in one visit, arriving after a switch away and back, is
+// dropped like one arriving in another conversation.
+for (const outcome of ['answer', 'error']) {
+  test(`an address bar ${outcome} from an earlier visit is dropped after a switch away and back`, async () => {
+    let finish;
+    const pending = new Promise((r) => { finish = r; });
+    const app = await load({
+      globals: { lcGUI: true },
+      routes: { ...perConversation({}), 'POST /api/sessions/*/browser/navigate': () => pending },
+    });
+    const url = app.el('browser-url');
+    const empty = app.el('browser-empty');
+    empty.textContent = 'No page yet.';
+    url.value = 'old.example';
+    url.fire('keydown', { key: 'Enter' });
+    app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+    await app.settle();
+    app.internals.selectSession('sess-1', 'general-purpose', '/tmp/workspace');
+    await app.settle();
+    finish(outcome === 'answer' ? { url: 'https://old.example/' } : { status: 503, body: { error: 'old failure' } });
+    await app.settle();
+    assert.equal(url.value, '', 'the earlier visit\'s address was written into this one\'s bar');
+    assert.equal(empty.textContent, 'No page yet.', 'the earlier visit\'s error was shown in this one');
+  });
+}
+
+test('an address bar error from before the setting went off and on again is dropped', async () => {
+  let finish;
+  const pending = new Promise((r) => { finish = r; });
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: { ...perConversation({}), 'POST /api/sessions/*/browser/navigate': () => pending },
+  });
+  const empty = app.el('browser-empty');
+  empty.textContent = 'No page yet.';
+  app.el('browser-url').value = 'old.example';
+  app.el('browser-url').fire('keydown', { key: 'Enter' });
+  app.internals.applyEvent({ type: 'settings.changed', data: { browser: false } });
+  await app.settle();
+  app.internals.applyEvent({ type: 'settings.changed', data: { browser: true } });
+  await app.settle();
+  finish({ status: 503, body: { error: 'old failure' } });
+  await app.settle();
+  assert.equal(empty.textContent, 'No page yet.');
+});
+
+// The worst of them: a location poll from the first visit, answered late,
+// says there is a page while the view still holds the frame of the
+// conversation visited in between.
+test('a location poll from an earlier visit cannot show the view', async () => {
+  let now = 1_000_000;
+  class ClockDate extends Date { static now() { return now; } }
+  const tabs = { 'sess-2': 'https://two.example/' };
+  const app = await load({ globals: { lcGUI: true, Date: ClockDate }, routes: perConversation(tabs) });
+  let finish;
+  const late = new Promise((r) => { finish = r; });
+  app.routes['GET /api/sessions/sess-1/browser'] = () => late;
+  app.internals.renderBrowserPanel();
+  app.routes['GET /api/sessions/sess-1/browser'] = { has_tab: false, width: 1280, height: 800 };
+
+  const view = app.el('browser-view');
+  app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  view.fire('load');
+  app.internals.selectSession('sess-1', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  assert.equal(view.classList.contains('stale'), true);
+
+  now += app.internals.STALE_FALLBACK_MS;
+  finish({ has_tab: true, url: 'https://one.example/' });
+  await app.settle();
+  assert.equal(view.classList.contains('stale'), true,
+    'a poll from the first visit showed the view, which holds the second conversation\'s frame');
+  assert.equal(app.el('browser-url').value, '');
+});
+
+test('a reconnect left from the conversation before does not take the next one\'s place', async () => {
+  const app = await load({ globals: { lcGUI: true }, routes: perConversation({}) });
+  const view = app.el('browser-view');
+  const realTimeout = setTimeout;
+  view.fire('error');
+  app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  view.fire('error');
+  await new Promise((r) => realTimeout(r, 2100));
+  assert.match(view.getAttribute('src'), /^\/api\/sessions\/sess-2\/browser\/stream\?r=\d+$/,
+    'the second conversation\'s broken stream was never opened again');
+});
+
+// The fallback counts from when the tab was found, not from the switch: a
+// conversation that gets its tab long after it was opened has sent no
+// frame when the tab is first found, and the view still holds the frame
+// of the conversation before.
+test('a tab opened long after the switch is not shown before its first frame', async () => {
+  let now = 1_000_000;
+  class ClockDate extends Date { static now() { return now; } }
+  const tabs = { 'sess-1': 'https://one.example/' };
+  const app = await load({ globals: { lcGUI: true, Date: ClockDate }, routes: perConversation(tabs) });
+  const view = app.el('browser-view');
+  view.fire('load');
+  app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  now += 10 * app.internals.STALE_FALLBACK_MS;
+  tabs['sess-2'] = 'https://two.example/';
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  assert.equal(view.classList.contains('stale'), true,
+    'the poll that first found the tab showed the view, which holds the first conversation\'s frame');
+
+  now += app.internals.STALE_FALLBACK_MS;
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  assert.equal(view.classList.contains('stale'), false);
+});
+
+test('an address bar open that succeeds takes the empty note away', async () => {
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: { ...perConversation({}), 'POST /api/sessions/*/browser/navigate': { url: 'https://example.com/' } },
+  });
+  assert.equal(app.el('browser-empty').hidden, false);
+  app.el('browser-url').value = 'example.com';
+  app.el('browser-url').fire('keydown', { key: 'Enter' });
+  await app.settle();
+  assert.equal(app.el('browser-empty').hidden, true, '"No page yet" was shown over the page just opened');
+});
+
 test('the address bar opens what is typed into it', async () => {
   const app = await load({
     globals: { lcGUI: true },

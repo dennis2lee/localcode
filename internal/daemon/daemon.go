@@ -33,7 +33,7 @@ type Daemon struct {
 	Version string
 
 	// Browser is the browser the model works in, shown in the GUI's
-	// right panel. Nil when the daemon was built without one.
+	// browser panel. Nil when the daemon was built without one.
 	Browser        *browser.Manager
 	browserViewers browserViewers
 

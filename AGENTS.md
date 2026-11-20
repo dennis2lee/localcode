@@ -41,7 +41,7 @@ Project rules for agents working in this repo.
   the attempt's log, and a force-cancelled attempt may keep none at all.
   The 44-minute hang above is still undiagnosed for exactly this reason.
 * What it runs, and why each is in it rather than left to memory:
-  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 2,958 tests
+  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 2,960 tests
     and 1,337 subtests over 34 packages, two of the tests skipped on macOS.
     The same suite runs a second time without `-race`
     (`go test ./... -count=1 -timeout 10m`), because a test whose timing
@@ -55,8 +55,8 @@ Project rules for agents working in this repo.
     Measured: `-parallel 1` 10s, `-parallel 8` 9s, `-p 1` 61s.
   * `go vet ./...`, `go build -tags gui ./...`, and
     `go test -tags gui -race ./internal/gui/ -count=1 -timeout 10m`
-    (29 tests, CGo). 23 of the 29 are behind the `gui` tag, and only this
-    check compiles them. The 6 in `chrome_test.go` and `logo_test.go` are
+    (30 tests, CGo). 23 of the 30 are behind the `gui` tag, and only this
+    check compiles them. The 7 in `chrome_test.go` and `logo_test.go` are
     untagged on purpose, so the race lane runs them too. The gate runs all
     29 on macOS, and `gui-windows.yml` runs them on Windows. Both
     cross-builds run too: `GOOS=windows GOARCH=amd64` and `CGO_ENABLED=0
