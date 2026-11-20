@@ -189,3 +189,28 @@ func TestARefusalStaysOneWhateverTheModelIsCalled(t *testing.T) {
 		}
 	}
 }
+
+// Found in review, round 2 (Opus): OpenRouter refuses an image with a 404,
+// and vLLM's per-prompt image limit read as a model without vision.
+func TestRefusalsAndLimitsByStatusAndCount(t *testing.T) {
+	for _, c := range []struct {
+		msg, model string
+		refusal    bool
+	}{
+		{`openai-compat endpoint returned 404: {"error":{"message":"No endpoints found that support image input","code":404}}`, "some/model", true},
+		{`openai-compat endpoint returned 500: {"error":"this model is missing data required for image input"}`, "llama3.2", true},
+		{`openai-compat endpoint returned 400: {"object":"error","message":"At most 1 image(s) may be provided in one prompt.","type":"BadRequestError","code":400}`, "Qwen/Qwen2.5-VL-7B-Instruct", false},
+		{`openai-compat endpoint returned 400: At most 4 image(s) may be provided in one request.`, "q", false},
+		{`openai-compat endpoint returned 400: At most 0 image(s) may be provided in one prompt.`, "q", true},
+	} {
+		if got := isVisionRefusal(errString(c.msg), c.model); got != c.refusal {
+			t.Errorf("refusal = %v, want %v: %s", got, c.refusal, c.msg)
+		}
+	}
+	// An occurrence with a letter on its left stays, after one skipped.
+	for _, c := range [][3]string{{"aaa", "a", "aaa"}, {"model mm: image", "m", "model mm: image"}, {"a b a", "a", "  b  "}} {
+		if got := withoutName(c[0], c[1]); got != c[2] {
+			t.Errorf("withoutName(%q, %q) = %q, want %q", c[0], c[1], got, c[2])
+		}
+	}
+}

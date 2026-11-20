@@ -404,6 +404,7 @@ async function fitImage(file, mediaType) {
   // Each encoding on its own: a page that cannot write one (PNG at this
   // size, or a type it lacks) may still write the next.
   let lastError = null;
+  let encoded = false;
   for (const [type, quality] of [['image/png', undefined], ['image/jpeg', 0.9], ['image/jpeg', 0.75]]) {
     let blob = null;
     try {
@@ -412,9 +413,12 @@ async function fitImage(file, mediaType) {
       lastError = err;
       continue;
     }
+    encoded = encoded || !!blob;
     if (blob && blob.size <= MAX_ONE_IMAGE_BYTES) return { file: blob, mediaType: type, scaled: { w, h } };
   }
-  if (lastError) throw lastError;
+  // Nothing written at all is a failure to report as one; a copy written
+  // and too big is the message below.
+  if (!encoded && lastError) throw lastError;
   return { error: `image not attached: it is ${what} (${limit}), and a ${w}x${h} copy is still too big` };
 }
 

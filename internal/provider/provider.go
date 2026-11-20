@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 )
 
@@ -422,8 +423,8 @@ var notVisionRefusal = []string{
 	// name says "vision" read as refusing images: kept from them for an
 	// hour by a 503. Not every 5xx: llama.cpp refuses an image with a
 	// 500 ("image input is not supported"), and its words are the
-	// refusal.
-	"returned 404", "statuscode: 404",
+	// refusal. Nor every 404: OpenRouter answers an image no endpoint
+	// can take with one ("No endpoints found that support image input").
 	"not found", "notfound", "does not exist",
 	"is loading", "currently loading", "unavailable", "overloaded",
 	"internal server error", "bad gateway", "gateway timeout",
@@ -471,6 +472,12 @@ func isVisionRefusal(err error, model string) bool {
 			return false
 		}
 	}
+	// vLLM's per-prompt image limit: "At most 1 image(s) may be provided
+	// in one prompt." A model that takes one image takes images; at most
+	// 0 is a server that takes none, and that is a refusal.
+	if m := imageCountLimit.FindStringSubmatch(lower); m != nil && m[1] != "0" {
+		return false
+	}
 	for _, p := range visionRefusalPhrases {
 		if strings.Contains(lower, p) {
 			return true
@@ -478,6 +485,10 @@ func isVisionRefusal(err error, model string) bool {
 	}
 	return false
 }
+
+// imageCountLimit matches vLLM's per-prompt limit on images, with the
+// number it allows.
+var imageCountLimit = regexp.MustCompile(`at most (\d+) image`)
 
 func isRefusalPhrase(name string) bool {
 	for _, p := range visionRefusalPhrases {
@@ -497,22 +508,24 @@ func withoutName(s, name string) string {
 	}
 	alnum := func(b byte) bool { return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' }
 	var out strings.Builder
+	written, from := 0, 0
 	for {
-		i := strings.Index(s, name)
-		if i < 0 {
-			out.WriteString(s)
-			return out.String()
+		j := strings.Index(s[from:], name)
+		if j < 0 {
+			break
 		}
+		i := from + j
 		end := i + len(name)
 		if (i > 0 && alnum(s[i-1])) || (end < len(s) && alnum(s[end])) {
-			out.WriteString(s[:i+1])
-			s = s[i+1:]
+			from = i + 1
 			continue
 		}
-		out.WriteString(s[:i])
+		out.WriteString(s[written:i])
 		out.WriteString(" ")
-		s = s[end:]
+		written, from = end, end
 	}
+	out.WriteString(s[written:])
+	return out.String()
 }
 
 // SendableToolInput is a tool call's arguments as they go back to a model in

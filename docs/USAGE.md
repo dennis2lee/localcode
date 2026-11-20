@@ -2734,7 +2734,7 @@ Set `fallback` on the primary profile:
 
 Fallback rebuilds the request for the selected model family, including orchestration policy and formatting notes.
 
-A fallback to a profile without `vision` drops `view_image` from the request. Each image in the history is sent as a note saying it was left out. The history keeps the image itself.
+A fallback to a model that is not sent images (see [Which models are sent images](#which-models-are-sent-images)) drops `view_image` from the request. Each image in the history is sent as a note saying it was left out. The history keeps the image itself. A fallback to a model that is sent images is offered `view_image` and sent the images, whatever the first model was.
 
 #### The turn log
 
