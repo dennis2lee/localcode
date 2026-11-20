@@ -26,7 +26,7 @@ export function renderMarkdown(src) {
     const cls = lang.trim() ? ` class="language-${escapeHtml(lang.trim())}"` : '';
     // Code is highlighted, not merely escaped: highlightCode escapes
     // every span itself, so raw code never reaches the output.
-    const html = `<pre><code${cls}>${highlightCode(code.replace(/\n$/, ''), lang.trim())}</code></pre>`;
+    const html = `<pre><code${cls}>${linkifyHTML(highlightCode(code.replace(/\n$/, ''), lang.trim()))}</code></pre>`;
     blocks.push(html);
     return placeholder(blocks.length - 1);
   });
@@ -46,11 +46,11 @@ export function renderMarkdown(src) {
   // inside (that is their whole point), and the single-backtick pass
   // below would otherwise eat the inner pair and leave the outers.
   text = text.replace(/``((?:[^`]|`[^`])*?)``/g, (_, code) => {
-    spans.push(`<code>${code}</code>`);
+    spans.push(`<code>${linkify(code)}</code>`);
     return spanToken(spans.length - 1);
   });
   text = text.replace(/`([^`\n]+)`/g, (_, code) => {
-    spans.push(`<code>${code}</code>`);
+    spans.push(`<code>${linkify(code)}</code>`);
     return spanToken(spans.length - 1);
   });
 
@@ -321,14 +321,88 @@ export function unwrapMath(s) {
 const strongUnderscore = /(^|[^\p{L}\p{N}_])__([^_]+)__(?![\p{L}\p{N}])/gu;
 const emUnderscore = /(^|[^\p{L}\p{N}_])_([^_]+)_(?![\p{L}\p{N}])/gu;
 
-// inline applies span-level markdown (bold, italic, links) to text that
-// has already been through escapeHtml — it only ever matches the plain
-// characters left behind (*, _, [, ], (, )), never entities.
-export function inline(s) {
-  return unwrapMath(s)
+// A web address the model wrote, linked wherever it is: in prose, in
+// inline code and in a code block. Every one opens in the person's own
+// browser: target="_blank" is a new tab in a browser, and the desktop
+// window hands it to the system (internal/gui newwindow*.go, and
+// js/links.js for the window that has to be told).
+//
+// Matched in text already through escapeHtml, so a quote or an angle
+// bracket is an entity here and "&" is "&amp;", which is part of an
+// address. Control characters end it: the placeholders below are made of
+// them.
+const bareURL = /https?:\/\/[^\s<>"'`\u0000-\u001f]+/g;
+
+const count = (s, c) => s.split(c).length - 1;
+
+// splitURL separates an address from what the match took after it: an
+// entity other than "&amp;" (the quote or bracket the address was written
+// inside), then punctuation that ends the sentence or closes a bracket
+// the address does not open. Returns ['', m] for a match that is not an
+// address once that is gone ("https://" and nothing after it).
+export function splitURL(m) {
+  let url = m;
+  let rest = '';
+  const ent = url.search(/&(?!amp;)/);
+  if (ent >= 0) {
+    rest = url.slice(ent);
+    url = url.slice(0, ent);
+  }
+  for (;;) {
+    const last = url.slice(-1);
+    const closes = { ')': '(', ']': '[', '}': '{' }[last];
+    const trailing = /[.,;:!?*_~'"]/.test(last) || (closes && count(url, last) > count(url, closes));
+    if (!trailing) break;
+    rest = last + rest;
+    url = url.slice(0, -1);
+  }
+  if (!/^https?:\/\/[^/?#]/.test(url)) return ['', m];
+  return [url, rest];
+}
+
+const anchor = (href, body) => `<a href="${href}" target="_blank" rel="noopener noreferrer">${body}</a>`;
+
+// linkify links every bare address in escaped text.
+export function linkify(escaped) {
+  return escaped.replace(bareURL, (m) => {
+    const [url, rest] = splitURL(m);
+    return url ? anchor(url, url) + rest : m;
+  });
+}
+
+// linkifyHTML links the addresses in highlighted code: in the text between
+// its tags, never inside a tag.
+function linkifyHTML(html) {
+  return html.split(/(<[^>]*>)/).map((part, i) => (i % 2 ? part : linkify(part))).join('');
+}
+
+function emphasis(s) {
+  return s
     .replace(/\*\*([^*]+)\*\*/g, (_, body) => `<strong>${body}</strong>`)
     .replace(strongUnderscore, (_, pre, body) => `${pre}<strong>${body}</strong>`)
     .replace(/\*([^*]+)\*/g, (_, body) => `<em>${body}</em>`)
-    .replace(emUnderscore, (_, pre, body) => `${pre}<em>${body}</em>`)
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`);
+    .replace(emUnderscore, (_, pre, body) => `${pre}<em>${body}</em>`);
+}
+
+// inline applies span-level markdown (bold, italic, links) to text that
+// has already been through escapeHtml — it only ever matches the plain
+// characters left behind (*, _, [, ], (, )), never entities.
+//
+// Links first, each held aside behind a placeholder, then emphasis: an
+// address is full of underscores and asterisks that are not emphasis
+// ("/_next/static/", "?q=*"), and the emphasis rules would cut it up. The
+// text of a [text](address) link still gets its emphasis.
+export function inline(s) {
+  const links = [];
+  const keep = (html) => {
+    links.push(html);
+    return `\u0002${links.length - 1}\u0002`;
+  };
+  const out = unwrapMath(s)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => keep(anchor(u, emphasis(t))))
+    .replace(bareURL, (m) => {
+      const [url, rest] = splitURL(m);
+      return url ? keep(anchor(url, url)) + rest : m;
+    });
+  return emphasis(out).replace(/\u0002(\d+)\u0002/g, (_, i) => links[+i]);
 }

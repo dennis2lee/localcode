@@ -47,6 +47,7 @@ import { initResizers } from './resize.js';
 import { tryComplete, resetCompletion } from './complete.js';
 import { initSettings, settings } from './settings.js';
 import { initBrowserPanel, renderBrowserPanel } from './browser.js';
+import { wireExternalLinks } from './links.js';
 
 agentSelectEl.addEventListener('change', async () => {
   const name = agentSelectEl.value;
@@ -322,6 +323,7 @@ function initWindowControls() {
 async function init() {
   initWindowControls();
   initBrowserPanel();
+  wireExternalLinks();
   initResizers();
   initSettings();
   wirePromptDialog();
@@ -416,6 +418,8 @@ export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
 export { renderBrowserPanel, STALE_FALLBACK_MS, pagePoint, keyEventFor, editCommandFor, modifierBits, browserShown, inGUI } from './browser.js';
 export { snapshotURL } from './transcript.js';
+export { externalHref, openExternally } from './links.js';
+export { linkify, splitURL } from './markdown.js';
 export { importNote } from './settings.js';
 export { loadSessions, renderSessionList, selectSession, deleteSessionConfirm, reorderList, landsBelow, groupLandsBelow, dropGroupOn, wireSessionDragGuard, dropSessionOn, sessionMatchesFilter, dropSessionOnGroupHeader, dropSessionToUngroupedTop, promptCreateGroup, promptRenameGroup, promptDeleteGroup, readCollapsedGroups, writeCollapsedGroups } from './sessions.js';
 export {

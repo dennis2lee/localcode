@@ -208,9 +208,9 @@ Links in the window:
 | Platform | Behavior |
 |---|---|
 | Windows | A link a model writes (and any other request for a new window) opens in the system's default browser, the one chosen under Default apps for `http` and `https`. Only `http` and `https` addresses are handed over. Anything else is dropped without opening a window. |
-| macOS | Not changed by this feature. The window installs no new-window handler, and what WKWebView does with a link that asks for a window is not verified. |
+| macOS, Linux | A click on a web link (left or middle button) opens it in the system's default browser, through `open` on macOS and `xdg-open` on Linux. The window has no new-window request to answer there: without one, WKWebView and WebKitGTK did nothing with a click on a link the model wrote. The page sends the click to the window instead, and the window holds the address to the same rules as Windows. |
 
-On Windows a dropped link shows nothing in the window. An address is dropped when it is empty, longer than 8192 bytes, not `http` or `https`, without a host, or when it contains a space, a control character, a double quote, `<` or `>`. A `%` that does not start an escape (`/50%off`) is not a reason to drop an address: it is handed over as `%25`, which the Windows shell can open and which a server reads the same way. `gui-frame.log` records the rule that dropped it and the scheme, never the rest of the address.
+On every platform only `http` and `https` addresses are handed over. On Windows a dropped link shows nothing in the window. An address is dropped when it is empty, longer than 8192 bytes, not `http` or `https`, without a host, or when it contains a space, a control character, a double quote, `<` or `>`. A `%` that does not start an escape (`/50%off`) is not a reason to drop an address: it is handed over as `%25`, which the Windows shell can open and which a server reads the same way. `gui-frame.log` records the rule that dropped it and the scheme, never the rest of the address.
 
 Windows asks the default browser through the shell, the same way any other program does, so changing the default browser changes where links open without restarting the window. When the hook cannot be installed, the window falls back to the earlier behavior (an Edge-engine popup) and `%LOCALAPPDATA%\localcode\gui-frame.log` says why.
 
@@ -2250,6 +2250,8 @@ Backwards because that is what a find in a conversation is usually for: where a 
 ### Model output renders as markdown
 
 The built-in offline renderer supports headings, emphasis, inline code, fenced code with syntax highlighting, lists, blockquotes, links, horizontal rules, and GFM tables. Unsupported Markdown and raw HTML are escaped as text. Model output cannot inject HTML.
+
+Every `http://` or `https://` address in the model's output is a link, written as `[text](address)` or bare, in prose, in inline code and in code blocks. A click opens it in your own browser: a new tab in a browser, and the system's default browser from the desktop window. The link leaves out what the model wrote around the address: a quote or angle bracket, punctuation that ends the sentence (`.`, `,`, `;`, `:`, `!`, `?`), and a closing bracket the address does not open. An underscore or asterisk inside an address is part of it, not emphasis.
 
 ### Watching a long turn
 

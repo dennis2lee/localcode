@@ -341,3 +341,67 @@ test('font commands nested in each other are all unwrapped', async () => {
     assert.equal(app.unwrapMath(input), want, input);
   }
 });
+
+// A web address the model wrote is a link wherever it is, opening in the
+// person's own browser (target="_blank"; js/links.js for the desktop
+// window). What is around it stays text.
+const link = (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`;
+
+test('a bare web address in prose is a link, without the punctuation after it', () => {
+  assert.equal(app.renderMarkdown('see https://example.com/a for more.'),
+    `<p>see ${link('https://example.com/a')} for more.</p>`);
+  assert.equal(app.renderMarkdown('http://localhost:8080/x, then'),
+    `<p>${link('http://localhost:8080/x')}, then</p>`);
+  assert.equal(app.renderMarkdown('Is it https://example.com?'),
+    `<p>Is it ${link('https://example.com')}?</p>`);
+});
+
+test('an address keeps its query, and its own brackets, but not the ones around it', () => {
+  assert.equal(app.renderMarkdown('https://x.example/?a=1&b=2'),
+    `<p>${link('https://x.example/?a=1&amp;b=2')}</p>`);
+  assert.equal(app.renderMarkdown('(see https://en.example/wiki/Foo_(bar))'),
+    `<p>(see ${link('https://en.example/wiki/Foo_(bar)')})</p>`);
+  assert.equal(app.renderMarkdown('"https://x.example/q" and <https://y.example/>'),
+    `<p>&quot;${link('https://x.example/q')}&quot; and &lt;${link('https://y.example/')}&gt;</p>`);
+});
+
+// An address is full of underscores and asterisks; none of them is
+// emphasis, and the address is not cut where one is.
+test('emphasis does not cut an address, and still goes around one', () => {
+  assert.equal(app.renderMarkdown('https://x.example/_next/static/a_b.js'),
+    `<p>${link('https://x.example/_next/static/a_b.js')}</p>`);
+  assert.equal(app.renderMarkdown('https://x.example/_a_/b?q=*x*&r=1'),
+    `<p>${link('https://x.example/_a_/b?q=*x*&amp;r=1')}</p>`);
+  assert.equal(app.renderMarkdown('**https://x.example/**'),
+    `<p><strong>${link('https://x.example/')}</strong></p>`);
+});
+
+test('an address in inline code and in a code block is a link too', () => {
+  assert.equal(app.renderMarkdown('run `curl https://api.example/v1`'),
+    `<p>run <code>curl ${link('https://api.example/v1')}</code></p>`);
+  const block = app.renderMarkdown('```\nGET https://api.example/v1/items\n```');
+  assert.ok(block.includes(link('https://api.example/v1/items')), block);
+});
+
+test('a [text](address) link stays one link, its text keeping its emphasis', () => {
+  assert.equal(app.renderMarkdown('[docs](https://x.example/d)'),
+    '<p><a href="https://x.example/d" target="_blank" rel="noopener noreferrer">docs</a></p>');
+  assert.equal(app.renderMarkdown('[**docs**](https://x.example/d)'),
+    '<p><a href="https://x.example/d" target="_blank" rel="noopener noreferrer"><strong>docs</strong></a></p>');
+  assert.equal(app.renderMarkdown('[https://x.example/](https://x.example/)'),
+    '<p><a href="https://x.example/" target="_blank" rel="noopener noreferrer">https://x.example/</a></p>');
+});
+
+test('only http and https with a host are links', () => {
+  for (const s of ['https://', 'ftp://x.example/a', 'javascript:alert(1)', 'mailto:a@x.example', 'file:///etc/passwd']) {
+    assert.ok(!app.renderMarkdown(s).includes('<a '), s);
+  }
+});
+
+// The address is matched in escaped text, so nothing in it can end the
+// attribute it goes into.
+test('a quote or angle bracket the model put after an address ends it', () => {
+  const out = app.renderMarkdown('https://x.example/"onmouseover=alert(1)<b>');
+  assert.ok(out.includes(`${link('https://x.example/')}&quot;onmouseover=alert(1)&lt;b&gt;`), out);
+  assert.equal((out.match(/<a /g) || []).length, 1);
+});

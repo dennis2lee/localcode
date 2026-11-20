@@ -2,8 +2,15 @@
 
 ## v0.174.0
 
+Every web address the model writes is a link that opens in your own browser, and a permission decision can no longer stall every later one.
+
+**Added**
+
+* A link for every bare `http://` or `https://` address in the model's output, in prose, inline code and code blocks, without the quote, bracket or sentence punctuation around it
+
 **Fixed**
 
+* A link in the desktop window on macOS or Linux doing nothing when clicked: opened in the system's default browser, held to the same rules as on Windows
 * A permission decision taking the permission lock twice: a settings change (a rule added, Smart Agent, skip permissions or the browser switched) made between the two left every later permission decision waiting, the browser's check of each request a page made included
 
 ## v0.173.0
