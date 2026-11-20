@@ -2148,7 +2148,7 @@ The limits are checked as you paste, naming the type or the limit, rather than a
 | Types | PNG, JPEG, GIF, WEBP | The image is refused, naming its type. |
 | One image | 3.75 MB and 8000 pixels a side | The page scales the image down so its long side is 2576 pixels, and attaches the copy as PNG, or as JPEG when the PNG is still over 3.75 MB. A page that cannot scale an image refuses it. The daemon refuses an image past these limits from any client. |
 | One message | 10 MB, every image in it together | The image that passes 10 MB is refused. |
-| One request | The newest 20 images of the conversation, and 10 MB of them | Each older image is sent as a note saying it was left out. The conversation keeps the image. |
+| One request | The newest 20 images of the conversation, and 10 MB of them | Each older image is sent as a note saying it was left out. The conversation keeps the image. A server set to take fewer images per request (vLLM's `--limit-mm-per-prompt`) refuses a request that carries more; raise its limit, or start a new conversation. |
 
 The per-image limits are Bedrock's, the strictest of the three providers. A 2576-pixel image is the largest the newest Claude models read without scaling it down themselves. The request limit keeps a request under Bedrock's 20 MB.
 
