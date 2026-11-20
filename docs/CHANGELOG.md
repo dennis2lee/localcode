@@ -6,7 +6,8 @@ A conversation goes on when a model's server takes fewer images in a request tha
 
 **Added**
 
-* A server's own cap on images in one request, read from its refusal ("At most 1 image(s) may be provided in one prompt", vLLM's `--limit-mm-per-prompt`) and kept per provider and model: the refused request sent again with the newest images within it, and every later one held to it
+* A server's own cap on images in one request, read from its refusal (vLLM's `--limit-mm-per-prompt`, in either of its wordings) and kept per provider and model: the refused request sent again with the newest images within it, and every later one held to it
+* A notice when a message has more images attached than its model's server takes, naming how many were left out
 
 ## v0.171.0
 

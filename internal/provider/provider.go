@@ -476,7 +476,7 @@ func isVisionRefusal(err error, model string) bool {
 	// vLLM's per-prompt image limit: "At most 1 image(s) may be provided
 	// in one prompt." A model that takes one image takes images; at most
 	// 0 is a server that takes none, and that is a refusal.
-	if m := imageCountLimit.FindStringSubmatch(lower); m != nil && m[1] != "0" {
+	if n, found := imageCap(lower); found && n > 0 {
 		return false
 	}
 	for _, p := range visionRefusalPhrases {
@@ -487,9 +487,33 @@ func isVisionRefusal(err error, model string) bool {
 	return false
 }
 
-// imageCountLimit matches vLLM's per-prompt limit on images, with the
-// number it allows.
-var imageCountLimit = regexp.MustCompile(`at most (\d+) image`)
+// imageCountLimit and imageCountLimitSet match vLLM's per-prompt limit on
+// images, with the number it allows, in the two ways vLLM has worded it:
+// "At most 1 image(s) may be provided in one prompt.", and "You set or
+// defaulted to '{"image": 1}' in `--limit-mm-per-prompt`, but passed 2
+// image items in the same prompt." (whose quotes may arrive escaped,
+// inside a JSON error body).
+var (
+	imageCountLimit    = regexp.MustCompile(`at most (\d+) image`)
+	imageCountLimitSet = regexp.MustCompile(`\\?"image\\?"\s*:\s*(\d+)`)
+)
+
+// imageCap reads a lowercased error message for vLLM's image limit:
+// the number it allows, and whether the message is one at all.
+func imageCap(lower string) (int, bool) {
+	m := imageCountLimit.FindStringSubmatch(lower)
+	if m == nil && strings.Contains(lower, "limit-mm-per-prompt") {
+		m = imageCountLimitSet.FindStringSubmatch(lower)
+	}
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
 
 // ImageCountLimit reads a server's refusal of a request for carrying more
 // images than it takes, and the number it takes. vLLM's words, set by its
@@ -500,12 +524,8 @@ func ImageCountLimit(err error) (n int, ok bool) {
 	if err == nil {
 		return 0, false
 	}
-	m := imageCountLimit.FindStringSubmatch(strings.ToLower(err.Error()))
-	if m == nil {
-		return 0, false
-	}
-	n, convErr := strconv.Atoi(m[1])
-	if convErr != nil || n <= 0 {
+	n, found := imageCap(strings.ToLower(err.Error()))
+	if !found || n <= 0 {
 		return 0, false
 	}
 	return n, true

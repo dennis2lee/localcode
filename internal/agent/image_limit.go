@@ -21,9 +21,9 @@ import (
 
 type imageLimitKey struct{}
 
-// maxImageCapRetries bounds how often one turn asks again for a cap: once
-// for the model it starts on and once for a fallback.
-const maxImageCapRetries = 2
+// maxImageCapRetries bounds how often a turn asks one model again for its
+// server's cap. The count starts over on each fallback.
+const maxImageCapRetries = 1
 
 // withImageLimit is ctx carrying the most images a request may carry, for
 // asSent to read. Zero means no cap of the server's own.
@@ -79,4 +79,21 @@ func imageLimitNotice(run modelRun, n int) string {
 	}
 	return fmt.Sprintf("%s's server takes at most %s in a request, so it is sent the newest %s and a note in place of each older one; asking again. Raise the server's limit (vLLM: --limit-mm-per-prompt) and restart localcode to send more.",
 		describeRun(run), what, what)
+}
+
+// capLeftOutNotice tells the person that a cap learned earlier left some
+// of the images they attached out of the request. The model is told by a
+// note in place of each; a person should not have to learn it from the
+// answer.
+func capLeftOutNotice(run modelRun, cap, attached int) string {
+	what := "1 image"
+	if cap != 1 {
+		what = fmt.Sprintf("%d images", cap)
+	}
+	verb := "were"
+	if attached-cap == 1 {
+		verb = "was"
+	}
+	return fmt.Sprintf("%s's server takes at most %s in a request, so %d of the %d images attached to this message %s left out. Raise the server's limit (vLLM: --limit-mm-per-prompt) and restart localcode to send more.",
+		describeRun(run), what, attached-cap, attached, verb)
 }

@@ -3,12 +3,14 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 
 	"localcode/internal/config"
 	"localcode/internal/provider"
+	"localcode/internal/tools"
 )
 
 // A server that takes fewer images in a request than a conversation holds
@@ -164,5 +166,110 @@ func TestAnImageCapBelongsToOneModel(t *testing.T) {
 	}
 	if got := countImages(asSent(withImageLimit(withViewsImages(context.Background(), true), 0), msgs)); got != 3 {
 		t.Errorf("asSent with no cap sent %d images", got)
+	}
+}
+
+// capNotices is the notices of sessionID that say a cap left images out.
+func capNotices(t *testing.T, loop *Loop, sessionID string) []string {
+	t.Helper()
+	evs, err := loop.Store.Events(sessionID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, ev := range evs {
+		if msg, _ := ev.Data["error"].(string); strings.Contains(msg, "takes at most") {
+			out = append(out, msg)
+		}
+	}
+	return out
+}
+
+// Found in review (Opus): a cap learned in one conversation left the
+// images a person attached past it out of every later request, in that
+// conversation or another, and no request was refused to say so.
+func TestImagesACapLeavesOutAreSaid(t *testing.T) {
+	sees := true
+	loop, p, first := imageLoop(t, "Qwen/Qwen2.5-VL-7B-Instruct", &sees, textReply("one"), textReply("two"), textReply("three"))
+	loop.Providers["local"] = &cappedServer{scriptedProvider: p, cap: 1}
+	img := provider.ImageBlock("image/png", testPNG)
+	if err := loop.SendMessage(context.Background(), first, "general-purpose", "look", img, img); err != nil {
+		t.Fatal(err)
+	}
+	if got := capNotices(t, loop, first); len(got) != 1 || !strings.Contains(got[0], "asking again") {
+		t.Fatalf("the turn that learned the cap: notices %q, want the one about asking again", got)
+	}
+
+	second, err := loop.Store.CreateSession("second", "", "general-purpose", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.SendMessage(context.Background(), second.ID, "general-purpose", "and these", img, img, img); err != nil {
+		t.Fatal(err)
+	}
+	got := capNotices(t, loop, second.ID)
+	if len(got) != 1 || !strings.Contains(got[0], "so 2 of the 3 images attached to this message were left out") {
+		t.Errorf("another conversation: notices %q", got)
+	}
+	// Within the cap, nothing to say.
+	if err := loop.SendMessage(context.Background(), second.ID, "general-purpose", "one more", img); err != nil {
+		t.Fatal(err)
+	}
+	if again := capNotices(t, loop, second.ID); len(again) != 1 {
+		t.Errorf("a message within the cap added a notice: %q", again)
+	}
+}
+
+// chainServer is three capped endpoints in one: a request past one image
+// is refused as vLLM refuses it, a request within it to a model named in
+// gone is "model not found", which moves a turn down its fallbacks, and
+// any other is answered.
+type chainServer struct {
+	mu    sync.Mutex
+	gone  map[string]bool
+	calls []string
+}
+
+func (c *chainServer) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	n := countImages(req.Messages)
+	c.mu.Lock()
+	c.calls = append(c.calls, fmt.Sprintf("%s:%d", req.Model, n))
+	c.mu.Unlock()
+	if n > 1 {
+		return nil, errors.New(`openai-compat endpoint returned 400: {"object":"error","message":"At most 1 image(s) may be provided in one prompt.","type":"BadRequestError","code":400}`)
+	}
+	if c.gone[req.Model] {
+		return nil, errors.New(`openai-compat endpoint returned 404: {"error":{"message":"model not found"}}`)
+	}
+	ch := make(chan provider.StreamEvent, 2)
+	for _, ev := range textReply("answered") {
+		ch <- ev
+	}
+	close(ch)
+	return ch, nil
+}
+
+// Found in review (Opus): the retry was counted per turn, so a turn whose
+// first two models each spent one ended on the third model's refusal.
+// Each model of the turn gets its own.
+func TestEachModelOfATurnGetsItsOwnCapRetry(t *testing.T) {
+	sees := true
+	reg := tools.NewRegistry(nil)
+	reg.Register(tools.ReadFile{})
+	server := &chainServer{gone: map[string]bool{"vl-a": true, "vl-b": true}}
+	loop, sessionID := scriptedLoop(t, server, reg)
+	loop.Config.Profiles["balanced"] = config.Profile{Provider: "local", Model: "vl-a", Vision: &sees, Fallback: []string{"b", "c"}}
+	loop.Config.Profiles["b"] = config.Profile{Provider: "local", Model: "vl-b", Vision: &sees}
+	loop.Config.Profiles["c"] = config.Profile{Provider: "local", Model: "vl-c", Vision: &sees}
+	loop.SetSmartAgentEnabled(true)
+
+	img := provider.ImageBlock("image/png", testPNG)
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "compare these", img, img); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if got := strings.Join(server.calls, " "); got != "vl-a:2 vl-a:1 vl-b:2 vl-b:1 vl-c:2 vl-c:1" {
+		t.Errorf("requests (model:images) %s", got)
 	}
 }

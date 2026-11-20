@@ -202,6 +202,8 @@ func TestRefusalsAndLimitsByStatusAndCount(t *testing.T) {
 		{`openai-compat endpoint returned 400: {"object":"error","message":"At most 1 image(s) may be provided in one prompt.","type":"BadRequestError","code":400}`, "Qwen/Qwen2.5-VL-7B-Instruct", false},
 		{`openai-compat endpoint returned 400: At most 4 image(s) may be provided in one request.`, "q", false},
 		{`openai-compat endpoint returned 400: At most 0 image(s) may be provided in one prompt.`, "q", true},
+		{"openai-compat endpoint returned 400: You set or defaulted to '{\"image\": 1}' in `--limit-mm-per-prompt`, but passed 2 image items in the same prompt.", "q", false},
+		{"openai-compat endpoint returned 400: You set or defaulted to '{\"image\": 0}' in `--limit-mm-per-prompt`, but passed 1 image items in the same prompt.", "q", true},
 	} {
 		if got := isVisionRefusal(errString(c.msg), c.model); got != c.refusal {
 			t.Errorf("refusal = %v, want %v: %s", got, c.refusal, c.msg)
@@ -215,8 +217,9 @@ func TestRefusalsAndLimitsByStatusAndCount(t *testing.T) {
 	}
 }
 
-// vLLM's cap on the images in one prompt, read with the number it allows.
-// Zero is a server that takes no images, which is a refusal and not a cap.
+// vLLM's cap on the images in one prompt, read with the number it allows,
+// in both of vLLM's wordings. Zero is a server that takes no images, which
+// is a refusal and not a cap.
 func TestImageCountLimitReadsVLLMsCap(t *testing.T) {
 	for _, c := range []struct {
 		msg string
@@ -227,6 +230,10 @@ func TestImageCountLimitReadsVLLMsCap(t *testing.T) {
 		{"openai-compat endpoint returned 400: At most 4 image(s) may be provided in one prompt. Set `--limit-mm-per-prompt` to increase this limit.", 4, true},
 		{"openai-compat endpoint returned 400: At most 12 image(s) may be provided in one request.", 12, true},
 		{"openai-compat endpoint returned 400: At most 0 image(s) may be provided in one prompt.", 0, false},
+		{`openai-compat endpoint returned 400: {"object":"error","message":"You set or defaulted to '{\"image\": 1}' in ` + "`--limit-mm-per-prompt`" + `, but passed 2 image items in the same prompt.","code":400}`, 1, true},
+		{"ValueError: You set or defaulted to '{\"image\": 3, \"video\": 0}' in `--limit-mm-per-prompt`, but passed 5 image items in the same prompt.", 3, true},
+		{"ValueError: You set or defaulted to '{\"image\": 0}' in `--limit-mm-per-prompt`, but passed 1 image items in the same prompt.", 0, false},
+		{`openai-compat endpoint returned 400: the "image": 4 field is invalid`, 0, false},
 		{"openai-compat endpoint returned 400: this model does not support image input", 0, false},
 		{"bedrock ConverseStream: ValidationException: Maximum number of images per request is 20.", 0, false},
 	} {

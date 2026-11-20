@@ -220,10 +220,12 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// length of the history, and asking the model again would spend the
 	// rest of the window finding that out.
 	rescues := 0
-	// How often this turn has asked again with fewer images for a server's
-	// cap. Learning a cap lowers what the next request carries, so one
+	// How often this turn has asked the model it is on again with fewer
+	// images for its server's cap; reset when a fallback moves the turn
+	// on. Learning a cap lowers what the next request carries, so one
 	// retry per model is all it takes; the bound is for the day that stops
 	// being true, when the same refusal would otherwise be asked forever.
+	// The chain of fallbacks is finite, so the turn is bounded too.
 	imageCapRetries := 0
 	// How many times this turn has moved down the fallback chain. Reported
 	// with the turn rather than kept for its own sake: a session that is
@@ -272,6 +274,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// they have been told those did not reach the model that answered.
 	attachedImages := countImages([]provider.Message{{Content: openingImages}})
 	imagesNoticed := false
+	// And whether they have been told that a server's cap on images in a
+	// request left some of them out. See image_limit.go.
+	capNoticed := false
 
 	for {
 		messages := l.requestHistory(ctx, sessionID)
@@ -419,6 +424,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// repeat it.
 			if n, ok := l.learnImageLimit(run.profile, err, countImages(req.Messages)); ok && imageCapRetries < maxImageCapRetries {
 				imageCapRetries++
+				capNoticed = true
 				ctx = withImageLimit(ctx, l.imageLimitFor(run.profile))
 				l.Store.Append(sessionID, events.TypeError, map[string]any{
 					"error":     imageLimitNotice(run, n),
@@ -542,6 +548,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					// A new endpoint gets its own retry allowance, and
 					// any retry still pending belonged to the old one.
 					sameTries = 0
+					imageCapRetries = 0
 					pending = pendingRetry{}
 					// The trim budget belongs to the old window.
 					trimBudget = l.contextWindow(ctx, run.profile) / 2
@@ -575,6 +582,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			if !firstOutput(assistantBlocks) {
 				if n, ok := l.learnImageLimit(run.profile, err, countImages(req.Messages)); ok && imageCapRetries < maxImageCapRetries {
 					imageCapRetries++
+					capNoticed = true
 					ctx = withImageLimit(ctx, l.imageLimitFor(run.profile))
 					l.Store.Append(sessionID, events.TypeError, map[string]any{
 						"error":     imageLimitNotice(run, n),
@@ -613,6 +621,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 						ctx = withViewsImages(ctx, l.seesImages(ctx, run.profile, "").sees)
 						ctx = withImageLimit(ctx, l.imageLimitFor(run.profile))
 						sameTries = 0
+						imageCapRetries = 0
 						trimBudget = l.contextWindow(ctx, run.profile) / 2
 						continue
 					}
@@ -634,6 +643,18 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			imagesNoticed = true
 			l.Store.Append(sessionID, events.TypeError, map[string]any{
 				"error":     imagesLeftOutNotice(run, attachedImages, l.knownSeesImages(run.profile, "").why),
+				"recovered": true,
+			})
+		}
+		// A cap learned earlier, in this conversation or another, leaves
+		// out the attached images past it without any request being
+		// refused, so nothing else would say so. The attached images are
+		// the newest, so the ones past the cap are the ones left out.
+		if cap := imagesPerRequest(ctx); viewsImages(ctx) && attachedImages > cap && cap < provider.MaxImagesPerRequest &&
+			!capNoticed && len(assistantBlocks) > 0 {
+			capNoticed = true
+			l.Store.Append(sessionID, events.TypeError, map[string]any{
+				"error":     capLeftOutNotice(run, cap, attachedImages),
 				"recovered": true,
 			})
 		}
