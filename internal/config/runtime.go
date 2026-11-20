@@ -62,6 +62,8 @@ func (c *Config) AddPermissionRuleRuntime(toolName string, rule PermissionRule) 
 // request guard among them, for every request a page makes. Nothing in the
 // daemon changes the agents after startup; this is how a test changes an
 // agent's rules while a browser is running without racing that guard.
+// Other readers of the table (ResolveProfile) take no lock, so it is for
+// a test with no turn running, not for the daemon.
 func (c *Config) SetAgentsRuntime(agents map[string]AgentConfig) {
 	c.permMu.Lock()
 	defer c.permMu.Unlock()

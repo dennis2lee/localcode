@@ -13,8 +13,8 @@ const { load } = require('./harness');
 
 // A link as the fake DOM can stand one in: an element whose closest()
 // finds it.
-const linkTo = (href) => {
-  const a = { getAttribute: (name) => (name === 'href' ? href : null) };
+const linkTo = (href, normalised) => {
+  const a = { getAttribute: (name) => (name === 'href' ? href : null), href: normalised };
   return { closest: (sel) => (sel === 'a[href]' ? a : null) };
 };
 const click = (target, props = {}) => ({
@@ -66,4 +66,36 @@ test('a click anywhere on the page is looked at', async () => {
   assert.equal(ev.defaultPrevented, true);
   await app.settle();
   assert.deepEqual(opened, ['https://example.com/b']);
+});
+
+// What is handed on is the address as the engine normalised it, a quote in
+// it percent-encoded, which the window's checks take; whether it is a web
+// link at all is read from what was written, where the page's own links
+// are relative.
+test('the engine\'s form of the address is what is opened', async () => {
+  const opened = [];
+  const app = await load({ globals: { lcGUI: true, lcOpenExternal: (u) => { opened.push(u); } } });
+  app.internals.openExternally(click(linkTo('https://example.com/?q="hi"', 'https://example.com/?q=%22hi%22')));
+  const own = click(linkTo('/api/sessions/s1/snapshots/a.png', 'http://127.0.0.1:4096/api/sessions/s1/snapshots/a.png'));
+  assert.equal(app.internals.openExternally(own), false);
+  await app.settle();
+  assert.deepEqual(opened, ['https://example.com/?q=%22hi%22']);
+});
+
+test('a click already handled is left alone, and a failure names no address', async () => {
+  const warned = [];
+  const app = await load({ globals: {
+    lcGUI: true,
+    lcOpenExternal: () => Promise.reject(new Error('not opened: no host')),
+    console: { log() {}, error() {}, warn: (...args) => warned.push(args.join(' ')) },
+  } });
+  const handled = click(linkTo('https://example.com/'));
+  handled.defaultPrevented = true;
+  assert.equal(app.internals.openExternally(handled), false);
+
+  app.internals.openExternally(click(linkTo('https://example.com/?token=SECRET')));
+  await app.settle();
+  assert.equal(warned.length, 1);
+  assert.ok(!warned[0].includes('SECRET') && !warned[0].includes('example.com'), warned[0]);
+  assert.match(warned[0], /not opened: no host/);
 });

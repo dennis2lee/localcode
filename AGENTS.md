@@ -55,10 +55,10 @@ Project rules for agents working in this repo.
     Measured: `-parallel 1` 10s, `-parallel 8` 9s, `-p 1` 61s.
   * `go vet ./...`, `go build -tags gui ./...`, and
     `go test -tags gui -race ./internal/gui/ -count=1 -timeout 10m`
-    (32 tests, CGo). 25 of the 32 are behind the `gui` tag, and only this
+    (33 tests, CGo). 26 of the 33 are behind the `gui` tag, and only this
     check compiles them. The 7 in `chrome_test.go` and `logo_test.go` are
     untagged on purpose, so the race lane runs them too. The gate runs all
-    32 on macOS, and `gui-windows.yml` runs 30 of them on Windows: the 2 in
+    33 on macOS, and `gui-windows.yml` runs 31 of them on Windows: the 2 in
     `newwindow_other_test.go` test the macOS and Linux link path. Both
     cross-builds run too: `GOOS=windows GOARCH=amd64` and `CGO_ENABLED=0
     GOOS=linux GOARCH=amd64`. Windows and Linux are release targets built
@@ -69,7 +69,7 @@ Project rules for agents working in this repo.
     that is no longer reported. The "written, tested, never called" shape
     has shipped twice (v0.55.0, v0.57.0); `-test=false` is what makes it
     visible, at the cost of listing the functions only tests call.
-  * The Web UI suite (863 tests in 73 files, deliberately also run by
+  * The Web UI suite (879 tests in 73 files, deliberately also run by
     `TestWebUI`, which skips itself when node is absent), the doc-link
     checker, `gofmt`, and `git diff --check HEAD` — `HEAD` because the bare form
     compares against the index and so inspects nothing once changes are

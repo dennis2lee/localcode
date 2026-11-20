@@ -405,3 +405,135 @@ test('a quote or angle bracket the model put after an address ends it', () => {
   assert.ok(out.includes(`${link('https://x.example/')}&quot;onmouseover=alert(1)&lt;b&gt;`), out);
   assert.equal((out.match(/<a /g) || []).length, 1);
 });
+
+// A Korean particle is written onto the word before it, an address
+// included. The address is linked without it; a path in Korean is kept.
+test('a word in another script written onto an address is not part of it', () => {
+  assert.equal(app.renderMarkdown('https://example.com에서 확인하세요.'),
+    `<p>${link('https://example.com')}에서 확인하세요.</p>`);
+  assert.equal(app.renderMarkdown('https://x.example/docs를 보세요'),
+    `<p>${link('https://x.example/docs')}를 보세요</p>`);
+  assert.equal(app.renderMarkdown('(https://x.example/a)에서'),
+    `<p>(${link('https://x.example/a')})에서</p>`);
+  assert.equal(app.renderMarkdown('문서: https://ko.example/위키/서울 참고'),
+    `<p>문서: ${link('https://ko.example/위키/서울')} 참고</p>`);
+});
+
+// Every start tag of a link, read the way an HTML tokenizer reads it: the
+// attribute names, quoted values and unquoted ones alike. A link the model
+// wrote has href, target and rel, and nothing else.
+function linkAttrs(html) {
+  const out = [];
+  for (const m of html.matchAll(/<a\s([^>]*)>/g)) {
+    const names = [];
+    const re = /\s*([^\s=/>"']+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*))?/g;
+    let a;
+    while ((a = re.exec(m[1])) && a[0].length) names.push(a[1]);
+    out.push(names.join(' '));
+  }
+  return out;
+}
+
+test('nothing inside a [text](address) target can end its href and start another attribute', () => {
+  for (const s of [
+    '[x](https://a.example/`https://q.example/onmouseover=alert(1)//`)',
+    '[x](https://a.example/```\nhttps://q.example/onmouseover=alert(1)\n```)',
+    '# [x](https://a.example/`https://q.example/onmouseover=alert(1)`)',
+    '[x](https://a.example/```x onmouseover=alert(1)//\ncode\n```)',
+  ]) {
+    const out = app.renderMarkdown(s);
+    for (const attrs of linkAttrs(out)) assert.equal(attrs, 'href target rel', `${s}\n=> ${out}`);
+  }
+});
+
+test('a fence language names a class and nothing else', () => {
+  const out = app.renderMarkdown('```x onmouseover=alert(1)//\ncode\n```');
+  assert.ok(out.startsWith('<pre><code class="language-xonmouseoveralert1">'), out);
+  assert.ok(!/<code[^>]*\sonmouseover/.test(out), out);
+});
+
+// The placeholders are made of control characters; one the model wrote is
+// not one.
+test('a placeholder character the model wrote is dropped, not read as a placeholder', () => {
+  assert.equal(app.renderMarkdown('before \u00020\u0002 after'), '<p>before 0 after</p>');
+  assert.equal(app.renderMarkdown('a \u00010\u0001 \u00000\u0000 b'), '<p>a 0 0 b</p>');
+});
+
+test('punctuation from other scripts, curly quotes and an ellipsis are not part of an address', () => {
+  assert.equal(app.renderMarkdown('https://example.com。'), `<p>${link('https://example.com')}。</p>`);
+  assert.equal(app.renderMarkdown('“https://example.com/x”'), `<p>“${link('https://example.com/x')}”</p>`);
+  assert.equal(app.renderMarkdown('https://example.com/x…'), `<p>${link('https://example.com/x')}…</p>`);
+  assert.equal(app.renderMarkdown('https://ko.example/위키/가이드。'), `<p>${link('https://ko.example/위키/가이드')}。</p>`);
+});
+
+// Highlighting puts tags round numbers and keywords; an address in a code
+// block is linked whole whatever it put round its parts.
+test('an address in a code block is one link, port and dates included', () => {
+  for (const u of ['http://localhost:8080/api', 'http://127.0.0.1:4096/', 'https://example.com/2024/05/post']) {
+    for (const lang of ['sh', 'bash', '', 'js']) {
+      const out = app.renderMarkdown('```' + lang + '\ncurl ' + u + ' # 42\n```');
+      assert.ok(out.includes(link(u)), `${lang}: ${out}`);
+    }
+  }
+  const quoted = app.renderMarkdown('```js\nfetch("https://api.example/v1?a=1&b=2")\n```');
+  assert.ok(quoted.includes(link('https://api.example/v1?a=1&amp;b=2')), quoted);
+});
+
+test('an address keeps a trailing "&", and an apostrophe inside a word', () => {
+  assert.equal(app.renderMarkdown('https://a.example/?a=1&'), `<p>${link('https://a.example/?a=1&amp;')}</p>`);
+  assert.equal(app.renderMarkdown("https://en.example/wiki/Hawai'i is"), `<p>${link('https://en.example/wiki/Hawai&#39;i')} is</p>`);
+  assert.equal(app.renderMarkdown("'https://x.example/q'"), `<p>&#39;${link('https://x.example/q')}&#39;</p>`);
+});
+
+test('a [text](address) target keeps the brackets it balances', () => {
+  assert.equal(app.renderMarkdown('[Function](https://en.example/wiki/Function_(mathematics))'),
+    '<p><a href="https://en.example/wiki/Function_(mathematics)" target="_blank" rel="noopener noreferrer">Function</a></p>');
+});
+
+// The model's text is what a page it read can write. A link whose text is
+// a web address opens that address; the one it pointed at is shown beside
+// it, so no link shows one address and opens another.
+test('a link whose text is another address does not open somewhere else', () => {
+  assert.equal(app.renderMarkdown('[https://good.example](https://evil.example)'),
+    `<p>${link('https://good.example')} (${link('https://evil.example')})</p>`);
+  assert.equal(app.renderMarkdown('[https://same.example/](https://same.example/)'),
+    `<p>${link('https://same.example/')}</p>`);
+});
+
+test('math is not unwrapped inside an address', () => {
+  assert.equal(app.renderMarkdown('https://x.example/p?x=$5\\sim$'), `<p>${link('https://x.example/p?x=$5\\sim$')}</p>`);
+});
+
+test('addresses side by side in quotes or brackets are each their own link', () => {
+  assert.equal(app.renderMarkdown('"https://a.example","https://b.example"'),
+    `<p>&quot;${link('https://a.example')}&quot;,&quot;${link('https://b.example')}&quot;</p>`);
+  assert.equal(app.renderMarkdown('(https://a.example),(https://b.example)'),
+    `<p>(${link('https://a.example')}),(${link('https://b.example')})</p>`);
+  assert.equal(app.renderMarkdown('<https://a.example>,<https://b.example>'),
+    `<p>&lt;${link('https://a.example')}&gt;,&lt;${link('https://b.example')}&gt;</p>`);
+  const code = app.renderMarkdown('```json\n["https://a.example","https://b.example"]\n```');
+  assert.ok(code.includes(link('https://a.example')) && code.includes(link('https://b.example')), code);
+});
+
+test('an address with no host is not a link', () => {
+  for (const s of ['https:///', 'https://:8080', 'https://@', 'https://?a=1', '[x](https:///)', '[x](https://#top)']) {
+    assert.ok(!app.renderMarkdown(s).includes('<a '), s);
+  }
+  assert.equal(app.renderMarkdown('http://[::1]:8080/a'), `<p>${link('http://[::1]:8080/a')}</p>`);
+});
+
+// A link inside a link is not HTML: inline code in a link's text is drawn
+// without its own links. Inline code that is another address is that
+// address, shown beside the one the link pointed at.
+test('inline code in a link\'s text does not make a link inside the link', () => {
+  assert.equal(app.renderMarkdown('[see `curl https://a.example`](https://b.example)'),
+    '<p><a href="https://b.example" target="_blank" rel="noopener noreferrer">see <code>curl https://a.example</code></a></p>');
+  assert.equal(app.renderMarkdown('[`https://a.example`](https://b.example)'),
+    `<p><code>${link('https://a.example')}</code> (${link('https://b.example')})</p>`);
+});
+
+test('an address in a link\'s text is not cut up by emphasis', () => {
+  const u = 'https://x.example/_a_/b?q=*x*&amp;r=1';
+  assert.equal(app.renderMarkdown('[https://x.example/_a_/b?q=*x*&r=1](https://x.example/_a_/b?q=*x*&r=1)'),
+    `<p><a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a></p>`);
+});

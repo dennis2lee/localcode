@@ -12,11 +12,18 @@
 // externalHref is the web address a click on target opens: the href of
 // the link it is in, when that is an http or https address. '' for
 // anything else (a relative link, a mailto:, no link at all).
+//
+// Whether it is one is read from the attribute as written: the page's own
+// links are relative, and a.href would make them absolute. What is handed
+// on is a.href, the address as the engine normalised it, with a quote or
+// a space in it percent-encoded, which is what WebView2 hands the Windows
+// window and what the window's checks expect.
 export function externalHref(target) {
   const a = target && typeof target.closest === 'function' ? target.closest('a[href]') : null;
   if (!a) return '';
-  const href = a.getAttribute('href') || '';
-  return /^https?:\/\//i.test(href) ? href : '';
+  const written = a.getAttribute('href') || '';
+  if (!/^https?:\/\//i.test(written)) return '';
+  return typeof a.href === 'string' && /^https?:\/\//i.test(a.href) ? a.href : written;
 }
 
 // openExternally sends a click on a web link to the window's
@@ -25,6 +32,9 @@ export function externalHref(target) {
 // one the same way.
 export function openExternally(e) {
   if (typeof window === 'undefined' || typeof window.lcOpenExternal !== 'function') return false;
+  // A click something else on the page has already handled is not a
+  // link to open.
+  if (e.defaultPrevented) return false;
   if (e.button !== undefined && e.button !== 0 && e.button !== 1) return false;
   const href = externalHref(e.target);
   if (!href) return false;
@@ -33,7 +43,8 @@ export function openExternally(e) {
   // to check it against what the window binds.
   Promise.resolve()
     .then(() => window.lcOpenExternal(href))
-    .catch((err) => console.warn(`could not open ${href}: ${err && err.message ? err.message : err}`));
+    // The reason, never the address: one may carry a token in its query.
+    .catch((err) => console.warn(`could not open a link: ${err && err.message ? err.message : err}`));
   return true;
 }
 

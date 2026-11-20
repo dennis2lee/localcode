@@ -113,6 +113,10 @@ func externalURL(raw string) (target, reason string) {
 		}
 	}
 	raw = repairStrayPercents(raw)
+	// Again after the repair, which writes each stray '%' as three bytes.
+	if len(raw) > maxExternalURL {
+		return "", refusedTooLong
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", refusedMalformed
