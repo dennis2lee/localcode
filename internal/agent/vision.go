@@ -160,7 +160,7 @@ func (l *Loop) probeVision(ctx context.Context, profile config.Profile) visionEn
 // now refuses is sent notes in place of images, so the conversation goes
 // on rather than failing until localcode restarts.
 func (l *Loop) forgetVisionOnRefusal(profile config.Profile, err error) {
-	if !provider.IsVisionRefusal(err) {
+	if !provider.IsVisionRefusal(err, profile.Model) {
 		return
 	}
 	l.mu.Lock()

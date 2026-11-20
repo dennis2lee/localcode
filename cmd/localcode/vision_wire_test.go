@@ -15,17 +15,19 @@ import (
 	"time"
 )
 
-// The daemon shows a model its profile says nothing about a test image,
-// through the model's own provider, before the first turn on it, and once
-// for the process. A model that names the colour is offered view_image.
-//
-// The hook is wired in buildDaemon; every test of the agent loop leaves it
-// unset, so this is the one that fails if the wiring goes.
-func TestTheDaemonShowsAnUnknownModelATestImageOnce(t *testing.T) {
-	type seen struct {
-		image     string // the data URI of the image a request carried
-		viewImage bool   // whether the request offered view_image
-	}
+// seenRequest is one request the fake model server got.
+type seenRequest struct {
+	image     string // the data URI of the image a request carried
+	viewImage bool   // whether the request offered view_image
+}
+
+// visionModelHome serves a fake OpenAI-compatible model that answers "Red."
+// to any request carrying an image, and points a temporary HOME's config
+// at it with a profile that does not set "vision". It returns what the
+// server was asked, in order.
+func visionModelHome(t *testing.T) func() []seenRequest {
+	t.Helper()
+	type seen = seenRequest
 	var mu sync.Mutex
 	var requests []seen
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +101,39 @@ func TestTheDaemonShowsAnUnknownModelATestImageOnce(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Chdir(work)
+	return func() []seenRequest {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]seenRequest(nil), requests...)
+	}
+}
 
+// checkProbedThenTurns: the test image first, alone, then each turn with
+// no image and view_image offered.
+func checkProbedThenTurns(t *testing.T, requests []seenRequest, turns int) {
+	t.Helper()
+	if len(requests) != 1+turns {
+		t.Fatalf("%d requests, want the test image and %d turns: %+v", len(requests), turns, requests)
+	}
+	if !strings.HasPrefix(requests[0].image, "data:image/png;base64,") || requests[0].viewImage {
+		t.Errorf("the first request is not the test image: %+v", requests[0])
+	}
+	for i, r := range requests[1:] {
+		if r.image != "" || !r.viewImage {
+			t.Errorf("turn %d: %+v, want no image and view_image offered", i+1, r)
+		}
+	}
+}
+
+// The daemon shows a model its profile says nothing about a test image,
+// through the model's own provider, before the first turn on it, and once
+// for the process. A model that names the colour is offered view_image.
+//
+// The hook is wired in buildDaemon and buildOneShot; every test of the
+// agent loop leaves it unset, so these are the ones that fail if the
+// wiring goes.
+func TestTheDaemonShowsAnUnknownModelATestImageOnce(t *testing.T) {
+	requests := visionModelHome(t)
 	d, stop, err := buildDaemon(context.Background(), "", nil)
 	if err != nil {
 		t.Fatalf("buildDaemon: %v", err)
@@ -117,17 +151,18 @@ func TestTheDaemonShowsAnUnknownModelATestImageOnce(t *testing.T) {
 		}
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	if len(requests) != 3 {
-		t.Fatalf("%d requests, want the test image and two turns: %+v", len(requests), requests)
+	checkProbedThenTurns(t, requests(), 2)
+}
+
+// Found in review (agy): localcode run built its own loop and left the
+// hook unset, so a run offered view_image to no model but Claude.
+func TestARunShowsAnUnknownModelATestImage(t *testing.T) {
+	requests := visionModelHome(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var out bytes.Buffer
+	if err := oneShot(ctx, runOptions{format: formatJSON, agent: "general-purpose"}, "look at fig.png", &out); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
 	}
-	if !strings.HasPrefix(requests[0].image, "data:image/png;base64,") || requests[0].viewImage {
-		t.Errorf("the first request is not the test image: %+v", requests[0])
-	}
-	for i, r := range requests[1:] {
-		if r.image != "" || !r.viewImage {
-			t.Errorf("turn %d: %+v, want no image and view_image offered", i+1, r)
-		}
-	}
+	checkProbedThenTurns(t, requests(), 1)
 }

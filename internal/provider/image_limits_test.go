@@ -120,7 +120,7 @@ func TestASizeRefusalIsNotAVisionRefusal(t *testing.T) {
 		"bedrock ConverseStream: ValidationException: The image is too large.",
 		"anthropic API returned 400: messages.3.content.1.image: image dimensions exceed the limit for many-image requests: 2000 pixels",
 	} {
-		if isVisionRefusal(errString(msg)) {
+		if isVisionRefusal(errString(msg), "") {
 			t.Errorf("read as a vision refusal: %s", msg)
 		}
 	}
@@ -130,7 +130,7 @@ func TestASizeRefusalIsNotAVisionRefusal(t *testing.T) {
 		"bedrock ConverseStream: ValidationException: This model doesn't support the image content block that you provided.",
 		"openai-compat endpoint returned 400: Input should be a valid string: expected a string",
 	} {
-		if !isVisionRefusal(errString(msg)) {
+		if !isVisionRefusal(errString(msg), "") {
 			t.Errorf("no longer read as a vision refusal: %s", msg)
 		}
 	}
@@ -139,3 +139,36 @@ func TestASizeRefusalIsNotAVisionRefusal(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// Found in review (agy): a server that is down, loading, or has no such
+// model often names the model, and a model whose name says "vision" read
+// as refusing images, kept from them for an hour by a 503. Bedrock's
+// validation words for an image's size read the same way.
+func TestAFailureThatNamesAVisionModelIsNotARefusal(t *testing.T) {
+	const model = "meta-llama/Llama-3.2-11B-Vision-Instruct"
+	for _, msg := range []string{
+		`openai-compat endpoint returned 503: {"error":{"message":"Model meta-llama/Llama-3.2-11B-Vision-Instruct is loading, try again shortly"}}`,
+		`openai-compat endpoint returned 500: {"error":{"message":"Internal server error invoking llama-3.2-11b-vision-instruct"}}`,
+		`openai-compat endpoint returned 404: {"error":{"message":"The model 'llama-3.2-11b-vision-instruct' does not exist"}}`,
+		`openai-compat endpoint returned 502: upstream llama-3.2-11b-vision-instruct`,
+		"operation error Bedrock Runtime: ConverseStream, https response error StatusCode: 503, ServiceUnavailableException: llama3-2-11b-vision-instruct",
+		"bedrock ConverseStream: ValidationException: 1 validation error detected: Value at 'messages.1.member.content.1.member.image.source.bytes' failed to satisfy constraint: Member must have length less than or equal to 3932160",
+		"bedrock ConverseStream: ValidationException: Maximum number of images per request is 20.",
+	} {
+		if isVisionRefusal(errString(msg), model) {
+			t.Errorf("read as a vision refusal: %s", msg)
+		}
+	}
+	// The model's name is taken out only where it stands as a word: a
+	// model called "m" leaves "image" alone, and a refusal that names a
+	// vision model is still a refusal.
+	if !isVisionRefusal(errString("openai-compat endpoint returned 400: this model does not support image input"), "m") {
+		t.Error("a model called m took the refusal's words with it")
+	}
+	if !isVisionRefusal(errString("openai-compat endpoint returned 400: Llama-3.2-11B-Vision-Instruct: image input is not supported by this deployment"), model) {
+		t.Error("a refusal naming the model is no longer one")
+	}
+	if got := withoutName("a llama-3.2-11b-vision-instruct, llama-3.2-11b-vision-instructs", "llama-3.2-11b-vision-instruct"); got != "a  , llama-3.2-11b-vision-instructs" {
+		t.Errorf("withoutName = %q", got)
+	}
+}

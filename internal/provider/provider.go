@@ -412,12 +412,25 @@ var notVisionRefusal = []string{
 	// model has no vision would have them switch it off on a model that
 	// has it.
 	"exceed", "too large", "too big", "request_too_large", "many-image",
+	// The same, in Bedrock's validation words: "Value at
+	// '...image.source.bytes' failed to satisfy constraint: Member must
+	// have length less than or equal to 3932160", "Maximum number of
+	// images per request is 20".
+	"must have length", "less than or equal", "maximum number",
+	// A server that is down, busy, still loading the model, or has no
+	// such model. Its message often names the model, and a model whose
+	// name says "vision" read as refusing images: kept from them for an
+	// hour by a 503.
+	"returned 5", "statuscode: 5", "returned 404", "statuscode: 404",
+	"not found", "notfound", "does not exist",
+	"is loading", "currently loading", "unavailable", "overloaded",
+	"internal server error", "bad gateway", "gateway timeout",
 }
 
-// IsVisionRefusal reports whether err means the model would not take an
+// IsVisionRefusal reports whether err means model would not take an
 // image, for a caller outside this package that has to act on it. See
 // isVisionRefusal.
-func IsVisionRefusal(err error) bool { return isVisionRefusal(err) }
+func IsVisionRefusal(err error, model string) bool { return isVisionRefusal(err, model) }
 
 // isVisionRefusal reports whether err means the model would not take an
 // image. A function of the error alone -- no network, no model -- so a
@@ -428,11 +441,21 @@ func IsVisionRefusal(err error) bool { return isVisionRefusal(err) }
 // SDK or this repository. So localcode sends the image and reads the
 // refusal, the way reasoningRejected reads a rejected thinking parameter
 // rather than predicting which accounts accept one.
-func isVisionRefusal(err error) bool {
+//
+// The model's own name is taken out of the message first: a server echoes
+// it, and "Llama-3.2-11B-Vision-Instruct" is not a refusal however its
+// request failed.
+func isVisionRefusal(err error, model string) bool {
 	if err == nil {
 		return false
 	}
 	lower := strings.ToLower(err.Error())
+	if m := strings.ToLower(strings.TrimSpace(model)); m != "" {
+		lower = withoutName(lower, m)
+		if i := strings.LastIndex(m, "/"); i >= 0 {
+			lower = withoutName(lower, m[i+1:])
+		}
+	}
 	for _, p := range notVisionRefusal {
 		if strings.Contains(lower, p) {
 			return false
@@ -444,6 +467,33 @@ func isVisionRefusal(err error) bool {
 		}
 	}
 	return false
+}
+
+// withoutName is s with each occurrence of name that stands on its own
+// (no letter or digit on either side) blanked out. On its own, so a model
+// called "m" does not take the m out of "image".
+func withoutName(s, name string) string {
+	if name == "" {
+		return s
+	}
+	alnum := func(b byte) bool { return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' }
+	var out strings.Builder
+	for {
+		i := strings.Index(s, name)
+		if i < 0 {
+			out.WriteString(s)
+			return out.String()
+		}
+		end := i + len(name)
+		if (i > 0 && alnum(s[i-1])) || (end < len(s) && alnum(s[end])) {
+			out.WriteString(s[:i+1])
+			s = s[i+1:]
+			continue
+		}
+		out.WriteString(s[:i])
+		out.WriteString(" ")
+		s = s[end:]
+	}
 }
 
 // SendableToolInput is a tool call's arguments as they go back to a model in
@@ -552,7 +602,7 @@ func trimLineEnds(s string) string {
 // it, to a model whose profile says it is sent images. The profile is what
 // changes that.
 func wrapVisionRefusal(err error, model string) error {
-	if !isVisionRefusal(err) {
+	if !isVisionRefusal(err, model) {
 		return err
 	}
 	return fmt.Errorf("%w\n\nhint: %s appears not to accept images. Set \"vision\": false on its profile "+

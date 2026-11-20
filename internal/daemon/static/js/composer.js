@@ -401,10 +401,20 @@ async function fitImage(file, mediaType) {
   } finally {
     if (typeof bitmap.close === 'function') bitmap.close();
   }
+  // Each encoding on its own: a page that cannot write one (PNG at this
+  // size, or a type it lacks) may still write the next.
+  let lastError = null;
   for (const [type, quality] of [['image/png', undefined], ['image/jpeg', 0.9], ['image/jpeg', 0.75]]) {
-    const blob = await canvas.encode(type, quality);
+    let blob = null;
+    try {
+      blob = await canvas.encode(type, quality);
+    } catch (err) {
+      lastError = err;
+      continue;
+    }
     if (blob && blob.size <= MAX_ONE_IMAGE_BYTES) return { file: blob, mediaType: type, scaled: { w, h } };
   }
+  if (lastError) throw lastError;
   return { error: `image not attached: it is ${what} (${limit}), and a ${w}x${h} copy is still too big` };
 }
 
@@ -567,15 +577,21 @@ export async function addImageFile(file, fallbackName) {
     return false;
   }
 
-  const currentTotal = attachedImages.reduce((sum, img) => sum + (img.size || 0), 0);
   const fileSize = fitted.file.size || 0;
-  if (fileSize + currentTotal > MAX_IMAGE_BYTES) {
+  const overTotal = () => fileSize + attachedImages.reduce((sum, img) => sum + (img.size || 0), 0) > MAX_IMAGE_BYTES;
+  if (overTotal()) {
     appendError(`image exceeds the 10MB limit (${fileSize} bytes)`);
     return false;
   }
 
   try {
     const b64 = await readFileBase64(fitted.file);
+    // Asked again after the read: two images pasted together each passed
+    // the check above before either was added, and together went over.
+    if (overTotal()) {
+      appendError(`image exceeds the 10MB limit (${fileSize} bytes)`);
+      return false;
+    }
     attachedImages.push({
       mediaType: fitted.mediaType,
       data: b64,

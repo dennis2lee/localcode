@@ -98,7 +98,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	agentCfg := l.agentConfig(ctx, resolveAgent)
 	// Whether this model is sent images, before the tool list is built:
 	// view_image is offered only when it is. See view_image.go.
-	ctx = withViewsImages(ctx, l.seesImages(ctx, profile, modelOverride).sees)
+	sees := l.seesImages(ctx, profile, modelOverride).sees
 
 	// The tool allowlist for this turn, resolved before the prompt is
 	// assembled rather than after, so the assembly can condition on the
@@ -106,12 +106,15 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// same reason it always was: flipping Smart Agent off mid-turn must
 	// not leave the model holding a tool_use for a tool the next
 	// request no longer advertises.
+	ctx = withViewsImages(ctx, sees)
 	allowedTools := l.toolsForTurn(ctx, agentCfg)
 	advertised := l.Tools.NamesFor(ctx, allowedTools)
-	// The list this turn started with. A fallback to a model that cannot
-	// see narrows it and a later one to a model that can puts it back, so
-	// each is derived from this rather than from the one before.
-	turnTools := allowedTools
+	// The list a fallback is derived from: the one a model that sees would
+	// be offered, less view_image for a fallback that cannot (see
+	// fallbackTools). Taken from the first model's own list, a turn that
+	// started on a model that cannot see offered view_image to no
+	// fallback, including one that can.
+	turnTools := l.toolsForTurn(withViewsImages(ctx, true), agentCfg)
 
 	// Before the prompt is built from it: a conversation's first turn
 	// counts toward the memory retirement clock and may retire notes,

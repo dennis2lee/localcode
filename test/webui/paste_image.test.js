@@ -243,6 +243,43 @@ for (const [failure, says] of [
   });
 }
 
+// Found in review (agy): a PNG encode that threw ended the attempt, and
+// the JPEG that would have fitted was never tried.
+test('a copy whose PNG encode fails goes as JPEG', async () => {
+  const { seen, globals } = scalingGlobals(5120, 2880, () => 1500000);
+  const realCanvas = globals.OffscreenCanvas;
+  globals.OffscreenCanvas = class extends realCanvas {
+    async convertToBlob(opts) {
+      if (opts.type === 'image/png') {
+        seen.encoded.push(opts);
+        throw new Error('PNG encoding failed');
+      }
+      return super.convertToBlob(opts);
+    }
+  };
+  const app = await load({ globals });
+  app.el('input').fire('paste', { clipboardData: { items: [makeImageItem('image/png', 9000000, 'big')] } });
+  await app.settle();
+  const images = app.internals.getAttachedImages();
+  assert.equal(images.length, 1, app.transcript());
+  assert.equal(images[0].mediaType, 'image/jpeg');
+});
+
+// Found in review (agy): two images pasted together each passed the 10 MB
+// check before either was added, and together went over it.
+test('images pasted together stay within the 10MB message total', async () => {
+  const app = await load();
+  const input = app.el('input');
+  for (let i = 0; i < 4; i++) {
+    input.fire('paste', { clipboardData: { items: [makeImageItem('image/png', 3000000, 'big')] } });
+  }
+  await app.settle();
+  const total = app.internals.getAttachedImages().reduce((sum, img) => sum + img.size, 0);
+  assert.equal(app.internals.getAttachedImages().length, 3);
+  assert.ok(total <= 10 * 1024 * 1024, `attached ${total} bytes`);
+  assert.ok(app.transcript().includes('10MB limit'), app.transcript());
+});
+
 test('an image within the limits is attached as it is, without a copy', async () => {
   const { seen, globals } = scalingGlobals(1920, 1080, () => 1);
   const app = await load({ globals });

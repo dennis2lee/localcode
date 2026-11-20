@@ -93,7 +93,7 @@ func ProbeVision(ctx context.Context, p Provider, model string) (VisionProbe, er
 		}}},
 	})
 	if err != nil {
-		if isVisionRefusal(err) {
+		if isVisionRefusal(err, model) {
 			return VisionProbe{Refused: err}, nil
 		}
 		return VisionProbe{}, err
@@ -121,7 +121,7 @@ func ProbeVision(ctx context.Context, p Provider, model string) (VisionProbe, er
 		return VisionProbe{}, err
 	}
 	if streamErr != nil {
-		if isVisionRefusal(streamErr) {
+		if isVisionRefusal(streamErr, model) {
 			return VisionProbe{Refused: streamErr}, nil
 		}
 		return VisionProbe{}, streamErr
