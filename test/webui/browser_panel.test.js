@@ -458,6 +458,33 @@ test('a frame on the stream calls off a reconnect still waiting', async () => {
   assert.equal(view.getAttribute('src'), src, 'a reconnect opened a working stream again');
 });
 
+test('a stream opened again for a closed tab can still reconnect', async () => {
+  const clock = handTimers();
+  // Every reading a millisecond on, so two addresses made in one real
+  // millisecond still differ.
+  let now = 1_000_000;
+  class TickingDate extends Date { static now() { now += 1; return now; } }
+  const tabs = { 'sess-1': 'https://one.example/' };
+  const app = await load({
+    globals: { lcGUI: true, Date: TickingDate, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout },
+    routes: perConversation(tabs),
+  });
+  const view = app.el('browser-view');
+  view.fire('load');
+  await app.settle();
+  view.fire('error');
+  delete tabs['sess-1'];
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  const reopened = view.getAttribute('src');
+  assert.match(reopened, /\?r=\d+$/);
+  // The stream opened for the next tab breaks too.
+  view.fire('error');
+  for (const t of clock.timers.slice()) if (!t.cleared) t.fn();
+  assert.notEqual(view.getAttribute('src'), reopened,
+    'a reconnect from before the tab closed held the slot, and the new stream was never opened again');
+});
+
 test('the address bar opens what is typed into it', async () => {
   const app = await load({
     globals: { lcGUI: true },

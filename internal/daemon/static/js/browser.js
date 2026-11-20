@@ -244,6 +244,19 @@ async function refreshLocation() {
   }
 }
 
+// newVisit starts a visit: answers to the one before are dropped from now
+// on, and a reconnect still waiting for it is called off, since it would
+// hold the one slot and drop a reconnect this visit may need.
+function newVisit() {
+  visit += 1;
+  tabSeenAt = 0;
+  visitHadTab = false;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
 // tabGone starts the visit over when the conversation's tab closed under
 // it (the browser restarted, or the profile was copied again). The view
 // still holds the closed tab's last frame, and an answer still on its way
@@ -252,8 +265,7 @@ async function refreshLocation() {
 // so the stream is opened again: the next tab's first frame is then that
 // stream's first, and shows the view.
 function tabGone() {
-  visit += 1;
-  visitHadTab = false;
+  newVisit();
   setStale(true);
   restoreEmptyText();
   const url = el('browser-url');
@@ -275,7 +287,7 @@ export function renderBrowserPanel() {
   if (handle) handle.hidden = !shown;
   if (!shown) {
     if (streamFor !== null) {
-      visit += 1;
+      newVisit();
       // Dropping the source ends the stream, and with it the daemon's
       // reason to offer this conversation the browser.
       view.removeAttribute('src');
@@ -292,17 +304,9 @@ export function renderBrowserPanel() {
     return;
   }
   if (streamFor !== session.sessionID) {
-    visit += 1;
-    // A reconnect waiting for the conversation before would hold the one
-    // slot, and drop the reconnect this one may need.
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
+    newVisit();
     daemonLost = false;
     streamFor = session.sessionID;
-    tabSeenAt = 0;
-    visitHadTab = false;
     setStale(true);
     // Through the attribute, which is what removeAttribute above takes
     // away again.
