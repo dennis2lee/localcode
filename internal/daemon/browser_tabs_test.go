@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"localcode/internal/browser"
@@ -70,5 +72,13 @@ func TestThePanelOpensSwitchesAndClosesTabs(t *testing.T) {
 	}
 	if resp := call(http.MethodDelete, base+"/tabs/"+two[0].ID); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("closing it again = %d", resp.StatusCode)
+	}
+	// The last one closed: an empty list, which the panel draws, not null,
+	// which it would skip and leave the closed tab drawn until a poll.
+	last := call(http.MethodDelete, base+"/tabs/"+two[1].ID)
+	body, _ := io.ReadAll(last.Body)
+	last.Body.Close()
+	if !strings.Contains(string(body), `"tabs":[]`) {
+		t.Errorf("closing the last tab answered %s", body)
 	}
 }

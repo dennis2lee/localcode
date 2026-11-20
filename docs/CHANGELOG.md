@@ -6,7 +6,7 @@ The desktop window's browser panel takes clicks and keys at any window zoom, hol
 
 **Added**
 
-* Tabs in the browser panel: one per page the conversation has open, a click to switch, `×` to close, `+` to open an empty one; the model's browser tool acts on the tab shown
+* Tabs in the browser panel: one per page the conversation has open, a click to switch, `×` to close, `+` to open an empty one; the model's browser tool acts on the tab shown, and closing it shows the tab that opened it, or else the one before it
 * A header button, right of the session name, that hides and shows the browser panel; the page goes on running while it is hidden
 
 **Fixed**

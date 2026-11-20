@@ -37,6 +37,7 @@ let navSeq = 0;          // address bar requests made, so only the newest one's 
 let navAnswers = 0;      // address bar answers used, so a poll asked before one is dropped
 let tabsDrawn = '';      // the tab strip as last drawn, so a poll that changes nothing redraws nothing
 let activeTab = '';      // the id of the tab the view shows
+let tabSeq = 0;          // tab strip clicks made, so only the newest one's answer is used
 
 // visit counts the panel's showings of a conversation: it moves on when
 // the stream is pointed at a conversation and when the panel is hidden.
@@ -247,33 +248,40 @@ function drawTabs(tabs) {
 }
 
 // tabAction is a click on the tab strip: open a tab, switch to one or
-// close one. The answer is the conversation's tabs, drawn if the panel is
-// still on the visit it was asked in; the location poll then follows the
-// active tab.
+// close one. Reports whether its answer was used.
+//
+// The answer is the conversation's tabs, used only if nothing newer came
+// since: the panel is on the visit it was asked in, no later tab click was
+// made, and it counts as an answer the location poll has to wait for, as
+// an address bar answer does, so a poll asked before it cannot put the
+// strip back. A click also retires an address bar open still on its way,
+// which is about the tab shown before. The tab it makes active is the one
+// the person chose, so its address goes in the bar whatever has the focus.
 async function tabAction(method, path) {
   const id = session.sessionID;
-  if (!id) return;
+  if (!id) return false;
   const asked = visit;
+  const n = ++tabSeq;
+  navSeq += 1;
+  let used = false;
   try {
     const res = await api(method, `/api/sessions/${id}/browser/${path}`);
-    if (asked !== visit || id !== session.sessionID) return;
-    if (res && Array.isArray(res.tabs)) {
-      drawTabs(res.tabs);
-      // The person just chose the tab shown: its address goes in the bar
-      // now, focus or not, before "+" hands the bar the focus and before a
-      // poll, which leaves a focused bar alone, could.
-      const a = res.tabs.find((t) => t.active);
-      if (a && a.id !== activeTab) {
-        activeTab = a.id;
-        const url = el('browser-url');
-        if (url) url.value = a.url && a.url !== 'about:blank' ? a.url : '';
-      }
+    if (asked === visit && id === session.sessionID && n === tabSeq) {
+      navAnswers += 1;
+      const tabs = res && Array.isArray(res.tabs) ? res.tabs : [];
+      drawTabs(tabs);
+      const a = tabs.find((t) => t.active);
+      activeTab = a ? a.id : '';
+      const url = el('browser-url');
+      if (url) url.value = a && a.url && a.url !== 'about:blank' ? a.url : '';
+      used = true;
     }
   } catch {
     // A tab that closed by itself in the meantime: the poll below says
     // what is there now.
   }
   if (asked === visit) refreshLocation();
+  return used;
 }
 
 async function refreshLocation() {
@@ -451,9 +459,10 @@ export function initBrowserPanel() {
   el('browser-back')?.addEventListener('click', () => navigate({ action: 'back' }));
   // A new tab is empty; the address bar is where its page is chosen, so it
   // gets the focus.
+  // Only when its answer was used: a switch to another conversation, or a
+  // later click, in the meantime is somewhere the focus does not belong.
   el('browser-tab-new')?.addEventListener('click', async () => {
-    await tabAction('POST', 'tabs');
-    url.focus();
+    if (await tabAction('POST', 'tabs')) url.focus();
   });
   el('browser-forward')?.addEventListener('click', () => navigate({ action: 'forward' }));
   el('browser-reload')?.addEventListener('click', () => navigate({ action: 'reload' }));

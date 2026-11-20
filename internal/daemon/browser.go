@@ -222,6 +222,15 @@ func (d *Daemon) handleBrowserState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// tabList is the tabs as a list a client can draw: empty, not null, when
+// the last one has closed.
+func tabList(tabs []browser.TabInfo) []browser.TabInfo {
+	if tabs == nil {
+		return []browser.TabInfo{}
+	}
+	return tabs
+}
+
 // handleBrowserNewTab opens an empty tab for the conversation and makes it
 // the one it works in: the panel's "+". A page opens in it from the
 // address bar, through the same navigate as any other, so the deny rules
@@ -237,7 +246,7 @@ func (d *Daemon) handleBrowserNewTab(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tabs": d.Browser.Tabs(ctx, id)})
+	writeJSON(w, http.StatusOK, map[string]any{"tabs": tabList(d.Browser.Tabs(ctx, id))})
 }
 
 // handleBrowserActivateTab makes one of the conversation's tabs the one it
@@ -254,7 +263,7 @@ func (d *Daemon) handleBrowserActivateTab(w http.ResponseWriter, r *http.Request
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	writeJSON(w, http.StatusOK, map[string]any{"tabs": d.Browser.Tabs(ctx, id)})
+	writeJSON(w, http.StatusOK, map[string]any{"tabs": tabList(d.Browser.Tabs(ctx, id))})
 }
 
 // handleBrowserCloseTab closes one of the conversation's tabs: its "x" in
@@ -270,7 +279,7 @@ func (d *Daemon) handleBrowserCloseTab(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tabs": d.Browser.Tabs(ctx, id)})
+	writeJSON(w, http.StatusOK, map[string]any{"tabs": tabList(d.Browser.Tabs(ctx, id))})
 }
 
 // handleBrowserNavigate is the panel's address bar and its back, forward

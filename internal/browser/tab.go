@@ -26,6 +26,7 @@ type Tab struct {
 	viewers map[chan []byte]bool
 	casting bool
 	frame   []byte // the latest screencast frame, JPEG
+	opener  string // the target that opened this tab with a link, or ""
 
 	castMu sync.Mutex // orders screencast starts and stops; see Watch
 }

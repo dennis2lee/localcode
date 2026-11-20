@@ -84,8 +84,9 @@ func (m *Manager) dropAll() {
 // convTabs is a conversation's pages, in the order they were opened, and
 // the one it works in: the one the model's browser tool acts on and the
 // panel shows. A tab a link opens, or one the person opens in the panel,
-// is added and becomes the active one. Closing the active tab makes the
-// one before it active, so a page a link opened goes back to its opener.
+// is added and becomes the active one. Closing the active tab makes its
+// opener active again, as a browser does, when it was opened by a link
+// and the opener is still open; otherwise the one before it in the list.
 type convTabs struct {
 	tabs    []*Tab
 	active  int
@@ -112,17 +113,65 @@ func (c *convTabs) add(t *Tab) {
 	c.notify()
 }
 
-// remove takes out the tab at i. Removing the active one makes the one
-// before it active (the first one, when it was the first).
-func (c *convTabs) remove(i int) {
+// remove takes out the tab at i. Removing the active one makes its
+// opener active, if it has one still open, or else the one before it (the
+// first one, when it was the first), and reports the tab that is active
+// now; nil when the active tab did not change or none is left. Whoever
+// watches is not told here: see showActive.
+func (c *convTabs) remove(i int) *Tab {
+	opener := c.tabs[i].opener
 	c.tabs = append(c.tabs[:i], c.tabs[i+1:]...)
 	switch {
 	case i < c.active:
 		c.active--
 	case i == c.active:
-		if c.active > 0 {
+		if j := c.index(opener); opener != "" && j >= 0 {
+			c.active = j
+		} else if c.active > 0 {
 			c.active--
 		}
+		return c.current()
+	}
+	return nil
+}
+
+// bringForward puts t in front of its window and waits for it to paint
+// there. A browser with no window paints only the tab in front of each
+// window, and the screencast the panel shows is built from those paints.
+// A tab a link opened sits in its opener's window, in front of it, so a
+// switch back to the opener showed no frame of it at all while the model
+// worked on it. And a screencast started the moment the tab comes forward
+// sends one frame and then nothing (measured: a second later, it streams),
+// so this waits for two animation frames, which a page that is not shown
+// does not run. Not called with m.mu held: it waits on the browser.
+func bringForward(t *Tab) {
+	if t == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = t.conn.Call(ctx, "", "Target.activateTarget", map[string]any{"targetId": t.targetID}, nil)
+	_ = t.conn.Call(ctx, t.session, "Page.bringToFront", nil, nil)
+	_ = t.conn.Call(ctx, t.session, "Runtime.evaluate", map[string]any{
+		"expression":    "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))",
+		"awaitPromise":  true,
+		"returnByValue": true,
+	}, nil)
+}
+
+// showActive brings conv's active tab t forward, then tells whoever is
+// watching the conversation that it changed: told first, a stream started
+// on a tab not yet painting and stayed on one frame. Nothing is told if
+// another change came in the meantime; that one tells. Not called with
+// m.mu held.
+func (m *Manager) showActive(conv string, t *Tab) {
+	if t == nil {
+		return
+	}
+	bringForward(t)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c := m.convs[conv]; c != nil && c.current() == t {
 		c.notify()
 	}
 }
@@ -232,18 +281,26 @@ func (m *Manager) NewTab(ctx context.Context, conv string) (*Tab, error) {
 // ActivateTab makes conv's tab id the one it works in.
 func (m *Manager) ActivateTab(conv, id string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	c := m.convs[conv]
-	if c == nil {
+	// A browser that has gone away took its tabs with it, whatever the
+	// list still says until the next start clears it.
+	if c == nil || !m.alive() {
+		m.mu.Unlock()
 		return ErrNoSuchTab
 	}
 	i := c.index(id)
 	if i < 0 {
+		m.mu.Unlock()
 		return ErrNoSuchTab
 	}
-	if i != c.active {
-		c.active = i
-		c.notify()
+	changed := i != c.active
+	c.active = i
+	t := c.current()
+	m.mu.Unlock()
+	if changed {
+		m.showActive(conv, t)
+	} else {
+		bringForward(t)
 	}
 	return nil
 }
@@ -253,7 +310,7 @@ func (m *Manager) ActivateTab(conv, id string) error {
 func (m *Manager) CloseTabID(ctx context.Context, conv, id string) error {
 	m.mu.Lock()
 	c := m.convs[conv]
-	if c == nil {
+	if c == nil || !m.alive() {
 		m.mu.Unlock()
 		return ErrNoSuchTab
 	}
@@ -263,7 +320,7 @@ func (m *Manager) CloseTabID(ctx context.Context, conv, id string) error {
 		return ErrNoSuchTab
 	}
 	t := c.tabs[i]
-	c.remove(i)
+	next := c.remove(i)
 	if len(c.tabs) == 0 {
 		delete(m.convs, conv)
 		close(c.changed)
@@ -273,6 +330,7 @@ func (m *Manager) CloseTabID(ctx context.Context, conv, id string) error {
 	}
 	m.mu.Unlock()
 	t.close(ctx)
+	m.showActive(conv, next)
 	return nil
 }
 
@@ -438,6 +496,7 @@ func (m *Manager) adopt(p *process, openerID, targetID string) {
 			if err != nil {
 				return
 			}
+			t.opener = openerID
 			c.add(t)
 			return
 		}
@@ -446,15 +505,16 @@ func (m *Manager) adopt(p *process, openerID, targetID string) {
 
 // forget drops a page that closed from whichever conversation had it.
 func (m *Manager) forget(targetID string) {
+	var next *Tab
+	var owner string
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for conv, c := range m.convs {
 		i := c.index(targetID)
 		if i < 0 {
 			continue
 		}
 		t := c.tabs[i]
-		c.remove(i)
+		next, owner = c.remove(i), conv
 		if m.proc != nil {
 			m.proc.conn.Forget(t.session)
 		}
@@ -462,8 +522,10 @@ func (m *Manager) forget(targetID string) {
 			delete(m.convs, conv)
 			close(c.changed)
 		}
-		return
+		break
 	}
+	m.mu.Unlock()
+	m.showActive(owner, next)
 }
 
 // CloseTab closes every page conv has.
@@ -508,8 +570,10 @@ func (m *Manager) Watch(ctx context.Context, conv string, frame func([]byte)) er
 		c := m.convs[conv]
 		var t *Tab
 		var changed chan struct{}
-		if c != nil {
+		var gone <-chan struct{}
+		if c != nil && m.proc != nil {
 			t, changed = c.current(), c.changed
+			gone = m.proc.conn.Done()
 		}
 		m.mu.Unlock()
 		if t == nil {
@@ -527,6 +591,11 @@ func (m *Manager) Watch(ctx context.Context, conv string, frame func([]byte)) er
 				return nil
 			case <-changed:
 				switched = true
+			case <-gone:
+				// The browser went away with every tab in it: nothing more
+				// will come, and the caller waits for the next one.
+				stop()
+				return errors.New("the browser went away")
 			case f := <-frames:
 				frame(f)
 			}
