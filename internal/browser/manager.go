@@ -38,8 +38,20 @@ type Options struct {
 }
 
 // Manager owns the one browser and every conversation's tab in it.
+//
+// Two locks, for two jobs. mu guards the state: the running browser and
+// every conversation's tabs. It is held to read or change that state and
+// never across anything that waits on the browser, a process or the disk:
+// a slow CDP call for one conversation used to hold every other
+// conversation's browser work behind it (Existing, Tabs, a switch, a
+// close, a stream), for as long as a start or an attach took. startMu
+// orders what changes which browser there is (a start, a profile copy, a
+// close), one at a time, so two conversations asking at once start one
+// browser. It is taken before mu, never while holding it.
 type Manager struct {
 	opts Options
+
+	startMu sync.Mutex
 
 	mu         sync.Mutex
 	proc       *process
@@ -206,22 +218,43 @@ func (m *Manager) dataDir() (string, error) {
 	return DefaultDataDir()
 }
 
+// errReplaced is a tab opened on a browser that was replaced (closed,
+// restarted, its profile copied again) while it opened.
+var errReplaced = errors.New("the browser restarted while the tab opened; try again")
+
 // Tab returns conv's tab, starting the browser and opening the tab if
 // either is not there yet.
 func (m *Manager) Tab(ctx context.Context, conv string) (*Tab, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := m.ensureRunning(ctx); err != nil {
-		return nil, err
+	if c := m.convs[conv]; c != nil && c.current() != nil && m.alive() {
+		t := c.current()
+		m.mu.Unlock()
+		return t, nil
 	}
-	if c := m.convs[conv]; c != nil && c.current() != nil {
-		return c.current(), nil
-	}
-	t, err := openTab(ctx, m.proc.conn)
+	m.mu.Unlock()
+	p, err := m.running(ctx)
 	if err != nil {
 		return nil, err
 	}
+	t, err := openTab(ctx, p.conn)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	if m.proc != p {
+		m.mu.Unlock()
+		return nil, errReplaced
+	}
+	// Another call for the same conversation got there first: its tab is
+	// the conversation's, and this one goes.
+	if c := m.convs[conv]; c != nil && c.current() != nil {
+		existing := c.current()
+		m.mu.Unlock()
+		t.close(ctx)
+		return existing, nil
+	}
 	m.convs[conv] = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
+	m.mu.Unlock()
 	return t, nil
 }
 
@@ -261,14 +294,18 @@ func (m *Manager) Tabs(ctx context.Context, conv string) []TabInfo {
 // NewTab opens an empty tab for conv and makes it the active one, starting
 // the browser if it is not running.
 func (m *Manager) NewTab(ctx context.Context, conv string) (*Tab, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := m.ensureRunning(ctx); err != nil {
-		return nil, err
-	}
-	t, err := openTab(ctx, m.proc.conn)
+	p, err := m.running(ctx)
 	if err != nil {
 		return nil, err
+	}
+	t, err := openTab(ctx, p.conn)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.proc != p {
+		return nil, errReplaced
 	}
 	if c := m.convs[conv]; c != nil {
 		c.add(t)
@@ -348,44 +385,61 @@ func (m *Manager) Existing(conv string) *Tab {
 	return nil
 }
 
-// ensureRunning starts the browser if it is not running. Called with m.mu.
-func (m *Manager) ensureRunning(ctx context.Context) error {
-	if m.proc != nil {
-		if m.alive() {
-			return nil
-		}
+// running returns the browser, starting it if it is not running. One
+// start at a time (startMu); m.mu only around reading and setting which
+// browser there is, never across the start itself, which copies a
+// profile, launches a process and makes the first CDP calls.
+//
+// The new browser is published only once it is guarded and its targets
+// are followed: a tab opened on it before then would load pages the deny
+// rules had not been asked about.
+func (m *Manager) running(ctx context.Context) (*process, error) {
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+	m.mu.Lock()
+	old := m.proc
+	if old != nil && m.alive() {
+		m.mu.Unlock()
+		return old, nil
+	}
+	if old != nil {
 		// It went away (crashed, or someone quit it); every tab went with
 		// it, and whoever is watching one is told, so they move on to
 		// the next browser rather than waiting on a dead page.
-		m.proc.kill()
 		m.proc = nil
 		m.dropAll()
 	}
+	m.mu.Unlock()
+	if old != nil {
+		old.kill()
+	}
 	install, err := Find(m.opts.ChromePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	dir, err := m.dataDir()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	profile, imported, err := m.ensureProfile(install, dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	p, err := start(ctx, install.Path, dir, profile, imported)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	m.proc = p
 	m.watchTargets(p)
 	m.guard(p)
-	return nil
+	m.mu.Lock()
+	m.proc = p
+	m.mu.Unlock()
+	return p, nil
 }
 
 // ensureProfile seeds dir from the person's everyday profile the first
 // time, and returns the profile name to open and whether it was imported.
-// Called with m.mu.
+// Called with startMu, not m.mu: a copy reads a whole profile.
 func (m *Manager) ensureProfile(install Install, dir string) (string, bool, error) {
 	if data, err := os.ReadFile(filepath.Join(dir, profileNameFile)); err == nil {
 		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
@@ -402,7 +456,9 @@ func (m *Manager) ensureProfile(install Install, dir string) (string, bool, erro
 		name = LastUsedProfile(src)
 		if rep, err := ImportProfile(src, name, dir); err == nil {
 			imported = true
+			m.mu.Lock()
 			m.lastImport = &rep
+			m.mu.Unlock()
 		} else {
 			name = "Default"
 		}
@@ -426,9 +482,10 @@ func writeProfileName(dir, name string, imported bool) error {
 // profile cannot be replaced under a running browser; every
 // conversation's tab closes with it, and the next use starts afresh.
 func (m *Manager) Import() (ImportReport, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.stopLocked()
+	// No start while the profile is replaced under it.
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+	m.stop()
 	install, err := Find(m.opts.ChromePath)
 	if err != nil {
 		return ImportReport{}, err
@@ -443,7 +500,9 @@ func (m *Manager) Import() (ImportReport, error) {
 	if err != nil {
 		return rep, err
 	}
+	m.mu.Lock()
 	m.lastImport = &rep
+	m.mu.Unlock()
 	return rep, writeProfileName(dir, name, true)
 }
 
@@ -478,29 +537,47 @@ func (m *Manager) watchTargets(p *process) {
 	_ = conn.Call(ctx, "", "Target.setDiscoverTargets", map[string]any{"discover": true}, nil)
 }
 
-// adopt makes a page opened by a conversation's current tab its new
-// current tab.
-func (m *Manager) adopt(p *process, openerID, targetID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.proc != p {
-		return
-	}
+// openerOf is the conversation whose tabs include targetID, or nil.
+// Called with m.mu.
+func (m *Manager) openerOf(targetID string) *convTabs {
 	for _, c := range m.convs {
-		// Opened from any of a conversation's tabs, not only the active one:
-		// a page in a tab the person switched away from can still open one.
-		if c.index(openerID) >= 0 {
-			t, err := attachTab(ctx, p.conn, targetID)
-			if err != nil {
-				return
-			}
-			t.opener = openerID
-			c.add(t)
-			return
+		if c.index(targetID) >= 0 {
+			return c
 		}
 	}
+	return nil
+}
+
+// adopt adds a page that one of a conversation's tabs opened (a link
+// with target=_blank, window.open) to that conversation, as its active
+// tab. Opened from any of its tabs, not only the active one: a page in a
+// tab the person switched away from can still open one. Attached with
+// m.mu let go, then checked again: the conversation can have gone, or the
+// browser been replaced, while it attached.
+func (m *Manager) adopt(p *process, openerID, targetID string) {
+	m.mu.Lock()
+	known := m.proc == p && m.openerOf(openerID) != nil
+	m.mu.Unlock()
+	if !known {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	t, err := attachTab(ctx, p.conn, targetID)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	c := m.openerOf(openerID)
+	if m.proc != p || c == nil {
+		m.mu.Unlock()
+		// The page a deleted conversation's tab opened is nobody's.
+		t.close(ctx)
+		return
+	}
+	t.opener = openerID
+	c.add(t)
+	m.mu.Unlock()
 }
 
 // forget drops a page that closed from whichever conversation had it.
@@ -545,20 +622,27 @@ func (m *Manager) CloseTab(conv string) {
 	close(c.changed)
 }
 
-// Close quits the browser.
+// Close quits the browser. After a start in progress, which would
+// otherwise publish a browser after it was closed.
 func (m *Manager) Close() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.stopLocked()
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+	m.stop()
 }
 
-func (m *Manager) stopLocked() {
-	if m.proc == nil {
-		return
-	}
-	m.proc.close()
+// stop forgets the browser and every tab in it, then quits it. Called
+// with startMu, not m.mu: quitting waits on the process.
+func (m *Manager) stop() {
+	m.mu.Lock()
+	p := m.proc
 	m.proc = nil
-	m.dropAll()
+	if p != nil {
+		m.dropAll()
+	}
+	m.mu.Unlock()
+	if p != nil {
+		p.close()
+	}
 }
 
 // Watch streams the frames of conv's current tab to the panel, following

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.176.1
+
+One conversation waiting on the browser no longer holds up the others' browser work.
+
+**Fixed**
+
+* The browser's lock held while waiting on the browser: opening a tab, attaching a tab a link opened, starting the browser or copying the profile kept every other conversation's browser panel, tab switches and browser tool waiting behind it
+
 ## v0.176.0
 
 The desktop window's browser panel takes clicks and keys at any window zoom, holds several tabs per conversation, and hides from a button in the header.
