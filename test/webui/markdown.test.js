@@ -526,8 +526,10 @@ test('an address with no host is not a link', () => {
 // without its own links. Inline code that is another address is that
 // address, shown beside the one the link pointed at.
 test('inline code in a link\'s text does not make a link inside the link', () => {
+  assert.equal(app.renderMarkdown('[see `curl -s x`](https://b.example)'),
+    '<p><a href="https://b.example" target="_blank" rel="noopener noreferrer">see <code>curl -s x</code></a></p>');
   assert.equal(app.renderMarkdown('[see `curl https://a.example`](https://b.example)'),
-    '<p><a href="https://b.example" target="_blank" rel="noopener noreferrer">see <code>curl https://a.example</code></a></p>');
+    `<p>see <code>curl ${link('https://a.example')}</code> (${link('https://b.example')})</p>`);
   assert.equal(app.renderMarkdown('[`https://a.example`](https://b.example)'),
     `<p><code>${link('https://a.example')}</code> (${link('https://b.example')})</p>`);
 });
@@ -536,4 +538,47 @@ test('an address in a link\'s text is not cut up by emphasis', () => {
   const u = 'https://x.example/_a_/b?q=*x*&amp;r=1';
   assert.equal(app.renderMarkdown('[https://x.example/_a_/b?q=*x*&r=1](https://x.example/_a_/b?q=*x*&r=1)'),
     `<p><a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a></p>`);
+});
+
+// A link's text is read as a reader sees it before it is trusted not to
+// be an address: emphasis, case, what shows as nothing and control
+// characters do not hide one.
+test('no way of writing an address in a link\'s text makes it open another', () => {
+  const beside = (shown) => `<p>${shown} (${link('https://evil.example')})</p>`;
+  assert.equal(app.renderMarkdown('[**http**s://good.example](https://evil.example)'), beside('<strong>http</strong>s://good.example'));
+  assert.equal(app.renderMarkdown('[HTTPS://good.example](https://evil.example)'), beside('HTTPS://good.example'));
+  assert.equal(app.renderMarkdown('[https:/\u200b/good.example](https://evil.example)'), beside('https:/\u200b/good.example'));
+  assert.equal(app.renderMarkdown('[https:／／good.example](https://evil.example)'), beside('https:／／good.example'));
+  assert.equal(app.renderMarkdown('[https://good.example\u0004](https://evil.example)'), beside(link('https://good.example')));
+  assert.equal(app.renderMarkdown('[www.good.example](https://evil.example)'), beside('www.good.example'));
+  // The address itself, plain, bold or with an ellipsis, is one link.
+  assert.equal(app.renderMarkdown('[**https://same.example/**](https://same.example/)'), `<p>${link('https://same.example/')}</p>`);
+  assert.equal(app.renderMarkdown('[https://same.example/…](https://same.example/…)'), `<p>${link('https://same.example/…')}</p>`);
+});
+
+test('a code block is never a link\'s text, in inline code or not', () => {
+  for (const s of ['[```\nhttps://a.example\n```](https://b.example)', '[` ```\nhttps://a.example\n``` `](https://b.example)']) {
+    const out = app.renderMarkdown(s);
+    assert.ok(!/<a [^>]*>(?:(?!<\/a>)[\s\S])*<a /.test(out), `${s}\n=> ${out}`);
+  }
+});
+
+test('a host is a name or an IPv6 address after any user part', () => {
+  for (const s of ['https://a@', 'https://a@/', 'https://a@:8080', 'http://[', 'https://[]', '[x](https://a@/)']) {
+    assert.ok(!app.renderMarkdown(s).includes('<a '), s);
+  }
+  assert.equal(app.renderMarkdown('https://user@host.example/a'), `<p>${link('https://user@host.example/a')}</p>`);
+});
+
+test('an apostrophe before a word in another script goes with the word', () => {
+  assert.equal(app.renderMarkdown("https://example.com/'한글"), `<p>${link('https://example.com/')}&#39;한글</p>`);
+});
+
+// Two older faults the reviews found beside the links.
+test('a double-backtick span inside a single-backtick one is part of its text', () => {
+  assert.equal(app.renderMarkdown('`a``b``c`'), '<p><code>a``b``c</code></p>');
+});
+
+test('math reads only its own symbols, not an object\'s inherited names', () => {
+  assert.equal(app.renderMarkdown('$\\toString$'), '<p>$\\toString$</p>');
 });

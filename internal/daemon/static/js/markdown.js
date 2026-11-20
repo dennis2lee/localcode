@@ -21,13 +21,15 @@ export function renderMarkdown(src) {
   // code block, silently splicing the wrong block (or the literal string
   // "undefined") into the rendered output.
   //
-  // The characters every placeholder here is made of (U+0000 to U+0003)
-  // are taken out of what the model wrote first. One it wrote itself would
-  // otherwise be read as a placeholder: spliced back as "undefined", or as
-  // another span's HTML in a place that span was never meant to be.
+  // Control characters (but tab and the line ends) are taken out of what
+  // the model wrote first. Every placeholder here is made of them, and one
+  // the model wrote itself would otherwise be read as a placeholder:
+  // spliced back as "undefined", or as another span's HTML in a place
+  // that span was never meant to be. The rest show as nothing, so they
+  // can only hide what an address or a link's text says.
   const blocks = [];
   const placeholder = (i) => `\u0000${i}\u0000`;
-  let text = String(src).replace(/[\u0000-\u0003]/g, '').replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, lang, code) => {
+  let text = String(src).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, lang, code) => {
     // The language names a class and nothing else.
     const name = lang.trim().replace(/[^\w+#.-]/g, '');
     const cls = name ? ` class="language-${name}"` : '';
@@ -55,12 +57,16 @@ export function renderMarkdown(src) {
   // Double-backtick spans first: they may hold single backticks
   // inside (that is their whole point), and the single-backtick pass
   // below would otherwise eat the inner pair and leave the outers.
-  text = text.replace(/``((?:[^`]|`[^`])*?)``/g, (_, code) => {
-    spans.push({ html: `<code>${linkify(code)}</code>`, plain: `<code>${code}</code>`, text: code });
+  text = text.replace(/``((?:[^`]|`[^`])*?)``/g, (whole, code) => {
+    spans.push({ html: `<code>${linkify(code)}</code>`, plain: `<code>${code}</code>`, text: code, raw: whole });
     return spanToken(spans.length - 1);
   });
-  text = text.replace(/`([^`\n]+)`/g, (_, code) => {
-    spans.push({ html: `<code>${linkify(code)}</code>`, plain: `<code>${code}</code>`, text: code });
+  text = text.replace(/`([^`\n]+)`/g, (_, written) => {
+    // A double-backtick span inside this one is part of its text, as it
+    // was written: a code span holds no markup, and its placeholder would
+    // otherwise be left in the output.
+    const code = written.replace(/\u0001(\d+)\u0001/g, (_, i) => spans[+i].raw);
+    spans.push({ html: `<code>${linkify(code)}</code>`, plain: `<code>${code}</code>`, text: code, raw: `\`${code}\`` });
     return spanToken(spans.length - 1);
   });
 
@@ -284,7 +290,7 @@ export function unwrapMath(s) {
   return s.replace(/\$\$?([^$\n]+?)\$?\$/g, (whole, body) => {
     if (!body.includes('\\')) return whole; // no LaTeX in it; not ours to touch
     let out = stripFontCommands(body)
-      .replace(/\\([a-zA-Z]+)/g, (cmd, name) => (name in mathSymbols ? mathSymbols[name] : cmd))
+      .replace(/\\([a-zA-Z]+)/g, (cmd, name) => (Object.prototype.hasOwnProperty.call(mathSymbols, name) ? mathSymbols[name] : cmd))
       // Escaped punctuation, which is only escaped because it was inside
       // maths. Deliberately not & or #: this text has already been through
       // escapeHtml, and putting a bare & back would undo that.
@@ -346,12 +352,17 @@ const emUnderscore = /(^|[^\p{L}\p{N}_])_([^_]+)_(?![\p{L}\p{N}])/gu;
 // end both: the placeholders below are made of them.
 const bareURL = /https?:\/\/(?:[^\s<>"'`\u0000-\u001f&]|&amp;|&#39;(?=[\p{L}\p{N}]))+/gu;
 const rawURL = /https?:\/\/(?:[^\s<>"'`\u0000-\u001f]|'(?=[\p{L}\p{N}]))+/gu;
-const wholeURL = new RegExp(`^${bareURL.source}$`, 'u');
 
-// An address has a host: a letter, a digit or an IPv6 "[" after the
-// scheme and any user part. "https:///", "https://:8080" and "https://@"
-// do not.
-const hasHost = (url) => /^https?:\/\/(?:[^/?#@]*@)?[\p{L}\p{N}[]/u.test(url);
+// hasHost is whether an address names a host: what follows the last "@"
+// of the part before the path is a name of letters, digits, dots and
+// hyphens, or an IPv6 address in brackets, with a port or none.
+// "https:///", "https://:8080", "https://a@/" and "http://[" do not.
+function hasHost(url) {
+  const m = /^https?:\/\/([^/?#]*)/i.exec(url);
+  if (!m) return false;
+  const host = m[1].slice(m[1].lastIndexOf('@') + 1);
+  return /^(?:[\p{L}\p{N}](?:[\p{L}\p{N}.-]*[\p{L}\p{N}])?|\[[0-9A-Fa-f:.]+\])(?::\d*)?$/u.test(host);
+}
 
 const CLOSES = { ')': '(', ']': '[', '}': '{' };
 
@@ -388,6 +399,13 @@ export function splitURL(m) {
     }
   }
   for (;;) {
+    // An apostrophe at the end closes a quote, and goes whole: cutting
+    // the ";" of "&#39;" would leave half an entity in the link.
+    if (url.endsWith('&#39;')) {
+      rest = '&#39;' + rest;
+      url = url.slice(0, -5);
+      continue;
+    }
     const last = url.slice(-1);
     // A ";" that ends "&amp;" is the address's own "&", not punctuation.
     if (/[.,;:!?*_~'"。、，．！？：；」』】〉》”’…]/.test(last) && !(last === ';' && url.endsWith('&amp;'))) {
@@ -437,7 +455,9 @@ function highlightLinked(code, lang) {
   const links = [];
   const hold = (m) => {
     const [url, rest] = splitURL(escapeHtml(m));
-    if (!url) return m;
+    // One private-use character names each, so a block holds as many as
+    // there are of them; any after that is left as code.
+    if (!url || links.length >= 0x1900) return m;
     links.push(anchor(url, url));
     return `\u0003${String.fromCharCode(0xe000 + links.length - 1)}\u0003${unescapeHtml(rest).replace(rawURL, hold)}`;
   };
@@ -470,19 +490,36 @@ let codeSpans = [];
 // address written in it, which is held aside the same way. Math is
 // unwrapped after the links are held aside, so it cannot edit one either.
 //
-// The address of [text](address) is held to what a bare one is: no
-// control character, so a placeholder for a code span or a code block
+// The address of [text](address) is held to what a bare one is: the
+// same characters, so a placeholder for a code span or a code block
 // (spliced back after this runs) can never land inside href="...", where
-// its quotes would end the attribute and start others; brackets that
-// balance; and a host. Inline code in its text is drawn without its own
-// links, since a link inside a link is not HTML.
+// its quotes would end the attribute and start others, and a host.
+// Brackets in it balance ("/wiki/Function_(mathematics)"). Its text holds
+// no code block; inline code in it is drawn without its own links, since
+// a link inside a link is not HTML.
 //
-// A link whose text is a web address goes to that address: the model's
-// text is shown as written, and the address it pointed at beside it, each
-// linked to itself. [https://good.example](https://evil.example) could
-// otherwise show one address and open another, and the text is what a
-// page the model read can write.
-const bracketLink = /\[([^\]]+)\]\((https?:\/\/(?:[^\s()\u0000-\u001f]|\([^\s()\u0000-\u001f]*\))+)\)/g;
+// A link whose text reads as a web address goes to that address: when
+// the text has "://" in it, or starts a word with "www.", and is not the
+// address the link opens, the text is shown as written with the address
+// it pointed at beside it, each link opening itself.
+// [https://good.example](https://evil.example) could otherwise show one
+// address and open another, and the text is what a page the model read
+// can write. The text is read as a reader sees it: inline code as its
+// text, entities read, width variants folded ("／" is "/"), a slash that
+// only looks like one taken as one, and what shows as nothing (a
+// zero-width space, a soft hyphen, a direction mark) taken out. So none
+// of those, nor emphasis or case, hides "://" from the check. A heuristic
+// like any reading of what text looks like: a script whose letters look
+// like a Latin address's ("һttps") is not caught.
+const URL_CHAR = `(?:[^\\s()<>"'\`\\u0000-\\u001f&]|&amp;|&#39;(?=[\\p{L}\\p{N}]))`;
+const bracketLink = new RegExp(`\\[([^\\]\\u0000]+)\\]\\((https?:\\/\\/(?:${URL_CHAR}|\\(${URL_CHAR}*\\))+)\\)`, 'gu');
+
+const asRead = (v) => v.normalize('NFKC')
+  .replace(/\p{Default_Ignorable_Code_Point}/gu, '')
+  .replace(/[\u2044\u2215\u29f8]/g, '/')
+  .trim();
+const visibleText = (t) => asRead(unescapeHtml(t.replace(/\u0001(\d+)\u0001/g, (_, i) => (codeSpans[+i] ? codeSpans[+i].text : ''))));
+const readsAsAddress = (v) => v.includes('://') || /(?:^|\s)www\./i.test(v);
 
 export function inline(s) {
   const links = [];
@@ -494,11 +531,19 @@ export function inline(s) {
   const out = s
     .replace(bracketLink, (whole, t, u) => {
       if (!hasHost(u)) return whole;
-      const shown = t.replace(/\u0001(\d+)\u0001/g, (_, i) => (codeSpans[+i] ? codeSpans[+i].text : '')).trim();
-      if (wholeURL.test(shown) && shown.replace(/\/$/, '') !== u.replace(/\/$/, '')) {
-        return `${t.replace(bareURL, bare)} (${keep(anchor(u, u))})`;
+      // A code block is never a link's text, inside inline code included:
+      // the block's own links would be links inside this one, and the
+      // address check below would read its placeholder, not its text.
+      if (t.replace(/\u0001(\d+)\u0001/g, (_, i) => (codeSpans[+i] ? codeSpans[+i].text : '')).includes('\u0000')) return whole;
+      const shown = visibleText(t);
+      if (readsAsAddress(shown)) {
+        // The address itself, as written or in bold: a link to it.
+        const target = asRead(unescapeHtml(u)).replace(/\/$/, '');
+        const unbolded = visibleText(emphasis(t).replace(/<[^>]*>/g, ''));
+        if (shown.replace(/\/$/, '') === target || unbolded.replace(/\/$/, '') === target) return keep(anchor(u, u));
+        return `${t} (${keep(anchor(u, u))})`;
       }
-      const text = t.replace(/\u0001(\d+)\u0001/g, '\u0001p$1\u0001').replace(bareURL, (m) => keep(m));
+      const text = t.replace(/\u0001(\d+)\u0001/g, '\u0001p$1\u0001');
       return keep(anchor(u, emphasis(text)));
     })
     .replace(bareURL, bare);
