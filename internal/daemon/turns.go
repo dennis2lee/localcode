@@ -333,6 +333,14 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("unsupported image media type %q: only PNG, JPEG, GIF, and WEBP are supported", img.MediaType))
 			return
 		}
+		// Refused here rather than sent: a server refuses an image past
+		// these, and an image it refuses stays in the conversation and
+		// fails every request after it. The Web UI scales a pasted image
+		// down to fit before it gets here.
+		if why := provider.ImageTooBig(img.Data); why != "" {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("image not attached: %s; send a smaller copy", why))
+			return
+		}
 		totalImageBytes += len(img.Data)
 		imgBlocks = append(imgBlocks, provider.ImageBlock(img.MediaType, img.Data))
 	}

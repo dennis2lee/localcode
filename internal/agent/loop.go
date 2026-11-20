@@ -349,6 +349,17 @@ type Loop struct {
 	// guessed from the model name exactly as before.
 	ProbeContextWindow func(ctx context.Context, providerKey, model string) (int, bool)
 
+	// ProbeVision, if set, shows a model a test image and reports what it
+	// did with it — see (*Loop).seesImages and provider.ProbeVision. Asked
+	// only for a model whose profile does not set "vision" and that is
+	// not a Claude model, once per provider and model.
+	//
+	// A hook for the same reason ProbeContextWindow is one: it is a
+	// request on the wire, one small image and a one-word answer. The
+	// daemon wires it for every provider (see ProbeVisionWith). Left nil,
+	// nothing is asked and such a model is not sent images, as before.
+	ProbeVision func(ctx context.Context, providerKey, model string) (provider.VisionProbe, error)
+
 	// WorkspaceRules, if set, returns the AGENTS.md/CLAUDE.md section for a
 	// directory, and is asked once per turn for the directory the session
 	// is actually working in — see internal/rules.
@@ -419,6 +430,12 @@ type Loop struct {
 	// it did not say" — recorded so a server that has no answer is not
 	// asked again on every turn.
 	probedWindows map[string]int
+
+	// visionCache is what each model did with the test image, keyed by
+	// provider+model, and visionInflight the probes running now. Both
+	// under mu. See vision.go.
+	visionCache    map[string]visionEntry
+	visionInflight map[string]chan struct{}
 
 	// SkillsSection is the startup-loaded half of the prompt that used
 	// to be folded into SystemPrompt before the Loop ever saw it. A field

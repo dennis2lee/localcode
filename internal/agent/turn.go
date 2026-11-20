@@ -98,7 +98,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	agentCfg := l.agentConfig(ctx, resolveAgent)
 	// Whether this model is sent images, before the tool list is built:
 	// view_image is offered only when it is. See view_image.go.
-	ctx = withViewsImages(ctx, profileViewsImages(profile, modelOverride))
+	ctx = withViewsImages(ctx, l.seesImages(ctx, profile, modelOverride).sees)
 
 	// The tool allowlist for this turn, resolved before the prompt is
 	// assembled rather than after, so the assembly can condition on the
@@ -501,7 +501,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				// A model that cannot see is not offered view_image, here
 				// as at the start of a turn, and before the prompt for it
 				// is assembled from the tools on offer.
-				allowedTools, advertised = l.fallbackTools(ctx, turnTools, profileViewsImages(next.profile, modelOverride))
+				allowedTools, advertised = l.fallbackTools(ctx, turnTools, l.seesImages(ctx, next.profile, modelOverride).sees)
 				if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride, chainAt, advertised); berr == nil {
 					l.reportFallback(sessionID, run, newRun, err)
 					fallbacks++
@@ -513,7 +513,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					run = newRun
 					// A model that cannot see is sent no image from here
 					// on. One already in the history stays there.
-					ctx = withViewsImages(ctx, run.profile.ViewsImages())
+					ctx = withViewsImages(ctx, l.seesImages(ctx, run.profile, "").sees)
 					// A new endpoint gets its own retry allowance, and
 					// any retry still pending belonged to the old one.
 					sameTries = 0
@@ -561,7 +561,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					return err
 				}
 				if next, ok := l.nextFallback(chain, &chainAt, err); ok {
-					allowedTools, advertised = l.fallbackTools(ctx, turnTools, profileViewsImages(next.profile, modelOverride))
+					allowedTools, advertised = l.fallbackTools(ctx, turnTools, l.seesImages(ctx, next.profile, modelOverride).sees)
 					if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride, chainAt, advertised); berr == nil {
 						l.reportFallback(sessionID, run, newRun, err)
 						fallbacks++
@@ -571,7 +571,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 						})
 						l.runRetryHook(ctx, sessionID, run, newRun, err)
 						run = newRun
-						ctx = withViewsImages(ctx, run.profile.ViewsImages())
+						ctx = withViewsImages(ctx, l.seesImages(ctx, run.profile, "").sees)
 						sameTries = 0
 						trimBudget = l.contextWindow(ctx, run.profile) / 2
 						continue
@@ -593,7 +593,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		if attachedImages > 0 && !viewsImages(ctx) && !imagesNoticed && len(assistantBlocks) > 0 {
 			imagesNoticed = true
 			l.Store.Append(sessionID, events.TypeError, map[string]any{
-				"error":     imagesLeftOutNotice(run, attachedImages),
+				"error":     imagesLeftOutNotice(run, attachedImages, l.knownSeesImages(run.profile, "").why),
 				"recovered": true,
 			})
 		}

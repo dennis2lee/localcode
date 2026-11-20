@@ -254,6 +254,10 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		}
 		return prober.ContextWindow(ctx, model)
 	}
+	// Ask a model whether it can see when its profile does not say and it
+	// is not a Claude model: shown a test image once, through the
+	// provider its turns use. See agent.ProbeVisionWith.
+	loop.ProbeVision = agent.ProbeVisionWith(providers)
 	// Restores conversation history and /usage totals for every session
 	// just loaded from disk — the event log survives a restart on its
 	// own, but Loop's in-memory history/usage maps don't, so without this

@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.171.0
+
+A model that can see is sent images whatever its name, and no image a server refuses stays in a conversation.
+
+**Added**
+
+* A test image for a model whose profile leaves `vision` unset and whose id does not contain `claude`: a red square shown once per provider and model, and the model is sent images when it names the colour
+* Scaling of a pasted or dropped image past 3.75 MB or 8000 pixels a side, in the page, to 2576 pixels on its long side, as PNG or else JPEG
+
+**Changed**
+
+* `vision` unset on a model other than Claude: decided by the test image instead of off
+* A request carries at most 10 MB of images, besides at most 20
+* The notice for images left out names the reason: the profile's `vision`, or the model's answer to the test image
+* `view_image` refuses an image past 8000 pixels a side, and the daemon refuses a message image past 3.75 MB or 8000 pixels a side
+
+**Fixed**
+
+* An image Bedrock refuses (over 3.75 MB, or 8000 pixels a side), kept in a conversation and failing every request after it: left out with a note
+* A conversation of large images over Bedrock's 20 MB request limit
+* A refusal of an image for its size read as a model without vision, with a hint to set `"vision": false`
+
 ## v0.170.0
 
 The model can work a web page in a browser shown in the desktop window's right panel.

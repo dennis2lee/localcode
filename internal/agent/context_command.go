@@ -99,7 +99,7 @@ func (l *Loop) handleContextCommand(ctx context.Context, sessionID, agentName, d
 		return l.replyLocal(sessionID, displayText, "Cannot describe the context: "+err.Error())
 	}
 	agentCfg := l.agentConfig(ctx, agentName)
-	ctx = withViewsImages(ctx, profileViewsImages(profile, ""))
+	ctx = withViewsImages(ctx, l.knownSeesImages(profile, "").sees)
 
 	// The same tool list the next turn would advertise, resolved the
 	// same way, so the report describes that request rather than an

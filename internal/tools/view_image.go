@@ -29,12 +29,9 @@ type ViewImage struct{}
 // ViewImageName is the name the tool is registered and hidden under.
 const ViewImageName = "view_image"
 
-// MaxViewImageBytes is the largest file the tool attaches. Bedrock's
-// Converse API refuses an image over 3.75 MB and the Anthropic API one over
-// 5 MB, and an image a server refuses stays in the history, so the limit is
-// the smallest of the three wires rather than the 10 MB a person may paste
-// across several images at once.
-const MaxViewImageBytes = 3_750_000
+// MaxViewImageBytes is the largest file the tool attaches: the most one
+// image may be on any wire. See provider.MaxImageBytes.
+const MaxViewImageBytes = provider.MaxImageBytes
 
 func (ViewImage) Name() string { return ViewImageName }
 
@@ -108,6 +105,15 @@ func (ViewImage) Execute(ctx context.Context, input json.RawMessage) Result {
 		return Result{
 			Content: fmt.Sprintf("%s is %s, not an image this can show (PNG, JPEG, GIF or WebP). "+
 				"Convert it to PNG and view that.", args.Path, mediaType),
+			IsError: true,
+		}
+	}
+	// The size in pixels too: a long screenshot within the byte limit is
+	// still one the Anthropic API and Bedrock refuse.
+	if w, h, ok := provider.ImageSize(data); ok && (w > provider.MaxImageSide || h > provider.MaxImageSide) {
+		return Result{
+			Content: fmt.Sprintf("%s is %dx%d pixels, over the %d pixel limit for a side. "+
+				"Make a smaller copy (scale it down, or crop it) and view that.", args.Path, w, h, provider.MaxImageSide),
 			IsError: true,
 		}
 	}

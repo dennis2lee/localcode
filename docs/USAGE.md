@@ -454,7 +454,7 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `top_p` | Nucleus sampling threshold, above 0 and at most 1. `1.0` truncates nothing. Omit the key to send nothing at all. Reaches OpenAI-compatible, Anthropic, and Bedrock. Dropped while a Claude model is reasoning. See [Sampling](#sampling-temperature-top_p-top_k). |
 | `top_k` | Only sample from the top K candidates at each step. `0` is no limit on vLLM. Omit the key to send nothing at all. Native on Anthropic, in `additionalModelRequestFields` on Bedrock, and a vLLM extension on OpenAI-compatible servers. Dropped while reasoning. See [Sampling](#sampling-temperature-top_p-top_k). |
 | `effort` | How hard this model is asked to think. Unset sends nothing at all. See [Effort](#effort). |
-| `vision` | Whether this model is sent images: pasted ones, the ones already in the conversation, and `view_image`'s, which it is offered only when this is true. Unset means true for a model whose id contains `claude` and false for every other. Set `true` on any other model that can see. A model that is not sent images gets a note where each image was, so a conversation moved to it goes on. See [Pasting an image](#pasting-an-image). |
+| `vision` | Whether this model is sent images: pasted ones, the ones already in the conversation, and `view_image`'s, which it is offered only when this is true. Unset, a model whose id contains `claude` is sent images, and any other model is shown a test image once and decides by its answer. `true` or `false` overrules the test. A model that is not sent images gets a note where each image was, so a conversation moved to it goes on. See [Which models are sent images](#which-models-are-sent-images). |
 | `keep_going` | Per-profile budget: maximum automatic continuations for Muse models. Zero or unset: 3. `-1`: disabled. Maximum: 10. A value outside `-1` to `10` stops startup. Ignored for other model families. This numeric per-profile setting is different from the daemon-wide top-level `keep_going` switch. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
 | `fallback` | Other profile names to try, in order, when a request to this one fails for a reason another model could survive. Read only with [Smart Agent](#smart-agent) on. See [Fallback chains](#fallback-chains-when-a-model-will-not-answer). |
 | `context_window` | Total input and output limit. Discovery uses `GET /v1/models` or llama.cpp `/props`, then model-ID matching, then 128k. An explicit value overrides discovery. Do not exceed the model's actual limit. |
@@ -2141,13 +2141,32 @@ Dropping a file on the input box handles it by type:
 
 Pasting an image into the prompt box attaches it to the message. A model that is sent images receives the picture rather than a path. Which models are sent images is decided by the `vision` rule below. Dropping an image file on the prompt box does the same as pasting it. The desktop window is this same page, so pasting works there too.
 
-PNG, JPEG, GIF and WEBP, and **ten megabytes for one message** counting every image in it together. Both are checked as you paste, naming the type or the limit, rather than after a turn has started. The bytes are sent as pasted — nothing is resized or re-encoded.
+The limits are checked as you paste, naming the type or the limit, rather than after a turn has started.
 
-The model has to be sent images, which the profile's `vision` key decides. A Claude model is sent images unless its profile says `"vision": false`. Any other model is sent images only with `"vision": true`.
+| Limit | Value | What happens past it |
+|---|---|---|
+| Types | PNG, JPEG, GIF, WEBP | The image is refused, naming its type. |
+| One image | 3.75 MB and 8000 pixels a side | The page scales the image down so its long side is 2576 pixels, and attaches the copy as PNG, or as JPEG when the PNG is still over 3.75 MB. A page that cannot scale an image refuses it. The daemon refuses an image past these limits from any client. |
+| One message | 10 MB, every image in it together | The image that passes 10 MB is refused. |
+| One request | The newest 20 images of the conversation, and 10 MB of them | Each older image is sent as a note saying it was left out. The conversation keeps the image. |
 
-* **A model that is not sent images:** each image is replaced by a note to the model saying an image was there. The transcript shows a notice naming the model and the profile to change.
+The per-image limits are Bedrock's, the strictest of the three providers. A 2576-pixel image is the largest the newest Claude models read without scaling it down themselves. The request limit keeps a request under Bedrock's 20 MB.
+
+#### Which models are sent images
+
+The profile's `vision` key decides, and a model it leaves unset is asked.
+
+| Model | Sent images |
+|---|---|
+| `"vision": true` or `"vision": false` | As the profile says. Nothing is asked. |
+| Unset, id contains `claude` | Yes. Nothing is asked. |
+| Unset, any other id | Shown a test image the first time a turn runs on it (a 64x64 red square, asked "What colour is this image?"). Sent images when it answers red. Not sent images when it answers otherwise or its server refuses the image. |
+
+* **The test image** goes through the same provider and model as the turn, as one small request without tools. The answer is kept per provider and model until localcode restarts.
+* **A test image with no answer** (an error, an empty reply, or 30 seconds without one) leaves the model unsent images for that turn. It is asked again after five minutes.
+* **A model that is not sent images:** each image is replaced by a note to the model saying an image was there. The transcript shows a notice naming the model, the reason (for example its answer to the test image), and the profile to change.
 * **Images already in the conversation:** the same rule applies on every request. A conversation moved with `/model` to a model that cannot see goes on, and moving back sends the images again.
-* **A model that is sent images and refuses them:** the turn fails with a hint to set `"vision": false` on its profile or to switch with `/model`. Sending the message again does not help, because the image is in the conversation.
+* **A model that is sent images and refuses them:** the turn fails with a hint to set `"vision": false` on its profile or to switch with `/model`. Sending the message again does not help, because the image is in the conversation. A refusal about an image's size is not read as a model without vision, and has no such hint.
 
 A pasted image is stored in the conversation, so it is still there after a restart, which is also why a session log with images is much larger than one without. [Compaction](#compact) drops them: an image cannot go into a text summary, so the summary says how many were omitted and the model keeps knowing a picture was discussed without still holding it.
 
@@ -2261,7 +2280,7 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | Tool | Needs permission | Purpose |
 |---|---|---|
 | `read_file` | No | Read a file with line numbers |
-| `view_image` | No | Attach an image file (PNG, JPEG, GIF or WebP, up to 3.75 MB) so the model sees it as it sees a pasted image. Offered only to a model that is sent images: see `vision` under [Profile fields](#profile-fields). |
+| `view_image` | No | Attach an image file (PNG, JPEG, GIF or WebP, up to 3.75 MB and 8000 pixels a side) so the model sees it as it sees a pasted image. Offered only to a model that is sent images: see [Which models are sent images](#which-models-are-sent-images). |
 | `glob` | No | Find files by pattern, `**` supported |
 | `grep` | No | Search file contents by regex. Stops at 200 matches and says so; names any file it could not open or could not finish reading. See [Grep completeness reporting](#grep-completeness-reporting) |
 | `write_file` | Yes | Create or overwrite a file |
@@ -3290,7 +3309,7 @@ Switching agents changes the profile, provider, model, system prompt, and tool s
 
 Agents may use different providers. The selected model receives the preceding conversation, including earlier questions and answers.
 
-Images in that conversation reach the model only when its profile has `vision`. Unset, `vision` is true for a model id containing `claude` and false for any other. A model without it gets a note in place of each image. The image is sent again when the conversation returns to a model that can see.
+Images in that conversation reach the model only when it is sent images. See [Which models are sent images](#which-models-are-sent-images). A model that is not gets a note in place of each image. The image is sent again when the conversation returns to a model that can see.
 
 Switching agents invalidates the previous agent's cached system prompt and tool-schema prefix.
 
@@ -3326,7 +3345,7 @@ Wrapped invocations such as `env python3 x.py` and `xargs python3` are not cover
 2. Point `providers.local.base_url` at that address.
 3. Set the profile's `model` to exactly the model name LM Studio shows.
 4. Point an `agents` entry at that profile and run with `--agent`.
-5. If the model reads images, set `"vision": true` on its profile. Unset, a model whose id does not contain `claude` is sent no images and is not offered `view_image`.
+5. Images need nothing set. The model is shown a test image the first time a turn runs on it, and is sent images when it names the colour. Set `"vision": true` or `false` on the profile to overrule the test. See [Which models are sent images](#which-models-are-sent-images).
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 

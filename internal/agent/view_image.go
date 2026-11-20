@@ -11,7 +11,7 @@ import (
 )
 
 // Whether the model a turn runs on is sent images. Decided once per turn
-// from its profile (config.Profile.ViewsImages), and read by the places
+// (see seesImages in vision.go), and read by the places
 // that act on it: hiddenTools, which offers view_image only to a model
 // that can use it; takeImages, which keeps an image out of a history that
 // cannot carry one even when an agent's own tool list named the tool; and
@@ -28,16 +28,6 @@ func viewsImages(ctx context.Context) bool {
 	return yes
 }
 
-// profileViewsImages is ViewsImages for the model a turn actually sends
-// to: a command's model override replaces the profile's model and nothing
-// else, so the default is judged on the model that replaced it.
-func profileViewsImages(profile config.Profile, modelOverride string) bool {
-	if modelOverride != "" {
-		profile.Model = modelOverride
-	}
-	return profile.ViewsImages()
-}
-
 // agentViewsImages answers for a delegation target, so the agent list the
 // delegation tools show can say which agents can be handed an image: its
 // model is sent images, and view_image is among the tools it would be
@@ -47,7 +37,7 @@ func profileViewsImages(profile config.Profile, modelOverride string) bool {
 func (l *Loop) agentViewsImages(ctx context.Context, agentName string) bool {
 	sessionID, _ := SessionIDFromContext(ctx)
 	_, profile, err := l.profileFor(ctx, sessionID, agentName)
-	if err != nil || !profile.ViewsImages() || l.Tools == nil {
+	if err != nil || !l.knownSeesImages(profile, "").sees || l.Tools == nil {
 		return false
 	}
 	// From the allowlist, the hidden set and the registry, not from the
@@ -91,6 +81,11 @@ func takeImages(ctx context.Context, res *tools.Result, used *int) []provider.Bl
 		if img.Type != provider.BlockImage || !provider.SupportedImageMediaType(img.MediaType) {
 			continue
 		}
+		if why := provider.ImageTooBig(img.Data); why != "" {
+			res.Content += "\n\nAn image was not attached: " + why + ". Make a smaller copy and view that."
+			res.IsError = true
+			continue
+		}
 		if *used+len(img.Data) > provider.MaxImageBytesPerMessage {
 			res.Content += fmt.Sprintf("\n\nAn image was not attached: the images of this step would pass %d bytes. "+
 				"View it on its own, in a later step.", provider.MaxImageBytesPerMessage)
@@ -123,18 +118,27 @@ func (l *Loop) requestHistory(ctx context.Context, sessionID string) []provider.
 // images, or with a note in place of each image.
 func asSent(ctx context.Context, msgs []provider.Message) []provider.Message {
 	if viewsImages(ctx) {
-		return newestImages(msgs, provider.MaxImagesPerRequest)
+		return newestImages(msgs, provider.MaxImagesPerRequest, provider.MaxImageBytesPerRequest)
 	}
 	return imagesAsText(msgs)
 }
 
-// newestImages is msgs with only the newest n images, and a note in place
-// of each older one. A conversation that keeps taking snapshots, or keeps
-// pasting screenshots, would otherwise reach a request no server takes,
-// and every turn after it would fail the same way. The stored history
-// keeps every image; a message changed here gets a new block slice.
-func newestImages(msgs []provider.Message, n int) []provider.Message {
-	seen := 0
+// newestImages is msgs with the newest images that fit in n images and
+// maxBytes bytes, and a note in place of each other one. A conversation
+// that keeps taking snapshots, or keeps pasting screenshots, would
+// otherwise reach a request no server takes, and every turn after it
+// would fail the same way. Counted from the newest back, and the first
+// image that does not fit ends the count, so what is sent is always the
+// most recent run of images.
+//
+// An image past what one image may be is left out wherever it is. Each
+// way in checks that already; this is for a history written before they
+// did, where one such image failed every request that carried it.
+//
+// The stored history keeps every image; a message changed here gets a
+// new block slice.
+func newestImages(msgs []provider.Message, n, maxBytes int) []provider.Message {
+	seen, size, full := 0, 0, false
 	var out []provider.Message
 	for i := len(msgs) - 1; i >= 0; i-- {
 		var content []provider.Block
@@ -143,15 +147,22 @@ func newestImages(msgs []provider.Message, n int) []provider.Message {
 			if b.Type != provider.BlockImage {
 				continue
 			}
-			seen++
-			if seen <= n {
+			var note string
+			if why := provider.ImageTooBig(b.Data); why != "" {
+				note = fmt.Sprintf("[An image (%s) was here. It was left out: %s.]", b.MediaType, why)
+			} else if !full && seen < n && size+len(b.Data) <= maxBytes {
+				seen++
+				size += len(b.Data)
 				continue
+			} else {
+				full = true
+				note = fmt.Sprintf("[An image (%s) was here. It was left out: a request carries at most %d images and %d bytes of them, and newer ones took its place.]",
+					b.MediaType, n, maxBytes)
 			}
 			if content == nil {
 				content = append([]provider.Block(nil), msgs[i].Content...)
 			}
-			content[j] = provider.TextBlock(fmt.Sprintf(
-				"[An image (%s) was here. It was left out: a request carries at most %d images, and newer ones took its place.]", b.MediaType, n))
+			content[j] = provider.TextBlock(note)
 		}
 		if content != nil {
 			if out == nil {
@@ -195,7 +206,10 @@ func imagesAsText(msgs []provider.Message) []provider.Message {
 // not reach the model, and what makes them reach it. The model is told too,
 // but a person who pasted a screenshot should not have to learn from the
 // answer that it was never seen.
-func imagesLeftOutNotice(run modelRun, n int) string {
+//
+// why is the verdict's reason, so a person whose model failed the test
+// image can tell that apart from a profile that says no.
+func imagesLeftOutNotice(run modelRun, n int, why string) string {
 	what := "the image attached to this message was"
 	if n > 1 {
 		what = fmt.Sprintf("the %d images attached to this message were", n)
@@ -204,8 +218,12 @@ func imagesLeftOutNotice(run modelRun, n int) string {
 	if run.profileName != "" {
 		fix = fmt.Sprintf(`set "vision": true on profile %q`, run.profileName)
 	}
-	return fmt.Sprintf("%s is not sent images, so %s left out of the request. If the model can see images, %s.",
-		describeRun(run), what, fix)
+	because := ""
+	if why != "" {
+		because = " (" + why + ")"
+	}
+	return fmt.Sprintf("%s is not sent images%s, so %s left out of the request. If the model can see images, %s.",
+		describeRun(run), because, what, fix)
 }
 
 // eventImages is images in the form the log records them, which is the

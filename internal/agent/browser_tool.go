@@ -454,16 +454,12 @@ func (t BrowserTool) snapshot(ctx context.Context, tab *browser.Tab, in browserI
 	switch {
 	case !viewsImages(ctx):
 		res.Content += " This model is not sent images, so it has the file and not the picture; read describes the page in text."
-	case len(shot.PNG) > tools.MaxViewImageBytes || shot.Width > maxSnapshotSide || shot.Height > maxSnapshotSide:
+	case len(shot.PNG) > provider.MaxImageBytes || shot.Width > provider.MaxImageSide || shot.Height > provider.MaxImageSide:
 		// A model's server refuses an image past these, and an image it
 		// refuses stays in the history, failing every turn after.
-		res.Content += fmt.Sprintf(" It is too big to send to the model (%d bytes; the limits are %d bytes and %d pixels a side), so it has the file and not the picture; the visible page or one element is smaller.", len(shot.PNG), tools.MaxViewImageBytes, maxSnapshotSide)
+		res.Content += fmt.Sprintf(" It is too big to send to the model (%d bytes; the limits are %d bytes and %d pixels a side), so it has the file and not the picture; the visible page or one element is smaller.", len(shot.PNG), provider.MaxImageBytes, provider.MaxImageSide)
 	default:
 		res.Images = []provider.Block{provider.ImageBlock("image/png", shot.PNG)}
 	}
 	return res, nil
 }
-
-// maxSnapshotSide is the longest side of a snapshot the model is sent: the
-// most the Anthropic API takes.
-const maxSnapshotSide = 8000

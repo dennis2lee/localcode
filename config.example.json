@@ -57,7 +57,7 @@
       "top_k": 0,
       "//keep_going": "How many times one turn may be told to carry on after the model stops with the task unfinished. Only ever applies to muse models (any id containing 'muse'); on them 0 (the default) means 3 out of the box and -1 forces it off. /keep-going toggles the whole feature. See docs/USAGE.md.",
       "keep_going": 0,
-      "//vision": "Whether this model is sent images: pasted ones, the ones already in the conversation, and the view_image tool's, which it is offered only when this is true. Unset means true for a Claude model and false for anything else. Set it to true on any other model that can see. A model that is not sent images gets a note where each image was, so a conversation moved to it goes on.",
+      "//vision": "Whether this model is sent images: pasted ones, the ones already in the conversation, and the view_image tool's, which it is offered only when this is true. Unset, a Claude model is sent images, and any other model is shown a test image on its first turn and is sent images when it names the colour. true or false overrules the test. A model that is not sent images gets a note where each image was, so a conversation moved to it goes on.",
       "vision": false
     }
   },

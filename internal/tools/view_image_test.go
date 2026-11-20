@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -201,5 +203,33 @@ func TestViewImageAttachesAFileOfExactlyTheLimit(t *testing.T) {
 	res := viewImage(t, context.Background(), path)
 	if res.IsError || len(res.Images) != 1 || len(res.Images[0].Data) != MaxViewImageBytes {
 		t.Errorf("a file of exactly %d bytes: error %v, %d images, %q", MaxViewImageBytes, res.IsError, len(res.Images), res.Content)
+	}
+}
+
+// A long screenshot within the byte limit is still one the Anthropic API
+// and Bedrock refuse, so it is refused here with its size in pixels.
+func TestViewImageRefusesAnImageTooTallToSend(t *testing.T) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, 4, provider.MaxImageSide+1))); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "long.png")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := viewImage(t, context.Background(), path)
+	if !res.IsError || len(res.Images) != 0 || !strings.Contains(res.Content, "4x8001 pixels, over the 8000 pixel limit") {
+		t.Errorf("got %v, %d images, %q", res.IsError, len(res.Images), res.Content)
+	}
+	// At the limit it goes.
+	buf.Reset()
+	if err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, 4, provider.MaxImageSide))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if res := viewImage(t, context.Background(), path); res.IsError || len(res.Images) != 1 {
+		t.Errorf("at the limit: %v, %q", res.IsError, res.Content)
 	}
 }

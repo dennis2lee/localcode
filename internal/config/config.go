@@ -872,29 +872,48 @@ type Profile struct {
 	// pastes, the ones already in the conversation, and view_image's,
 	// which it is offered only when this is true. A model that is not
 	// sent images gets a note where each one was. Nil means "a Claude
-	// model can, anything else cannot"; see ViewsImages.
+	// model can, and any other is asked"; see VisionSetting.
 	//
-	// A setting rather than a guess for everything else, because an image
-	// sent to a model that cannot take one is not a wrong answer, it is a
+	// Not a guess from the name for anything else, because an image sent
+	// to a model that cannot take one is not a wrong answer, it is a
 	// request the server refuses, and the image stays in the history, so
 	// every request after it is refused too. Local servers name their
 	// models whatever they like, and a name says nothing about whether the
-	// weights behind it were trained on images.
+	// weights behind it were trained on images. Unset, such a model is
+	// shown a test image once (see provider.ProbeVision), and this setting
+	// is how a person overrules what it answered.
 	Vision *bool `json:"vision,omitempty"`
 }
 
-// ViewsImages reports whether this profile's model is sent images.
-//
-// Unset means true for a Claude model, which every Claude model since the
-// third generation is, through every provider localcode reaches it by,
-// and false for everything else: a model that can see is set to true in
-// one line, and a model that cannot is never sent what would break its
-// session.
+// ViewsImages reports whether this profile's model is sent images, as far
+// as the profile alone can say: false for a model it leaves to be asked.
+// The agent loop asks that model; see VisionSetting.
 func (p Profile) ViewsImages() bool {
+	sees, _ := p.VisionSetting()
+	return sees
+}
+
+// VisionSetting is what the profile says about whether its model is sent
+// images, and whether it says anything at all.
+//
+// "vision" set is the answer. Unset, a Claude model is sent images, which
+// every Claude model since the third generation takes, through every
+// provider localcode reaches it by. Any other model is not known from
+// here: known is false, and the caller asks the model itself.
+func (p Profile) VisionSetting() (sees, known bool) {
 	if p.Vision != nil {
-		return *p.Vision
+		return *p.Vision, true
 	}
-	return strings.Contains(strings.ToLower(p.Model), "claude")
+	if IsClaudeModel(p.Model) {
+		return true, true
+	}
+	return false, false
+}
+
+// IsClaudeModel reports whether a model id names a Claude model, through
+// any provider's spelling of it.
+func IsClaudeModel(model string) bool {
+	return strings.Contains(strings.ToLower(model), "claude")
 }
 
 // maxKeepGoing caps keep_going. Ten is already far past the point where a

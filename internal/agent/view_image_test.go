@@ -309,3 +309,75 @@ func TestARequestCarriesTheNewestTwentyImages(t *testing.T) {
 		t.Error("a history within the limit was copied")
 	}
 }
+
+// Twenty images are more than Bedrock takes in bytes once they are big: it
+// refuses a request over 20 MB. The newest that fit in the request's image
+// bytes go; the first that does not fit ends the run, so an older small
+// image is not sent around a newer one left out.
+func TestARequestCarriesNoMoreImageBytesThanAServerTakes(t *testing.T) {
+	const each = 3_000_000
+	var msgs []provider.Message
+	for i := 0; i < 6; i++ {
+		data := make([]byte, each)
+		data[0] = byte(i)
+		msgs = append(msgs, provider.Message{Role: provider.RoleUser, Content: []provider.Block{
+			provider.TextBlock(fmt.Sprintf("shot %d", i)),
+			provider.ImageBlock("image/png", data),
+		}})
+	}
+	// The oldest is small, and still behind the run that was cut.
+	msgs[0].Content[1].Data = []byte{0}
+	sent := asSent(withViewsImages(context.Background(), true), msgs)
+	var kept []int
+	total, notes := 0, 0
+	for i, m := range sent {
+		for _, b := range m.Content {
+			if b.Type == provider.BlockImage {
+				kept = append(kept, i)
+				total += len(b.Data)
+			}
+			if strings.Contains(b.Text, "bytes of them, and newer ones took its place") {
+				notes++
+			}
+		}
+	}
+	if fmt.Sprint(kept) != "[3 4 5]" || notes != 3 || total > provider.MaxImageBytesPerRequest {
+		t.Errorf("kept the images of messages %v (%d bytes) and %d notes; want [3 4 5] and 3", kept, total, notes)
+	}
+	for i, m := range msgs {
+		if m.Content[1].Type != provider.BlockImage {
+			t.Fatalf("the stored history lost message %d's image", i)
+		}
+	}
+}
+
+// An image past what one image may be is left out with its reason,
+// wherever it is in the history, and the rest go as they would.
+func TestAnImageNoServerTakesIsLeftOutOfEveryRequest(t *testing.T) {
+	big := provider.ImageBlock("image/png", make([]byte, provider.MaxImageBytes+1))
+	msgs := []provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("old"), provider.ImageBlock("image/png", testPNG)}},
+		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("big"), big}},
+	}
+	sent := asSent(withViewsImages(context.Background(), true), msgs)
+	if sent[0].Content[1].Type != provider.BlockImage {
+		t.Error("the image that fits was left out")
+	}
+	if got := sent[1].Content[1]; got.Type != provider.BlockText || !strings.Contains(got.Text, "it is 3750001 bytes, over the 3750000 byte limit") {
+		t.Errorf("the oversized image went as %+v", got)
+	}
+}
+
+// A tool's image past the per-image limit is not attached, and the result
+// says why. The snapshot tool checks before this; view_image does too.
+func TestATooBigToolImageIsNotAttached(t *testing.T) {
+	ctx := withViewsImages(context.Background(), true)
+	res := tools.Result{Content: "shot", Images: []provider.Block{provider.ImageBlock("image/png", make([]byte, provider.MaxImageBytes+1))}}
+	used := 0
+	if got := takeImages(ctx, &res, &used); len(got) != 0 || used != 0 {
+		t.Fatalf("attached %d images, %d bytes", len(got), used)
+	}
+	if !res.IsError || !strings.Contains(res.Content, "An image was not attached: it is 3750001 bytes") {
+		t.Errorf("result: %v %q", res.IsError, res.Content)
+	}
+}

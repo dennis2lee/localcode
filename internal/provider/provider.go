@@ -406,6 +406,12 @@ var notVisionRefusal = []string{
 	"canceled", "cancelled", "deadline exceeded",
 	"unauthorized", "access denied", "accessdenied", "expired token",
 	"credentials",
+	// An image the model would take, but not at this size: "image
+	// exceeds 5 MB maximum", "image dimensions exceed max allowed size",
+	// a request over the server's byte limit. Telling the person the
+	// model has no vision would have them switch it off on a model that
+	// has it.
+	"exceed", "too large", "too big", "request_too_large", "many-image",
 }
 
 // isVisionRefusal reports whether err means the model would not take an

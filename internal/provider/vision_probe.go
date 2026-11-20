@@ -1,0 +1,146 @@
+package provider
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"image"
+	"image/color"
+	"image/png"
+	"regexp"
+	"strings"
+	"sync"
+)
+
+// This file asks a model whether it can see, by showing it something.
+//
+// A model's name does not say whether it can. A server names what it
+// serves whatever it likes, and the same family ships with and without
+// vision. A server's model list says nothing about it either: vLLM, the
+// most common thing behind an on-premises endpoint, reports no modality at
+// all. What does answer is the model: shown a red square and asked its
+// colour, a model that sees says red, a server that takes no images
+// refuses the request, and a model that is handed only the text cannot
+// say red except by chance.
+
+// VisionProbe is what a model did with the test image.
+type VisionProbe struct {
+	// Sees is true when the model named the test image's colour.
+	Sees bool
+	// Answer is what the model said, cut short. Empty when the server
+	// refused the image.
+	Answer string
+	// Refused is the server's refusal when it would not take the image.
+	Refused error
+}
+
+// visionProbeQuestion is asked beside the image. One word, so a model
+// that sees has nothing to say but the colour.
+const visionProbeQuestion = "What colour is this image? Answer with one word."
+
+// visionProbeMaxTokens is room for a reasoning model to think before it
+// answers. The probe stops reading as soon as the answer names the colour.
+const visionProbeMaxTokens = 4096
+
+// visionProbeColour matches the answer. A whole word, so "coloured" is not
+// "red".
+var visionProbeColour = regexp.MustCompile(`(?i)\b(red|crimson|scarlet)\b`)
+
+// visionProbeBlind matches an answer that says it saw nothing. Such an
+// answer can still name a colour ("I cannot see an image, so I cannot say
+// whether it is red"), and that is not seeing.
+var visionProbeBlind = regexp.MustCompile(`(?i)(can(no|')t|unable to|do(es)? not|don'?t) (see|view|access|process)|no image`)
+
+// errNoVisionAnswer is a probe the model answered with nothing: a reasoning
+// model that spent its tokens thinking, or a server that ended the stream
+// early. It says nothing about vision either way.
+var errNoVisionAnswer = errors.New("the model gave no answer")
+
+// visionProbeImage is the test image: a 64x64 red square, as PNG. Big
+// enough for the smallest input a vision encoder takes.
+var visionProbeImage = sync.OnceValue(func() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	red := color.RGBA{R: 220, G: 20, B: 20, A: 255}
+	for y := 0; y < 64; y++ {
+		for x := 0; x < 64; x++ {
+			img.SetRGBA(x, y, red)
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		panic(err) // an in-memory encode of a valid image does not fail
+	}
+	return buf.Bytes()
+})
+
+// ProbeVision shows model, through p, a red square and asks its colour.
+//
+// A nil error means the result is an answer: the model named the colour,
+// named something else, or the server refused the image. Any other
+// failure, such as a rate limit, a timeout, a model that is not found or
+// an empty reply, is returned as the error, and says nothing about vision.
+//
+// The request goes through the same adapter as every other, so a probe
+// that passes has also shown that this provider's wire form for an image
+// reaches this server intact.
+func ProbeVision(ctx context.Context, p Provider, model string) (VisionProbe, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stream, err := p.Chat(ctx, ChatRequest{
+		Model:     model,
+		MaxTokens: visionProbeMaxTokens,
+		Messages: []Message{{Role: RoleUser, Content: []Block{
+			ImageBlock("image/png", visionProbeImage()),
+			TextBlock(visionProbeQuestion),
+		}}},
+	})
+	if err != nil {
+		if isVisionRefusal(err) {
+			return VisionProbe{Refused: err}, nil
+		}
+		return VisionProbe{}, err
+	}
+	var answer strings.Builder
+	var streamErr error
+	for ev := range stream {
+		switch ev.Type {
+		case EventTextDelta:
+			answer.WriteString(ev.TextDelta)
+			if seesColour(answer.String()) {
+				// Answered. The rest of a long reply is not needed, and
+				// the stream closes once the request is cancelled.
+				cancel()
+			}
+		case EventError:
+			if streamErr == nil {
+				streamErr = ev.Err
+			}
+		}
+	}
+	said := strings.TrimSpace(answer.String())
+	if seesColour(said) {
+		return VisionProbe{Sees: true, Answer: clipAnswer(said)}, nil
+	}
+	if streamErr != nil {
+		if isVisionRefusal(streamErr) {
+			return VisionProbe{Refused: streamErr}, nil
+		}
+		return VisionProbe{}, streamErr
+	}
+	if said == "" {
+		return VisionProbe{}, errNoVisionAnswer
+	}
+	return VisionProbe{Answer: clipAnswer(said)}, nil
+}
+
+func seesColour(answer string) bool {
+	return visionProbeColour.MatchString(answer) && !visionProbeBlind.MatchString(answer)
+}
+
+func clipAnswer(s string) string {
+	const max = 80
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return s
+}

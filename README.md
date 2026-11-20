@@ -81,7 +81,7 @@ The Windows MSI, the macOS `.app` and the Debian packages are on the [releases p
    }
    ```
 
-   **A local server.** LM Studio listens on `http://localhost:1234/v1`, Ollama on `http://localhost:11434/v1`. `model` is the name the server lists. A model that reads images also needs `"vision": true` on its profile.
+   **A local server.** LM Studio listens on `http://localhost:1234/v1`, Ollama on `http://localhost:11434/v1`. `model` is the name the server lists. A model that reads images is found by a test image on its first turn; `"vision"` on its profile overrules the test.
 
    ```json
    {
