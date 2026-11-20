@@ -245,3 +245,96 @@ func TestAModelThatPassesTheTestImageIsSentImages(t *testing.T) {
 		})
 	}
 }
+
+// A "yes" lasts for the process; a "no" is asked again after an hour,
+// because a refusal is read from an error's words and a server can fail
+// for another reason in words that mention an image.
+func TestANoIsAskedAgainAfterAnHour(t *testing.T) {
+	answers := map[string]provider.VisionProbe{
+		"sees":    {Sees: true, Answer: "red"},
+		"blind":   {Answer: "Blue"},
+		"refuses": {Refused: errors.New("500: failed to process image")},
+	}
+	probe := &visionProbe{reply: func(model string) (provider.VisionProbe, error) { return answers[model], nil }}
+	loop := &Loop{ProbeVision: probe.hook}
+	for model := range answers {
+		loop.seesImages(context.Background(), config.Profile{Provider: "p", Model: model}, "")
+	}
+	loop.mu.Lock()
+	defer loop.mu.Unlock()
+	if until := loop.visionCache["p\x00sees"].until; !until.IsZero() {
+		t.Errorf("a yes expires at %v", until)
+	}
+	for _, model := range []string{"blind", "refuses"} {
+		until := loop.visionCache["p\x00"+model].until
+		if left := time.Until(until); left < visionAskAgainAfter-time.Minute || left > visionAskAgainAfter {
+			t.Errorf("%s: asked again in %v, want an hour", model, left)
+		}
+	}
+}
+
+// A turn refused for carrying an image drops the model's verdict, so the
+// next turn asks again instead of sending images to a server that has
+// stopped taking them. Any other failure leaves it.
+func TestARefusedTurnForgetsTheVerdict(t *testing.T) {
+	probe := &visionProbe{reply: sees("red")}
+	loop := &Loop{ProbeVision: probe.hook}
+	p := config.Profile{Provider: "onprem", Model: "swapped"}
+	loop.seesImages(context.Background(), p, "")
+
+	loop.forgetVisionOnRefusal(p, errors.New("openai-compat endpoint returned 429: rate limit on image requests"))
+	loop.forgetVisionOnRefusal(config.Profile{Provider: "other", Model: "swapped"}, errors.New("this model does not support image input"))
+	loop.seesImages(context.Background(), p, "")
+	if n := probe.count("onprem/swapped"); n != 1 {
+		t.Fatalf("asked %d times after failures that are not this model's refusal", n)
+	}
+
+	loop.forgetVisionOnRefusal(p, errors.New("openai-compat endpoint returned 400: this model does not support image input"))
+	probe.reply = func(string) (provider.VisionProbe, error) {
+		return provider.VisionProbe{Refused: errors.New("does not support image input")}, nil
+	}
+	if got := loop.seesImages(context.Background(), p, ""); got.sees || probe.count("onprem/swapped") != 2 {
+		t.Errorf("after the refusal: %+v, asked %d times", got, probe.count("onprem/swapped"))
+	}
+}
+
+// Through a turn: the request refused for its image fails that turn, and
+// the next turn on the same model asks again and sends a note instead.
+func TestATurnAfterARefusalAsksAgain(t *testing.T) {
+	loop, p, sessionID := imageLoop(t, "swapped-vlm", nil, textReply("ok"))
+	probe := &visionProbe{reply: sees("red")}
+	loop.ProbeVision = probe.hook
+	refusing := &refusingOnce{scriptedProvider: p, err: errors.New("openai-compat endpoint returned 400: this model does not support image input")}
+	loop.Providers["local"] = refusing
+
+	err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "look", provider.ImageBlock("image/png", testPNG))
+	if err == nil || !strings.Contains(err.Error(), "does not support image input") {
+		t.Fatalf("first turn: %v", err)
+	}
+	probe.reply = func(string) (provider.VisionProbe, error) { return provider.VisionProbe{Answer: "Blue"}, nil }
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "and now?"); err != nil {
+		t.Fatalf("second turn: %v", err)
+	}
+	if n := probe.count("local/swapped-vlm"); n != 2 {
+		t.Errorf("asked %d times, want again after the refusal", n)
+	}
+	reqs := requestsOf(p)
+	if last := reqs[len(reqs)-1]; imagesIn(last) != 0 || leftOutNotes(last) != 1 {
+		t.Errorf("the turn after: %d images, %d notes", imagesIn(last), leftOutNotes(last))
+	}
+}
+
+// refusingOnce refuses its first request with err, then answers as the
+// scripted provider does.
+type refusingOnce struct {
+	*scriptedProvider
+	err     error
+	refused atomic.Bool
+}
+
+func (r *refusingOnce) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	if r.refused.CompareAndSwap(false, true) {
+		return nil, r.err
+	}
+	return r.scriptedProvider.Chat(ctx, req)
+}

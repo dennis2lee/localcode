@@ -414,6 +414,11 @@ var notVisionRefusal = []string{
 	"exceed", "too large", "too big", "request_too_large", "many-image",
 }
 
+// IsVisionRefusal reports whether err means the model would not take an
+// image, for a caller outside this package that has to act on it. See
+// isVisionRefusal.
+func IsVisionRefusal(err error) bool { return isVisionRefusal(err) }
+
 // isVisionRefusal reports whether err means the model would not take an
 // image. A function of the error alone -- no network, no model -- so a
 // test drives it with any error value.

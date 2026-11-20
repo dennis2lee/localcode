@@ -402,6 +402,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		stream, err := run.client.Chat(ctx, req)
 		if err != nil {
 			l.traceModel(ctx, traceID, sessionID, trRun, streamUsage{}, "", time.Since(callStarted), err)
+			l.forgetVisionOnRefusal(run.profile, err)
 			// Too long is a recoverable condition, not an error to hand
 			// back: compacting is exactly what the session needs and what
 			// the user would have to do by hand anyway. Reported in the
@@ -544,6 +545,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			})
 		}
 		if err != nil {
+			l.forgetVisionOnRefusal(run.profile, err)
 			// A stream that died before saying anything can be asked
 			// again elsewhere. One that had already written into the
 			// transcript cannot: the conversation would end up carrying a

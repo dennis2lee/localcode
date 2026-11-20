@@ -43,6 +43,14 @@ const visionProbeTimeout = 30 * time.Second
 // before a later turn asks again.
 const visionRetryAfter = 5 * time.Minute
 
+// visionAskAgainAfter is how long a "no" is remembered: a wrong answer, or
+// a refusal. Not for the process, as a "yes" is, because a refusal is read
+// from the error's words, and a server that failed for another reason in
+// words that mention an image would otherwise keep images from a model
+// that can see until localcode restarts. One small request an hour is the
+// price.
+const visionAskAgainAfter = time.Hour
+
 // seesImages is whether the model profile runs, with modelOverride in
 // place of its model, is sent images. It asks the model when nothing else
 // can say, and waits for that answer.
@@ -132,10 +140,32 @@ func (l *Loop) probeVision(ctx context.Context, profile config.Profile) visionEn
 	case probe.Sees:
 		return visionEntry{verdict: visionVerdict{sees: true, why: fmt.Sprintf("it named the colour of a test image (%q)", probe.Answer)}}
 	case probe.Refused != nil:
-		return visionEntry{verdict: visionVerdict{why: "its server refused a test image (" + firstLine(probe.Refused.Error()) + ")"}}
+		return visionEntry{
+			verdict: visionVerdict{why: "its server refused a test image (" + firstLine(probe.Refused.Error()) + ")"},
+			until:   time.Now().Add(visionAskAgainAfter),
+		}
 	default:
-		return visionEntry{verdict: visionVerdict{why: fmt.Sprintf("it did not name the colour of a test image (it said %q)", probe.Answer)}}
+		return visionEntry{
+			verdict: visionVerdict{why: fmt.Sprintf("it did not name the colour of a test image (it said %q)", probe.Answer)},
+			until:   time.Now().Add(visionAskAgainAfter),
+		}
 	}
+}
+
+// forgetVisionOnRefusal drops what the test image said about the model of
+// profile when a turn's request to it was refused for carrying an image.
+// The server is the authority, and a server can stop taking images under
+// a model name that took them, as a local one does when another model is
+// loaded under the same name. The next turn asks again, and a model that
+// now refuses is sent notes in place of images, so the conversation goes
+// on rather than failing until localcode restarts.
+func (l *Loop) forgetVisionOnRefusal(profile config.Profile, err error) {
+	if !provider.IsVisionRefusal(err) {
+		return
+	}
+	l.mu.Lock()
+	delete(l.visionCache, profile.Provider+"\x00"+profile.Model)
+	l.mu.Unlock()
 }
 
 // ProbeVisionWith is the ProbeVision hook for a set of providers: the

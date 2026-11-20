@@ -2162,8 +2162,15 @@ The profile's `vision` key decides, and a model it leaves unset is asked.
 | Unset, id contains `claude` | Yes. Nothing is asked. |
 | Unset, any other id | Shown a test image the first time a turn runs on it (a 64x64 red square, asked "What colour is this image?"). Sent images when it answers red. Not sent images when it answers otherwise or its server refuses the image. |
 
-* **The test image** goes through the same provider and model as the turn, as one small request without tools. The answer is kept per provider and model until localcode restarts.
-* **A test image with no answer** (an error, an empty reply, or 30 seconds without one) leaves the model unsent images for that turn. It is asked again after five minutes.
+* **The test image** goes through the same provider and model as the turn, as one small request without tools. It is not counted in `/usage`. The answer is kept per provider and model.
+
+| Answer | Kept for |
+|---|---|
+| Names the colour | Until localcode restarts |
+| Another answer, or the server refuses the image | One hour, then the model is asked again |
+| No answer (an error, an empty reply, or 30 seconds without one) | Five minutes. The model is not sent images meanwhile. |
+| Any, when a turn's request to the model is refused for carrying an image | Cleared. The next turn asks again. |
+
 * **A model that is not sent images:** each image is replaced by a note to the model saying an image was there. The transcript shows a notice naming the model, the reason (for example its answer to the test image), and the profile to change.
 * **Images already in the conversation:** the same rule applies on every request. A conversation moved with `/model` to a model that cannot see goes on, and moving back sends the images again.
 * **A model that is sent images and refuses them:** the turn fails with a hint to set `"vision": false` on its profile or to switch with `/model`. Sending the message again does not help, because the image is in the conversation. A refusal about an image's size is not read as a model without vision, and has no such hint.
