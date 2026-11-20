@@ -1,7 +1,7 @@
 import {
   leftPanel, rightPanel, browserPanel, centerEl,
   resizeLeftHandle, resizeRightHandle, resizeBrowserHandle,
-  toggleLeftBtn, toggleRightBtn,
+  toggleLeftBtn, toggleRightBtn, toggleBrowserBtn,
 } from './dom.js';
 
 // Every panel is a flex item with a fixed width, so resizing is just
@@ -71,7 +71,7 @@ const widthOf = (el) => Number(el && el.offsetWidth) || 0;
 // panels.
 function roomFor(panel) {
   let room = Math.max(0, widthOf(centerEl) - CENTER_MIN);
-  if (browserPanel && panel !== browserPanel && !browserPanel.hidden) {
+  if (browserPanel && panel !== browserPanel && !browserPanel.hidden && !browserPanel.classList.contains('collapsed')) {
     room += Math.max(0, widthOf(browserPanel) - BROWSER_BOUNDS.min);
   }
   return room;
@@ -171,9 +171,10 @@ function attachToggle(btn, panel, handle, key) {
   });
 }
 
-// The browser panel has no toggle of its own: it is shown while the
-// browser setting is on in the desktop window, and js/browser.js shows and
-// hides it with its handle.
+// The browser panel is there while the browser setting is on in the
+// desktop window: js/browser.js shows it and its handle, and its header
+// button, then. That button collapses it like the side panels' toggles
+// do, and the choice is remembered with theirs.
 export function initResizers() {
   const saved = readStored();
   if (typeof saved.left === 'number') setPanelWidth(leftPanel, saved.left);
@@ -181,9 +182,11 @@ export function initResizers() {
   if (typeof saved.browser === 'number' && browserPanel) setPanelWidth(browserPanel, saved.browser, BROWSER_BOUNDS);
   setCollapsed(leftPanel, resizeLeftHandle, saved.leftCollapsed === true);
   setCollapsed(rightPanel, resizeRightHandle, saved.rightCollapsed === true);
+  setCollapsed(browserPanel, resizeBrowserHandle, saved.browserCollapsed === true);
   attach(resizeLeftHandle, leftPanel, 'left', 'left', SIDE_BOUNDS);
   attach(resizeRightHandle, rightPanel, 'right', 'right', SIDE_BOUNDS);
   attach(resizeBrowserHandle, browserPanel, 'right', 'browser', BROWSER_BOUNDS);
   attachToggle(toggleLeftBtn, leftPanel, resizeLeftHandle, 'leftCollapsed');
   attachToggle(toggleRightBtn, rightPanel, resizeRightHandle, 'rightCollapsed');
+  attachToggle(toggleBrowserBtn, browserPanel, resizeBrowserHandle, 'browserCollapsed');
 }

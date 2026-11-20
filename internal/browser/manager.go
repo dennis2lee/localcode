@@ -81,18 +81,60 @@ func (m *Manager) dropAll() {
 	m.convs = map[string]*convTabs{}
 }
 
-// convTabs is a conversation's pages: the one it works in is the last. A
-// link that opens a new tab pushes it; closing that tab pops it.
+// convTabs is a conversation's pages, in the order they were opened, and
+// the one it works in: the one the model's browser tool acts on and the
+// panel shows. A tab a link opens, or one the person opens in the panel,
+// is added and becomes the active one. Closing the active tab makes the
+// one before it active, so a page a link opened goes back to its opener.
 type convTabs struct {
-	stack   []*Tab
-	changed chan struct{} // closed when the current tab changes
+	tabs    []*Tab
+	active  int
+	changed chan struct{} // closed when the active tab changes
 }
 
 func (c *convTabs) current() *Tab {
-	if len(c.stack) == 0 {
+	if len(c.tabs) == 0 {
 		return nil
 	}
-	return c.stack[len(c.stack)-1]
+	return c.tabs[c.active]
+}
+
+// notify tells whoever is watching the active tab that it changed.
+func (c *convTabs) notify() {
+	close(c.changed)
+	c.changed = make(chan struct{})
+}
+
+// add appends t and makes it the active tab.
+func (c *convTabs) add(t *Tab) {
+	c.tabs = append(c.tabs, t)
+	c.active = len(c.tabs) - 1
+	c.notify()
+}
+
+// remove takes out the tab at i. Removing the active one makes the one
+// before it active (the first one, when it was the first).
+func (c *convTabs) remove(i int) {
+	c.tabs = append(c.tabs[:i], c.tabs[i+1:]...)
+	switch {
+	case i < c.active:
+		c.active--
+	case i == c.active:
+		if c.active > 0 {
+			c.active--
+		}
+		c.notify()
+	}
+}
+
+// index is where the tab with targetID is in c, or -1.
+func (c *convTabs) index(targetID string) int {
+	for i, t := range c.tabs {
+		if t.targetID == targetID {
+			return i
+		}
+	}
+	return -1
 }
 
 // NewManager returns a manager that starts nothing until a tab is asked
@@ -130,8 +172,108 @@ func (m *Manager) Tab(ctx context.Context, conv string) (*Tab, error) {
 	if err != nil {
 		return nil, err
 	}
-	m.convs[conv] = &convTabs{stack: []*Tab{t}, changed: make(chan struct{})}
+	m.convs[conv] = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
 	return t, nil
+}
+
+// TabInfo is one of a conversation's tabs, for the panel's tab strip.
+type TabInfo struct {
+	ID     string `json:"id"`
+	URL    string `json:"url"`
+	Title  string `json:"title"`
+	Active bool   `json:"active"`
+}
+
+// ErrNoSuchTab is a tab id the conversation does not have (any more).
+var ErrNoSuchTab = errors.New("this conversation has no such browser tab")
+
+// Tabs lists conv's tabs in the order they were opened. Nil when it has
+// none or the browser has gone away.
+func (m *Manager) Tabs(ctx context.Context, conv string) []TabInfo {
+	m.mu.Lock()
+	var tabs []*Tab
+	active := 0
+	if c := m.convs[conv]; c != nil && m.alive() {
+		tabs = append(tabs, c.tabs...)
+		active = c.active
+	}
+	m.mu.Unlock()
+	if len(tabs) == 0 {
+		return nil
+	}
+	out := make([]TabInfo, len(tabs))
+	for i, t := range tabs {
+		loc, _ := t.Location(ctx)
+		out[i] = TabInfo{ID: t.targetID, URL: loc.URL, Title: loc.Title, Active: i == active}
+	}
+	return out
+}
+
+// NewTab opens an empty tab for conv and makes it the active one, starting
+// the browser if it is not running.
+func (m *Manager) NewTab(ctx context.Context, conv string) (*Tab, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensureRunning(ctx); err != nil {
+		return nil, err
+	}
+	t, err := openTab(ctx, m.proc.conn)
+	if err != nil {
+		return nil, err
+	}
+	if c := m.convs[conv]; c != nil {
+		c.add(t)
+	} else {
+		m.convs[conv] = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
+	}
+	return t, nil
+}
+
+// ActivateTab makes conv's tab id the one it works in.
+func (m *Manager) ActivateTab(conv, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := m.convs[conv]
+	if c == nil {
+		return ErrNoSuchTab
+	}
+	i := c.index(id)
+	if i < 0 {
+		return ErrNoSuchTab
+	}
+	if i != c.active {
+		c.active = i
+		c.notify()
+	}
+	return nil
+}
+
+// CloseTabID closes conv's tab id. When it was the active one, the tab
+// before it becomes active; when it was the last, conv has none.
+func (m *Manager) CloseTabID(ctx context.Context, conv, id string) error {
+	m.mu.Lock()
+	c := m.convs[conv]
+	if c == nil {
+		m.mu.Unlock()
+		return ErrNoSuchTab
+	}
+	i := c.index(id)
+	if i < 0 {
+		m.mu.Unlock()
+		return ErrNoSuchTab
+	}
+	t := c.tabs[i]
+	c.remove(i)
+	if len(c.tabs) == 0 {
+		delete(m.convs, conv)
+		close(c.changed)
+	}
+	if m.proc != nil {
+		m.proc.conn.Forget(t.session)
+	}
+	m.mu.Unlock()
+	t.close(ctx)
+	return nil
 }
 
 // Existing returns conv's tab if it has one, without starting anything.
@@ -289,14 +431,14 @@ func (m *Manager) adopt(p *process, openerID, targetID string) {
 		return
 	}
 	for _, c := range m.convs {
-		if cur := c.current(); cur != nil && cur.targetID == openerID {
+		// Opened from any of a conversation's tabs, not only the active one:
+		// a page in a tab the person switched away from can still open one.
+		if c.index(openerID) >= 0 {
 			t, err := attachTab(ctx, p.conn, targetID)
 			if err != nil {
 				return
 			}
-			c.stack = append(c.stack, t)
-			close(c.changed)
-			c.changed = make(chan struct{})
+			c.add(t)
 			return
 		}
 	}
@@ -307,24 +449,20 @@ func (m *Manager) forget(targetID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for conv, c := range m.convs {
-		for i, t := range c.stack {
-			if t.targetID != targetID {
-				continue
-			}
-			wasCurrent := i == len(c.stack)-1
-			c.stack = append(c.stack[:i], c.stack[i+1:]...)
-			if m.proc != nil {
-				m.proc.conn.Forget(t.session)
-			}
-			if len(c.stack) == 0 {
-				delete(m.convs, conv)
-			}
-			if wasCurrent {
-				close(c.changed)
-				c.changed = make(chan struct{})
-			}
-			return
+		i := c.index(targetID)
+		if i < 0 {
+			continue
 		}
+		t := c.tabs[i]
+		c.remove(i)
+		if m.proc != nil {
+			m.proc.conn.Forget(t.session)
+		}
+		if len(c.tabs) == 0 {
+			delete(m.convs, conv)
+			close(c.changed)
+		}
+		return
 	}
 }
 
@@ -339,7 +477,7 @@ func (m *Manager) CloseTab(conv string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	for _, t := range c.stack {
+	for _, t := range c.tabs {
 		t.close(ctx)
 	}
 	close(c.changed)

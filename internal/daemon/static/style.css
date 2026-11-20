@@ -867,9 +867,29 @@ aside.left {
   flex-shrink: 100;
 }
 #browser-panel[hidden], #resize-browser[hidden] { display: none; }
-main:has(> #browser-panel:not([hidden])) > #center { min-width: 280px; }
-main:has(> #browser-panel:not([hidden])) > :is(#left-panel, #right-panel) { flex-shrink: 1; min-width: 160px; }
-.browser-bar { display: flex; gap: 4px; align-items: center; margin: 10px 0 8px; }
+main:has(> #browser-panel:not([hidden]):not(.collapsed)) > #center { min-width: 280px; }
+main:has(> #browser-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #right-panel) { flex-shrink: 1; min-width: 160px; }
+#toggle-browser[hidden] { display: none; }
+/* The conversation's tabs, above the address bar. Each is its title, cut
+   to the room there is, and its own close button; the strip scrolls
+   sideways once they no longer fit at their narrowest. */
+.browser-tabs { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
+.browser-tab-list { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
+.browser-tab {
+  display: flex; align-items: center; flex: 0 1 180px; min-width: 72px;
+  border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--bg);
+}
+.browser-tab.active { background: var(--raised); border-color: var(--interactive); }
+.browser-tab-open {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: transparent; border: 0; color: var(--muted); font: inherit; font-size: var(--t-ui);
+  padding: 2px 2px 2px 8px; text-align: left;
+}
+.browser-tab.active .browser-tab-open { color: var(--text); }
+.browser-tab-close { background: transparent; border: 0; color: var(--faint); padding: 0 6px; font-size: 14px; line-height: 1; }
+.browser-tab-close:hover { color: var(--text); }
+.browser-tab-new { padding: 2px 6px; }
+.browser-bar { display: flex; gap: 4px; align-items: center; margin: 6px 0 8px; }
 .browser-bar .browser-nav { padding: 2px 6px; }
 .ico-flip { transform: scaleX(-1); }
 #browser-url {

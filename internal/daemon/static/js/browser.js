@@ -35,6 +35,8 @@ let tabSeenAt = 0;       // when a location poll of this visit first found a tab
 let visitHadTab = false; // a location poll of this visit found a tab
 let navSeq = 0;          // address bar requests made, so only the newest one's answer is used
 let navAnswers = 0;      // address bar answers used, so a poll asked before one is dropped
+let tabsDrawn = '';      // the tab strip as last drawn, so a poll that changes nothing redraws nothing
+let activeTab = '';      // the id of the tab the view shows
 
 // visit counts the panel's showings of a conversation: it moves on when
 // the stream is pointed at a conversation and when the panel is hidden.
@@ -209,6 +211,71 @@ function reconnect(delay) {
   }, delay);
 }
 
+// drawTabs draws the conversation's tabs: each a button that makes it the
+// active one, with an "x" that closes it. Built with elements, never with
+// markup: a tab's title is whatever the page it shows calls itself.
+function drawTabs(tabs) {
+  const list = el('browser-tab-list');
+  if (!list) return;
+  const key = JSON.stringify(tabs.map((t) => [t.id, t.title, t.url, t.active]));
+  if (key === tabsDrawn) return;
+  tabsDrawn = key;
+  list.innerHTML = '';
+  for (const t of tabs) {
+    // A tab with no page calls itself "about:blank"; it is a new tab.
+    const blank = !t.url || t.url === 'about:blank';
+    const label = blank ? 'New tab' : (t.title && t.title !== 'about:blank' ? t.title : t.url);
+    const tab = document.createElement('div');
+    tab.className = t.active ? 'browser-tab active' : 'browser-tab';
+    const open = document.createElement('button');
+    open.className = 'browser-tab-open';
+    open.textContent = label;
+    open.title = blank ? label : `${label}\n${t.url}`;
+    open.addEventListener('click', () => tabAction('POST', `tabs/${encodeURIComponent(t.id)}/activate`));
+    const close = document.createElement('button');
+    close.className = 'browser-tab-close';
+    close.textContent = '×';
+    close.title = 'close this tab';
+    close.addEventListener('click', (e) => {
+      if (e.stopPropagation) e.stopPropagation();
+      tabAction('DELETE', `tabs/${encodeURIComponent(t.id)}`);
+    });
+    tab.appendChild(open);
+    tab.appendChild(close);
+    list.appendChild(tab);
+  }
+}
+
+// tabAction is a click on the tab strip: open a tab, switch to one or
+// close one. The answer is the conversation's tabs, drawn if the panel is
+// still on the visit it was asked in; the location poll then follows the
+// active tab.
+async function tabAction(method, path) {
+  const id = session.sessionID;
+  if (!id) return;
+  const asked = visit;
+  try {
+    const res = await api(method, `/api/sessions/${id}/browser/${path}`);
+    if (asked !== visit || id !== session.sessionID) return;
+    if (res && Array.isArray(res.tabs)) {
+      drawTabs(res.tabs);
+      // The person just chose the tab shown: its address goes in the bar
+      // now, focus or not, before "+" hands the bar the focus and before a
+      // poll, which leaves a focused bar alone, could.
+      const a = res.tabs.find((t) => t.active);
+      if (a && a.id !== activeTab) {
+        activeTab = a.id;
+        const url = el('browser-url');
+        if (url) url.value = a.url && a.url !== 'about:blank' ? a.url : '';
+      }
+    }
+  } catch {
+    // A tab that closed by itself in the meantime: the poll below says
+    // what is there now.
+  }
+  if (asked === visit) refreshLocation();
+}
+
 async function refreshLocation() {
   if (!browserShown()) return;
   const id = session.sessionID;
@@ -226,6 +293,16 @@ async function refreshLocation() {
       reconnect(0);
     }
     showEmpty(!!st.has_tab);
+    const tabs = st.has_tab && Array.isArray(st.tabs) ? st.tabs : [];
+    drawTabs(tabs);
+    const active = (tabs.find((t) => t.active) || {}).id || '';
+    const url = el('browser-url');
+    if (active !== activeTab) {
+      // Another tab is the one shown now: its address, not the last one's,
+      // and none for a tab with no page yet.
+      activeTab = active;
+      if (url && document.activeElement !== url) url.value = st.url && st.url !== 'about:blank' ? st.url : '';
+    }
     if (!st.has_tab) {
       if (visitHadTab) tabGone();
       tabSeenAt = 0;
@@ -235,7 +312,6 @@ async function refreshLocation() {
     } else if (Date.now() - tabSeenAt >= STALE_FALLBACK_MS) {
       setStale(false);
     }
-    const url = el('browser-url');
     // Not while the person is typing an address into it.
     if (url && document.activeElement !== url && st.url && st.url !== 'about:blank') url.value = st.url;
   } catch {
@@ -251,6 +327,8 @@ function newVisit() {
   visit += 1;
   tabSeenAt = 0;
   visitHadTab = false;
+  activeTab = '';
+  drawTabs([]);
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -285,6 +363,11 @@ export function renderBrowserPanel() {
   panel.hidden = !shown;
   const handle = el('resize-browser');
   if (handle) handle.hidden = !shown;
+  const toggle = el('toggle-browser');
+  if (toggle) {
+    toggle.hidden = !shown;
+    toggle.setAttribute('aria-expanded', String(!panel.classList.contains('collapsed')));
+  }
   if (!shown) {
     if (streamFor !== null) {
       newVisit();
@@ -366,6 +449,12 @@ export function initBrowserPanel() {
     if (target) navigate({ url: target });
   });
   el('browser-back')?.addEventListener('click', () => navigate({ action: 'back' }));
+  // A new tab is empty; the address bar is where its page is chosen, so it
+  // gets the focus.
+  el('browser-tab-new')?.addEventListener('click', async () => {
+    await tabAction('POST', 'tabs');
+    url.focus();
+  });
   el('browser-forward')?.addEventListener('click', () => navigate({ action: 'forward' }));
   el('browser-reload')?.addEventListener('click', () => navigate({ action: 'reload' }));
 
@@ -373,10 +462,26 @@ export function initBrowserPanel() {
   // the window where the view can say where it is, so a drag that leaves
   // the view still lands on the page's edge; from the event's own offset
   // otherwise.
+  //
+  // The pointer's place and the view's rectangle are in the window's
+  // pixels; the view's border and inner size (clientLeft, clientWidth)
+  // are in the page's own layout pixels. The two differ by the zoom the
+  // page applies to itself (js/zoom.js, a CSS zoom on the root), so every
+  // click on a zoomed page landed that factor away from where it was
+  // aimed: at 125%, a click on (1000, 600) reached (1257, 757), and a
+  // field the person clicked never got the focus their typing needed. The
+  // layout sizes are scaled into the window's pixels before dividing.
   const point = (e) => {
     if (typeof view.getBoundingClientRect === 'function' && typeof e.clientX === 'number') {
       const r = view.getBoundingClientRect();
-      return pagePoint(e.clientX - r.left - (view.clientLeft || 0), e.clientY - r.top - (view.clientTop || 0), view.clientWidth, view.clientHeight);
+      const kx = view.offsetWidth > 0 ? r.width / view.offsetWidth : 1;
+      const ky = view.offsetHeight > 0 ? r.height / view.offsetHeight : kx;
+      return pagePoint(
+        e.clientX - r.left - (view.clientLeft || 0) * kx,
+        e.clientY - r.top - (view.clientTop || 0) * ky,
+        view.clientWidth * kx,
+        view.clientHeight * ky,
+      );
     }
     return pagePoint(e.offsetX, e.offsetY, view.clientWidth, view.clientHeight);
   };

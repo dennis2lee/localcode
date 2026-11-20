@@ -493,7 +493,7 @@ func TestTheDefaultWindowHoldsEveryPanelWithTheBrowser(t *testing.T) {
 		}
 		return n
 	}
-	const shown = `main:has\(> #browser-panel:not\(\[hidden\]\)\) > `
+	const shown = `main:has\(> #browser-panel:not\(\[hidden\]\):not\(\.collapsed\)\) > `
 	winW := num("the window's default width", `winW\s*=\s*(\d+)`, src)
 	handle := num("a handle's width", `\.resizer \{\s*flex: 0 0 (\d+)px`, css)
 	browser := num("the browser panel's minimum", `#browser-panel \{[^}]*min-width: (\d+)px`, css)

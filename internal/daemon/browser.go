@@ -215,8 +215,62 @@ func (d *Daemon) handleBrowserState(w http.ResponseWriter, r *http.Request) {
 		if loc, err := tab.Location(ctx); err == nil {
 			out["url"], out["title"] = loc.URL, loc.Title
 		}
+		// Every tab, for the panel's tab strip: the active one is the tab
+		// above.
+		out["tabs"] = d.Browser.Tabs(ctx, id)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleBrowserNewTab opens an empty tab for the conversation and makes it
+// the one it works in: the panel's "+". A page opens in it from the
+// address bar, through the same navigate as any other, so the deny rules
+// hold for it as they do everywhere.
+func (d *Daemon) handleBrowserNewTab(w http.ResponseWriter, r *http.Request) {
+	id, ok := d.browserOn(w, r)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	if _, err := d.Browser.NewTab(ctx, id); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tabs": d.Browser.Tabs(ctx, id)})
+}
+
+// handleBrowserActivateTab makes one of the conversation's tabs the one it
+// works in: a click on its tab in the panel. The model's browser tool acts
+// on it from then on, and the panel's stream shows it.
+func (d *Daemon) handleBrowserActivateTab(w http.ResponseWriter, r *http.Request) {
+	id, ok := d.browserOn(w, r)
+	if !ok {
+		return
+	}
+	if err := d.Browser.ActivateTab(id, r.PathValue("tab")); err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, map[string]any{"tabs": d.Browser.Tabs(ctx, id)})
+}
+
+// handleBrowserCloseTab closes one of the conversation's tabs: its "x" in
+// the panel. Closing the active tab makes the one before it active.
+func (d *Daemon) handleBrowserCloseTab(w http.ResponseWriter, r *http.Request) {
+	id, ok := d.browserOn(w, r)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := d.Browser.CloseTabID(ctx, id, r.PathValue("tab")); err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tabs": d.Browser.Tabs(ctx, id)})
 }
 
 // handleBrowserNavigate is the panel's address bar and its back, forward

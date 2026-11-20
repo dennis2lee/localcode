@@ -115,6 +115,9 @@
     <path d="M8.85 2.6 14.6 12.4a1 1 0 0 1-.86 1.5H2.26a1 1 0 0 1-.86-1.5L7.15 2.6a1 1 0 0 1 1.7 0Z"/>
     <path d="M8 6.25v3.1M8 11.5h.01"/>
   </symbol>
+  <symbol id="i-globe" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="8" cy="8" r="5.75"/><path d="M2.25 8h11.5M8 2.25c1.6 1.6 2.4 3.5 2.4 5.75S9.6 12.15 8 13.75M8 2.25C6.4 3.85 5.6 5.75 5.6 8s.8 4.15 2.4 5.75"/>
+  </symbol>
   <symbol id="i-server" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
     <rect x="2.25" y="2.75" width="11.5" height="4.5" rx="1"/><rect x="2.25" y="8.75" width="11.5" height="4.5" rx="1"/>
     <path d="M4.75 5h.01M4.75 11h.01"/>
@@ -171,6 +174,10 @@
   <div class="right">
     <select class="agent-select" id="agent-select" title="switch agent"></select>
     <span class="session-id" id="session-id">connecting…</span>
+    <!-- Hides the browser panel and shows it again. There only while the
+         panel is: in the desktop window with the browser on. Hiding it
+         keeps its page running, so the model keeps the browser. -->
+    <button class="panel-toggle" id="toggle-browser" title="show/hide the browser panel" hidden><svg class="ico"><use href="#i-globe"/></svg></button>
     <button class="panel-toggle" id="toggle-right" title="show/hide the tasks and MCP panel"><svg class="ico"><use href="#i-drawer"/></svg></button>
   </div>
 </header>
@@ -289,6 +296,12 @@
   <aside id="browser-panel" hidden>
     <div class="side-section">
       <h2>Browser</h2>
+      <!-- The conversation's tabs. A click on one makes it the one the
+           model and the view work in; "x" closes it, "+" opens another. -->
+      <div class="browser-tabs" id="browser-tabs">
+        <div class="browser-tab-list" id="browser-tab-list"></div>
+        <button class="icon-btn browser-tab-new" id="browser-tab-new" title="open a new tab"><svg class="ico ico-12"><use href="#i-plus"/></svg></button>
+      </div>
       <div class="browser-bar">
         <button class="icon-btn browser-nav" id="browser-back" title="back"><svg class="ico ico-flip"><use href="#i-chev-r"/></svg></button>
         <button class="icon-btn browser-nav" id="browser-forward" title="forward"><svg class="ico"><use href="#i-chev-r"/></svg></button>

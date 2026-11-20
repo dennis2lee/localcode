@@ -542,6 +542,31 @@ test('a drag tells the page the button is held, and ends where the pointer left 
   assert.equal(app.callsTo('POST', '/api/sessions/sess-1/browser/input').length, 3);
 });
 
+// The page zooms itself (js/zoom.js, a CSS zoom on the root). The view's
+// rectangle and the pointer are then in the window's pixels and its
+// border and inner size in the page's layout pixels, larger by the zoom.
+// A click lands where it was aimed whatever the zoom.
+test('a click on a zoomed page lands where it was aimed', async () => {
+  const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
+  const view = app.el('browser-view');
+  const zoom = 1.25;
+  view.style.width = '642px';
+  view.clientWidth = 640;
+  view.clientHeight = 400;
+  view.clientLeft = 1;
+  view.clientTop = 1;
+  view.getBoundingClientRect = () => ({ left: 100, top: 50, width: 642 * zoom, height: 402 * zoom });
+  // Where page point (1000, 600) is drawn in the window.
+  const x = 100 + 1 * zoom + 1000 * (640 * zoom / 1280);
+  const y = 50 + 1 * zoom + 600 * (400 * zoom / 800);
+  view.fire('mousedown', { clientX: x, clientY: y, button: 0, buttons: 1, detail: 1 });
+  app.fireWindow('mouseup', { clientX: x, clientY: y, button: 0, buttons: 0, detail: 1 });
+  await app.settle();
+  const sent = app.callsTo('POST', '/api/sessions/sess-1/browser/input').map((c) => c.body.mouse);
+  assert.deepEqual([sent[0].type, sent[0].x, sent[0].y], ['mousePressed', 1000, 600],
+    'the click landed the zoom factor away from where it was aimed');
+});
+
 test('input reaches the daemon one request at a time, in order', async () => {
   let release;
   const gate = new Promise((r) => { release = r; });
@@ -719,4 +744,129 @@ test('the settings switch is in the desktop window only, and tells the daemon', 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].body.enabled, true);
   assert.equal(app.el('browser-panel').hidden, false, 'turning it on did not draw the panel');
+});
+
+// The conversation's tabs, from the location answer: a click on one
+// switches to it, its "x" closes it, "+" opens another and hands the
+// address bar the focus.
+const withTabs = (tabs, extra = {}) => ({
+  ...settingsWith({ browser: true }),
+  'GET /api/sessions/*/browser': () => {
+    const active = tabs.find((t) => t.active);
+    return { has_tab: tabs.length > 0, url: active ? active.url : undefined, title: active ? active.title : undefined, tabs };
+  },
+  ...extra,
+});
+
+test('the panel draws the conversation\'s tabs, the active one marked', async () => {
+  const tabs = [
+    { id: 't1', url: 'https://one.example/', title: 'One', active: false },
+    { id: 't2', url: 'about:blank', title: 'about:blank', active: true },
+  ];
+  const app = await load({ globals: { lcGUI: true }, routes: withTabs(tabs) });
+  const drawn = app.el('browser-tab-list').querySelectorAll('.browser-tab');
+  assert.equal(drawn.length, 2);
+  assert.equal(drawn[0].querySelector('.browser-tab-open').textContent, 'One');
+  assert.equal(drawn[1].querySelector('.browser-tab-open').textContent, 'New tab');
+  assert.ok(!drawn[0].classList.contains('active') && drawn[1].classList.contains('active'));
+  // The active tab has no page, so the address bar is empty.
+  assert.equal(app.el('browser-url').value, '');
+});
+
+test('a click on a tab switches to it, its x closes it, and + opens one', async () => {
+  const tabs = [
+    { id: 't1', url: 'https://one.example/', title: 'One', active: true },
+    { id: 't2', url: 'https://two.example/', title: 'Two', active: false },
+  ];
+  const answer = () => ({ tabs });
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: withTabs(tabs, {
+      'POST /api/sessions/*/browser/tabs': answer,
+      'POST /api/sessions/*/browser/tabs/*/activate': answer,
+      'DELETE /api/sessions/*/browser/tabs/*': answer,
+    }),
+  });
+  const tab = (i) => app.el('browser-tab-list').querySelectorAll('.browser-tab')[i];
+  tab(1).querySelector('.browser-tab-open').click();
+  await app.settle();
+  assert.equal(app.callsTo('POST', '/api/sessions/sess-1/browser/tabs/t2/activate').length, 1);
+
+  tab(0).querySelector('.browser-tab-close').click();
+  await app.settle();
+  assert.equal(app.callsTo('DELETE', '/api/sessions/sess-1/browser/tabs/t1').length, 1);
+  assert.equal(app.callsTo('POST', /\/browser\/tabs\/[^/]+\/activate$/).length, 1, 'the x also switched to the tab it closes');
+
+  app.el('browser-tab-new').click();
+  await app.settle();
+  assert.equal(app.callsTo('POST', '/api/sessions/sess-1/browser/tabs').length, 1);
+  assert.equal(app.doc.activeElement, app.el('browser-url'), 'the new tab\'s address is not where the focus went');
+});
+
+test('the address bar follows the active tab', async () => {
+  const tabs = [
+    { id: 't1', url: 'https://one.example/', title: 'One', active: true },
+    { id: 't2', url: 'https://two.example/', title: 'Two', active: false },
+  ];
+  const app = await load({ globals: { lcGUI: true }, routes: withTabs(tabs) });
+  assert.equal(app.el('browser-url').value, 'https://one.example/');
+  tabs[0].active = false;
+  tabs[1].active = true;
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  assert.equal(app.el('browser-url').value, 'https://two.example/');
+  tabs.push({ id: 't3', url: 'about:blank', title: '', active: true });
+  tabs[1].active = false;
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  assert.equal(app.el('browser-url').value, '', 'a new tab showed the last tab\'s address');
+});
+
+// The header button hides the panel and shows it again. It is there only
+// while the panel is, and hiding keeps the page running: the stream stays
+// open, so the model keeps the browser.
+test('the header button hides and shows the browser panel, and is there only with it', async () => {
+  const off = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: false }) });
+  assert.equal(off.el('toggle-browser').hidden, true);
+
+  const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
+  const toggle = app.el('toggle-browser');
+  assert.equal(toggle.hidden, false);
+  toggle.click();
+  assert.ok(app.el('browser-panel').classList.contains('collapsed'));
+  assert.ok(app.el('resize-browser').classList.contains('collapsed'));
+  assert.equal(app.el('browser-view').getAttribute('src'), '/api/sessions/sess-1/browser/stream',
+    'hiding the panel closed its stream, and with it the model\'s browser');
+  assert.equal(JSON.parse(app.storage.get('localcode.panelWidths')).browserCollapsed, true);
+
+  const reopened = await load({
+    globals: { lcGUI: true },
+    routes: settingsWith({ browser: true }),
+    localStorage: { 'localcode.panelWidths': JSON.stringify({ browserCollapsed: true }) },
+  });
+  assert.ok(reopened.el('browser-panel').classList.contains('collapsed'));
+  reopened.el('toggle-browser').click();
+  assert.ok(!reopened.el('browser-panel').classList.contains('collapsed'));
+});
+
+// "+" hands the address bar the focus for the new tab's page. The bar is
+// emptied first: a poll leaves a focused bar alone, and what is typed
+// would otherwise be added to the last tab's address.
+test('a new tab\'s address bar is empty when it gets the focus', async () => {
+  const tabs = [{ id: 't1', url: 'https://one.example/', title: 'One', active: true }];
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: withTabs(tabs, {
+      'POST /api/sessions/*/browser/tabs': () => {
+        tabs[0].active = false;
+        tabs.push({ id: 't2', url: 'about:blank', title: 'about:blank', active: true });
+        return { tabs };
+      },
+    }),
+  });
+  assert.equal(app.el('browser-url').value, 'https://one.example/');
+  app.el('browser-tab-new').click();
+  await app.settle();
+  assert.equal(app.doc.activeElement, app.el('browser-url'));
+  assert.equal(app.el('browser-url').value, '', 'the last tab\'s address was left for the new tab\'s');
 });

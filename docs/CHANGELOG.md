@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.176.0
+
+The desktop window's browser panel takes clicks and keys at any window zoom, holds several tabs per conversation, and hides from a button in the header.
+
+**Added**
+
+* Tabs in the browser panel: one per page the conversation has open, a click to switch, `×` to close, `+` to open an empty one; the model's browser tool acts on the tab shown
+* A header button, right of the session name, that hides and shows the browser panel; the page goes on running while it is hidden
+
+**Fixed**
+
+* A click on the browser panel landing away from where it was aimed when the window was zoomed (Ctrl+wheel), by the zoom factor: a field clicked never took the focus, so typing reached nothing
+
 ## v0.175.0
 
 A prompt the model books for later reaches the run as text when it fires, not as a command you typed.
