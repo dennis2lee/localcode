@@ -57,7 +57,70 @@ type Manager struct {
 	proc       *process
 	convs      map[string]*convTabs
 	lastImport *ImportReport
+
+	// What a call made with mu let go has to find when it takes mu again
+	// to publish its tab, since the state can change in between:
+	//
+	// opening counts each conversation's tab opens in flight, and a
+	// CloseTab of the conversation cancels them: a tab still opening when
+	// its conversation was deleted would otherwise bring the conversation
+	// back.
+	opening map[string]*opening
+	// adopting is each page a link opened that is being attached, and the
+	// conversation it is for: a page that one opens in turn finds its
+	// conversation there before the first is in its list.
+	adopting map[string]string
+	// gone is the latest pages that closed while in no conversation's
+	// list: one that closes while it attaches gets its close event before
+	// it is published, and is not published.
+	gone     [goneKept]string
+	goneNext int
 }
+
+// goneKept is how many closed pages gone remembers, far more than close
+// while a tab attaches.
+const goneKept = 256
+
+// opening is one conversation's tab opens in flight.
+type opening struct {
+	n         int
+	cancelled bool
+}
+
+// beginOpen counts a tab open for conv, and returns what endOpen and the
+// publish check read. Called with m.mu.
+func (m *Manager) beginOpen(conv string) *opening {
+	o := m.opening[conv]
+	if o == nil {
+		o = &opening{}
+		m.opening[conv] = o
+	}
+	o.n++
+	return o
+}
+
+// endOpen is the end of a tab open beginOpen counted. Called with m.mu.
+func (m *Manager) endOpen(conv string, o *opening) {
+	o.n--
+	if o.n == 0 && m.opening[conv] == o {
+		delete(m.opening, conv)
+	}
+}
+
+// wasGone is whether the page targetID closed while in no list. Called
+// with m.mu.
+func (m *Manager) wasGone(targetID string) bool {
+	for _, id := range m.gone {
+		if id != "" && id == targetID {
+			return true
+		}
+	}
+	return false
+}
+
+// errClosedMeanwhile is a tab opened for a conversation deleted while it
+// opened.
+var errClosedMeanwhile = errors.New("the conversation was closed while its tab opened")
 
 // LastImport is what the most recent copy of the person's profile did,
 // nil before the first.
@@ -201,7 +264,7 @@ func (c *convTabs) index(targetID string) int {
 // NewManager returns a manager that starts nothing until a tab is asked
 // for.
 func NewManager(opts Options) *Manager {
-	return &Manager{opts: opts, convs: map[string]*convTabs{}}
+	return &Manager{opts: opts, convs: map[string]*convTabs{}, opening: map[string]*opening{}, adopting: map[string]string{}}
 }
 
 // Available is whether there is a browser to start: a Chrome or Edge
@@ -231,31 +294,58 @@ func (m *Manager) Tab(ctx context.Context, conv string) (*Tab, error) {
 		m.mu.Unlock()
 		return t, nil
 	}
+	o := m.beginOpen(conv)
 	m.mu.Unlock()
-	p, err := m.running(ctx)
+	t, err := m.openFor(ctx, conv, o)
 	if err != nil {
 		return nil, err
 	}
-	t, err := openTab(ctx, p.conn)
-	if err != nil {
-		return nil, err
-	}
-	m.mu.Lock()
-	if m.proc != p {
-		m.mu.Unlock()
-		return nil, errReplaced
-	}
+	defer m.mu.Unlock()
 	// Another call for the same conversation got there first: its tab is
 	// the conversation's, and this one goes.
 	if c := m.convs[conv]; c != nil && c.current() != nil {
 		existing := c.current()
-		m.mu.Unlock()
-		t.close(ctx)
+		go t.close(context.Background())
 		return existing, nil
 	}
 	m.convs[conv] = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
-	m.mu.Unlock()
 	return t, nil
+}
+
+// openFor opens a tab for conv on the running browser, starting it if it
+// is not, with m.mu let go throughout, and checks what changed meanwhile:
+// the browser replaced, the conversation closed, the page closed. o is
+// the open beginOpen counted, ended here.
+//
+// On success it returns with m.mu held, for the caller to publish the tab
+// and let it go: a check made under one hold and a publish under the next
+// would let a close or a delete in between. On failure m.mu is not held
+// and the tab, if one opened, is closed.
+func (m *Manager) openFor(ctx context.Context, conv string, o *opening) (*Tab, error) {
+	p, err := m.running(ctx)
+	var t *Tab
+	if err == nil {
+		t, err = openTab(ctx, p.conn)
+	}
+	m.mu.Lock()
+	m.endOpen(conv, o)
+	switch {
+	case err != nil:
+	case m.proc != p:
+		err = errReplaced
+	case o.cancelled:
+		err = errClosedMeanwhile
+	case m.wasGone(t.targetID):
+		err = errReplaced
+	}
+	if err == nil {
+		return t, nil
+	}
+	m.mu.Unlock()
+	if t != nil {
+		t.close(ctx)
+	}
+	return nil, err
 }
 
 // TabInfo is one of a conversation's tabs, for the panel's tab strip.
@@ -294,19 +384,14 @@ func (m *Manager) Tabs(ctx context.Context, conv string) []TabInfo {
 // NewTab opens an empty tab for conv and makes it the active one, starting
 // the browser if it is not running.
 func (m *Manager) NewTab(ctx context.Context, conv string) (*Tab, error) {
-	p, err := m.running(ctx)
-	if err != nil {
-		return nil, err
-	}
-	t, err := openTab(ctx, p.conn)
-	if err != nil {
-		return nil, err
-	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.proc != p {
-		return nil, errReplaced
+	o := m.beginOpen(conv)
+	m.mu.Unlock()
+	t, err := m.openFor(ctx, conv, o)
+	if err != nil {
+		return nil, err
 	}
+	defer m.mu.Unlock()
 	if c := m.convs[conv]; c != nil {
 		c.add(t)
 	} else {
@@ -537,41 +622,52 @@ func (m *Manager) watchTargets(p *process) {
 	_ = conn.Call(ctx, "", "Target.setDiscoverTargets", map[string]any{"discover": true}, nil)
 }
 
-// openerOf is the conversation whose tabs include targetID, or nil.
-// Called with m.mu.
-func (m *Manager) openerOf(targetID string) *convTabs {
-	for _, c := range m.convs {
-		if c.index(targetID) >= 0 {
-			return c
-		}
-	}
-	return nil
-}
-
 // adopt adds a page that one of a conversation's tabs opened (a link
 // with target=_blank, window.open) to that conversation, as its active
 // tab. Opened from any of its tabs, not only the active one: a page in a
-// tab the person switched away from can still open one. Attached with
-// m.mu let go, then checked again: the conversation can have gone, or the
-// browser been replaced, while it attached.
+// tab the person switched away from can still open one; and from a page
+// that is itself still being adopted, whose conversation it then is.
+//
+// Attached with m.mu let go, then checked again before it is published:
+// the browser can have been replaced, the conversation closed, or the
+// page closed (its close event then came before it was in any list, and
+// is in gone) while it attached.
 func (m *Manager) adopt(p *process, openerID, targetID string) {
 	m.mu.Lock()
-	known := m.proc == p && m.openerOf(openerID) != nil
-	m.mu.Unlock()
-	if !known {
+	conv := ""
+	if m.proc == p {
+		for name, c := range m.convs {
+			if c.index(openerID) >= 0 {
+				conv = name
+				break
+			}
+		}
+		if conv == "" {
+			conv = m.adopting[openerID]
+		}
+	}
+	if conv == "" {
+		m.mu.Unlock()
 		return
 	}
+	m.adopting[targetID] = conv
+	m.mu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	t, err := attachTab(ctx, p.conn, targetID)
+
+	m.mu.Lock()
+	_, still := m.adopting[targetID]
+	delete(m.adopting, targetID)
+	c := m.convs[conv]
 	if err != nil {
+		m.mu.Unlock()
 		return
 	}
-	m.mu.Lock()
-	c := m.openerOf(openerID)
-	if m.proc != p || c == nil {
+	if m.proc != p || c == nil || !still || m.wasGone(targetID) {
 		m.mu.Unlock()
-		// The page a deleted conversation's tab opened is nobody's.
+		// The page a closed conversation's tab opened is nobody's.
 		t.close(ctx)
 		return
 	}
@@ -601,6 +697,10 @@ func (m *Manager) forget(targetID string) {
 		}
 		break
 	}
+	if owner == "" {
+		m.gone[m.goneNext] = targetID
+		m.goneNext = (m.goneNext + 1) % goneKept
+	}
 	m.mu.Unlock()
 	m.showActive(owner, next)
 }
@@ -610,6 +710,16 @@ func (m *Manager) CloseTab(conv string) {
 	m.mu.Lock()
 	c := m.convs[conv]
 	delete(m.convs, conv)
+	// A tab still opening for it is for a conversation that is gone: it
+	// closes when it finds this, instead of bringing the conversation back.
+	if o := m.opening[conv]; o != nil {
+		o.cancelled = true
+	}
+	for target, owner := range m.adopting {
+		if owner == conv {
+			delete(m.adopting, target)
+		}
+	}
 	m.mu.Unlock()
 	if c == nil {
 		return

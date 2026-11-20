@@ -19,11 +19,14 @@ import (
 
 // stallingBrowser is a stand-in for a browser's DevTools endpoint that
 // answers every call at once, except the method named, which it holds
-// until the test ends. Enough websocket to speak to cdp.Dial on loopback.
-func stallingBrowser(t *testing.T, stall string) (*cdp.Conn, <-chan struct{}) {
+// until release is called (or the test ends). Enough websocket to speak to
+// cdp.Dial on loopback.
+func stallingBrowser(t *testing.T, stall string) (*cdp.Conn, <-chan struct{}, func()) {
 	t.Helper()
 	held := make(chan struct{}, 4)
 	release := make(chan struct{})
+	var once sync.Once
+	let := func() { once.Do(func() { close(release) }) }
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, rw, err := w.(http.Hijacker).Hijack()
 		if err != nil {
@@ -100,11 +103,11 @@ func stallingBrowser(t *testing.T, stall string) (*cdp.Conn, <-chan struct{}) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		close(release)
+		let()
 		conn.Close()
 		srv.Close()
 	})
-	return conn, held
+	return conn, held, let
 }
 
 // prompt fails the test if f takes longer than a lock held for no reason
@@ -135,7 +138,7 @@ func TestASlowCallToTheBrowserHoldsNoOtherConversation(t *testing.T) {
 		{"a first tab opening", "Target.createTarget", func(m *Manager, p *process) { m.Tab(context.Background(), "c3") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			conn, held := stallingBrowser(t, tc.stall)
+			conn, held, _ := stallingBrowser(t, tc.stall)
 			p := &process{conn: conn, exited: make(chan struct{})}
 			m := NewManager(Options{})
 			m.proc = p
@@ -180,5 +183,98 @@ func TestTwoFirstTabsAtOnceAreOne(t *testing.T) {
 	}
 	if got := m.Tabs(ctx, "c"); len(got) != 1 {
 		t.Errorf("the conversation has %d tabs", len(got))
+	}
+}
+
+// standIn is a manager on a stand-in browser holding stall, with
+// conversation c1 on tab "A".
+func standIn(t *testing.T, stall string) (*Manager, *process, <-chan struct{}, func()) {
+	t.Helper()
+	conn, held, release := stallingBrowser(t, stall)
+	p := &process{conn: conn, exited: make(chan struct{})}
+	m := NewManager(Options{})
+	m.proc = p
+	m.convs["c1"] = &convTabs{tabs: []*Tab{{conn: conn, targetID: "A", session: "sA"}}, changed: make(chan struct{})}
+	return m, p, held, release
+}
+
+func waitHeld(t *testing.T, held <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-held:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("%s never reached the browser", what)
+	}
+}
+
+func tabIDs(m *Manager, conv string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []string
+	if c := m.convs[conv]; c != nil {
+		for _, t := range c.tabs {
+			ids = append(ids, t.targetID)
+		}
+	}
+	return ids
+}
+
+// A page that closes while it is being attached gets its close event
+// before it is in any list. It is not published afterwards: a closed page
+// as the active tab would leave the panel and the model on nothing.
+func TestAPageThatClosesWhileItAttachesIsNotPublished(t *testing.T) {
+	m, p, held, release := standIn(t, "Target.attachToTarget")
+	done := make(chan struct{})
+	go func() { m.adopt(p, "A", "B"); close(done) }()
+	waitHeld(t, held, "the attach")
+	m.forget("B")
+	release()
+	<-done
+	if got := tabIDs(m, "c1"); len(got) != 1 || got[0] != "A" {
+		t.Errorf("tabs = %v; the closed page was published", got)
+	}
+}
+
+// A page opened by a page that is itself still being attached belongs to
+// the same conversation, not to nobody.
+func TestAPageOpenedByOneStillAttachingIsKept(t *testing.T) {
+	m, p, held, release := standIn(t, "Target.attachToTarget")
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); m.adopt(p, "A", "B") }()
+	waitHeld(t, held, "the first attach")
+	go func() { defer wg.Done(); m.adopt(p, "B", "D") }()
+	waitHeld(t, held, "the second attach")
+	release()
+	wg.Wait()
+	got := tabIDs(m, "c1")
+	if len(got) != 3 {
+		t.Errorf("tabs = %v; want A, B and D", got)
+	}
+}
+
+// A tab still opening when its conversation is deleted does not bring the
+// conversation back.
+func TestATabOpeningForAClosedConversationIsNotPublished(t *testing.T) {
+	m, _, held, release := standIn(t, "Target.createTarget")
+	result := make(chan error, 1)
+	go func() {
+		_, err := m.NewTab(context.Background(), "c1")
+		result <- err
+	}()
+	waitHeld(t, held, "the new tab")
+	m.CloseTab("c1")
+	release()
+	if err := <-result; err == nil {
+		t.Error("a tab opened for a closed conversation was published")
+	}
+	if got := tabIDs(m, "c1"); got != nil {
+		t.Errorf("the closed conversation has tabs again: %v", got)
+	}
+	m.mu.Lock()
+	left := len(m.opening)
+	m.mu.Unlock()
+	if left != 0 {
+		t.Errorf("%d open(s) still counted after they ended", left)
 	}
 }
