@@ -664,7 +664,7 @@ func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string,
 	// Smart Agent's shipped guards, after the user's own rules so any of
 	// them can be turned off by writing a rule for the same tool, and
 	// before the ordinary builtins because they are the stricter answer.
-	if c.SmartAgentFor(ctx) {
+	if c.smartAgentForLocked(ctx) {
 		if d, matched := secretGuard(toolName, subject); matched {
 			return d
 		}

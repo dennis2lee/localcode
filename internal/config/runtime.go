@@ -57,6 +57,17 @@ func (c *Config) AddPermissionRuleRuntime(toolName string, rule PermissionRule) 
 	addRule(c.Permissions, toolName, rule)
 }
 
+// SetAgentsRuntime replaces the agent table under the permission lock.
+// Rules are resolved under that lock from any goroutine, the browser's
+// request guard among them, for every request a page makes. Nothing in the
+// daemon changes the agents after startup; this is how a test changes an
+// agent's rules while a browser is running without racing that guard.
+func (c *Config) SetAgentsRuntime(agents map[string]AgentConfig) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.Agents = agents
+}
+
 // RemovePermissionRuleRuntime mirrors RemovePermissionRuleFromFile against
 // the in-memory config.
 func (c *Config) RemovePermissionRuleRuntime(toolName string, rule PermissionRule) {

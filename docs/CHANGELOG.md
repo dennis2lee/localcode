@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.174.0
+
+**Fixed**
+
+* A permission decision taking the permission lock twice: a settings change (a rule added, Smart Agent, skip permissions or the browser switched) made between the two left every later permission decision waiting, the browser's check of each request a page made included
+
 ## v0.173.0
 
 The desktop window's browser has a column of its own, and each conversation's browser panel shows only that conversation's page.
