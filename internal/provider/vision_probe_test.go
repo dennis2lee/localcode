@@ -18,6 +18,8 @@ type probeScript struct {
 	// endless keeps sending after the deltas until the request is
 	// cancelled, as a model in the middle of a long answer does.
 	endless bool
+	// stop is the stop reason the stream ends with; "end_turn" when empty.
+	stop string
 
 	got ChatRequest
 }
@@ -52,7 +54,11 @@ func (p *probeScript) Chat(ctx context.Context, req ChatRequest) (<-chan StreamE
 			send(StreamEvent{Type: EventError, Err: p.streamErr})
 			return
 		}
-		send(StreamEvent{Type: EventMessageStop, StopReason: "end_turn"})
+		stop := p.stop
+		if stop == "" {
+			stop = "end_turn"
+		}
+		send(StreamEvent{Type: EventMessageStop, StopReason: stop})
 	}()
 	return ch, nil
 }
@@ -155,6 +161,18 @@ func TestProbeVisionCutShortIsNoAnswer(t *testing.T) {
 		cancel()
 		if !errors.Is(err, context.DeadlineExceeded) || got.Sees || got.Answer != "" {
 			t.Errorf("%q then nothing: %+v, %v; want the deadline as the error", deltas, got, err)
+		}
+	}
+}
+
+// Found in review (agy): a reply that reached the token limit was judged
+// as if it were whole, so "The attachment was red", cut before "acted.",
+// read as seeing for the life of the process.
+func TestProbeVisionCutAtTheTokenLimitIsNoAnswer(t *testing.T) {
+	for _, deltas := range [][]string{{"The image is"}, {"The attachment was red"}} {
+		got, err := ProbeVision(context.Background(), &probeScript{deltas: deltas, stop: "max_tokens"}, "m")
+		if !errors.Is(err, errVisionAnswerCut) || got.Sees {
+			t.Errorf("%q at the token limit: %+v, %v", deltas, got, err)
 		}
 	}
 }

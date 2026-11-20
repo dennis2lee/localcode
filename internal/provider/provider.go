@@ -420,8 +420,10 @@ var notVisionRefusal = []string{
 	// A server that is down, busy, still loading the model, or has no
 	// such model. Its message often names the model, and a model whose
 	// name says "vision" read as refusing images: kept from them for an
-	// hour by a 503.
-	"returned 5", "statuscode: 5", "returned 404", "statuscode: 404",
+	// hour by a 503. Not every 5xx: llama.cpp refuses an image with a
+	// 500 ("image input is not supported"), and its words are the
+	// refusal.
+	"returned 404", "statuscode: 404",
 	"not found", "notfound", "does not exist",
 	"is loading", "currently loading", "unavailable", "overloaded",
 	"internal server error", "bad gateway", "gateway timeout",
@@ -451,9 +453,17 @@ func isVisionRefusal(err error, model string) bool {
 	}
 	lower := strings.ToLower(err.Error())
 	if m := strings.ToLower(strings.TrimSpace(model)); m != "" {
-		lower = withoutName(lower, m)
+		names := []string{m}
 		if i := strings.LastIndex(m, "/"); i >= 0 {
-			lower = withoutName(lower, m[i+1:])
+			names = append(names, m[i+1:])
+		}
+		for _, name := range names {
+			// Not a name that is itself one of the refusal's words: a
+			// model aliased "vision" or "acme/image" would take "does not
+			// support vision" with it.
+			if !isRefusalPhrase(name) {
+				lower = withoutName(lower, name)
+			}
 		}
 	}
 	for _, p := range notVisionRefusal {
@@ -463,6 +473,15 @@ func isVisionRefusal(err error, model string) bool {
 	}
 	for _, p := range visionRefusalPhrases {
 		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRefusalPhrase(name string) bool {
+	for _, p := range visionRefusalPhrases {
+		if name == p {
 			return true
 		}
 	}

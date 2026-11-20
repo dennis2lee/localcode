@@ -251,6 +251,11 @@ func (l *Loop) fallbackTools(ctx context.Context, turnTools []string, sees bool)
 
 // withoutViewImage is a tool allowlist with view_image taken out. nil means
 // every registered tool, so it is spelled out before one is removed.
+//
+// A list that held nothing else matches nothing rather than coming back
+// empty: an empty allowlist means no restriction at all, and an agent
+// allowed only view_image fell back to a model that cannot see with every
+// tool there is, bash included. Found in review (agy).
 func withoutViewImage(reg *tools.Registry, allowed []string) []string {
 	if allowed == nil && reg != nil {
 		allowed = reg.Names()
@@ -260,6 +265,9 @@ func withoutViewImage(reg *tools.Registry, allowed []string) []string {
 		if n != tools.ViewImageName {
 			out = append(out, n)
 		}
+	}
+	if len(out) == 0 && len(allowed) > 0 {
+		return []string{noToolOffered}
 	}
 	return out
 }

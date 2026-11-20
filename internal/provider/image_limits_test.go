@@ -172,3 +172,20 @@ func TestAFailureThatNamesAVisionModelIsNotARefusal(t *testing.T) {
 		t.Errorf("withoutName = %q", got)
 	}
 }
+
+// Found in review (agy): a model aliased with a word of the refusal took
+// that word out of it ("acme/vision" left "does not support"), and
+// llama.cpp's refusal arrives as a 500, which a rule against 5xx missed.
+func TestARefusalStaysOneWhateverTheModelIsCalled(t *testing.T) {
+	cases := []struct{ msg, model string }{
+		{`openai-compat endpoint returned 400: {"error":{"message":"acme/vision does not support vision"}}`, "acme/vision"},
+		{`openai-compat endpoint returned 400: {"error":"The loaded model does not support vision"}`, "vision"},
+		{`openai-compat endpoint returned 400: {"error":{"message":"This model does not support image input"}}`, "team/image"},
+		{`openai-compat endpoint returned 500: {"error":{"code":500,"message":"image input is not supported - hint: if this is unexpected, you may need to provide the mmproj","type":"server_error"}}`, "qwen3-30b-a3b"},
+	}
+	for _, c := range cases {
+		if !isVisionRefusal(errString(c.msg), c.model) {
+			t.Errorf("model %q: not read as a refusal: %s", c.model, c.msg)
+		}
+	}
+}

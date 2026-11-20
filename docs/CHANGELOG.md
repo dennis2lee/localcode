@@ -22,6 +22,7 @@ A model that can see is sent images whatever its name, and no image a server ref
 * A conversation of large images over Bedrock's 20 MB request limit
 * A refusal of an image for its size read as a model without vision, with a hint to set `"vision": false`
 * `view_image` not offered to a fallback model that can see, after a first model that cannot
+* An agent allowed only `view_image`, falling back to a model that cannot see, offered every tool, `bash` included
 * Two images pasted together passing the 10 MB message limit between them
 
 ## v0.170.0

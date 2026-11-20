@@ -56,6 +56,11 @@ var visionProbeBlind = regexp.MustCompile(`(?i)(can(no|')t|unable to|do(es)? not
 // early. It says nothing about vision either way.
 var errNoVisionAnswer = errors.New("the model gave no answer")
 
+// errVisionAnswerCut is a probe whose reply reached the token limit, which
+// a one-word answer does not: what it said was cut short and is not its
+// answer.
+var errVisionAnswerCut = errors.New("the answer reached the token limit")
+
 // visionProbeImage is the test image: a 64x64 red square, as PNG. Big
 // enough for the smallest input a vision encoder takes.
 var visionProbeImage = sync.OnceValue(func() []byte {
@@ -104,10 +109,15 @@ func ProbeVision(ctx context.Context, p Provider, model string) (VisionProbe, er
 	// still to come, read as seeing.
 	var answer strings.Builder
 	var streamErr error
+	cut := false
 	for ev := range stream {
 		switch ev.Type {
 		case EventTextDelta:
 			answer.WriteString(ev.TextDelta)
+		case EventMessageStop:
+			// Ended at the token limit: the answer was cut, so what it
+			// says is not its answer, for the reason a cancel is not.
+			cut = ev.StopReason == "max_tokens"
 		case EventError:
 			if streamErr == nil {
 				streamErr = ev.Err
@@ -128,6 +138,8 @@ func ProbeVision(ctx context.Context, p Provider, model string) (VisionProbe, er
 	}
 	said := strings.TrimSpace(answer.String())
 	switch {
+	case cut:
+		return VisionProbe{}, errVisionAnswerCut
 	case said == "":
 		return VisionProbe{}, errNoVisionAnswer
 	case seesColour(said):
