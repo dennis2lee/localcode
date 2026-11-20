@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -489,6 +490,26 @@ func isVisionRefusal(err error, model string) bool {
 // imageCountLimit matches vLLM's per-prompt limit on images, with the
 // number it allows.
 var imageCountLimit = regexp.MustCompile(`at most (\d+) image`)
+
+// ImageCountLimit reads a server's refusal of a request for carrying more
+// images than it takes, and the number it takes. vLLM's words, set by its
+// --limit-mm-per-prompt: "At most 1 image(s) may be provided in one
+// prompt." ok is false for any other error, and for a limit of zero,
+// which is a server that takes no images (see isVisionRefusal).
+func ImageCountLimit(err error) (n int, ok bool) {
+	if err == nil {
+		return 0, false
+	}
+	m := imageCountLimit.FindStringSubmatch(strings.ToLower(err.Error()))
+	if m == nil {
+		return 0, false
+	}
+	n, convErr := strconv.Atoi(m[1])
+	if convErr != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
 
 func isRefusalPhrase(name string) bool {
 	for _, p := range visionRefusalPhrases {

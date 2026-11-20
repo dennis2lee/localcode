@@ -437,6 +437,11 @@ type Loop struct {
 	visionCache    map[string]visionEntry
 	visionInflight map[string]chan struct{}
 
+	// imageLimits is the most images each model's server takes in one
+	// request, keyed by provider+model, where it has said so. Under mu.
+	// See image_limit.go.
+	imageLimits map[string]int
+
 	// SkillsSection is the startup-loaded half of the prompt that used
 	// to be folded into SystemPrompt before the Loop ever saw it. A field
 	// of its own because it is an asset of its own: a skill index is

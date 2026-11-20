@@ -118,7 +118,7 @@ func (l *Loop) requestHistory(ctx context.Context, sessionID string) []provider.
 // images, or with a note in place of each image.
 func asSent(ctx context.Context, msgs []provider.Message) []provider.Message {
 	if viewsImages(ctx) {
-		return newestImages(msgs, provider.MaxImagesPerRequest, provider.MaxImageBytesPerRequest)
+		return newestImages(msgs, imagesPerRequest(ctx), provider.MaxImageBytesPerRequest)
 	}
 	return imagesAsText(msgs)
 }
@@ -156,8 +156,12 @@ func newestImages(msgs []provider.Message, n, maxBytes int) []provider.Message {
 				continue
 			} else {
 				full = true
-				note = fmt.Sprintf("[An image (%s) was here. It was left out: a request carries at most %d images and %d bytes of them, and newer ones took its place.]",
-					b.MediaType, n, maxBytes)
+				images := fmt.Sprintf("%d images", n)
+				if n == 1 {
+					images = "1 image"
+				}
+				note = fmt.Sprintf("[An image (%s) was here. It was left out: a request carries at most %s and %d bytes of them, and newer ones took its place.]",
+					b.MediaType, images, maxBytes)
 			}
 			if content == nil {
 				content = append([]provider.Block(nil), msgs[i].Content...)

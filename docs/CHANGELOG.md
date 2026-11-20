@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.172.0
+
+A conversation goes on when a model's server takes fewer images in a request than the conversation holds.
+
+**Added**
+
+* A server's own cap on images in one request, read from its refusal ("At most 1 image(s) may be provided in one prompt", vLLM's `--limit-mm-per-prompt`) and kept per provider and model: the refused request sent again with the newest images within it, and every later one held to it
+
 ## v0.171.0
 
 A model that can see is sent images whatever its name, and no image a server refuses stays in a conversation.

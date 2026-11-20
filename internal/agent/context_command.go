@@ -100,6 +100,7 @@ func (l *Loop) handleContextCommand(ctx context.Context, sessionID, agentName, d
 	}
 	agentCfg := l.agentConfig(ctx, agentName)
 	ctx = withViewsImages(ctx, l.knownSeesImages(profile, "").sees)
+	ctx = withImageLimit(ctx, l.imageLimitFor(profile))
 
 	// The same tool list the next turn would advertise, resolved the
 	// same way, so the report describes that request rather than an

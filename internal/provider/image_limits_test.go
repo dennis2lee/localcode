@@ -214,3 +214,28 @@ func TestRefusalsAndLimitsByStatusAndCount(t *testing.T) {
 		}
 	}
 }
+
+// vLLM's cap on the images in one prompt, read with the number it allows.
+// Zero is a server that takes no images, which is a refusal and not a cap.
+func TestImageCountLimitReadsVLLMsCap(t *testing.T) {
+	for _, c := range []struct {
+		msg string
+		n   int
+		ok  bool
+	}{
+		{`openai-compat endpoint returned 400: {"object":"error","message":"At most 1 image(s) may be provided in one prompt.","type":"BadRequestError","code":400}`, 1, true},
+		{"openai-compat endpoint returned 400: At most 4 image(s) may be provided in one prompt. Set `--limit-mm-per-prompt` to increase this limit.", 4, true},
+		{"openai-compat endpoint returned 400: At most 12 image(s) may be provided in one request.", 12, true},
+		{"openai-compat endpoint returned 400: At most 0 image(s) may be provided in one prompt.", 0, false},
+		{"openai-compat endpoint returned 400: this model does not support image input", 0, false},
+		{"bedrock ConverseStream: ValidationException: Maximum number of images per request is 20.", 0, false},
+	} {
+		n, ok := ImageCountLimit(errString(c.msg))
+		if n != c.n || ok != c.ok {
+			t.Errorf("ImageCountLimit(%q) = %d, %v; want %d, %v", c.msg, n, ok, c.n, c.ok)
+		}
+	}
+	if _, ok := ImageCountLimit(nil); ok {
+		t.Error("nil read as a cap")
+	}
+}

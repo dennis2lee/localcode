@@ -66,10 +66,17 @@ func (l *Loop) knownSeesImages(profile config.Profile, modelOverride string) vis
 	return l.visionFor(context.Background(), profile, modelOverride, false)
 }
 
-func (l *Loop) visionFor(ctx context.Context, profile config.Profile, modelOverride string, ask bool) visionVerdict {
+// profileWithModel is profile with modelOverride in place of its model,
+// when there is one: what a command's model override sends to.
+func profileWithModel(profile config.Profile, modelOverride string) config.Profile {
 	if modelOverride != "" {
 		profile.Model = modelOverride
 	}
+	return profile
+}
+
+func (l *Loop) visionFor(ctx context.Context, profile config.Profile, modelOverride string, ask bool) visionVerdict {
+	profile = profileWithModel(profile, modelOverride)
 	if sees, known := profile.VisionSetting(); known {
 		if profile.Vision != nil {
 			return visionVerdict{sees: sees, why: fmt.Sprintf(`its profile sets "vision": %t`, sees)}
