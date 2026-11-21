@@ -56,10 +56,24 @@ func launchArgs(dataDir, profile string, imported bool) []string {
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--hide-crash-restore-bubble",
-		// A page can have the browser download a URL in the background
-		// with no page to watch: the browser makes that request itself,
-		// outside the guard and without its user agent.
-		"--disable-features=BackgroundFetch",
+		// Both in one flag: the browser takes the last one it is given.
+		//
+		// BackgroundFetch: a page can have the browser download a URL in
+		// the background with no page to watch: the browser makes that
+		// request itself, outside the guard and without its user agent.
+		//
+		// MacAppCodeSignClone: on macOS a browser makes a copy of its own
+		// application at every start, a hard link to its program in a
+		// folder under the system's temporary files, and removes it when
+		// it quits. A browser that starts while another is making or
+		// removing its copy can be given the copy's path as its own: it
+		// finds no framework beside it and is aborted before it listens
+		// ("Library not loaded", by the system's crash report). Measured
+		// with Chrome 158, the package's tests run twice side by side as
+		// the gate runs them: a browser was lost that way in three runs
+		// of four, and with the copy off in none of four. A browser that
+		// is killed, not quit, also left its copy there for good.
+		"--disable-features=BackgroundFetch,MacAppCodeSignClone",
 		fmt.Sprintf("--window-size=%d,%d", ViewportWidth, ViewportHeight),
 		// Every conversation's tab is in a window of its own, and all but
 		// one are behind another. A browser slows, and under memory
@@ -131,6 +145,13 @@ func start(ctx context.Context, path, dataDir, profile string, imported bool) (*
 
 	wsURL, err := waitForPort(ctx, portFile, p.exited)
 	if err != nil {
+		select {
+		case <-p.exited:
+			// How it ended is the only word there is on why: the browser
+			// says nothing else of an exit before it listens.
+			err = fmt.Errorf("%w (%v)", err, cmd.ProcessState)
+		default:
+		}
 		p.kill()
 		return nil, err
 	}

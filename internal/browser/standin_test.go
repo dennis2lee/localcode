@@ -146,6 +146,19 @@ type scriptedBrowser struct {
 	calls  []command
 	counts map[string]int
 	ids    atomic.Int64
+	// says is what the browser answers a method with, beside the ids it
+	// makes up: says["Runtime.evaluate"] is what a script in a page gives.
+	says map[string]map[string]any
+}
+
+// answers makes the browser answer every call of method with result.
+func (sb *scriptedBrowser) answers(method string, result map[string]any) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	if sb.says == nil {
+		sb.says = map[string]map[string]any{}
+	}
+	sb.says[method] = result
 }
 
 // newScriptedBrowser holds call n of method for each n in hold[method] and
@@ -178,9 +191,13 @@ func newScriptedBrowser(t *testing.T, fail map[string]string, hold map[string][]
 		sb.calls = append(sb.calls, c)
 		sb.counts[c.Method]++
 		n := sb.counts[c.Method]
+		said := sb.says[c.Method]
 		sb.mu.Unlock()
 		reply := func() {
 			result := map[string]any{}
+			for k, v := range said {
+				result[k] = v
+			}
 			switch c.Method {
 			case "Target.createTarget":
 				result["targetId"] = fmt.Sprintf("T%d", sb.ids.Add(1))

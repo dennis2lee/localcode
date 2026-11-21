@@ -651,6 +651,22 @@ test('a shortcut carries the editing command, by the platform\'s own modifier', 
     'a key coming up carries the command a second time');
 });
 
+// Ctrl+Shift+C is not a copy in a browser. Sent as one, it put the
+// selection on the clipboard under a page that uses the keys itself.
+test('with Shift held as well, only redo and paste are editing shortcuts', async () => {
+  const app = await load({ init: false });
+  const { editCommandFor } = app.internals;
+  const key = (k, mods) => ({ key: k, code: `Key${k.toUpperCase()}`, keyCode: k.toUpperCase().charCodeAt(0), shiftKey: true, ...mods });
+  for (const mac of [true, false]) {
+    const held = mac ? { metaKey: true } : { ctrlKey: true };
+    for (const k of ['A', 'C', 'X', 'Y']) {
+      assert.equal(editCommandFor(key(k, held), mac), '', `${mac ? 'Cmd' : 'Ctrl'}+Shift+${k} carries an editing command`);
+    }
+    assert.equal(editCommandFor(key('Z', held), mac), 'redo');
+    assert.equal(editCommandFor(key('V', held), mac), 'paste');
+  }
+});
+
 // The window's zoom shortcut (js/zoom.js) is the window's alone. Passed on
 // to the page as well, Ctrl+plus zoomed the page in the panel on Windows
 // and Linux, the browser kept that zoom for the site, and every click

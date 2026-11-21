@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
-
-	"localcode/internal/cdp"
 )
 
 // UserAgentMark is in the User-Agent of every request the model's browser
@@ -50,8 +48,8 @@ func (m *Manager) guard(p *process) {
 	_ = p.conn.Call(ctx, "", "Browser.getVersion", nil, &version)
 	p.userAgent = markedUserAgent(version.UserAgent)
 
-	p.conn.On("", "Target.attachedToTarget", func(params json.RawMessage) { go m.guardTarget(p, params) })
-	p.conn.On("", "Target.detachedFromTarget", func(params json.RawMessage) { forgetDetached(p.conn, params) })
+	p.conn.On("", "Target.attachedToTarget", func(params json.RawMessage) { go m.guardTarget(p, params, "") })
+	p.conn.On("", "Target.detachedFromTarget", func(params json.RawMessage) { m.forgetDetached(p, params) })
 	_ = p.conn.Call(ctx, "", "Target.setAutoAttach", autoAttach, nil)
 }
 
@@ -75,16 +73,26 @@ func markedUserAgent(ua string) string {
 // opened does), so waiting for each in turn waited for ever. Commands on
 // one session are carried out in the order they arrive, so the target
 // still runs with its user agent and its guard in place.
-func (m *Manager) guardTarget(p *process, params json.RawMessage) {
+//
+// within is the page the target was attached through, "" for one the
+// browser attached itself. A frame from another site is a target of its
+// own, and what it asks the browser for, the page it is in asks for (see
+// Manager.ask).
+func (m *Manager) guardTarget(p *process, params json.RawMessage, within string) {
 	var ev struct {
 		SessionID  string `json:"sessionId"`
 		TargetInfo struct {
-			Type string `json:"type"`
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
 		} `json:"targetInfo"`
 		WaitingForDebugger bool `json:"waitingForDebugger"`
 	}
 	if json.Unmarshal(params, &ev) != nil || ev.SessionID == "" {
 		return
+	}
+	page := within
+	if ev.TargetInfo.Type == "page" {
+		page = ev.TargetInfo.TargetID
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -108,12 +116,21 @@ func (m *Manager) guardTarget(p *process, params json.RawMessage) {
 			pending = append(pending,
 				conn.Go(ctx, sess, "Network.enable", map[string]any{"maxTotalBufferSize": 0, "maxResourceBufferSize": 0}),
 				conn.Go(ctx, sess, "Network.setBypassServiceWorker", map[string]any{"bypass": true}))
+			// A link opened in a tab or a window of its own is told here,
+			// before the browser makes that page: on the session of the
+			// frame the link is in, which for a frame from another site is
+			// this one and not its page's.
+			if page != "" {
+				frame := ev.TargetInfo.TargetID
+				conn.On(sess, "Page.frameRequestedNavigation", func(pp json.RawMessage) { m.ask(p, page, frame, sess, pp) })
+				pending = append(pending, conn.Go(ctx, sess, "Page.enable", nil))
+			}
 		}
 		// A frame from another site runs in a process of its own, as a
 		// target of its own, and is only attached if asked for; so is a
 		// worker a page starts.
-		conn.On(sess, "Target.attachedToTarget", func(pp json.RawMessage) { go m.guardTarget(p, pp) })
-		conn.On(sess, "Target.detachedFromTarget", func(pp json.RawMessage) { forgetDetached(conn, pp) })
+		conn.On(sess, "Target.attachedToTarget", func(pp json.RawMessage) { go m.guardTarget(p, pp, page) })
+		conn.On(sess, "Target.detachedFromTarget", func(pp json.RawMessage) { m.forgetDetached(p, pp) })
 		pending = append(pending, conn.Go(ctx, sess, "Target.setAutoAttach", autoAttach))
 	}
 	if ev.WaitingForDebugger {
@@ -127,12 +144,21 @@ func (m *Manager) guardTarget(p *process, params json.RawMessage) {
 // forgetDetached drops the handlers of a session whose target is gone: a
 // frame removed, a worker ended, a tab closed. Each target the guard
 // attaches registers its own, and a long-lived browser attaches many.
-func forgetDetached(conn *cdp.Conn, params json.RawMessage) {
+// With them goes what the session was heard for (see ask).
+func (m *Manager) forgetDetached(p *process, params json.RawMessage) {
 	var ev struct {
 		SessionID string `json:"sessionId"`
 	}
-	if json.Unmarshal(params, &ev) == nil && ev.SessionID != "" {
-		conn.Forget(ev.SessionID)
+	if json.Unmarshal(params, &ev) != nil || ev.SessionID == "" {
+		return
+	}
+	p.conn.Forget(ev.SessionID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for frame, sess := range m.heard {
+		if sess == ev.SessionID {
+			delete(m.heard, frame)
+		}
 	}
 }
 

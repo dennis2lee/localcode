@@ -249,15 +249,44 @@ func TestParseKeys(t *testing.T) {
 		"cmd+l":     {"l", ModMeta, ""},
 		"x":         {"x", 0, "x"},
 		"F5":        {"F5", 0, ""},
+		// The plus key is the key after the last "+".
+		"+":            {"+", 0, "+"},
+		"ctrl++":       {"+", ModCtrl, ""},
+		"ctrl+shift++": {"+", ModCtrl | ModShift, ""},
+		"ctrl+plus":    {"+", ModCtrl, ""},
+		"plus":         {"+", 0, "+"},
+		"cmd+minus":    {"-", ModMeta, ""},
+		// With Ctrl, Cmd or Alt a key types nothing; with Shift it does.
+		"ctrl+Enter":  {"Enter", ModCtrl, ""},
+		"cmd+Enter":   {"Enter", ModMeta, ""},
+		"alt+space":   {" ", ModAlt, ""},
+		"shift+Enter": {"Enter", ModShift, "\r"},
 	} {
 		def, mods, err := parseKeys(combo)
 		if err != nil || def.key != want.key || mods != want.mods || def.text != want.text {
 			t.Errorf("parseKeys(%q) = %+v, %d, %v", combo, def, mods, err)
 		}
 	}
-	for _, bad := range []string{"hyper+a", "nosuchkey"} {
+	for _, bad := range []string{"hyper+a", "nosuchkey", "ctrl+", "ctrl+++", "+a", "++", ""} {
 		if _, _, err := parseKeys(bad); err == nil {
 			t.Errorf("parseKeys(%q) accepted", bad)
+		}
+	}
+}
+
+// A key that is neither a letter nor a digit carries where it is on the
+// keyboard, as a letter does: a page that takes Ctrl+/ or Ctrl+plus as a
+// shortcut reads the key code, and a key with none was not one it knew.
+func TestAPunctuationKeyCarriesItsKeyCode(t *testing.T) {
+	for combo, want := range map[string]keyPlace{
+		"ctrl+=": {"Equal", 187}, "ctrl++": {"Equal", 187}, "ctrl+plus": {"Equal", 187},
+		"ctrl+-": {"Minus", 189}, "ctrl+minus": {"Minus", 189}, "ctrl+/": {"Slash", 191},
+		"cmd+.": {"Period", 190}, "ctrl+[": {"BracketLeft", 219}, "?": {"Slash", 191},
+		"ctrl+shift+!": {"Digit1", 49}, "ctrl+1": {"Digit1", 49}, "ctrl+a": {"KeyA", 65},
+	} {
+		def, _, err := parseKeys(combo)
+		if err != nil || def.code != want.code || def.keyCode != want.keyCode {
+			t.Errorf("parseKeys(%q) is the key %q, %d (%v), want %q, %d", combo, def.code, def.keyCode, err, want.code, want.keyCode)
 		}
 	}
 }
@@ -301,6 +330,8 @@ func TestAShortcutCarriesItsEditingCommand(t *testing.T) {
 		{"ctrl+a", "selectAll"}, {"cmd+a", "selectAll"}, {"ctrl+c", "copy"},
 		{"cmd+x", "cut"}, {"ctrl+z", "undo"}, {"ctrl+shift+z", "redo"}, {"ctrl+y", "redo"},
 		{"a", ""}, {"shift+a", ""}, {"ctrl+alt+a", ""}, {"ctrl+b", ""},
+		// With Shift held as well, only Z is an editing shortcut.
+		{"ctrl+shift+a", ""}, {"ctrl+shift+c", ""}, {"cmd+shift+x", ""}, {"ctrl+shift+y", ""}, {"cmd+shift+z", "redo"},
 	} {
 		def, mods, err := parseKeys(c.combo)
 		if err != nil {
