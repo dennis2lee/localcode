@@ -9,6 +9,8 @@ A link opened in a tab or a window of its own from the browser panel is one of t
 * A link on the browser panel opened with the wheel, or with Ctrl, Cmd or Shift held, and Enter on a focused link with one of them held, opening a page that was in no tab strip and could not be closed: the page is a tab of the conversation, behind the tab shown for Ctrl, Cmd or the wheel, and the tab shown with Shift
 * The browser panel left on a still picture that took no click after a link was opened in front of the page (Ctrl+Shift+click, Cmd+Shift+click, Shift with the wheel): the page opened is the tab shown
 * A page a script opened from a click with Ctrl or Cmd held made the tab shown although the browser had opened it behind and did not draw it: its tab is added behind
+* A page that opened a dialog as it loaded, before it was one of the conversation's tabs, standing still until it was closed with no tab made for it: the dialog is answered OK
+* Every request of a conversation's page held and let go twice by the deny rules' check, and the handlers of each frame from another site kept after its tab closed
 * The browser tool's `key` action refusing `ctrl++` and `ctrl+plus`, and pressing a punctuation key (`ctrl+=`, `ctrl+-`, `ctrl+/`) with no key code for a page to read
 * `ctrl+Enter` and `cmd+Enter` from the `key` action typing a line break as well as pressing the key
 * Ctrl+Shift or Cmd+Shift with A, C, X or Y carrying an editing command (select all, copy, cut, redo) to the page, from the panel and from the `key` action

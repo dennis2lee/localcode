@@ -48,9 +48,55 @@ func (m *Manager) guard(p *process) {
 	_ = p.conn.Call(ctx, "", "Browser.getVersion", nil, &version)
 	p.userAgent = markedUserAgent(version.UserAgent)
 
-	p.conn.On("", "Target.attachedToTarget", func(params json.RawMessage) { go m.guardTarget(p, params, "") })
-	p.conn.On("", "Target.detachedFromTarget", func(params json.RawMessage) { m.forgetDetached(p, params) })
+	p.conn.On("", "Target.attachedToTarget", func(params json.RawMessage) { m.attached(p, params, "") })
+	p.conn.On("", "Target.detachedFromTarget", func(params json.RawMessage) { forgetDetached(p, params) })
 	_ = p.conn.Call(ctx, "", "Target.setAutoAttach", autoAttach, nil)
+}
+
+// attached is the browser saying a session was attached to a target, and
+// sets the target up through it: see guardTarget. Called in the
+// connection's read loop.
+//
+// A page is set up through one session: the first attached to it, which
+// is the one the browser attached itself before the page ran, and which
+// lasts as long as the page. A conversation's tab is attached a second
+// time, for the tab's own work (attachTab), and that session was set up
+// too. So every request of the page was held and let go twice; each
+// frame in it from another site was attached twice, the second time
+// through the tab's session, and when the tab closed that session's
+// handlers went before the browser said those frames' sessions had gone,
+// so theirs stayed for good (measured: four handlers for each such
+// frame, on every tab closed); and a link the page asked the browser to
+// open was told twice (see Manager.ask).
+//
+// Only a page: a worker can be attached through more than one session
+// that each end at a time of their own, and is set up through each.
+func (m *Manager) attached(p *process, params json.RawMessage, within string) {
+	var ev struct {
+		SessionID  string `json:"sessionId"`
+		TargetInfo struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+		} `json:"targetInfo"`
+	}
+	if json.Unmarshal(params, &ev) != nil || ev.SessionID == "" {
+		return
+	}
+	if ev.TargetInfo.Type == "page" {
+		p.guardMu.Lock()
+		_, already := p.guarded[ev.TargetInfo.TargetID]
+		if !already {
+			if p.guarded == nil {
+				p.guarded = map[string]string{}
+			}
+			p.guarded[ev.TargetInfo.TargetID] = ev.SessionID
+		}
+		p.guardMu.Unlock()
+		if already {
+			return
+		}
+	}
+	go m.guardTarget(p, params, within)
 }
 
 // markedUserAgent is the browser's user agent as an ordinary browser
@@ -121,16 +167,30 @@ func (m *Manager) guardTarget(p *process, params json.RawMessage, within string)
 			// frame the link is in, which for a frame from another site is
 			// this one and not its page's.
 			if page != "" {
-				frame := ev.TargetInfo.TargetID
-				conn.On(sess, "Page.frameRequestedNavigation", func(pp json.RawMessage) { m.ask(p, page, frame, sess, pp) })
+				conn.On(sess, "Page.frameRequestedNavigation", func(pp json.RawMessage) { m.ask(p, page, pp) })
+				// With Page on, a dialog the page opens is told to this
+				// session, and the page waits for its answer. A tab
+				// answers the dialogs of its page (attachTab), but a page
+				// can open one before a tab is attached to it, on load,
+				// and then nothing answered: the page stood still, its
+				// tab could not be attached, and it was closed (so it
+				// was before Page was on here, too: nothing was told of
+				// that dialog at all). Answered here as a tab answers.
+				conn.On(sess, "Page.javascriptDialogOpening", func(json.RawMessage) {
+					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						_ = conn.Call(ctx, sess, "Page.handleJavaScriptDialog", map[string]any{"accept": true}, nil)
+					}()
+				})
 				pending = append(pending, conn.Go(ctx, sess, "Page.enable", nil))
 			}
 		}
 		// A frame from another site runs in a process of its own, as a
 		// target of its own, and is only attached if asked for; so is a
 		// worker a page starts.
-		conn.On(sess, "Target.attachedToTarget", func(pp json.RawMessage) { go m.guardTarget(p, pp, page) })
-		conn.On(sess, "Target.detachedFromTarget", func(pp json.RawMessage) { m.forgetDetached(p, pp) })
+		conn.On(sess, "Target.attachedToTarget", func(pp json.RawMessage) { m.attached(p, pp, page) })
+		conn.On(sess, "Target.detachedFromTarget", func(pp json.RawMessage) { forgetDetached(p, pp) })
 		pending = append(pending, conn.Go(ctx, sess, "Target.setAutoAttach", autoAttach))
 	}
 	if ev.WaitingForDebugger {
@@ -144,8 +204,7 @@ func (m *Manager) guardTarget(p *process, params json.RawMessage, within string)
 // forgetDetached drops the handlers of a session whose target is gone: a
 // frame removed, a worker ended, a tab closed. Each target the guard
 // attaches registers its own, and a long-lived browser attaches many.
-// With them goes what the session was heard for (see ask).
-func (m *Manager) forgetDetached(p *process, params json.RawMessage) {
+func forgetDetached(p *process, params json.RawMessage) {
 	var ev struct {
 		SessionID string `json:"sessionId"`
 	}
@@ -153,11 +212,11 @@ func (m *Manager) forgetDetached(p *process, params json.RawMessage) {
 		return
 	}
 	p.conn.Forget(ev.SessionID)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for frame, sess := range m.heard {
+	p.guardMu.Lock()
+	defer p.guardMu.Unlock()
+	for page, sess := range p.guarded {
 		if sess == ev.SessionID {
-			delete(m.heard, frame)
+			delete(p.guarded, page)
 		}
 	}
 }

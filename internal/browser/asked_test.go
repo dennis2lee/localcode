@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -27,13 +28,22 @@ func linkSite(t *testing.T) string {
 		case "/framed":
 			// The same server under its other name is another site, and a
 			// frame from another site is a process and a target of its own.
-			fmt.Fprintf(w, `<!doctype html><title>Framed</title><iframe src="http://localhost:%s/" style="position:absolute;left:0;top:0;width:600px;height:400px;border:0"></iframe>`, port)
+			fmt.Fprintf(w, `<!doctype html><title>Framed</title><iframe src="http://localhost:%s/" style="position:absolute;left:0;top:0;width:600px;height:400px;border:0"></iframe>
+<script>addEventListener('message', (e) => { if (e.data === 'over') document.title = 'Framed, over'; });</script>`, port)
 		default:
+			// The page says when the mouse is over one of its controls,
+			// in its title, and from a frame to the page it is in: see
+			// clickWith.
 			fmt.Fprint(w, `<!doctype html><title>Links</title>
 <style>a,button{position:absolute;left:10px;width:200px;height:30px;display:block}</style>
 <a id=link href="/second" style="top:10px">second</a>
 <button onclick="window.open('/second')" style="top:60px">open</button>
-<form action="/second" method="post"><button style="top:110px">send</button></form>`)
+<form action="/second" method="post"><button style="top:110px">send</button></form>
+<script>
+for (const el of document.querySelectorAll('a, button')) {
+  el.addEventListener('mouseover', () => { document.title = 'Links, over'; if (parent !== window) parent.postMessage('over', '*'); });
+}
+</script>`)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -61,11 +71,27 @@ func newTabKey() (int, string) {
 	return ModCtrl, "ctrl"
 }
 
-// clickWith clicks at x, y with button, holding mods.
+// clickWith clicks linkSite's control at x, y with button, holding mods,
+// once the control has the mouse over it. A frame from another site is
+// drawn and takes the mouse a moment after its page has loaded: a click
+// sent before then went to the page around it, and opened nothing (seen
+// on the macOS runner, twice in twenty-four runs).
 func clickWith(x, y float64, button string, mods int) func(context.Context, *Tab) error {
 	return func(ctx context.Context, tab *Tab) error {
-		if err := tab.Mouse(ctx, MouseEvent{Type: "mouseMoved", X: x, Y: y}); err != nil {
-			return err
+		deadline := time.Now().Add(10 * time.Second)
+		for over := false; !over; {
+			if err := tab.Mouse(ctx, MouseEvent{Type: "mouseMoved", X: x, Y: y}); err != nil {
+				return err
+			}
+			if err := tab.eval(ctx, `document.title.endsWith('over')`, &over); err != nil {
+				return err
+			}
+			if !over {
+				if time.Now().After(deadline) {
+					return fmt.Errorf("the control at (%v, %v) never had the mouse over it", x, y)
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
 		}
 		for _, typ := range []string{"mousePressed", "mouseReleased"} {
 			if err := tab.Mouse(ctx, MouseEvent{Type: typ, X: x, Y: y, Button: button, ClickCount: 1, Modifiers: mods}); err != nil {
@@ -86,10 +112,58 @@ func tabsWhen(t *testing.T, ctx context.Context, m *Manager, conv string, n int)
 			return tabs
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the conversation has %d tabs, want %d: %+v", len(tabs), n, tabs)
+			t.Fatalf("the conversation has %d tabs, want %d: %+v\n%s", len(tabs), n, tabs, whatTheManagerKnows(ctx, m))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// whatTheManagerKnows is, for a failure, what tells why a page is not a
+// tab: the asks still waiting, the pages claimed and not yet attached,
+// the pages that closed unlisted, and every page the browser has open. A
+// page that was never asked for, one that was asked for and never made,
+// one made and not taken for its ask, one still attaching and one closed
+// for failing to attach each read differently here.
+func whatTheManagerKnows(ctx context.Context, m *Manager) string {
+	short := func(id string) string {
+		if len(id) > 8 {
+			return id[:8]
+		}
+		return id
+	}
+	var b strings.Builder
+	m.mu.Lock()
+	for _, a := range m.asks {
+		fmt.Fprintf(&b, "  ask from %s for %s, %s ago\n", short(a.from), a.url, time.Since(a.at).Round(time.Millisecond))
+	}
+	for target, conv := range m.adopting {
+		fmt.Fprintf(&b, "  claimed for %q, not attached: %s\n", conv, short(target))
+	}
+	for target, at := range m.gone {
+		fmt.Fprintf(&b, "  closed unlisted %s ago: %s\n", time.Since(at).Round(time.Millisecond), short(target))
+	}
+	var conn = m.connLocked()
+	m.mu.Unlock()
+	if conn == nil {
+		return b.String() + "  no browser\n"
+	}
+	var out struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+			URL      string `json:"url"`
+			OpenerID string `json:"openerId"`
+		} `json:"targetInfos"`
+	}
+	if err := conn.Call(ctx, "", "Target.getTargets", nil, &out); err != nil {
+		return b.String() + "  the browser's pages: " + err.Error() + "\n"
+	}
+	for _, ti := range out.TargetInfos {
+		if ti.Type == "page" {
+			fmt.Fprintf(&b, "  page %s at %q, opener %q\n", short(ti.TargetID), ti.URL, short(ti.OpenerID))
+		}
+	}
+	return b.String()
 }
 
 // drawn waits for tab to be the page in front of its window, the only
@@ -278,123 +352,308 @@ func TestTheSameLinkOpenedByTwoConversationsIsATabOfEach(t *testing.T) {
 	}
 }
 
+// A script can send a link a click of its own making, with Shift or Ctrl
+// set on it. The page then asks the browser to open the link elsewhere,
+// and the browser opens nothing for a click nobody made. That ask is not
+// kept: kept, it was answered by the next page with the address, and
+// another conversation's page was taken for this one's.
+func TestAClickAScriptMadeTakesNoOtherConversationsPage(t *testing.T) {
+	m := testManager(t)
+	ctx := ctxFor(t)
+	site := linkSite(t)
+	key, _ := newTabKey()
+	one, err := m.Tab(ctx, "one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := one.Navigate(ctx, site); err != nil {
+		t.Fatal(err)
+	}
+	// After a click of the person's own with no key held, as a page that
+	// waits for one would do it.
+	for _, typ := range []string{"mousePressed", "mouseReleased"} {
+		if err := one.Mouse(ctx, MouseEvent{Type: typ, X: 600, Y: 400, Button: "left", ClickCount: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, mods := range []string{"shiftKey: true", "ctrlKey: true, metaKey: true"} {
+		if err := one.eval(ctx, `document.getElementById('link').dispatchEvent(new MouseEvent('click', {`+mods+`, bubbles: true, cancelable: true}))`, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The page has said it by the time it answers the next question.
+	if err := one.eval(ctx, `1`, nil); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	kept := len(m.asks)
+	m.mu.Unlock()
+	if kept != 0 {
+		t.Errorf("%d asks were kept from a click a script made", kept)
+	}
+	two, err := m.Tab(ctx, "two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := two.Navigate(ctx, site); err != nil {
+		t.Fatal(err)
+	}
+	if err := clickWith(linkX, linkY, "left", key)(ctx, two); err != nil {
+		t.Fatal(err)
+	}
+	tabsWhen(t, ctx, m, "two", 2)
+	if tabs := m.Tabs(ctx, "one"); len(tabs) != 1 {
+		t.Errorf("the conversation whose script clicked has the tabs %+v, want the one it had", tabs)
+	}
+}
+
+// A page that opens a dialog as it loads is answered though no tab is
+// attached to it yet. A tab answers its page's dialogs, but this page's
+// tab was still waiting its turn behind another that was attaching: the
+// dialog had nobody to answer it, the page stood still, its tab could not
+// be attached, and it was closed.
+func TestADialogAPageOpensBeforeItIsATabIsAnswered(t *testing.T) {
+	m := testManager(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/busy":
+			fmt.Fprint(w, `<!doctype html><script>const end = Date.now() + 400; while (Date.now() < end) {}</script><title>Busy</title>`)
+		case "/asks":
+			fmt.Fprint(w, `<!doctype html><script>alert('on load'); document.title = 'Answered ' + confirm('and again')</script><p>ready</p>`)
+		default:
+			fmt.Fprint(w, `<!doctype html><title>Start</title>
+<style>a{position:absolute;left:10px;width:200px;height:30px;display:block}</style>
+<a href="/busy" target="_blank" style="top:10px">busy</a>
+<a href="/asks" target="_blank" style="top:50px">asks</a>`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ctx := ctxFor(t)
+	tab, err := m.Tab(ctx, "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tab.Navigate(ctx, srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	// Two links, one after the other: the second page is made while the
+	// first is still being attached.
+	for _, y := range []float64{25, 65} {
+		for _, typ := range []string{"mousePressed", "mouseReleased"} {
+			if err := tab.Mouse(ctx, MouseEvent{Type: typ, X: 40, Y: y, Button: "left", ClickCount: 1}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	tabs := tabsWhen(t, ctx, m, "c", 3)
+	deadline := time.Now().Add(10 * time.Second)
+	for tabs[2].Title != "Answered true" {
+		if time.Now().After(deadline) {
+			t.Fatalf("the page that opened dialogs is %+v, want both answered OK", tabs[2])
+		}
+		time.Sleep(50 * time.Millisecond)
+		tabs = tabsWhen(t, ctx, m, "c", 3)
+	}
+}
+
+// Closing a tab lets go of every handler its page had, the handlers of
+// each frame in it from another site among them. A tab's own session was
+// set up as the guard's is, so each such frame was attached a second time
+// through it, and those sessions' handlers stayed when the tab closed.
+func TestClosingATabLetsGoOfItsFramesHandlers(t *testing.T) {
+	m := testManager(t)
+	ctx := ctxFor(t)
+	site := linkSite(t)
+	if _, err := m.Tab(ctx, "keep"); err != nil {
+		t.Fatal(err)
+	}
+	conn := m.proc.conn
+	openAndClose := func(n int) {
+		for i := 0; i < n; i++ {
+			conv := fmt.Sprintf("framed %d", i)
+			tab, err := m.Tab(ctx, conv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tab.Navigate(ctx, site+"/framed"); err != nil {
+				t.Fatal(err)
+			}
+			<-m.CloseTab(conv)
+		}
+	}
+	// settled is the handler count once it has stopped changing.
+	settled := func() int {
+		n, since := conn.HandlerCount(), time.Now()
+		for deadline := time.Now().Add(10 * time.Second); time.Since(since) < 500*time.Millisecond && time.Now().Before(deadline); {
+			time.Sleep(50 * time.Millisecond)
+			if now := conn.HandlerCount(); now != n {
+				n, since = now, time.Now()
+			}
+		}
+		return n
+	}
+	openAndClose(1)
+	before := settled()
+	openAndClose(8)
+	if after := settled(); after > before {
+		t.Fatalf("handlers went from %d to %d over 8 closed tabs with a frame from another site", before, after)
+	}
+}
+
 func askOf(url, where string) json.RawMessage {
 	b, _ := json.Marshal(map[string]string{"url": url, "disposition": where, "reason": "anchorClick"})
 	return b
 }
 
-// One click is one ask, though every session of the page it is in is told
-// of it: the guard's and the tab's own. Counted twice, one was left for
-// the next page with that address, whoever's it was.
-func TestAClickToldOnTwoSessionsIsOneAsk(t *testing.T) {
-	sb, _ := newScriptedBrowser(t, nil, nil)
-	m, p := managerOn(sb)
-	const u = "http://site.test/second"
-	for _, sess := range []string{"guard", "tab"} {
-		m.ask(p, "A", "A", sess, askOf(u, "newTab"))
+// keyClicked marks conv's tab id as one a click with a key held was just
+// sent to: the click an ask is taken for.
+func keyClicked(t *testing.T, m *Manager, id string) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, tab := m.listed(id)
+	if tab == nil {
+		t.Fatalf("no tab %s to click", id)
 	}
-	if from := m.asked(p, u); from != "A" {
-		t.Fatalf("the page made was asked for by %q, want A", from)
+	tab.mayOpen("left", ModCtrl)
+}
+
+// fronted is the pages the browser was asked to put in front, in order.
+func (sb *scriptedBrowser) fronted() []string {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	var out []string
+	for _, c := range sb.calls {
+		if c.Method == "Target.activateTarget" {
+			out = append(out, fmt.Sprint(c.Params["targetId"]))
+		}
 	}
-	if from := m.asked(p, u); from != "" {
-		t.Fatalf("one click left a second ask, from %q", from)
-	}
-	// A second click is a second ask.
-	for _, sess := range []string{"guard", "tab"} {
-		m.ask(p, "A", "A", sess, askOf(u, "newWindow"))
-	}
-	if from := m.asked(p, u); from != "A" {
-		t.Fatalf("the second click's page was asked for by %q, want A", from)
-	}
-	// A frame of the page from another site is heard on a session of its
-	// own, and asks for the page it is in.
-	for _, sess := range []string{"frame by guard", "frame by tab"} {
-		m.ask(p, "A", "F", sess, askOf(u, "newTab"))
-	}
-	if from, again := m.asked(p, u), m.asked(p, u); from != "A" || again != "" {
-		t.Fatalf("a frame's click was asked for by %q and %q, want A once", from, again)
-	}
-	// With the session it was heard on gone, another is heard.
-	m.forgetDetached(p, json.RawMessage(`{"sessionId":"guard"}`))
-	m.ask(p, "A", "A", "tab", askOf(u, "newTab"))
-	if from := m.asked(p, u); from != "A" {
-		t.Fatalf("with the first session gone, the page made was asked for by %q, want A", from)
-	}
+	return out
+}
+
+// tabs is conv's tab ids, once its work is done.
+func tabsDone(t *testing.T, m *Manager, conv string) string {
+	t.Helper()
+	drained(t, m, conv)
+	ids, _ := tabsOf(m, conv)
+	return fmt.Sprint(ids)
 }
 
 // What is not kept as an ask: a link opened in the page itself, a
-// download, and the address this manager opens its own tabs with, which
-// would have a tab it is opening taken for a page a conversation asked
-// for.
+// download, the address this manager opens its own tabs with (which would
+// have a tab it is opening taken for a page a conversation asked for),
+// and anything a page says when no click or key that can open a link
+// elsewhere was just sent to it. A script can have a page say it with no
+// such click, and the browser then opens nothing: kept, that ask was
+// answered by the next page with its address, whoever's it was.
 func TestWhatIsNotAnAsk(t *testing.T) {
 	sb, _ := newScriptedBrowser(t, nil, nil)
 	m, p := managerOn(sb)
+	const u = "http://site.test/second"
+	n := 0
+	notMade := func(what, url string) {
+		t.Helper()
+		n++
+		m.made(p, fmt.Sprintf("P%d", n), url)
+		if got := tabsDone(t, m, "c1"); got != "[A]" {
+			t.Fatalf("%s: a page at %q is a tab of the conversation: %s", what, url, got)
+		}
+	}
+	// Before any click with a key held.
+	m.ask(p, "A", askOf(u, "newTab"))
+	notMade("an ask with no click before it", u)
+	// After a plain click, which opens a link in its own page.
+	m.mu.Lock()
+	m.convs["c1"].tabs[0].mayOpen("left", 0)
+	m.mu.Unlock()
+	m.ask(p, "A", askOf(u, "newTab"))
+	notMade("an ask after a click with no key held", u)
+	// Long after one.
+	keyClicked(t, m, "A")
+	m.mu.Lock()
+	m.convs["c1"].tabs[0].opens.Store(time.Now().Add(-askAfter - time.Second).UnixNano())
+	m.mu.Unlock()
+	m.ask(p, "A", askOf(u, "newTab"))
+	notMade("an ask long after the click", u)
+
+	keyClicked(t, m, "A")
 	for _, ev := range []json.RawMessage{
-		askOf("http://site.test/second", "currentTab"),
-		askOf("http://site.test/second", "download"),
+		askOf(u, "currentTab"),
+		askOf(u, "download"),
 		askOf(blankPage, "newTab"),
 		askOf("", "newTab"),
 		json.RawMessage(`not JSON`),
 	} {
-		m.ask(p, "A", "A", "s", ev)
+		m.ask(p, "A", ev)
 	}
-	for _, u := range []string{"http://site.test/second", blankPage, ""} {
-		if from := m.asked(p, u); from != "" {
-			t.Errorf("a page at %q was asked for by %q, want by nobody", u, from)
-		}
+	for _, url := range []string{u, blankPage, ""} {
+		notMade("what is not an ask", url)
 	}
-	// What is kept, on the same session, is taken by its page.
-	const other = "http://site.test/other"
-	m.ask(p, "A", "A", "s", askOf(other, "newTab"))
-	// Not by a page of a browser that has been replaced.
+	// From a page that is no conversation's tab.
+	m.ask(p, "Z", askOf(u, "newTab"))
+	notMade("an ask from a page that is no tab", u)
+	// On a browser that has been replaced, and by a page of one.
 	replaced := &process{conn: sb.conn}
-	if from := m.asked(replaced, other); from != "" {
-		t.Errorf("a page of another browser took the ask of %q", from)
+	m.ask(replaced, "A", askOf(u, "newTab"))
+	notMade("an ask on another browser", u)
+	m.ask(p, "A", askOf(u, "newTab"))
+	m.made(replaced, "Q", u)
+	if got := tabsDone(t, m, "c1"); got != "[A]" {
+		t.Fatalf("a page of another browser took the ask: %s", got)
 	}
-	if from := m.asked(p, other); from != "A" {
-		t.Fatalf("the page made was asked for by %q, want A", from)
-	}
-	// And no ask is kept from a browser that has been replaced, or from
-	// before every tab went with the browser.
-	m.ask(replaced, "A", "A", "s", askOf(other, "newTab"))
-	if from := m.asked(p, other); from != "" {
-		t.Errorf("an ask on another browser was kept, from %q", from)
-	}
-	m.ask(p, "A", "A", "s", askOf(other, "newTab"))
+	// From before every tab went with the browser.
 	m.mu.Lock()
 	m.dropAll()
 	m.mu.Unlock()
-	if from := m.asked(p, other); from != "" {
-		t.Errorf("an ask was kept when every tab went, from %q", from)
+	m.made(p, "R", u)
+	if got := tabsDone(t, m, "c1"); got != "[]" {
+		t.Errorf("an ask was kept when every tab went: %s", got)
 	}
 }
 
-// The oldest ask for an address is answered first, an ask waits only so
-// long for its page, and only so many are kept.
-func TestAsksAreAnsweredOldestFirstAndNotForEver(t *testing.T) {
+// An ask is answered once, by the page with its address; the newest ask
+// for an address is answered first, so one left behind does not come
+// before the ask a click has just made; an ask waits only so long; and
+// only so many are kept.
+func TestAsksAreAnsweredNewestFirstAndNotForEver(t *testing.T) {
 	sb, _ := newScriptedBrowser(t, nil, nil)
 	m, p := managerOn(sb)
+	m.mu.Lock()
+	m.convs["c2"] = &convTabs{tabs: []*Tab{{conn: sb.conn, targetID: "C", session: "sC"}}, changed: make(chan struct{})}
+	m.mu.Unlock()
 	const u = "http://site.test/second"
-	m.ask(p, "A", "A", "sA", askOf(u, "newTab"))
-	m.ask(p, "C", "C", "sC", askOf(u, "newTab"))
-	m.ask(p, "A", "A", "sA", askOf(u+"?other", "newTab"))
-	if first, second := m.asked(p, u), m.asked(p, u); first != "A" || second != "C" {
-		t.Fatalf("the pages were asked for by %q then %q, want A then C", first, second)
+	keyClicked(t, m, "A")
+	keyClicked(t, m, "C")
+
+	m.ask(p, "A", askOf(u, "newTab"))
+	m.ask(p, "C", askOf(u, "newWindow"))
+	m.ask(p, "A", askOf(u+"?other", "newTab"))
+	m.made(p, "P1", u)
+	if one, two := tabsDone(t, m, "c1"), tabsDone(t, m, "c2"); one != "[A]" || two != "[C P1]" {
+		t.Fatalf("the first page made is in %s and %s, want in the conversation that asked last", one, two)
 	}
-	if from := m.asked(p, u+"?other"); from != "A" {
-		t.Fatalf("the page at the other address was asked for by %q, want A", from)
+	m.made(p, "P2", u)
+	m.made(p, "P3", u)
+	if one, two := tabsDone(t, m, "c1"), tabsDone(t, m, "c2"); one != "[A P2]" || two != "[C P1]" {
+		t.Fatalf("after two more pages the tabs are %s and %s: each ask is answered once", one, two)
+	}
+	m.made(p, "P4", u+"?other")
+	if one := tabsDone(t, m, "c1"); one != "[A P2 P4]" {
+		t.Fatalf("the page at the other address: %s", one)
 	}
 
-	m.ask(p, "A", "A", "sA", askOf(u, "newTab"))
+	m.ask(p, "A", askOf(u, "newTab"))
 	m.mu.Lock()
 	m.asks[0].at = time.Now().Add(-askFor - time.Second)
 	m.mu.Unlock()
-	if from := m.asked(p, u); from != "" {
-		t.Fatalf("an ask older than %s was answered, from %q", askFor, from)
+	m.made(p, "P5", u)
+	if one := tabsDone(t, m, "c1"); one != "[A P2 P4]" {
+		t.Fatalf("an ask older than %s was answered: %s", askFor, one)
 	}
 
 	for i := 0; i < askMax+5; i++ {
-		m.ask(p, "A", "A", "sA", askOf(fmt.Sprintf("%s?%d", u, i), "newTab"))
+		m.ask(p, "A", askOf(fmt.Sprintf("%s?%d", u, i), "newTab"))
 	}
 	m.mu.Lock()
 	kept := len(m.asks)
@@ -402,11 +661,10 @@ func TestAsksAreAnsweredOldestFirstAndNotForEver(t *testing.T) {
 	if kept != askMax {
 		t.Fatalf("%d asks are kept, want %d", kept, askMax)
 	}
-	if from := m.asked(p, u+"?0"); from != "" {
-		t.Errorf("the oldest ask was kept past the limit")
-	}
-	if from := m.asked(p, fmt.Sprintf("%s?%d", u, askMax+4)); from != "A" {
-		t.Errorf("the newest ask was asked for by %q, want A", from)
+	m.made(p, "P6", u+"?0")
+	m.made(p, "P7", fmt.Sprintf("%s?%d", u, askMax+4))
+	if one := tabsDone(t, m, "c1"); one != "[A P2 P4 P7]" {
+		t.Errorf("past the limit the oldest ask goes and the newest stays: %s", one)
 	}
 }
 
@@ -416,22 +674,57 @@ func TestAPageAskedForByAClosedConversationIsClosed(t *testing.T) {
 	sb, _ := newScriptedBrowser(t, nil, nil)
 	m, p := managerOn(sb)
 	const u = "http://site.test/second"
-	m.ask(p, "A", "A", "sA", askOf(u, "newTab"))
+	keyClicked(t, m, "A")
+	m.ask(p, "A", askOf(u, "newTab"))
 	<-m.CloseTab("c1")
-	from := m.asked(p, u)
-	if from != "A" {
-		t.Fatalf("the page made was asked for by %q, want A", from)
-	}
-	m.created(p, from, "B")
+	m.made(p, "B", u)
 	sb.waitClosed(t, "A", "B")
-	if ids, _ := tabsOf(m, "c1"); len(ids) != 0 {
-		t.Errorf("the closed conversation has the tabs %v", ids)
+	if got := tabsDone(t, m, "c1"); got != "[]" {
+		t.Errorf("the closed conversation has the tabs %s", got)
 	}
 }
 
+// What a tab asked for is the conversation's though the tab has closed
+// since: the page is a tab of the conversation, not one left open in the
+// browser with nobody's name on it, nor closed.
+func TestAPageAskedForByATabThatHasClosedIsTheConversations(t *testing.T) {
+	const u = "http://site.test/second"
+	t.Run("one of its tabs", func(t *testing.T) {
+		sb, _ := newScriptedBrowser(t, nil, nil)
+		m, p := managerOn(sb)
+		m.mu.Lock()
+		m.convs["c1"].tabs = append(m.convs["c1"].tabs, &Tab{conn: sb.conn, targetID: "A2", session: "sA2"})
+		m.mu.Unlock()
+		keyClicked(t, m, "A")
+		m.ask(p, "A", askOf(u, "newTab"))
+		m.destroyed(p, "A")
+		drained(t, m, "c1")
+		m.made(p, "B", u)
+		if got := tabsDone(t, m, "c1"); got != "[A2 B]" {
+			t.Fatalf("the tabs are %s, want [A2 B]", got)
+		}
+		if closed := sb.closed(); contains(closed, "B") {
+			t.Errorf("the page asked for was closed: %v", closed)
+		}
+	})
+	t.Run("its only tab", func(t *testing.T) {
+		sb, _ := newScriptedBrowser(t, nil, nil)
+		m, p := managerOn(sb)
+		keyClicked(t, m, "A")
+		m.ask(p, "A", askOf(u, "newTab"))
+		m.destroyed(p, "A")
+		drained(t, m, "c1")
+		m.made(p, "B", u)
+		if got := tabsDone(t, m, "c1"); got != "[B]" {
+			t.Fatalf("the tabs are %s, want [B]", got)
+		}
+	})
+}
+
 // A page the browser opened behind is added behind: the conversation
-// goes on in the tab it was in, nobody watching it is told of a change,
-// and nothing is put in front.
+// goes on in the tab it was in, and nobody watching it is told of a
+// change. The tab it works in is put in front either way, whatever has
+// happened in its window since the page said where it was.
 func TestAPageOpenedBehindIsATabBehind(t *testing.T) {
 	sb, _ := newScriptedBrowser(t, nil, nil)
 	sb.answers("Runtime.evaluate", map[string]any{"result": map[string]any{"value": "hidden"}})
@@ -449,8 +742,8 @@ func TestAPageOpenedBehindIsATabBehind(t *testing.T) {
 		t.Error("whoever watches the conversation was told of a change, and the tab it works in is the same")
 	default:
 	}
-	if n := sb.count("Target.activateTarget"); n != 0 {
-		t.Errorf("a tab was put in front %d times", n)
+	if got := fmt.Sprint(sb.fronted()); got != "[A]" {
+		t.Errorf("put in front: %s, want the tab it works in, [A]", got)
 	}
 	// One in front is the tab it works in, as before.
 	sb.answers("Runtime.evaluate", map[string]any{"result": map[string]any{"value": "visible"}})
@@ -458,6 +751,26 @@ func TestAPageOpenedBehindIsATabBehind(t *testing.T) {
 	drained(t, m, "c1")
 	if ids, active := tabsOf(m, "c1"); fmt.Sprint(ids) != "[A B C]" || active != "C" {
 		t.Fatalf("the tabs are %v and the conversation works in %s, want [A B C] and C", ids, active)
+	}
+	if got := fmt.Sprint(sb.fronted()); got != "[A C]" {
+		t.Errorf("put in front: %s, want [A C]", got)
+	}
+}
+
+// A page that does not say where it is becomes the tab the conversation
+// works in, as every page a link opened did, and is put in front: taken
+// to be in front and left where it was, one opened behind was a tab the
+// browser did not draw.
+func TestAPageThatDoesNotSayWhereItIsIsPutInFront(t *testing.T) {
+	sb, _ := newScriptedBrowser(t, map[string]string{"Runtime.evaluate": "Execution context was destroyed"}, nil)
+	m, p := managerOn(sb)
+	m.created(p, "A", "B")
+	drained(t, m, "c1")
+	if ids, active := tabsOf(m, "c1"); fmt.Sprint(ids) != "[A B]" || active != "B" {
+		t.Fatalf("the tabs are %v and the conversation works in %s, want [A B] and B", ids, active)
+	}
+	if got := fmt.Sprint(sb.fronted()); got != "[B]" {
+		t.Errorf("put in front: %s, want [B]", got)
 	}
 }
 
@@ -487,15 +800,48 @@ func TestAPageOpenedBehindThatIsTheOnlyTabIsPutInFront(t *testing.T) {
 	if ids, active := tabsOf(m, "c1"); fmt.Sprint(ids) != "[B]" || active != "B" {
 		t.Fatalf("the tabs are %v and the conversation works in %q, want [B] and B", ids, active)
 	}
-	var fronted []string
-	sb.mu.Lock()
-	for _, c := range sb.calls {
-		if c.Method == "Target.activateTarget" {
-			fronted = append(fronted, fmt.Sprint(c.Params["targetId"]))
+	if got := fmt.Sprint(sb.fronted()); got != "[B]" {
+		t.Errorf("put in front: %s, want [B]", got)
+	}
+}
+
+// A page is set up through one session, the first attached to it: the
+// tab's own session, attached after, is not set up again. A worker is,
+// through each of its sessions.
+func TestAPageIsSetUpThroughOneSession(t *testing.T) {
+	sb, _ := newScriptedBrowser(t, nil, nil)
+	m, p := managerOn(sb)
+	attach := func(session, target, kind string) {
+		ev, _ := json.Marshal(map[string]any{"sessionId": session, "targetInfo": map[string]string{"targetId": target, "type": kind}})
+		m.attached(p, ev, "")
+	}
+	setUp := func(want int) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for sb.count("Fetch.enable") != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d targets were set up, want %d", sb.count("Fetch.enable"), want)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		// And no more than that, a moment later.
+		time.Sleep(50 * time.Millisecond)
+		if got := sb.count("Fetch.enable"); got != want {
+			t.Fatalf("%d targets were set up, want %d", got, want)
 		}
 	}
-	sb.mu.Unlock()
-	if fmt.Sprint(fronted) != "[B]" {
-		t.Errorf("put in front: %v, want [B]", fronted)
-	}
+	attach("guard", "P", "page")
+	setUp(1)
+	attach("tab", "P", "page")
+	setUp(1)
+	attach("guard 2", "Q", "page")
+	setUp(2)
+	attach("w1", "W", "service_worker")
+	attach("w2", "W", "service_worker")
+	setUp(4)
+	// With its session gone, a page is set up through the next.
+	gone, _ := json.Marshal(map[string]string{"sessionId": "guard"})
+	forgetDetached(p, gone)
+	attach("tab again", "P", "page")
+	setUp(5)
 }

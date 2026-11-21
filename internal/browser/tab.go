@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"localcode/internal/cdp"
@@ -29,6 +30,8 @@ type Tab struct {
 	opener  string // the target that opened this tab with a link, or ""
 
 	castMu sync.Mutex // orders screencast starts and stops; see Watch
+
+	opens atomic.Int64 // see opening
 }
 
 // blankPage is the address every tab this manager opens starts at. A
@@ -174,21 +177,38 @@ func attachTab(ctx context.Context, conn *cdp.Conn, targetID string) (*Tab, erro
 // the browser does not draw it: one opened in a tab of its own and not
 // shown. The page says so itself, and says it from the moment it is
 // made (measured: a page opened in front or in a window of its own says
-// "visible" at once, one opened behind says "hidden"). A page that does
-// not answer is taken to be in front, as every page a link opened was
-// before.
-func (t *Tab) behind(ctx context.Context) bool {
+// "visible" at once, one opened behind says "hidden"). known is whether
+// it said either: a page that does not answer has not.
+func (t *Tab) behind(ctx context.Context) (behind, known bool) {
 	var state string
 	// A page that is still loading can swap the document the question
 	// was put to, and the question fails; it is put again.
 	for range 3 {
 		if err := t.eval(ctx, `document.visibilityState`, &state); err == nil {
-			return state == "hidden"
+			return state == "hidden", state == "hidden" || state == "visible"
 		} else if ctx.Err() != nil {
-			return false
+			break
 		}
 	}
-	return false
+	return false, false
+}
+
+// opening is when a click or a key that can open a link in a tab or a
+// window of its own was last sent to the page: a click with the wheel,
+// or a click or a key with Ctrl, Cmd or Shift held. The zero time if
+// none was. See Manager.ask.
+func (t *Tab) opening() time.Time {
+	if at := t.opens.Load(); at != 0 {
+		return time.Unix(0, at)
+	}
+	return time.Time{}
+}
+
+// mayOpen records such a click or key, as it is sent.
+func (t *Tab) mayOpen(button string, mods int) {
+	if button == "middle" || mods&(ModCtrl|ModMeta|ModShift) != 0 {
+		t.opens.Store(time.Now().UnixNano())
+	}
 }
 
 // TargetID is the page's id in the browser.

@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"localcode/internal/cdp"
@@ -34,6 +35,11 @@ type process struct {
 	dataDir   string
 	exited    chan struct{}
 	userAgent string // what every target is told to send; see guard
+
+	// guarded is, for each page, the session the guard set up: see
+	// Manager.attached.
+	guardMu sync.Mutex
+	guarded map[string]string
 }
 
 // launchArgs are the browser's command line. No window (the panel is the

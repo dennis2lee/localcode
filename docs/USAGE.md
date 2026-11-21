@@ -2852,7 +2852,7 @@ The `browser` tool's actions:
 Limits:
 
 * Every page renders at 1280x800, at 100% zoom. A click is sent as a point in that picture, so a zoomed page would not be where its picture shows it.
-* A JavaScript dialog (`alert`, `confirm`, `prompt`) is answered OK at once, and the next result names it.
+* A JavaScript dialog (`alert`, `confirm`, `prompt`) is answered OK at once, and the next result names it. A dialog a page opens before it is one of the conversation's tabs is answered OK and not named.
 * A link to `about:blank` opened in a tab or a window of its own is not added to the conversation's tabs.
 * Downloads and file pickers are not handled.
 * Some sites refuse a browser with no window.
