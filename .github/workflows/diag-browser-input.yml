@@ -1,0 +1,200 @@
+# Diagnostic, not part of the release: clicks and types on the browser
+# panel's page in the real desktop window on a Windows runner, with a real
+# mouse and keyboard, and reads back what the page received. The page
+# writes every mousedown, focus, key and input into its title.
+# Runs on pushes to diag/* branches only.
+name: diag-browser-input
+
+on:
+  push:
+    branches: ['diag/**']
+
+permissions:
+  contents: read
+
+jobs:
+  input:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        zoom_steps: [0, 1]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      - name: Build the window
+        timeout-minutes: 12
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: go build -tags gui -ldflags "-s -w -H windowsgui -X main.version=0.0.1" -o localcode-gui.exe ./cmd/localcode
+
+      - name: Click and type on the panel's page
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory "$env:USERPROFILE\.localcode\browser" -Force | Out-Null
+          # A profile name already chosen, so nothing is copied from the
+          # runner's own Chrome.
+          Set-Content -Encoding ascii "$env:USERPROFILE\.localcode\browser\localcode-profile" "Default"
+          @"
+          {
+            "auto_update": false,
+            "browser": true,
+            "providers": { "local": { "type": "openai-compat", "base_url": "http://127.0.0.1:9/v1" } },
+            "profiles": { "main": { "provider": "local", "model": "test-model" } },
+            "agents": { "general-purpose": { "profile": "main" } },
+            "default_profile": "main"
+          }
+          "@ | Set-Content -Encoding utf8 "$env:USERPROFILE\.localcode\config.json"
+
+          New-Item -ItemType Directory site -Force | Out-Null
+          @"
+          <!doctype html><html><head><title>ready</title>
+          <style>body{margin:0;font:20px sans-serif;background:#fff}
+          #f{position:absolute;left:100px;top:100px;width:600px;height:60px;font-size:28px}
+          #b{position:absolute;left:100px;top:300px;width:300px;height:100px;font-size:28px}</style></head>
+          <body><input id="f"><button id="b">press</button>
+          <script>
+          const log = [];
+          function t(s) { log.push(s); document.title = log.slice(-8).join(' | '); }
+          document.addEventListener('mousedown', e => t('down@' + e.clientX + ',' + e.clientY + ' on ' + (e.target.id || e.target.tagName)));
+          document.getElementById('b').addEventListener('click', () => t('clicked'));
+          document.getElementById('f').addEventListener('focus', () => t('focus f'));
+          document.getElementById('f').addEventListener('input', e => t('typed:' + e.target.value));
+          document.addEventListener('keydown', e => t('key:' + e.key + ' on ' + ((document.activeElement && document.activeElement.id) || '-')));
+          </script></body></html>
+          "@ | Set-Content -Encoding utf8 site\page.html
+          Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', 'site' -RedirectStandardError site-err.txt -RedirectStandardOutput site-out.txt
+
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          Add-Type -AssemblyName UIAutomationClient
+          Add-Type -AssemblyName UIAutomationTypes
+          Add-Type -AssemblyName Microsoft.VisualBasic
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class M {
+            [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
+            public static void Down() { mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero); }
+            public static void Up() { mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero); }
+          }
+          "@
+          New-Item -ItemType Directory shots -Force | Out-Null
+          function Shot($name) {
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $bmp.Save("shots\$name.png")
+            $g.Dispose(); $bmp.Dispose()
+          }
+          "screen: $([System.Windows.Forms.SystemInformation]::VirtualScreen)"
+
+          $app = Start-Process "$PWD\localcode-gui.exe" -PassThru
+          $base = $null
+          for ($i = 0; $i -lt 90 -and -not $base; $i++) {
+            $ports = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $app.Id } | ForEach-Object { $_.LocalPort }
+            foreach ($port in $ports) {
+              try { Invoke-RestMethod "http://127.0.0.1:$port/api/version" -TimeoutSec 2 | Out-Null; $base = "http://127.0.0.1:$port"; break } catch {}
+            }
+            if (-not $base) { Start-Sleep 1 }
+          }
+          "window pid $($app.Id), daemon at $base"
+          if (-not $base) { exit 1 }
+          Start-Sleep 3
+
+          function Api($method, $path, $body) {
+            try {
+              if ($null -ne $body) { Invoke-RestMethod -Method $method "$base$path" -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress -Depth 6) }
+              else { Invoke-RestMethod -Method $method "$base$path" }
+            } catch { "API $method $path failed: $($_.Exception.Message) $($_.ErrorDetails.Message)" }
+          }
+          function Title() { (Api Get "/api/sessions/$id/browser").title }
+          function Activate() { try { [Microsoft.VisualBasic.Interaction]::AppActivate($app.Id) } catch {}; Start-Sleep -Milliseconds 500 }
+
+          $s = Api Post '/api/sessions' @{}
+          $id = $s.id
+          Api Post "/api/sessions/$id/rename" @{ title = 'probe' } | Out-Null
+          Activate
+          [System.Windows.Forms.SendKeys]::SendWait('{F5}')
+          Start-Sleep 4
+
+          $root = [System.Windows.Automation.AutomationElement]::RootElement
+          $pidCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $app.Id)
+          function Find($prop, $value) {
+            $win = $root.FindFirst('Children', $pidCond)
+            $cond = New-Object System.Windows.Automation.PropertyCondition($prop, $value)
+            for ($i = 0; $i -lt 20; $i++) {
+              $el = $win.FindFirst('Descendants', $cond)
+              if ($el) { return $el }
+              Start-Sleep -Milliseconds 500
+            }
+            return $null
+          }
+          function ClickAt($x, $y) {
+            [M]::SetCursorPos([int]$x, [int]$y) | Out-Null
+            Start-Sleep -Milliseconds 300
+            [M]::Down(); Start-Sleep -Milliseconds 80; [M]::Up()
+            Start-Sleep -Milliseconds 1200
+          }
+          $row = Find ([System.Windows.Automation.AutomationElement]::NameProperty) 'probe'
+          if ($row) { $r = $row.Current.BoundingRectangle; Activate; ClickAt ($r.X + 12) ($r.Y + $r.Height / 2); "opened the conversation from its row at $r" } else { "no row named probe" }
+
+          for ($z = 0; $z -lt ${{ matrix.zoom_steps }}; $z++) { Activate; [System.Windows.Forms.SendKeys]::SendWait('^='); Start-Sleep 1 }
+
+          "navigate: $(Api Post "/api/sessions/$id/browser/navigate" @{ url = 'http://127.0.0.1:8765/page.html' } | ConvertTo-Json -Compress)"
+          Start-Sleep 4
+          "title after navigate: $(Title)"
+          Shot 'after-navigate'
+
+          "--- A: input sent to the daemon directly"
+          Api Post "/api/sessions/$id/browser/input" @{ mouse = @{ type = 'mousePressed'; x = 400; y = 130; button = 'left'; buttons = 1; clickCount = 1 } } | Out-Null
+          Api Post "/api/sessions/$id/browser/input" @{ mouse = @{ type = 'mouseReleased'; x = 400; y = 130; button = 'left'; buttons = 0; clickCount = 1 } } | Out-Null
+          Api Post "/api/sessions/$id/browser/input" @{ text = 'api' } | Out-Null
+          Start-Sleep 1
+          "RESULT api (zoom steps ${{ matrix.zoom_steps }}): $(Title)"
+          Api Post "/api/sessions/$id/browser/navigate" @{ url = 'http://127.0.0.1:8765/page.html?2' } | Out-Null
+          Start-Sleep 3
+
+          "--- B: the real mouse and keyboard on the panel"
+          $view = Find ([System.Windows.Automation.AutomationElement]::AutomationIdProperty) 'browser-view'
+          if (-not $view) {
+            "no element with AutomationId browser-view; images in the window:"
+            $win = $root.FindFirst('Children', $pidCond)
+            $imgs = $win.FindAll('Descendants', (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Image)))
+            foreach ($im in $imgs) { "  image '$($im.Current.Name)' id '$($im.Current.AutomationId)' at $($im.Current.BoundingRectangle)" }
+            $view = $imgs | Sort-Object { $_.Current.BoundingRectangle.Width * $_.Current.BoundingRectangle.Height } -Descending | Select-Object -First 1
+          }
+          if (-not $view) { "no view found"; Shot 'no-view'; exit 0 }
+          $v = $view.Current.BoundingRectangle
+          "view at $v"
+          $fx = $v.X + $v.Width * 400 / 1280; $fy = $v.Y + $v.Height * 130 / 800
+          Activate
+          ClickAt $fx $fy
+          "RESULT mouse-on-field (zoom steps ${{ matrix.zoom_steps }}): clicked screen $([int]$fx),$([int]$fy) aiming at page 400,130 :: $(Title)"
+          [System.Windows.Forms.SendKeys]::SendWait('hello')
+          Start-Sleep 2
+          "RESULT keyboard (zoom steps ${{ matrix.zoom_steps }}): $(Title)"
+          Shot 'after-typing'
+          $bx = $v.X + $v.Width * 250 / 1280; $by = $v.Y + $v.Height * 350 / 800
+          ClickAt $bx $by
+          "RESULT mouse-on-button (zoom steps ${{ matrix.zoom_steps }}): aiming at page 250,350 :: $(Title)"
+          Shot 'after-button'
+          $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+          "focused element: '$($focused.Current.Name)' id '$($focused.Current.AutomationId)' type $($focused.Current.ControlType.ProgrammaticName)"
+
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-input-shots-${{ strategy.job-index }}
+          path: shots
+          if-no-files-found: warn
