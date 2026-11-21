@@ -195,6 +195,19 @@ func (m *Manager) guardTarget(p *process, params json.RawMessage, within string)
 	}
 	if ev.WaitingForDebugger {
 		pending = append(pending, conn.Go(ctx, sess, "Runtime.runIfWaitingForDebugger", nil))
+		if ev.TargetInfo.Type == "page" {
+			// A page just made is asked, as it starts, where the browser
+			// put it: see Manager.born.
+			target := ev.TargetInfo.TargetID
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				var said string
+				if evalOn(ctx, conn, sess, whereIs, &said) == nil {
+					m.bornAt(p, target, said)
+				}
+			}()
+		}
 	}
 	for _, ch := range pending {
 		<-ch

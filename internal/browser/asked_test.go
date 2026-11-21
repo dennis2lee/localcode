@@ -501,6 +501,190 @@ func TestClosingATabLetsGoOfItsFramesHandlers(t *testing.T) {
 	}
 }
 
+// A key that opens nothing elsewhere lets no script's ask through. Shift
+// is held for every capital letter typed, and each such key let whatever
+// the page's script said in the next seconds pass for a click.
+func TestAKeyThatOpensNothingLetsNoAskThrough(t *testing.T) {
+	m := testManager(t)
+	ctx := ctxFor(t)
+	site := linkSite(t)
+	key, _ := newTabKey()
+	one, err := m.Tab(ctx, "one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := one.Navigate(ctx, site); err != nil {
+		t.Fatal(err)
+	}
+	for _, keys := range []string{"shift+Tab", "ctrl+a", "shift+A"} {
+		if err := one.Press(ctx, keys); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := one.eval(ctx, `
+		const ask = () => document.getElementById('link').dispatchEvent(new MouseEvent('click', {ctrlKey: true, metaKey: true, bubbles: true, cancelable: true}));
+		ask();
+		setInterval(ask, 10);
+	`, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := one.eval(ctx, `1`, nil); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	kept := len(m.asks)
+	m.mu.Unlock()
+	if kept != 0 {
+		t.Errorf("%d asks were kept from a click a script made after keys that open nothing", kept)
+	}
+	two, err := m.Tab(ctx, "two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := two.Navigate(ctx, site); err != nil {
+		t.Fatal(err)
+	}
+	if err := clickWith(linkX, linkY, "left", key)(ctx, two); err != nil {
+		t.Fatal(err)
+	}
+	tabsWhen(t, ctx, m, "two", 2)
+	if tabs := m.Tabs(ctx, "one"); len(tabs) != 1 {
+		t.Errorf("the conversation whose script clicked has the tabs %+v, want the one it had", tabs)
+	}
+}
+
+// Pages opened one straight after another end where the browser put
+// them: the last one opened in front is the tab the conversation works
+// in, and is the one drawn; one opened behind is behind. Where a page is
+// when its turn comes to be added is not where the browser put it: one
+// opened in front is behind the next by then, and this manager putting
+// the tab it works in back in front, after a page added behind, covered
+// one opened in front that was still waiting, which was then listed
+// behind and left there.
+func TestPagesOpenedOneAfterAnotherEndWhereTheBrowserPutThem(t *testing.T) {
+	m := testManager(t)
+	site := linkSite(t)
+	type open struct {
+		name   string
+		button string
+		mods   int
+		front  bool
+	}
+	behind := open{"behind", "middle", 0, false}
+	inFront := open{"in front", "middle", ModShift, true}
+	window := open{"in a window", "left", ModShift, true}
+	for _, seq := range [][]open{
+		{behind, inFront}, {inFront, behind}, {behind, behind}, {inFront, inFront},
+		{behind, window}, {window, behind}, {inFront, window}, {window, inFront},
+		{behind, inFront, behind}, {inFront, behind, inFront},
+	} {
+		name := ""
+		for i, o := range seq {
+			if i > 0 {
+				name += ", then "
+			}
+			name += o.name
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := ctxFor(t)
+			first, err := m.Tab(ctx, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { <-m.CloseTab(name) })
+			if err := first.Navigate(ctx, site); err != nil {
+				t.Fatal(err)
+			}
+			// The mouse is over the link before the first click, and the
+			// clicks follow each other with nothing waited for between.
+			if err := clickWith(linkX, linkY, seq[0].button, seq[0].mods)(ctx, first); err != nil {
+				t.Fatal(err)
+			}
+			for _, o := range seq[1:] {
+				for _, typ := range []string{"mousePressed", "mouseReleased"} {
+					if err := first.Mouse(ctx, MouseEvent{Type: typ, X: linkX, Y: linkY, Button: o.button, ClickCount: 1, Modifiers: o.mods}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			tabs := tabsWhen(t, ctx, m, name, 1+len(seq))
+			want := 0
+			for i, o := range seq {
+				if o.front {
+					want = i + 1
+				}
+			}
+			// The last of them is added a moment after it is listed.
+			deadline := time.Now().Add(10 * time.Second)
+			for !tabs[want].Active {
+				if time.Now().After(deadline) {
+					t.Fatalf("the tabs are %+v, want tab %d the one the conversation works in", tabs, want)
+				}
+				time.Sleep(50 * time.Millisecond)
+				tabs = m.Tabs(ctx, name)
+			}
+			drained(t, m, name)
+			if tabs = m.Tabs(ctx, name); len(tabs) != 1+len(seq) || !tabs[want].Active {
+				t.Fatalf("once every page is added the tabs are %+v, want tab %d the one the conversation works in", tabs, want)
+			}
+			drawn(t, ctx, m.Existing(name), "the tab the conversation works in")
+		})
+	}
+}
+
+// A page says where the browser put it as it starts, before its turn to
+// be added comes: by then it may be somewhere else.
+func TestAPageSaysWhereItIsAsItStarts(t *testing.T) {
+	m := testManager(t)
+	ctx := ctxFor(t)
+	site := linkSite(t)
+	for _, tc := range []struct {
+		name, want string
+		mods       int
+	}{{"behind", "hidden", 0}, {"in front", "visible", ModShift}} {
+		t.Run(tc.name, func(t *testing.T) {
+			first, err := m.Tab(ctx, tc.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { <-m.CloseTab(tc.name) })
+			if err := first.Navigate(ctx, site); err != nil {
+				t.Fatal(err)
+			}
+			// The conversation's turn is held: the page waits to be added.
+			held, err := m.queued(ctx, tc.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := clickWith(linkX, linkY, "middle", tc.mods)(ctx, first); err != nil {
+				held()
+				t.Fatal(err)
+			}
+			said, deadline := "", time.Now().Add(10*time.Second)
+			for said == "" && time.Now().Before(deadline) {
+				m.mu.Lock()
+				for _, s := range m.born {
+					said = s
+				}
+				m.mu.Unlock()
+				time.Sleep(20 * time.Millisecond)
+			}
+			held()
+			if said != tc.want {
+				t.Fatalf("the page said %q as it started, want %q", said, tc.want)
+			}
+			tabsWhen(t, ctx, m, tc.name, 2)
+			drained(t, m, tc.name)
+			m.mu.Lock()
+			left := len(m.born)
+			m.mu.Unlock()
+			if left != 0 {
+				t.Errorf("%d pages' words are kept once the page is a tab", left)
+			}
+		})
+	}
+}
+
 func askOf(url, where string) json.RawMessage {
 	b, _ := json.Marshal(map[string]string{"url": url, "disposition": where, "reason": "anchorClick"})
 	return b
@@ -516,7 +700,7 @@ func keyClicked(t *testing.T, m *Manager, id string) {
 	if tab == nil {
 		t.Fatalf("no tab %s to click", id)
 	}
-	tab.mayOpen("left", ModCtrl)
+	tab.clicked("left", ModCtrl)
 }
 
 // fronted is the pages the browser was asked to put in front, in order.
@@ -563,12 +747,41 @@ func TestWhatIsNotAnAsk(t *testing.T) {
 	// Before any click with a key held.
 	m.ask(p, "A", askOf(u, "newTab"))
 	notMade("an ask with no click before it", u)
-	// After a plain click, which opens a link in its own page.
+	// After a click or a key that opens a link in its own page, or
+	// nothing: a plain click, the right button, a letter typed with Shift
+	// held, Tab with Shift, a shortcut.
 	m.mu.Lock()
-	m.convs["c1"].tabs[0].mayOpen("left", 0)
+	a := m.convs["c1"].tabs[0]
+	a.clicked("left", 0)
+	a.clicked("right", ModCtrl)
+	a.pressed("A", ModShift)
+	a.pressed("Tab", ModShift)
+	a.pressed("a", ModCtrl)
+	a.pressed("Enter", 0)
 	m.mu.Unlock()
 	m.ask(p, "A", askOf(u, "newTab"))
-	notMade("an ask after a click with no key held", u)
+	notMade("an ask after a click or a key that opens nothing elsewhere", u)
+	// After each that can: the wheel, a click with a key held, Enter or
+	// Space with one held.
+	for i, opens := range []func(){
+		func() { a.clicked("middle", 0) },
+		func() { a.clicked("left", ModShift) },
+		func() { a.clicked("", ModMeta) },
+		func() { a.pressed("Enter", ModCtrl) },
+		func() { a.pressed(" ", ModShift) },
+	} {
+		a.opens.Store(0)
+		opens()
+		m.ask(p, "A", askOf(u, "newTab"))
+		m.mu.Lock()
+		kept := len(m.asks)
+		m.asks = nil
+		m.mu.Unlock()
+		if kept != 1 {
+			t.Fatalf("after click or key %d that can open a link elsewhere, %d asks are kept, want 1", i, kept)
+		}
+	}
+	a.opens.Store(0)
 	// Long after one.
 	keyClicked(t, m, "A")
 	m.mu.Lock()
@@ -771,6 +984,93 @@ func TestAPageThatDoesNotSayWhereItIsIsPutInFront(t *testing.T) {
 	}
 	if got := fmt.Sprint(sb.fronted()); got != "[B]" {
 		t.Errorf("put in front: %s, want [B]", got)
+	}
+}
+
+// And whoever watches the conversation is told of that tab once it has
+// been brought forward and has painted, not when it is listed: a stream
+// started on a tab the browser is not drawing stays on one picture.
+func TestAPageThatDoesNotSayWhereItIsIsToldOfOncePainted(t *testing.T) {
+	// The page answers nothing it is asked: where it is (three tries),
+	// then whether it has painted, which is held.
+	sb, let := newScriptedBrowser(t, map[string]string{"Runtime.evaluate": "Execution context was destroyed"}, map[string][]int{"Runtime.evaluate": {4}})
+	m, p := managerOn(sb)
+	m.mu.Lock()
+	watching := m.convs["c1"].changed
+	m.mu.Unlock()
+	m.created(p, "A", "B")
+	sb.waitHeld(t, "Runtime.evaluate#4")
+	if got := fmt.Sprint(sb.fronted()); got != "[B]" {
+		t.Fatalf("put in front before it is waited on to paint: %s, want [B]", got)
+	}
+	select {
+	case <-watching:
+		t.Fatal("whoever watches the conversation was told before the tab had painted")
+	default:
+	}
+	let["Runtime.evaluate"][4]()
+	select {
+	case <-watching:
+	case <-time.After(2 * time.Second):
+		t.Error("whoever watches the conversation was not told once the tab had painted")
+	}
+}
+
+// With more of its pages still to be added, nothing of the conversation's
+// is brought forward: that would cover one opened in front that waits.
+// The last of them settles what is in front.
+func TestNothingIsBroughtForwardWhileMorePagesWait(t *testing.T) {
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Target.attachToTarget": {1}})
+	sb.answers("Runtime.evaluate", map[string]any{"result": map[string]any{"value": "hidden"}})
+	m, p := managerOn(sb)
+	m.created(p, "A", "B")
+	sb.waitHeld(t, "Target.attachToTarget#1")
+	m.created(p, "A", "C")
+	queuedBehind(t, m, "c1", 2)
+	// The second page said, as it started, that it was in front.
+	m.bornAt(p, "C", "visible")
+	let["Target.attachToTarget"][1]()
+	drained(t, m, "c1")
+	if ids, active := tabsOf(m, "c1"); fmt.Sprint(ids) != "[A B C]" || active != "C" {
+		t.Fatalf("the tabs are %v and the conversation works in %s, want [A B C] and C", ids, active)
+	}
+	if got := fmt.Sprint(sb.fronted()); got != "[C]" {
+		t.Errorf("put in front: %s, want only the last, [C]", got)
+	}
+}
+
+// A page that closes before it is attached was never a tab, but it may
+// have been in front, and the browser then brings another tab of its
+// window forward: the tab the conversation works in is put back in
+// front.
+func TestAPageThatClosesUnattachedLeavesTheActiveTabInFront(t *testing.T) {
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Target.attachToTarget": {1}})
+	m, p := managerOn(sb)
+	m.created(p, "A", "B")
+	sb.waitHeld(t, "Target.attachToTarget#1")
+	m.destroyed(p, "B")
+	let["Target.attachToTarget"][1]()
+	drained(t, m, "c1")
+	if ids, active := tabsOf(m, "c1"); fmt.Sprint(ids) != "[A]" || active != "A" {
+		t.Fatalf("the tabs are %v and the conversation works in %s, want [A] and A", ids, active)
+	}
+	if got := fmt.Sprint(sb.fronted()); got != "[A]" {
+		t.Errorf("put in front: %s, want [A]", got)
+	}
+}
+
+// And so does a page that could not be attached, which is closed.
+func TestAPageThatCouldNotBeAttachedLeavesTheActiveTabInFront(t *testing.T) {
+	sb, _ := newScriptedBrowser(t, map[string]string{"Runtime.enable": "the page does not answer"}, nil)
+	m, p := managerOn(sb)
+	m.created(p, "A", "B")
+	drained(t, m, "c1")
+	sb.waitClosed(t, "B")
+	if ids, active := tabsOf(m, "c1"); fmt.Sprint(ids) != "[A]" || active != "A" {
+		t.Fatalf("the tabs are %v and the conversation works in %s, want [A] and A", ids, active)
+	}
+	if got := fmt.Sprint(sb.fronted()); got != "[A]" {
+		t.Errorf("put in front: %s, want [A]", got)
 	}
 }
 

@@ -173,19 +173,28 @@ func attachTab(ctx context.Context, conn *cdp.Conn, targetID string) (*Tab, erro
 	return t, nil
 }
 
-// behind is whether the page is behind another tab of its window, where
-// the browser does not draw it: one opened in a tab of its own and not
-// shown. The page says so itself, and says it from the moment it is
-// made (measured: a page opened in front or in a window of its own says
-// "visible" at once, one opened behind says "hidden"). known is whether
-// it said either: a page that does not answer has not.
-func (t *Tab) behind(ctx context.Context) (behind, known bool) {
-	var state string
+// whereIs asks a page where the browser put it: whether it is the tab
+// in front of its window, which is the only one the browser draws, or
+// behind another. The page says so from the moment it is made (measured:
+// a page opened in front or in a window of its own says "visible" at
+// once, one opened behind says "hidden").
+const whereIs = `document.visibilityState`
+
+// placed reads what a page said to whereIs: behind is that it is behind
+// another tab, and known that it said one or the other.
+func placed(said string) (behind, known bool) {
+	return said == "hidden", said == "hidden" || said == "visible"
+}
+
+// where asks the page where it is now: see whereIs. A page that does not
+// answer is not known to be anywhere.
+func (t *Tab) where(ctx context.Context) (behind, known bool) {
+	var said string
 	// A page that is still loading can swap the document the question
 	// was put to, and the question fails; it is put again.
 	for range 3 {
-		if err := t.eval(ctx, `document.visibilityState`, &state); err == nil {
-			return state == "hidden", state == "hidden" || state == "visible"
+		if err := t.eval(ctx, whereIs, &said); err == nil {
+			return placed(said)
 		} else if ctx.Err() != nil {
 			break
 		}
@@ -194,9 +203,8 @@ func (t *Tab) behind(ctx context.Context) (behind, known bool) {
 }
 
 // opening is when a click or a key that can open a link in a tab or a
-// window of its own was last sent to the page: a click with the wheel,
-// or a click or a key with Ctrl, Cmd or Shift held. The zero time if
-// none was. See Manager.ask.
+// window of its own was last sent to the page: see clicked and pressed.
+// The zero time if none was. See Manager.ask.
 func (t *Tab) opening() time.Time {
 	if at := t.opens.Load(); at != 0 {
 		return time.Unix(0, at)
@@ -204,9 +212,25 @@ func (t *Tab) opening() time.Time {
 	return time.Time{}
 }
 
-// mayOpen records such a click or key, as it is sent.
-func (t *Tab) mayOpen(button string, mods int) {
-	if button == "middle" || mods&(ModCtrl|ModMeta|ModShift) != 0 {
+// opensElsewhere are the keys that, held, make a click or a key open a
+// link in a tab or a window of its own rather than in its page.
+const opensElsewhere = ModCtrl | ModMeta | ModShift
+
+// clicked records a click that can open a link elsewhere, as it is sent:
+// one with the wheel, or the left button with one of those keys held.
+func (t *Tab) clicked(button string, mods int) {
+	if button == "middle" || ((button == "left" || button == "") && mods&opensElsewhere != 0) {
+		t.opens.Store(time.Now().UnixNano())
+	}
+}
+
+// pressed records a key that can open a link elsewhere, as it is sent:
+// Enter or Space, which are what a focused link or button takes for a
+// click, with one of those keys held. Not any key with one held: Shift
+// is held for every capital letter typed, and each would let whatever
+// the page's script said in the seconds after pass for a click.
+func (t *Tab) pressed(key string, mods int) {
+	if (key == "Enter" || key == " ") && mods&opensElsewhere != 0 {
 		t.opens.Store(time.Now().UnixNano())
 	}
 }
@@ -459,6 +483,12 @@ func (t *Tab) Capture(ctx context.Context, s Shot) (Captured, error) {
 
 // eval runs expression in the page and decodes its value into out.
 func (t *Tab) eval(ctx context.Context, expression string, out any) error {
+	return evalOn(ctx, t.conn, t.session, expression, out)
+}
+
+// evalOn runs expression in the page session is attached to, and decodes
+// its value into out.
+func evalOn(ctx context.Context, conn *cdp.Conn, session, expression string, out any) error {
 	var res struct {
 		Result struct {
 			Value json.RawMessage `json:"value"`
@@ -470,7 +500,7 @@ func (t *Tab) eval(ctx context.Context, expression string, out any) error {
 			} `json:"exception"`
 		} `json:"exceptionDetails"`
 	}
-	if err := t.conn.Call(ctx, t.session, "Runtime.evaluate", map[string]any{
+	if err := conn.Call(ctx, session, "Runtime.evaluate", map[string]any{
 		"expression": expression, "returnByValue": true, "awaitPromise": true,
 	}, &res); err != nil {
 		return err

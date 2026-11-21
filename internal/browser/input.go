@@ -164,7 +164,7 @@ func (t *Tab) Mouse(ctx context.Context, e MouseEvent) error {
 		params["deltaX"], params["deltaY"] = e.DeltaX, e.DeltaY
 	}
 	if e.Type == "mousePressed" || e.Type == "mouseReleased" {
-		t.mayOpen(e.Button, e.Modifiers)
+		t.clicked(e.Button, e.Modifiers)
 	}
 	return t.input(ctx, "Input.dispatchMouseEvent", params)
 }
@@ -301,7 +301,7 @@ func (t *Tab) KeyEvent(ctx context.Context, e KeyEvent) error {
 		params["commands"] = e.Commands
 	}
 	if e.Type != "keyUp" {
-		t.mayOpen("", e.Modifiers)
+		t.pressed(e.Key, e.Modifiers)
 	}
 	return t.input(ctx, "Input.dispatchKeyEvent", params)
 }

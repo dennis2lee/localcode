@@ -84,6 +84,9 @@ type Manager struct {
 	// a window of their own, oldest first, each until its page turns up:
 	// see ask.
 	asks []ask
+	// born is where the browser put each page that is claimed and not
+	// yet attached, as the page said when it started: see bornAt.
+	born map[string]string
 }
 
 // ask is one link a page asked the browser to open in a tab or a window
@@ -245,6 +248,7 @@ func (m *Manager) dropAll() {
 	}
 	m.convs = map[string]*convTabs{}
 	m.adopting = map[string]string{}
+	m.born = map[string]string{}
 	m.asks = nil
 }
 
@@ -301,6 +305,13 @@ func (c *convTabs) add(t *Tab) {
 // they watch has not changed; the panel's tab strip reads the list.
 func (c *convTabs) addBehind(t *Tab) {
 	c.tabs = append(c.tabs, t)
+}
+
+// addUntold appends t and makes it the active tab, and leaves telling
+// whoever watches to showActive, once the tab is in front and painted.
+func (c *convTabs) addUntold(t *Tab) {
+	c.tabs = append(c.tabs, t)
+	c.active = len(c.tabs) - 1
 }
 
 // remove takes out the tab at i. Removing the active one makes its
@@ -414,6 +425,7 @@ func NewManager(opts Options) *Manager {
 		queues:   map[string]*queue{},
 		adopting: map[string]string{},
 		gone:     map[string]time.Time{},
+		born:     map[string]string{},
 	}
 }
 
@@ -1038,7 +1050,8 @@ func (m *Manager) claim(p *process, conv, from, targetID string) {
 // same, as it was at first, such a page was one the browser did not
 // draw: the panel showed a picture that did not change. A page that does
 // not say where it is becomes the one it works in, as every page a link
-// opened did before, and is put in front.
+// opened did before, and is put in front. Where the browser put it is
+// what the page said as it started (see bornAt).
 func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, targetID string) {
 	_ = m.await(context.Background(), q, tk)
 	// A page it does not publish is closed after the turn, so a page slow
@@ -1054,6 +1067,8 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	m.mu.Lock()
 	_, claimed := m.adopting[targetID]
 	stale := m.proc != p || !claimed || m.wasGone(targetID)
+	said, early := m.born[targetID]
+	delete(m.born, targetID)
 	if stale {
 		delete(m.adopting, targetID)
 	}
@@ -1068,20 +1083,37 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	t, err := attachTab(ctx, p.conn, targetID)
+	// Where the browser put it is what it said as it started, if it said:
+	// where it is by now is something else, since a page opened after it
+	// may have covered it, or this manager put another in front.
 	behind, known := false, false
 	if err == nil {
-		behind, known = t.behind(ctx)
+		if early {
+			behind, known = placed(said)
+		}
+		if !known {
+			behind, known = t.where(ctx)
+		}
 	}
 
 	m.mu.Lock()
 	_, claimed = m.adopting[targetID]
 	delete(m.adopting, targetID)
+	// What it said as it started may have come since this turn began.
+	delete(m.born, targetID)
 	if err != nil {
 		// Not attached, it can be no conversation's tab: closed rather than
 		// left open in the browser where nothing reaches it, and so are the
-		// pages it opened before it closed.
+		// pages it opened before it closed. If it was the last the
+		// conversation waited for, the tab it works in is put in front,
+		// as after a page that is added.
 		m.markGone(targetID)
+		var active *Tab
+		if c := m.convs[conv]; c != nil && !m.waiting(conv) {
+			active = c.current()
+		}
 		m.mu.Unlock()
+		front(active)
 		release()
 		closeTarget(p.conn, targetID)
 		return
@@ -1095,25 +1127,37 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 		return
 	}
 	t.opener = openerID
+	// More of the conversation's pages are waiting to be added: what is
+	// in front is settled by the last of them, and until then nothing is
+	// brought forward, since that would cover one of those opened in
+	// front and still waiting.
+	more := m.waiting(conv)
+	inFront := known && !behind
 	c := m.convs[conv]
 	switch {
 	case c == nil:
 		c = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
 		m.convs[conv] = c
-	case behind:
+	case known && behind:
 		c.addBehind(t)
-	default:
+	case inFront || more:
 		c.add(t)
+	default:
+		// Not known to be in front: whoever watches is told once it has
+		// been brought forward and has painted, below, not now.
+		c.addUntold(t)
 	}
 	active := c.current()
 	m.mu.Unlock()
-	// Whatever the page said, the tab the conversation works in is put in
-	// front, which changes nothing when it is there. What the page said
-	// is where it was when asked, not where the browser put it: a page
-	// opened in front may be behind one opened after it by then, and if
-	// that one then closes before it is anybody's tab, the browser brings
-	// this one forward again, over the tab the list says is in front.
-	if active != t || (known && !behind) {
+	if more {
+		return
+	}
+	// The tab the conversation works in is put in front, which changes
+	// nothing when it is there. It may not be: a page opened in front
+	// can have been covered since, by a page opened after it that closed
+	// before it was anybody's tab, and then brought forward again by the
+	// browser over the tab the list says is in front.
+	if active != t || inFront {
 		front(active)
 		return
 	}
@@ -1123,6 +1167,51 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	after := m.showActive(conv, t)
 	release()
 	after()
+}
+
+// waiting is whether a page claimed for conv is still to be attached.
+// Called with m.mu.
+func (m *Manager) waiting(conv string) bool {
+	for _, owner := range m.adopting {
+		if owner == conv {
+			return true
+		}
+	}
+	return false
+}
+
+// bornAt is a page saying, as it starts, where the browser put it (see
+// whereIs): kept for a page that is claimed and waits to be attached,
+// which is asked nothing later if it said. Called from the guard, which
+// is attached to every page before it runs.
+//
+// The page is asked then, and not when its turn comes to be attached,
+// because by then the answer is about something else. A page opened in
+// front says "hidden" once a page opened after it is in front of it, or
+// once this manager has brought another forward; taken for one opened
+// behind, the page the browser had put in front was listed behind and
+// left there.
+func (m *Manager) bornAt(p *process, targetID, said string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, claimed := m.adopting[targetID]; m.proc == p && claimed {
+		m.born[targetID] = said
+	}
+}
+
+// refront puts the tab conv works in back in front, in conv's turn: a
+// page of its that was never attached has closed, and if it had been in
+// front the browser has brought some other tab of that window forward.
+func (m *Manager) refront(conv string, q *queue, tk uint64) {
+	_ = m.await(context.Background(), q, tk)
+	defer m.done(q)
+	m.mu.Lock()
+	var active *Tab
+	if c := m.convs[conv]; c != nil && !m.waiting(conv) {
+		active = c.current()
+	}
+	m.mu.Unlock()
+	front(active)
 }
 
 // destroyed is the browser saying a page closed. Called in the connection's
@@ -1138,13 +1227,17 @@ func (m *Manager) destroyed(p *process, targetID string) {
 		m.mu.Unlock()
 		return
 	}
-	if _, claimed := m.adopting[targetID]; claimed {
+	if conv, claimed := m.adopting[targetID]; claimed {
 		// Closed before it was attached: never a tab. Its attach finds the
 		// claim gone and the page in gone, and adds nothing; a tab of the
-		// conversation stays the one it works in.
+		// conversation stays the one it works in, and is put back in
+		// front in its turn.
 		delete(m.adopting, targetID)
+		delete(m.born, targetID)
 		m.markGone(targetID)
+		q, tk := m.ticket(conv)
 		m.mu.Unlock()
+		go m.refront(conv, q, tk)
 		return
 	}
 	conv := m.owner(targetID)
@@ -1260,6 +1353,7 @@ func (m *Manager) dropLocked(conv string) *convTabs {
 	for target, owner := range m.adopting {
 		if owner == conv {
 			delete(m.adopting, target)
+			delete(m.born, target)
 			// A page it opens before its attach closes it is closed too.
 			m.markGone(target)
 		}
