@@ -38,17 +38,43 @@ type Tab struct {
 // built from those paints: two conversations' tabs in one window left the
 // one behind with no frames at all.
 func openTab(ctx context.Context, conn *cdp.Conn) (*Tab, error) {
-	var created struct {
-		TargetID string `json:"targetId"`
+	// The browser makes the page whether or not the caller still waits
+	// for it. Asked for apart from the caller, it is closed once it is
+	// there when the caller stopped waiting, rather than left open with
+	// nobody told its id.
+	type made struct {
+		id  string
+		err error
 	}
-	if err := conn.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "newWindow": true}, &created); err != nil {
-		return nil, err
+	answer := make(chan made, 1)
+	go func() {
+		var created struct {
+			TargetID string `json:"targetId"`
+		}
+		askCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err := conn.Call(askCtx, "", "Target.createTarget", map[string]any{"url": "about:blank", "newWindow": true}, &created)
+		answer <- made{created.TargetID, err}
+	}()
+	var page made
+	select {
+	case page = <-answer:
+	case <-ctx.Done():
+		go func() {
+			if page := <-answer; page.err == nil {
+				closeTarget(conn, page.id)
+			}
+		}()
+		return nil, ctx.Err()
 	}
-	t, err := attachTab(ctx, conn, created.TargetID)
+	if page.err != nil {
+		return nil, page.err
+	}
+	t, err := attachTab(ctx, conn, page.id)
 	if err != nil {
 		// The page is there whether or not it could be attached: closed,
 		// or it stays open in the browser and in no list.
-		closeTarget(conn, created.TargetID)
+		closeTarget(conn, page.id)
 		return nil, err
 	}
 	return t, nil

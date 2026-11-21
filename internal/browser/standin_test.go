@@ -271,3 +271,25 @@ func contains(ids []string, id string) bool {
 	}
 	return false
 }
+
+// waitClosed waits for the browser to be asked to close every page in ids.
+func (sb *scriptedBrowser) waitClosed(t *testing.T, ids ...string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		closed := sb.closed()
+		all := true
+		for _, id := range ids {
+			if !contains(closed, id) {
+				all = false
+			}
+		}
+		if all {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("closed %v; want %v among them", closed, ids)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

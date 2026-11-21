@@ -400,6 +400,9 @@ var errReplaced = errors.New("the browser restarted while the tab opened; try ag
 // Tab returns conv's tab, starting the browser and opening the tab if
 // either is not there yet.
 func (m *Manager) Tab(ctx context.Context, conv string) (*Tab, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// The tab there now, if nothing of the conversation's is under way: a
 	// page a link opened that is still attaching, or a tab opening, is
 	// about to be the one it works in, and the answer waits for it.
@@ -839,7 +842,16 @@ func (m *Manager) created(p *process, openerID, targetID string) {
 // conversation whose last tab closed meanwhile has this one as its tab.
 func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, targetID string) {
 	_ = m.await(context.Background(), q, tk)
-	defer m.done(q)
+	// A page it does not publish is closed after the turn, so a page slow
+	// to close holds up nothing of the conversation's that comes after.
+	turn := true
+	release := func() {
+		if turn {
+			turn = false
+			m.done(q)
+		}
+	}
+	defer release()
 	m.mu.Lock()
 	_, claimed := m.adopting[targetID]
 	stale := m.proc != p || !claimed || m.wasGone(targetID)
@@ -850,6 +862,7 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	if stale {
 		// Its conversation closed, or it did, while it waited for its
 		// turn: nobody's, closed without attaching to it.
+		release()
 		closeTarget(p.conn, targetID)
 		return
 	}
@@ -866,6 +879,7 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 		// pages it opened before it closed.
 		m.markGone(targetID)
 		m.mu.Unlock()
+		release()
 		closeTarget(p.conn, targetID)
 		return
 	}
@@ -873,6 +887,7 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 		m.mu.Unlock()
 		// The page a deleted conversation's tab opened is nobody's, and a
 		// page that closed while it attached is not a tab.
+		release()
 		t.discard()
 		return
 	}
@@ -965,57 +980,70 @@ func (m *Manager) connLocked() *cdp.Conn {
 	return m.proc.conn
 }
 
-// CloseTab closes every page conv has, in its turn: after the work asked
-// for before it, a tab still opening included, so nothing it opens
-// outlives the conversation. Its claims go too, so a page one of its tabs
-// opened is closed rather than adopted. It returns as soon as its turn is
-// taken, so whoever deletes or archives a conversation waits on no page;
-// what it returns is closed once the pages are.
+// CloseTab closes every page conv has. Its tabs leave the list at once,
+// so nothing lists, streams or drives them once it has returned, and its
+// claims go too, so a page one of its tabs opened is closed rather than
+// adopted. The pages close in its turn: after the work asked for before
+// it, a tab still opening included, whose tab it closes as well, so
+// nothing that work opens outlives the conversation. It does not wait
+// for that turn, so whoever deletes or archives a conversation waits on
+// no page; what it returns is closed once the pages are.
 func (m *Manager) CloseTab(conv string) <-chan struct{} {
 	m.mu.Lock()
 	q, tk := m.ticket(conv)
+	now := m.dropLocked(conv)
 	m.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		_ = m.await(context.Background(), q, tk)
 		m.mu.Lock()
-		c := m.convs[conv]
-		delete(m.convs, conv)
-		for target, owner := range m.adopting {
-			if owner == conv {
-				delete(m.adopting, target)
-				// A page it opens before its attach closes it is closed too.
-				m.markGone(target)
-			}
-		}
-		if c != nil {
-			for _, t := range c.tabs {
-				m.markGone(t.targetID)
-			}
-			// Whoever watches is told now, not once the pages are closed:
-			// the conversation has no tab from here on.
-			close(c.changed)
-		}
+		// What the work ahead of it published in the meantime.
+		later := m.dropLocked(conv)
 		m.mu.Unlock()
 		// The pages close after the turn, and side by side: nothing of the
 		// conversation's is listed any more, and a page slow to close holds
 		// up no other.
 		m.done(q)
-		if c == nil {
-			return
-		}
 		var wg sync.WaitGroup
-		for _, t := range c.tabs {
-			wg.Add(1)
-			go func(t *Tab) {
-				defer wg.Done()
-				t.discard()
-			}(t)
+		for _, c := range []*convTabs{now, later} {
+			if c == nil {
+				continue
+			}
+			for _, t := range c.tabs {
+				wg.Add(1)
+				go func(t *Tab) {
+					defer wg.Done()
+					t.discard()
+				}(t)
+			}
 		}
 		wg.Wait()
 	}()
 	return done
+}
+
+// dropLocked takes conv out of the lists: its tabs, which it returns,
+// and its claims, all remembered as gone. Whoever watches is told: the
+// conversation has no tab from here on. Called with m.mu.
+func (m *Manager) dropLocked(conv string) *convTabs {
+	for target, owner := range m.adopting {
+		if owner == conv {
+			delete(m.adopting, target)
+			// A page it opens before its attach closes it is closed too.
+			m.markGone(target)
+		}
+	}
+	c := m.convs[conv]
+	if c == nil {
+		return nil
+	}
+	delete(m.convs, conv)
+	for _, t := range c.tabs {
+		m.markGone(t.targetID)
+	}
+	close(c.changed)
+	return c
 }
 
 // Close quits the browser. After a start in progress, which would

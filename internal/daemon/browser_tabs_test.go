@@ -98,17 +98,20 @@ func TestArchivingAConversationClosesItsTabs(t *testing.T) {
 	}
 	d, srv, id := browserDaemon(t)
 	base := srv.URL + "/api/sessions/" + id
+	var body string
 	post := func(url string) int {
 		t.Helper()
 		resp, err := http.Post(url, "application/json", strings.NewReader("{}"))
 		if err != nil {
 			t.Fatal(err)
 		}
+		data, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		body = strings.TrimSpace(string(data))
 		return resp.StatusCode
 	}
 	if code := post(base + "/browser/tabs"); code != http.StatusOK {
-		t.Fatalf("new tab = %d", code)
+		t.Fatalf("new tab = %d: %s", code, body)
 	}
 	if d.Browser.Existing(id) == nil {
 		t.Fatal("no tab to archive with")
@@ -175,6 +178,36 @@ func TestTheBrowserRefusesAnArchivedConversation(t *testing.T) {
 	} {
 		if resp := do(c.method, base+c.path, c.body); resp.StatusCode != http.StatusForbidden {
 			t.Errorf("%s %s on an archived conversation = %d, want 403", c.method, c.path, resp.StatusCode)
+		}
+	}
+}
+
+// A tab opened for a conversation that was archived or deleted while it
+// opened is closed, and the request refused as it would have been had it
+// come after: 403 for an archived conversation, 404 for a deleted one.
+func TestATabOpenedTooLateIsClosed(t *testing.T) {
+	d := newTestDaemon(t, "http://127.0.0.1:1")
+	d.Browser = browser.NewManager(browser.Options{ChromePath: "/no/such/chrome", DataDir: t.TempDir()})
+	for _, id := range []string{"live", "shelved"} {
+		if _, err := d.Loop.Store.CreateSessionIn(id, "", "general-purpose", t.TempDir(), true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := d.Loop.Store.Archive("shelved"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		id   string
+		late bool
+		code int
+	}{
+		{"live", false, http.StatusOK},
+		{"shelved", true, http.StatusForbidden},
+		{"deleted", true, http.StatusNotFound},
+	} {
+		w := httptest.NewRecorder()
+		if late := d.openedTooLate(w, c.id); late != c.late || (late && w.Code != c.code) {
+			t.Errorf("%s: too late %v with %d, want %v with %d", c.id, late, w.Code, c.late, c.code)
 		}
 	}
 }

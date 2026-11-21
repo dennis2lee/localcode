@@ -130,9 +130,7 @@ func TestAPageThatFailsToAttachIsClosed(t *testing.T) {
 		<-opened
 		<-deleted
 		drained(t, m, "c1")
-		if closed := sb.closed(); !contains(closed, "B") {
-			t.Errorf("the popup was never closed (closed: %v)", closed)
-		}
+		sb.waitClosed(t, "B")
 		if n := sb.conn.HandlerCount(); n != 0 {
 			t.Errorf("%d handlers left on the connection, want 0", n)
 		}
@@ -184,16 +182,9 @@ func TestAPopupOfADeletedConversationsPopupIsClosed(t *testing.T) {
 	<-deleted
 	drained(t, m, "c1")
 	m.created(p, "C", "E")
-	deadline := time.Now().Add(2 * time.Second)
-	for !contains(sb.closed(), "E") {
-		if time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	closed := sb.closed()
-	if got, _ := tabsOf(m, "c1"); got != nil || !contains(closed, "B") || !contains(closed, "C") || !contains(closed, "E") {
-		t.Errorf("tabs %v, closed %v; want no tabs and B, C and E closed", got, closed)
+	sb.waitClosed(t, "B", "C", "E")
+	if got, _ := tabsOf(m, "c1"); got != nil {
+		t.Errorf("tabs %v; want none", got)
 	}
 	if n := sb.count("Target.attachToTarget"); n != 1 {
 		t.Errorf("%d attaches, want 1: the deleted conversation's second popup was attached", n)
@@ -422,5 +413,94 @@ func TestTheTabAskedForTooLateIsNotHandedOver(t *testing.T) {
 	let["Target.attachToTarget"][1]()
 	if err := <-asked; !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Tab: %v, want the deadline", err)
+	}
+}
+
+// A new tab whose caller stops waiting while the browser makes its page
+// returns then, and the page is closed once the browser has made it, not
+// left open with nobody told its id.
+func TestAPageMadeAfterItsCallerStoppedWaitingIsClosed(t *testing.T) {
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Target.createTarget": {1}})
+	m, _ := managerOn(sb)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	opened := make(chan error, 1)
+	go func() {
+		_, err := m.NewTab(ctx, "c1")
+		opened <- err
+	}()
+	sb.waitHeld(t, "Target.createTarget#1")
+	select {
+	case err := <-opened:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("the new tab: %v, want the deadline", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the new tab still waits on the browser after its caller stopped")
+	}
+	let["Target.createTarget"][1]()
+	sb.waitClosed(t, "T1")
+	if got, _ := tabsOf(m, "c1"); len(got) != 1 {
+		t.Errorf("tabs = %v; want A alone", got)
+	}
+}
+
+// A popup that closed while it waited for its turn is closed again in the
+// browser after the turn: a page slow to close holds up nothing of the
+// conversation's that comes after.
+func TestARejectedPopupsCloseHoldsUpNoTurn(t *testing.T) {
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{
+		"Target.attachToTarget": {1},
+		"Target.closeTarget":    {1},
+	})
+	m, p := managerOn(sb)
+	m.created(p, "A", "X")
+	sb.waitHeld(t, "Target.attachToTarget#1")
+	m.created(p, "A", "B")
+	m.destroyed(p, "B")
+	let["Target.attachToTarget"][1]()
+	sb.waitHeld(t, "Target.closeTarget#1")
+	prompt(t, "switching tabs", func() {
+		if err := m.ActivateTab("c1", "A"); err != nil {
+			t.Error(err)
+		}
+	})
+	let["Target.closeTarget"][1]()
+}
+
+// A closed conversation's tabs leave the list as the close is asked for,
+// even behind a tab still opening: nothing lists, streams or drives them
+// after it. The tab still opening is closed in the close's turn.
+func TestAClosedConversationLeavesTheListAtOnce(t *testing.T) {
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Target.createTarget": {1}})
+	m, _ := managerOn(sb)
+	changed := m.convs["c1"].changed
+	go func() { _, _ = m.NewTab(context.Background(), "c1") }()
+	sb.waitHeld(t, "Target.createTarget#1")
+	done := m.CloseTab("c1")
+	if m.Existing("c1") != nil || m.Tabs(context.Background(), "c1") != nil {
+		t.Error("the closed conversation's tabs are still listed")
+	}
+	select {
+	case <-changed:
+	default:
+		t.Error("the watcher was not told")
+	}
+	let["Target.createTarget"][1]()
+	<-done
+	sb.waitClosed(t, "A", "T1")
+	if got, _ := tabsOf(m, "c1"); got != nil {
+		t.Errorf("tabs %v; want none", got)
+	}
+}
+
+// A caller with no time left is not handed a tab, even one already there.
+func TestTheTabAskedForWithNoTimeLeftIsNotHandedOver(t *testing.T) {
+	sb, _ := newScriptedBrowser(t, nil, nil)
+	m, _ := managerOn(sb)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := m.Tab(ctx, "c1"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Tab: %v, want canceled", err)
 	}
 }

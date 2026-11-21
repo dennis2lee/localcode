@@ -251,7 +251,29 @@ func (d *Daemon) handleBrowserNewTab(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
+	if d.openedTooLate(w, id) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"tabs": tabList(d.Browser.Tabs(ctx, id))})
+}
+
+// openedTooLate is browserOn's check once more, after a tab was opened:
+// a conversation archived or deleted while the tab opened had its tabs
+// closed before this one was there. This one is closed too (the close
+// takes its turn after the open), and the request is refused as browserOn
+// would have refused it.
+func (d *Daemon) openedTooLate(w http.ResponseWriter, id string) bool {
+	sess, err := d.Loop.Store.Get(id)
+	if err == nil && sess.ArchivedAt == nil {
+		return false
+	}
+	d.Browser.CloseTab(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+	} else {
+		refuseArchived(w, sess)
+	}
+	return true
 }
 
 // handleBrowserActivateTab makes one of the conversation's tabs the one it
@@ -312,6 +334,9 @@ func (d *Daemon) handleBrowserNavigate(w http.ResponseWriter, r *http.Request) {
 	tab, err := d.Browser.Tab(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	if d.openedTooLate(w, id) {
 		return
 	}
 	switch req.Action {
