@@ -181,10 +181,13 @@ func (t *Tab) input(ctx context.Context, method string, params map[string]any) e
 	done := t.conn.Go(ctx, t.session, method, params)
 	timer := time.NewTimer(inputAckWait)
 	defer timer.Stop()
+	t0 := time.Now()
 	select {
 	case err := <-done:
+		probef("input %.8s %s %v mods=%v button=%v err=%v in %s", t.targetID, method, params["type"], params["modifiers"], params["button"], err, time.Since(t0).Round(time.Millisecond))
 		return err
 	case <-timer.C:
+		probef("input %.8s %s %v NOT ACKED in %s", t.targetID, method, params["type"], time.Since(t0).Round(time.Millisecond))
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

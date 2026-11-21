@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        n: [1, 2]
+        n: [1, 2, 3, 4]
     name: macos-gate-${{ matrix.n }}
     runs-on: macos-latest
     timeout-minutes: 40

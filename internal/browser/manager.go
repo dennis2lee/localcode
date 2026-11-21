@@ -888,6 +888,7 @@ func (m *Manager) ask(p *process, from, frame, sess string, params json.RawMessa
 	if json.Unmarshal(params, &ev) != nil {
 		return
 	}
+	probef("ask heard from=%.8s frame=%.8s sess=%.8s %s %q", from, frame, sess, ev.Disposition, ev.URL)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.proc != p {
@@ -1046,6 +1047,7 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	m.mu.Lock()
 	_, claimed = m.adopting[targetID]
 	delete(m.adopting, targetID)
+	probef("adopt publish target=%.8s err=%v claimed=%v gone=%v", targetID, err, claimed, m.wasGone(targetID))
 	if err != nil {
 		// Not attached, it can be no conversation's tab: closed rather than
 		// left open in the browser where nothing reaches it, and so are the
