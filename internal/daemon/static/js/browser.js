@@ -561,11 +561,12 @@ export function initBrowserPanel() {
     }
   });
   view.addEventListener('contextmenu', (e) => e.preventDefault());
-  // The window's zoom shortcut stays the window's: js/zoom.js takes it.
-  // Sent on to the page as well, Ctrl+plus zoomed the page in the panel
-  // on Windows and Linux, the browser kept that zoom for the site, and a
-  // zoomed page is not where its picture says it is: every click after it
-  // missed, and with no field focused the typing went nowhere.
+  // The window's zoom shortcut stays the window's: js/zoom.js takes it,
+  // wherever the focus is, and one key press does one thing. Sent on to
+  // the page as well, Ctrl+plus used to zoom the page in the panel too on
+  // Windows and Linux (the daemon no longer lets a key reach the
+  // browser's own shortcuts: browser.Tab.KeyEvent), and a zoomed page is
+  // not where its picture says it is, so every click after it missed.
   view.addEventListener('keydown', (e) => {
     if (zoomKey(e) !== null) return;
     e.preventDefault();

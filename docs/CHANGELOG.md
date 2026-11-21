@@ -2,12 +2,13 @@
 
 ## v0.176.2
 
-A click or a key on the browser panel reaches the page where it was aimed when the browser's profile had pages zoomed.
+A click or a key on the browser panel reaches the page where it was aimed: the browser's own zoom and shortcuts no longer move, hide or close the page.
 
 **Fixed**
 
 * A click on the browser panel landing away from where it was aimed, and the typing after it reaching no field, when the copied Chrome or Edge profile had pages zoomed, by default or for the site: the profile's zoom is removed at every start, and every page is at 100%
-* Ctrl+plus, Ctrl+minus and Ctrl+0 on the browser panel zooming the page in it as well as the window, on Windows and Linux, with the same missed clicks on that site from then on: the shortcut zooms the window only, and the browser tool's `key` action refuses it
+* A key pressed on the browser panel, or by the browser tool's `key` action, running the browser's own shortcut when the page did not use it. On Windows and Linux: F1, Ctrl+T, Ctrl+H, Ctrl+J and Ctrl+U opening a page in front of the conversation's, which left the panel on a still picture; Ctrl+W closing the conversation's tab; Ctrl+plus zooming the page for good, with every click on that site missing from then on. On macOS: Shift alone, Escape, Page Down and the function keys opening the browser's settings in front
+* Ctrl+plus, Ctrl+minus and Ctrl+0 on the browser panel sent to the page as well as zooming the window: the shortcut is the window's only
 
 ## v0.176.1
 

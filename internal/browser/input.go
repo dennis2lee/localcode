@@ -246,49 +246,35 @@ func commandsFor(key string, mods int) []string {
 	return nil
 }
 
-// ErrZoomShortcut is a key event that was not sent to the page because it
-// is the browser's shortcut for zooming it.
-var ErrZoomShortcut = errors.New("that is the browser's zoom shortcut, and a page here stays at 100%: the key was not sent")
-
-// zoomShortcut reports whether e is the browser's shortcut for zooming
-// the page: Ctrl, or Command, with plus, minus or zero, on the main keys
-// or the number pad, and no Alt.
+// KeyEvent dispatches one key event as the panel saw it.
 //
-// A key the page does not use goes on to the browser, and on Windows and
-// Linux a browser with no window still acts on its shortcuts. Ctrl+plus
-// sent from the panel zoomed the page, and the browser kept that zoom for
-// the site (measured with Chrome and Edge on Windows: two presses took a
-// page from 1280 pixels wide to 1024, and it stayed there when the site
-// was opened again). A zoomed page is not where its picture says it is,
-// so every click after it missed: see ownPreferences. Ctrl with the wheel
-// was measured too, and does not zoom.
-func zoomShortcut(e KeyEvent) bool {
-	if e.Modifiers&(ModCtrl|ModMeta) == 0 || e.Modifiers&ModAlt != 0 {
-		return false
-	}
-	switch e.KeyCode {
-	case 187, 189, // = and +, - and _
-		107, 109, // the number pad's + and -
-		48, 96: // 0, and the number pad's
-		return true
-	}
-	switch e.Key {
-	case "+", "=", "-", "_", "0":
-		return true
-	}
-	return false
-}
-
-// KeyEvent dispatches one key event as the panel saw it. The browser's
-// zoom shortcut is refused with ErrZoomShortcut.
+// The key goes to the page and no further. It carries the key's Windows
+// code, which is what a page reads, and no native key code: with one, the
+// browser takes the event for a key pressed on its own window, and runs
+// its own shortcut for any key the page leaves unused. A browser with no
+// window still has them all. Measured, one browser per key, with the
+// native code set to the Windows one as it was at first:
+//
+//   - Windows and Linux, Chrome and Edge: F1 opened the vendor's help
+//     site, Ctrl+T a new tab, Ctrl+H the history, Ctrl+J the downloads and
+//     Ctrl+U the page's source, each in a tab in front of the
+//     conversation's, whose page is then hidden and no longer drawn, so
+//     the panel showed a still picture that took no click. Ctrl+W closed
+//     the conversation's tab. Ctrl+N and Ctrl+Shift+N opened windows, F12
+//     the developer tools. Ctrl+plus zoomed the page and the browser kept
+//     that zoom for the site (see ownPreferences for what a zoomed page
+//     does to a click).
+//   - macOS, where the number is some other key's: Shift alone, Escape,
+//     Page Down and every function key opened chrome://settings/help in
+//     front of the conversation's tab.
+//
+// With no native code, none of 54 keys had any effect on the browser, on
+// any of the four.
 func (t *Tab) KeyEvent(ctx context.Context, e KeyEvent) error {
 	switch e.Type {
 	case "keyDown", "keyUp", "rawKeyDown", "char":
 	default:
 		return fmt.Errorf("unknown key event %q", e.Type)
-	}
-	if zoomShortcut(e) {
-		return ErrZoomShortcut
 	}
 	for _, c := range e.Commands {
 		if !panelCommands[c] {
@@ -298,7 +284,6 @@ func (t *Tab) KeyEvent(ctx context.Context, e KeyEvent) error {
 	params := map[string]any{"type": e.Type, "key": e.Key, "code": e.Code, "modifiers": e.Modifiers}
 	if e.KeyCode != 0 {
 		params["windowsVirtualKeyCode"] = e.KeyCode
-		params["nativeVirtualKeyCode"] = e.KeyCode
 	}
 	if e.Text != "" {
 		params["text"] = e.Text

@@ -2,14 +2,13 @@ package browser
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+	"time"
 )
 
 // zoomPage has a field well away from the corner, so a click that is off
@@ -95,69 +94,108 @@ func TestAZoomedProfilesPagesAreAtFullSize(t *testing.T) {
 	}
 }
 
-// The browser's zoom shortcut is not sent to the page, from the panel or
-// from the model: where a browser acts on it (Windows and Linux), the
-// page would be laid out narrower than its picture from then on.
-func TestTheBrowsersZoomShortcutIsNotSent(t *testing.T) {
-	zoom := []KeyEvent{
-		{Type: "rawKeyDown", Key: "=", Code: "Equal", KeyCode: 187, Modifiers: ModCtrl},
-		{Type: "rawKeyDown", Key: "+", Code: "Equal", KeyCode: 187, Modifiers: ModCtrl | ModShift},
-		{Type: "rawKeyDown", Key: "-", Code: "Minus", KeyCode: 189, Modifiers: ModCtrl},
-		{Type: "rawKeyDown", Key: "0", Code: "Digit0", KeyCode: 48, Modifiers: ModCtrl},
-		{Type: "rawKeyDown", Key: "+", Code: "NumpadAdd", KeyCode: 107, Modifiers: ModCtrl},
-		{Type: "rawKeyDown", Key: "-", Code: "NumpadSubtract", KeyCode: 109, Modifiers: ModCtrl},
-		{Type: "rawKeyDown", Key: "0", Code: "Numpad0", KeyCode: 96, Modifiers: ModCtrl},
-		{Type: "rawKeyDown", Key: "=", Code: "Equal", KeyCode: 187, Modifiers: ModMeta},
-		{Type: "keyUp", Key: "=", Code: "Equal", KeyCode: 187, Modifiers: ModCtrl},
-		// As the model's key action builds one: no key code.
-		{Type: "rawKeyDown", Key: "-", Modifiers: ModCtrl},
+// A key goes to the browser with the code a page reads and no native key
+// code: with one, the browser runs its own shortcut for a key the page
+// leaves unused.
+func TestAKeyCarriesNoNativeKeyCode(t *testing.T) {
+	sb, _ := newScriptedBrowser(t, nil, nil)
+	tab := &Tab{conn: sb.conn, session: "sA"}
+	if err := tab.KeyEvent(context.Background(), KeyEvent{Type: "rawKeyDown", Key: "F1", Code: "F1", KeyCode: 112}); err != nil {
+		t.Fatal(err)
 	}
-	// Nothing to send it on: a key that got past the check would not
-	// return at all.
-	tab := &Tab{}
-	for _, e := range zoom {
-		if err := tab.KeyEvent(context.Background(), e); !errors.Is(err, ErrZoomShortcut) {
-			t.Errorf("%+v: %v, want the zoom shortcut refused", e, err)
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	var sent map[string]any
+	for _, c := range sb.calls {
+		if c.Method == "Input.dispatchKeyEvent" {
+			sent = c.Params
 		}
 	}
-	for _, e := range []KeyEvent{
-		{Type: "keyDown", Key: "=", Code: "Equal", KeyCode: 187, Text: "="},
-		{Type: "keyDown", Key: "0", Code: "Digit0", KeyCode: 48, Text: "0"},
-		{Type: "keyDown", Key: "+", Code: "Equal", KeyCode: 187, Text: "+", Modifiers: ModShift},
-		{Type: "rawKeyDown", Key: "a", Code: "KeyA", KeyCode: 65, Modifiers: ModCtrl},
-		// Ctrl+Alt is AltGr on Windows, and a page's own shortcut elsewhere.
-		{Type: "rawKeyDown", Key: "0", Code: "Digit0", KeyCode: 48, Modifiers: ModCtrl | ModAlt},
-	} {
-		if zoomShortcut(e) {
-			t.Errorf("%+v is taken for a zoom shortcut", e)
-		}
+	if sent == nil {
+		t.Fatal("the key was not sent")
+	}
+	if code, _ := sent["windowsVirtualKeyCode"].(float64); code != 112 {
+		t.Errorf("windowsVirtualKeyCode = %v, want 112", sent["windowsVirtualKeyCode"])
+	}
+	if native, ok := sent["nativeVirtualKeyCode"]; ok {
+		t.Errorf("the key carries the native key code %v", native)
 	}
 }
 
-// With the shortcut pressed, from the panel and from the model, the page
-// stays as wide as its picture.
-func TestAZoomShortcutLeavesThePageAtFullSize(t *testing.T) {
-	m := testManager(t)
-	ctx := ctxFor(t)
-	tab, err := m.Tab(ctx, "conv1")
-	if err != nil {
+// pagesOpen is how many pages the browser has open.
+func pagesOpen(t *testing.T, ctx context.Context, m *Manager) int {
+	t.Helper()
+	var out struct {
+		TargetInfos []struct {
+			Type string `json:"type"`
+		} `json:"targetInfos"`
+	}
+	if err := m.proc.conn.Call(ctx, "", "Target.getTargets", nil, &out); err != nil {
 		t.Fatal(err)
 	}
-	if err := tab.Navigate(ctx, zoomSite(t)); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 2; i++ {
-		for _, typ := range []string{"rawKeyDown", "keyUp"} {
-			err := tab.KeyEvent(ctx, KeyEvent{Type: typ, Key: "=", Code: "Equal", KeyCode: 187, Modifiers: ModCtrl})
-			if !errors.Is(err, ErrZoomShortcut) {
-				t.Fatalf("Ctrl+= from the panel: %v", err)
-			}
+	n := 0
+	for _, ti := range out.TargetInfos {
+		if ti.Type == "page" {
+			n++
 		}
 	}
-	if err := tab.Press(ctx, "ctrl+0"); !errors.Is(err, ErrZoomShortcut) || !strings.Contains(err.Error(), "100%") {
-		t.Errorf("ctrl+0 from the model: %v", err)
-	}
-	if w := pageWidth(t, ctx, tab); w != ViewportWidth {
-		t.Errorf("the page is laid out %v pixels wide after the shortcut, want %d", w, ViewportWidth)
+	return n
+}
+
+// A key the page does not use does nothing in the browser. With a native
+// key code on it, the browser ran its own shortcut: a help page, a new
+// tab or its history opened in front of the conversation's tab, whose
+// page was then hidden and no longer drawn; the tab closed; the page
+// zoomed. Which keys did it depended on the system (Shift alone and
+// Escape on macOS; F1, Ctrl+T, Ctrl+H, Ctrl+W and Ctrl+plus on Windows and
+// Linux), so each is pressed in a browser of its own.
+func TestAKeyFromThePanelRunsNoBrowserShortcut(t *testing.T) {
+	site := zoomSite(t)
+	for _, k := range []KeyEvent{
+		{Key: "Shift", Code: "ShiftLeft", KeyCode: 16, Modifiers: ModShift},
+		{Key: "Escape", Code: "Escape", KeyCode: 27},
+		{Key: "F1", Code: "F1", KeyCode: 112},
+		{Key: "t", Code: "KeyT", KeyCode: 84, Modifiers: ModCtrl},
+		{Key: "h", Code: "KeyH", KeyCode: 72, Modifiers: ModCtrl},
+		{Key: "w", Code: "KeyW", KeyCode: 87, Modifiers: ModCtrl},
+		{Key: "=", Code: "Equal", KeyCode: 187, Modifiers: ModCtrl},
+	} {
+		name := k.Key
+		if k.Modifiers&ModCtrl != 0 {
+			name = "Ctrl+" + name
+		}
+		t.Run(name, func(t *testing.T) {
+			m := testManager(t)
+			ctx := ctxFor(t)
+			tab, err := m.Tab(ctx, "conv1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tab.Navigate(ctx, site); err != nil {
+				t.Fatal(err)
+			}
+			before := pagesOpen(t, ctx, m)
+			for _, typ := range []string{"rawKeyDown", "keyUp"} {
+				k.Type = typ
+				if err := tab.KeyEvent(ctx, k); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// What the browser did with the key, it did within a second.
+			time.Sleep(1500 * time.Millisecond)
+			if m.Existing("conv1") != tab {
+				t.Fatal("the conversation's tab is gone")
+			}
+			var state string
+			if err := tab.eval(ctx, `document.visibilityState + ' ' + innerWidth + ' ' + location.pathname`, &state); err != nil {
+				t.Fatal(err)
+			}
+			if want := fmt.Sprintf("visible %d /", ViewportWidth); state != want {
+				t.Errorf("the page is %q after the key, want %q", state, want)
+			}
+			if after := pagesOpen(t, ctx, m); after != before {
+				t.Errorf("the browser has %d pages open after the key, and had %d", after, before)
+			}
+		})
 	}
 }
