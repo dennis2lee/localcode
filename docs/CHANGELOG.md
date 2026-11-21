@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.176.3
 
 A link opened in a tab or a window of its own from the browser panel is one of the conversation's tabs, and a page opened from a popup window covers no other conversation's page.
 
