@@ -31,6 +31,11 @@ type Tab struct {
 	castMu sync.Mutex // orders screencast starts and stops; see Watch
 }
 
+// blankPage is the address every tab this manager opens starts at. A
+// page a conversation's page asks the browser for is known by its
+// address (see Manager.ask), and this one is never asked for.
+const blankPage = "about:blank"
+
 // openTab creates a page and attaches to it.
 //
 // In a window of its own. A browser with no window still paints only the
@@ -53,7 +58,7 @@ func openTab(ctx context.Context, conn *cdp.Conn) (*Tab, error) {
 		}
 		askCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		err := conn.Call(askCtx, "", "Target.createTarget", map[string]any{"url": "about:blank", "newWindow": true}, &created)
+		err := conn.Call(askCtx, "", "Target.createTarget", map[string]any{"url": blankPage, "newWindow": true}, &created)
 		answer <- made{created.TargetID, err}
 	}()
 	var page made
@@ -163,6 +168,27 @@ func attachTab(ctx context.Context, conn *cdp.Conn, targetID string) (*Tab, erro
 		return nil, err
 	}
 	return t, nil
+}
+
+// behind is whether the page is behind another tab of its window, where
+// the browser does not draw it: one opened in a tab of its own and not
+// shown. The page says so itself, and says it from the moment it is
+// made (measured: a page opened in front or in a window of its own says
+// "visible" at once, one opened behind says "hidden"). A page that does
+// not answer is taken to be in front, as every page a link opened was
+// before.
+func (t *Tab) behind(ctx context.Context) bool {
+	var state string
+	// A page that is still loading can swap the document the question
+	// was put to, and the question fails; it is put again.
+	for range 3 {
+		if err := t.eval(ctx, `document.visibilityState`, &state); err == nil {
+			return state == "hidden"
+		} else if ctx.Err() != nil {
+			return false
+		}
+	}
+	return false
 }
 
 // TargetID is the page's id in the browser.

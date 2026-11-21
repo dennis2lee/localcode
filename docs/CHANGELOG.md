@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+A link opened in a tab or a window of its own from the browser panel is one of the conversation's tabs.
+
+**Fixed**
+
+* A link on the browser panel opened with the wheel, or with Ctrl, Cmd or Shift held, and Enter on a focused link with one of them held, opening a page that was in no tab strip and could not be closed: the page is a tab of the conversation, behind the tab shown for Ctrl, Cmd or the wheel, and the tab shown with Shift
+* The browser panel left on a still picture that took no click after a link was opened in front of the page (Ctrl+Shift+click, Cmd+Shift+click, Shift with the wheel): the page opened is the tab shown
+* A page a script opened from a click with Ctrl or Cmd held made the tab shown although the browser had opened it behind and did not draw it: its tab is added behind
+
 ## v0.176.2
 
 A click or a key on the browser panel reaches the page where it was aimed: the browser's own zoom and shortcuts no longer move, hide or close the page.

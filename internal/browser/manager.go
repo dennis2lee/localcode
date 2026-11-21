@@ -80,7 +80,31 @@ type Manager struct {
 	// when: a tab this manager opened can close before it is published,
 	// and is not published. Kept for goneFor, longer than any open takes.
 	gone map[string]time.Time
+	// asks is the links pages have asked the browser to open in a tab or
+	// a window of their own, oldest first, each until its page turns up:
+	// see ask.
+	asks []ask
+	// heard is, for each frame that has asked, the one session its asks
+	// are taken from: see ask.
+	heard map[string]string
 }
+
+// ask is one link a page asked the browser to open in a tab or a window
+// of its own.
+type ask struct {
+	from string // the page that asked
+	url  string
+	at   time.Time
+}
+
+// askFor is how long an ask waits for its page. The browser makes the
+// page within tens of milliseconds of being asked (measured); this is
+// for a machine too busy to.
+const askFor = 30 * time.Second
+
+// askMax is how many asks are kept: more than are ever open at once, and
+// a bound on what a page that asks without end can make this hold.
+const askMax = 64
 
 // goneFor is how long a page that closed unlisted is remembered: longer
 // than an open can take (openTab's and attachTab's callers give at most
@@ -215,6 +239,8 @@ func (m *Manager) dropAll() {
 	}
 	m.convs = map[string]*convTabs{}
 	m.adopting = map[string]string{}
+	m.asks = nil
+	m.heard = map[string]string{}
 }
 
 // convTabs is a conversation's pages, in the order they were opened, and
@@ -263,6 +289,13 @@ func (c *convTabs) add(t *Tab) {
 	c.tabs = append(c.tabs, t)
 	c.active = len(c.tabs) - 1
 	c.notify()
+}
+
+// addBehind appends t and leaves the active tab the one it was: a page
+// the browser opened behind it. Nobody watching is told, because what
+// they watch has not changed; the panel's tab strip reads the list.
+func (c *convTabs) addBehind(t *Tab) {
+	c.tabs = append(c.tabs, t)
 }
 
 // remove takes out the tab at i. Removing the active one makes its
@@ -376,6 +409,7 @@ func NewManager(opts Options) *Manager {
 		queues:   map[string]*queue{},
 		adopting: map[string]string{},
 		gone:     map[string]time.Time{},
+		heard:    map[string]string{},
 	}
 }
 
@@ -757,8 +791,9 @@ func (m *Manager) Import() (ImportReport, error) {
 }
 
 // watchTargets follows pages a conversation's tab opens (a link with
-// target=_blank, window.open) and closes, so the conversation keeps
-// working in the page in front, as a person would.
+// target=_blank, window.open, a link opened in a tab or a window of its
+// own) and closes, so the conversation keeps working in the page in
+// front, as a person would.
 func (m *Manager) watchTargets(p *process) {
 	conn := p.conn
 	conn.On("", "Target.targetCreated", func(params json.RawMessage) {
@@ -766,13 +801,23 @@ func (m *Manager) watchTargets(p *process) {
 			TargetInfo struct {
 				TargetID string `json:"targetId"`
 				Type     string `json:"type"`
+				URL      string `json:"url"`
 				OpenerID string `json:"openerId"`
 			} `json:"targetInfo"`
 		}
-		if json.Unmarshal(params, &ev) != nil || ev.TargetInfo.Type != "page" || ev.TargetInfo.OpenerID == "" {
+		if json.Unmarshal(params, &ev) != nil || ev.TargetInfo.Type != "page" {
 			return
 		}
-		m.created(p, ev.TargetInfo.OpenerID, ev.TargetInfo.TargetID)
+		from := ev.TargetInfo.OpenerID
+		if from == "" {
+			// No page opened it, as the browser tells it: one a page asked
+			// for, or not a conversation's (a tab this manager is opening,
+			// the page the browser starts with).
+			if from = m.asked(p, ev.TargetInfo.URL); from == "" {
+				return
+			}
+		}
+		m.created(p, from, ev.TargetInfo.TargetID)
 	})
 	conn.On("", "Target.targetDestroyed", func(params json.RawMessage) {
 		var ev struct {
@@ -785,6 +830,105 @@ func (m *Manager) watchTargets(p *process) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = conn.Call(ctx, "", "Target.setDiscoverTargets", map[string]any{"discover": true}, nil)
+}
+
+// ask is a page asking the browser to open a link somewhere other than
+// in itself: params is the Page.frameRequestedNavigation event, sess the
+// session it came on, frame the target that session is attached to (the
+// page, or a frame of it from another site) and from the page. Called in
+// the connection's read loop, and quick.
+//
+// A link clicked with the wheel, or with Ctrl, Cmd or Shift held, and
+// Enter pressed on a focused link with one of them held, opens in a tab
+// or a window of its own. The browser makes that page with no opener:
+// nothing in what it says of the page tells which page it came from, so
+// such a page was no conversation's. It was in no tab strip and could not
+// be closed, and one opened in front (Ctrl+Shift+click, Shift and the
+// wheel) covered the conversation's page in its window, which the browser
+// then stopped drawing: the panel showed a still picture that took no
+// click.
+//
+// What does tell is this event. Measured on Chrome on macOS, Linux and
+// Windows and on Edge on Windows, over every such click and key: the
+// page it is sent for says it first, with the address and "newTab" or
+// "newWindow", and the browser then makes a page with that same address,
+// character for character (a fragment, a query, an address it had to
+// escape, one three thousand characters long, one that then redirects).
+// So an ask is kept until a page with no opener and its address turns
+// up, and that page is the asking page's conversation's: see asked.
+//
+// One click is one ask. A target can have several sessions, and each is
+// sent the event: the guard attaches every target, and a conversation's
+// tab is attached a second time for the tab's own work, so each frame in
+// it from another site is too. The first session a frame is heard on is
+// the one its asks are taken from, for as long as that session lasts; an
+// ask counted twice left one behind, for the next page with its address
+// to be taken for.
+//
+// Not kept: an ask for about:blank, which is the address this manager
+// opens its own tabs with (see openTab), so that no tab of its own is
+// taken for a page a conversation asked for.
+func (m *Manager) ask(p *process, from, frame, sess string, params json.RawMessage) {
+	var ev struct {
+		URL         string `json:"url"`
+		Disposition string `json:"disposition"`
+	}
+	if json.Unmarshal(params, &ev) != nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.proc != p {
+		return
+	}
+	if on, ok := m.heard[frame]; !ok {
+		m.heard[frame] = sess
+	} else if on != sess {
+		return
+	}
+	if ev.Disposition != "newTab" && ev.Disposition != "newWindow" {
+		return
+	}
+	if ev.URL == "" || ev.URL == blankPage {
+		return
+	}
+	m.asks = append(m.fresh(), ask{from: from, url: ev.URL, at: time.Now()})
+	if len(m.asks) > askMax {
+		m.asks = m.asks[len(m.asks)-askMax:]
+	}
+}
+
+// fresh is the asks still waiting for their page: those older than
+// askFor are dropped. Called with m.mu.
+func (m *Manager) fresh() []ask {
+	now := time.Now()
+	n := 0
+	for n < len(m.asks) && now.Sub(m.asks[n].at) > askFor {
+		n++
+	}
+	m.asks = m.asks[n:]
+	return m.asks
+}
+
+// asked is the page that asked for the page the browser just made with
+// no opener and address url, "" if none did, and takes that ask: the
+// oldest for the address. Two pages that ask for one address at the same
+// moment each get one of the two pages, the first to ask the first made,
+// which is the order the browser is asked in. Called in the connection's
+// read loop.
+func (m *Manager) asked(p *process, url string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.proc != p {
+		return ""
+	}
+	for i, a := range m.fresh() {
+		if a.url == url {
+			m.asks = append(m.asks[:i], m.asks[i+1:]...)
+			return a.from
+		}
+	}
+	return ""
 }
 
 // owner is the conversation a page belongs to: listed in its tabs, or
@@ -800,12 +944,13 @@ func (m *Manager) owner(targetID string) string {
 }
 
 // created is the browser saying a page opened another (a link with
-// target=_blank, window.open). Called in the connection's read loop, in
-// the order the browser sent its events, and quick: it claims the page
-// for the opener's conversation and takes its place in that conversation's
-// queue now, so a page the new one opens in turn finds its conversation,
-// and the pages are added in the order they opened. The attach, which
-// waits on the browser, is adopt's.
+// target=_blank, window.open), or made the page another asked it for (see
+// ask); openerID is the page it came from either way. Called in the
+// connection's read loop, in the order the browser sent its events, and
+// quick: it claims the page for the opener's conversation and takes its
+// place in that conversation's queue now, so a page the new one opens in
+// turn finds its conversation, and the pages are added in the order they
+// opened. The attach, which waits on the browser, is adopt's.
 func (m *Manager) created(p *process, openerID, targetID string) {
 	m.mu.Lock()
 	if m.proc != p {
@@ -834,12 +979,20 @@ func (m *Manager) created(p *process, openerID, targetID string) {
 	go m.adopt(p, conv, q, tk, openerID, targetID)
 }
 
-// adopt attaches a page created claimed for conv and adds it as conv's
-// active tab, in conv's turn. Opened from any of its tabs, not only the
+// adopt attaches a page created claimed for conv and adds it as a tab of
+// conv's, in conv's turn. Opened from any of its tabs, not only the
 // active one: a page in a tab the person switched away from can still
 // open one. Not added if the conversation was deleted (its claim is
 // gone), the browser replaced, or the page already closed; a
 // conversation whose last tab closed meanwhile has this one as its tab.
+//
+// The tab is where the browser put the page. In front of its window, it
+// becomes the one the conversation works in. Behind the tab in front (a
+// link opened with Ctrl or Cmd held, or with the wheel, and a window.open
+// from a click with one of them held), it is added behind, and the
+// conversation goes on in the tab it was in. Made the active one all the
+// same, as it was at first, such a page was one the browser did not
+// draw: the panel showed a picture that did not change.
 func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, targetID string) {
 	_ = m.await(context.Background(), q, tk)
 	// A page it does not publish is closed after the turn, so a page slow
@@ -869,6 +1022,7 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	t, err := attachTab(ctx, p.conn, targetID)
+	behind := err == nil && t.behind(ctx)
 
 	m.mu.Lock()
 	_, claimed = m.adopting[targetID]
@@ -892,12 +1046,26 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 		return
 	}
 	t.opener = openerID
-	if c := m.convs[conv]; c != nil {
-		c.add(t)
-	} else {
+	c := m.convs[conv]
+	switch {
+	case c == nil:
 		m.convs[conv] = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
+	case behind:
+		c.addBehind(t)
+		m.mu.Unlock()
+		return
+	default:
+		c.add(t)
 	}
 	m.mu.Unlock()
+	if behind {
+		// The only tab the conversation has, and so the one it works in,
+		// behind another page of its window: put in front, or nothing
+		// draws it.
+		after := m.showActive(conv, t)
+		release()
+		after()
+	}
 }
 
 // destroyed is the browser saying a page closed. Called in the connection's
