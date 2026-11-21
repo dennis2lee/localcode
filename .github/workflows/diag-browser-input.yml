@@ -165,31 +165,47 @@ jobs:
           Start-Sleep 3
 
           "--- B: the real mouse and keyboard on the panel"
-          $view = Find ([System.Windows.Automation.AutomationElement]::AutomationIdProperty) 'browser-view'
-          if (-not $view) {
-            "no element with AutomationId browser-view; images in the window:"
-            $win = $root.FindFirst('Children', $pidCond)
-            $imgs = $win.FindAll('Descendants', (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Image)))
-            foreach ($im in $imgs) { "  image '$($im.Current.Name)' id '$($im.Current.AutomationId)' at $($im.Current.BoundingRectangle)" }
-            $view = $imgs | Sort-Object { $_.Current.BoundingRectangle.Width * $_.Current.BoundingRectangle.Height } -Descending | Select-Object -First 1
+          # The view has no accessible name, so it is found by its pixels:
+          # the page is white, and the view starts below the address bar.
+          $url = Find ([System.Windows.Automation.AutomationElement]::AutomationIdProperty) 'browser-url'
+          if (-not $url) { "no address bar"; Shot 'no-url'; exit 0 }
+          $u = $url.Current.BoundingRectangle
+          "address bar at $u"
+          function ViewRect() {
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $g.Dispose()
+            $white = { param($x, $y) $c = $bmp.GetPixel($x, $y); $c.R -gt 245 -and $c.G -gt 245 -and $c.B -gt 245 }
+            $x0 = [int]($u.X + $u.Width / 2); $y = [int]($u.Bottom + 2)
+            while ($y -lt $b.Height - 1 -and -not (& $white $x0 $y)) { $y++ }
+            $top = $y
+            while ($y -lt $b.Height - 1 -and (& $white $x0 ($y + 1))) { $y++ }
+            $bottom = $y
+            $mid = [int](($top + $bottom) / 2)
+            $l = $x0; while ($l -gt 0 -and (& $white ($l - 1) $mid)) { $l-- }
+            $r = $x0; while ($r -lt $b.Width - 1 -and (& $white ($r + 1) $mid)) { $r++ }
+            $bmp.Dispose()
+            return @{ X = $l; Y = $top; W = $r - $l + 1; H = $bottom - $top + 1 }
           }
-          if (-not $view) { "no view found"; Shot 'no-view'; exit 0 }
-          $v = $view.Current.BoundingRectangle
-          "view at $v"
-          $fx = $v.X + $v.Width * 400 / 1280; $fy = $v.Y + $v.Height * 130 / 800
+          $v = ViewRect
+          "view (white area) at $($v.X),$($v.Y) size $($v.W)x$($v.H); expected height for its width $([int]($v.W * 800 / 1280))"
+          function Aim($px, $py) { @{ X = $v.X + $v.W * $px / 1280; Y = $v.Y + $v.H * $py / 800 } }
+          $p = Aim 400 130
           Activate
-          ClickAt $fx $fy
-          "RESULT mouse-on-field (zoom steps ${{ matrix.zoom_steps }}): clicked screen $([int]$fx),$([int]$fy) aiming at page 400,130 :: $(Title)"
+          ClickAt $p.X $p.Y
+          "RESULT mouse-on-field (zoom steps ${{ matrix.zoom_steps }}): clicked screen $([int]$p.X),$([int]$p.Y) aiming at page 400,130 :: $(Title)"
+          $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+          "focused after the click: '$($focused.Current.Name)' id '$($focused.Current.AutomationId)' type $($focused.Current.ControlType.ProgrammaticName)"
           [System.Windows.Forms.SendKeys]::SendWait('hello')
           Start-Sleep 2
           "RESULT keyboard (zoom steps ${{ matrix.zoom_steps }}): $(Title)"
           Shot 'after-typing'
-          $bx = $v.X + $v.Width * 250 / 1280; $by = $v.Y + $v.Height * 350 / 800
-          ClickAt $bx $by
-          "RESULT mouse-on-button (zoom steps ${{ matrix.zoom_steps }}): aiming at page 250,350 :: $(Title)"
+          $p = Aim 250 350
+          ClickAt $p.X $p.Y
+          "RESULT mouse-on-button (zoom steps ${{ matrix.zoom_steps }}): clicked screen $([int]$p.X),$([int]$p.Y) aiming at page 250,350 :: $(Title)"
           Shot 'after-button'
-          $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
-          "focused element: '$($focused.Current.Name)' id '$($focused.Current.AutomationId)' type $($focused.Current.ControlType.ProgrammaticName)"
 
       - name: Keep the screenshots
         if: always()
