@@ -95,7 +95,10 @@ function step(dir) {
 // shortcut. The browser panel reads it too: a zoom shortcut is the
 // window's, and is not passed on to the page in the panel.
 export function zoomKey(e) {
-  if (!e.ctrlKey && !e.metaKey) return null;
+  // Not with Alt: Ctrl+Alt is AltGr on Windows and Linux, and a character
+  // typed with it is a character. A browser's own zoom shortcut takes no
+  // Alt either.
+  if ((!e.ctrlKey && !e.metaKey) || e.altKey) return null;
   // "=" is the unshifted key on the same cap as "+", which is what
   // ctrl+plus actually delivers on most layouts.
   if (e.key === '+' || e.key === '=') return 1;
@@ -104,12 +107,19 @@ export function zoomKey(e) {
   return null;
 }
 
+// zoomWheel is whether a turn of the wheel zooms the window: one with Ctrl
+// or Cmd held. Like zoomKey, the browser panel reads it and does not pass
+// the turn on to the page.
+export function zoomWheel(e) {
+  return Boolean(e.ctrlKey || e.metaKey);
+}
+
 export function wireZoom(target) {
   const el = target || document;
   applyZoom(read());
 
   el.addEventListener('wheel', (e) => {
-    if (!e.ctrlKey && !e.metaKey) return;
+    if (!zoomWheel(e)) return;
     e.preventDefault();
     step(e.deltaY < 0 ? 1 : -1);
   }, { passive: false });

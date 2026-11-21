@@ -682,6 +682,57 @@ test('the window\'s zoom shortcut is not passed on to the page', async () => {
   assert.deepEqual(sent, ['=', '0']);
 });
 
+// A key coming up follows what its going down did, whichever of the two
+// had Ctrl held: the page gets both halves of a key press or neither.
+test('a key press reaches the page whole or not at all, whenever Ctrl is let go', async () => {
+  const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
+  const view = app.el('browser-view');
+  const sent = () => app.callsTo('POST', '/api/sessions/sess-1/browser/input').map((c) => `${c.body.key.type} ${c.body.key.key}`);
+
+  // Ctrl+= as a zoom shortcut, with Ctrl let go first: neither half.
+  view.fire('keydown', { key: '=', code: 'Equal', keyCode: 187, ctrlKey: true });
+  view.fire('keyup', { key: '=', code: 'Equal', keyCode: 187 });
+  await app.settle();
+  assert.deepEqual(sent(), [], 'the end of a key press the page never saw the start of');
+
+  // "=" typed, with Ctrl pressed before it comes up: both halves.
+  view.fire('keydown', { key: '=', code: 'Equal', keyCode: 187 });
+  view.fire('keyup', { key: '=', code: 'Equal', keyCode: 187, ctrlKey: true });
+  await app.settle();
+  assert.deepEqual(sent(), ['keyDown =', 'keyUp ='], 'a key left held down in the page');
+});
+
+// AltGr is Ctrl+Alt on Windows and Linux. A character typed with it is a
+// character, for the page, and not the window's zoom shortcut.
+test('a character typed with AltGr is not a zoom shortcut', async () => {
+  const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
+  const { zoomKey } = app.internals;
+  assert.equal(zoomKey({ key: '0', ctrlKey: true, altKey: true }), null);
+  assert.equal(zoomKey({ key: '=', ctrlKey: true, altKey: true }), null);
+  const view = app.el('browser-view');
+  view.fire('keydown', { key: '=', code: 'Digit0', keyCode: 48, ctrlKey: true, altKey: true });
+  await app.settle();
+  const sent = app.callsTo('POST', '/api/sessions/sess-1/browser/input').map((c) => c.body.key.text);
+  assert.deepEqual(sent, ['=']);
+});
+
+// The wheel with Ctrl or Cmd zooms the window (js/zoom.js), and that turn
+// is not passed on to the page as well.
+test('the window\'s zoom gesture is not passed on to the page', async () => {
+  const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
+  const view = app.el('browser-view');
+  view.fire('wheel', { offsetX: 100, offsetY: 100, deltaX: 0, deltaY: -100, deltaMode: 0, ctrlKey: true });
+  view.fire('wheel', { offsetX: 100, offsetY: 100, deltaX: 0, deltaY: 100, deltaMode: 0, metaKey: true });
+  await app.settle();
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/sess-1/browser/input').map((c) => c.body), [],
+    'a zoom gesture reached the page');
+  // A plain turn scrolls the page.
+  view.fire('wheel', { offsetX: 100, offsetY: 100, deltaX: 0, deltaY: 40, deltaMode: 0 });
+  await app.settle();
+  const sent = app.callsTo('POST', '/api/sessions/sess-1/browser/input').map((c) => c.body.mouse.type);
+  assert.deepEqual(sent, ['mouseWheel']);
+});
+
 test('a zoom shortcut says which way the window zooms', async () => {
   const app = await load({ init: false });
   const { zoomKey } = app.internals;

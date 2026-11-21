@@ -16,7 +16,7 @@
 
 import { app, session } from './state.js';
 import { api } from './api.js';
-import { zoomKey } from './zoom.js';
+import { zoomKey, zoomWheel } from './zoom.js';
 
 // The page size the daemon renders every tab at (browser.ViewportWidth and
 // ViewportHeight), which is the frame of every coordinate sent back.
@@ -537,6 +537,9 @@ export function initBrowserPanel() {
     if (!dragging) move(e, false);
   });
   view.addEventListener('wheel', (e) => {
+    // The window's zoom gesture, like its zoom shortcut below: js/zoom.js
+    // takes it, and the page does not get it as well.
+    if (zoomWheel(e)) return;
     e.preventDefault();
     const p = point(e);
     // A wheel that counts in lines or pages, as a page counts pixels.
@@ -567,15 +570,24 @@ export function initBrowserPanel() {
   // Windows and Linux (the daemon no longer lets a key reach the
   // browser's own shortcuts: browser.Tab.KeyEvent), and a zoomed page is
   // not where its picture says it is, so every click after it missed.
+  //
+  // A key coming up follows what its going down did, whatever is held by
+  // then: Ctrl let go before the "=" is, and the page would get the end of
+  // a key press it never saw the start of.
+  const keptFromPage = new Set();
   view.addEventListener('keydown', (e) => {
-    if (zoomKey(e) !== null) return;
+    if (zoomKey(e) !== null) {
+      keptFromPage.add(e.code || e.key);
+      return;
+    }
+    keptFromPage.delete(e.code || e.key);
     e.preventDefault();
     const key = keyEventFor(e, true);
     if (key.commands && key.commands[0] === 'paste') lastPasteKey = Date.now();
     sendInput({ key });
   });
   view.addEventListener('keyup', (e) => {
-    if (zoomKey(e) !== null) return;
+    if (keptFromPage.delete(e.code || e.key)) return;
     e.preventDefault();
     sendInput({ key: keyEventFor(e, false) });
   });
