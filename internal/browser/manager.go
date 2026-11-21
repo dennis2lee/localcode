@@ -88,16 +88,12 @@ type Manager struct {
 	// yet attached, as the page said when it started: see bornAt.
 	born map[string]string
 	// popups is that a conversation has had a page in a popup window on
-	// this browser, and landing the window kept for what such a page
-	// opens: see land.
-	popups  bool
-	landing *landing
-}
-
-// landing is the landing window: its blank page, and its window's id.
-type landing struct {
-	target string
-	window int
+	// this browser, and landings the windows kept for what such a page
+	// opens: the blank page of each, and its window's number, 0 until the
+	// browser has said it. One, but for the moment one is replaced. See
+	// land.
+	popups   bool
+	landings map[string]int
 }
 
 // ask is one link a page asked the browser to open in a tab or a window
@@ -261,7 +257,7 @@ func (m *Manager) dropAll() {
 	m.adopting = map[string]string{}
 	m.born = map[string]string{}
 	m.asks = nil
-	m.popups, m.landing = false, nil
+	m.popups, m.landings = false, map[string]int{}
 }
 
 // convTabs is a conversation's pages, in the order they were opened, and
@@ -275,6 +271,10 @@ type convTabs struct {
 	active   int
 	changed  chan struct{} // closed when the active tab changes
 	switches uint64        // showActive calls so far: which one tells
+	// unshown is that the active tab became the active one without being
+	// known to be in front, and nobody watching has been told of it: it
+	// is to be brought forward and told of once painted. See settle.
+	unshown bool
 }
 
 func (c *convTabs) current() *Tab {
@@ -305,10 +305,12 @@ func (c *convTabs) closed(next *Tab) {
 	}
 }
 
-// add appends t and makes it the active tab.
+// add appends t and makes it the active tab: a page in front of its
+// window, which whoever watches is told of at once.
 func (c *convTabs) add(t *Tab) {
 	c.tabs = append(c.tabs, t)
 	c.active = len(c.tabs) - 1
+	c.unshown = false
 	c.notify()
 }
 
@@ -320,10 +322,11 @@ func (c *convTabs) addBehind(t *Tab) {
 }
 
 // addUntold appends t and makes it the active tab, and leaves telling
-// whoever watches to showActive, once the tab is in front and painted.
+// whoever watches to settle, once the tab is in front and painted.
 func (c *convTabs) addUntold(t *Tab) {
 	c.tabs = append(c.tabs, t)
 	c.active = len(c.tabs) - 1
+	c.unshown = true
 }
 
 // remove takes out the tab at i. Removing the active one makes its
@@ -405,6 +408,9 @@ func (m *Manager) showActive(conv string, t *Tab) (after func()) {
 	if c := m.convs[conv]; c != nil {
 		c.switches++
 		n = c.switches
+		if c.current() == t {
+			c.unshown = false
+		}
 	}
 	m.mu.Unlock()
 	front(t)
@@ -438,6 +444,7 @@ func NewManager(opts Options) *Manager {
 		adopting: map[string]string{},
 		gone:     map[string]time.Time{},
 		born:     map[string]string{},
+		landings: map[string]int{},
 	}
 }
 
@@ -1007,25 +1014,34 @@ func (m *Manager) made(p *process, targetID, url string) {
 // window: in front, where it covered that conversation's page, which the
 // browser then stopped drawing, or behind, to cover it when switched to.
 //
-// So once a conversation has had a page in a popup window, the window
-// made last is kept one of this manager's own, with a blank page and no
-// conversation's: the landing window. What a popup's page opens lands
-// there, with nothing of anybody's to cover. A page that has landed
-// there has that window from then on: a new landing window is made, and
-// the old one's blank page closed (see landed). A tab this manager opens
-// is in a new window too, so a new landing window is made right after
-// each (see landAfter). Before the first popup there is none, and
-// nothing is made or asked.
+// So once a conversation has had a page in a popup window, the tabbed
+// window made last is kept one of this manager's own, with a blank page
+// and no conversation's: the landing window. What a popup's page opens
+// lands there, with nothing of anybody's to cover. A new one is made
+// after each thing that makes a tabbed window:
 //
-// Windows are numbered in the order they are made, which is how two
-// landing windows made at once are told apart: the later one is kept.
+//   - a page that has landed there, which has that window from then on,
+//     and the blank page it landed beside is closed (see landed);
+//   - a tab this manager opens, which is in a new window (see landAfter);
+//   - a link opened in a window of its own, with Shift held, which the
+//     browser makes a tabbed window for (see landed).
 //
-// What is left: a popup's page that opens a tab in the moment between
-// this manager's own new window and the landing window made after it
-// lands in that new window; two pages of different conversations that
-// land in the landing window before either is seen share it; and a page
-// that says its window has a toolbar when it has none is not known to be
-// in a popup.
+// Before the first popup there is none, and nothing is made or asked.
+//
+// Windows are numbered in the order they are made. That is how a tabbed
+// window made after the landing window is known, and how two landing
+// windows made at once are told apart: the later is kept. A landing
+// window is listed as soon as the browser has made it, before its number
+// is known, so that a page that lands in it in that moment is seen to
+// have.
+//
+// What is left: a popup's page that opens a tab in the moment between a
+// new tabbed window and the landing window made after it lands in that
+// window; two pages of different conversations that land in the landing
+// window before either is seen share it; a page that says its window has
+// a toolbar when it has none is not known to be in a popup; and a page
+// the browser makes in a window of its own that is no conversation's
+// tab is not seen at all.
 func (m *Manager) land(p *process) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1035,15 +1051,45 @@ func (m *Manager) land(p *process) {
 	if err := p.conn.Call(ctx, "", "Target.createTarget", map[string]any{"url": blankPage, "newWindow": true}, &made); err != nil {
 		return
 	}
-	mine := &landing{target: made.TargetID, window: windowOf(ctx, p.conn, made.TargetID)}
+	mine := made.TargetID
 	m.mu.Lock()
-	old := mine
-	if m.proc == p && m.popups && mine.window != 0 && (m.landing == nil || mine.window > m.landing.window) {
-		old, m.landing = m.landing, mine
+	// Not kept: no popup any more (the browser was replaced), or its
+	// page has closed already.
+	kept := m.proc == p && m.popups && !m.wasGone(mine)
+	if kept {
+		m.landings[mine] = 0
 	}
 	m.mu.Unlock()
-	if old != nil {
-		closeTarget(p.conn, old.target)
+	if !kept {
+		closeTarget(p.conn, mine)
+		return
+	}
+	window := windowOf(ctx, p.conn, mine)
+	var old []string
+	m.mu.Lock()
+	// Still listed: a page that landed in it meanwhile takes it out.
+	if _, listed := m.landings[mine]; listed && m.proc == p {
+		if window == 0 {
+			// The browser does not say which window it is: no use.
+			delete(m.landings, mine)
+			old = append(old, mine)
+		} else {
+			m.landings[mine] = window
+			newest := 0
+			for _, w := range m.landings {
+				newest = max(newest, w)
+			}
+			for target, w := range m.landings {
+				if w != 0 && w < newest {
+					delete(m.landings, target)
+					old = append(old, target)
+				}
+			}
+		}
+	}
+	m.mu.Unlock()
+	for _, target := range old {
+		closeTarget(p.conn, target)
 	}
 }
 
@@ -1060,9 +1106,11 @@ func (m *Manager) landAfter(p *process) {
 
 // landed looks at where a page that is becoming a conversation's tab is:
 // see land. A page in a popup window is the reason for a landing window,
-// and the first makes one. A page in the landing window has landed: the
-// window is its own from here, a new landing window is made first, and
-// then the blank page it landed beside is closed. Called in the page's
+// and makes one if there is none. A page in a landing window has landed:
+// the window is its own from here, a new landing window is made first,
+// and then the blank page it landed beside is closed. A page in a tabbed
+// window made after the landing window is one the browser made a window
+// for, and a new landing window is made after it. Called in the page's
 // conversation's turn, not with m.mu.
 func (m *Manager) landed(ctx context.Context, p *process, targetID string, popup bool) {
 	m.mu.Lock()
@@ -1070,28 +1118,52 @@ func (m *Manager) landed(ctx context.Context, p *process, targetID string, popup
 		m.mu.Unlock()
 		return
 	}
-	first := popup && !m.popups
 	if popup {
 		m.popups = true
 	}
-	at := m.landing
+	wanted := m.popups
+	landings := make(map[string]int, len(m.landings))
+	for target, window := range m.landings {
+		landings[target] = window
+	}
 	m.mu.Unlock()
-	if first {
+	if !wanted {
+		return
+	}
+	if len(landings) == 0 {
+		// The first popup, or the last landing window could not be made.
 		m.land(p)
 		return
 	}
-	if at == nil || windowOf(ctx, p.conn, targetID) != at.window {
+	if popup {
+		// In a window of its own, which no tab lands in.
 		return
 	}
-	m.mu.Lock()
-	taken := m.landing == at
-	if taken {
-		m.landing = nil
+	window := windowOf(ctx, p.conn, targetID)
+	if window == 0 {
+		return
 	}
-	m.mu.Unlock()
-	if taken {
+	newest := 0
+	for target, w := range landings {
+		if w == 0 {
+			// Made, and its number not yet known to this manager.
+			w = windowOf(ctx, p.conn, target)
+		}
+		if w == window {
+			m.mu.Lock()
+			_, mine := m.landings[target]
+			delete(m.landings, target)
+			m.mu.Unlock()
+			if mine {
+				m.land(p)
+				closeTarget(p.conn, target)
+			}
+			return
+		}
+		newest = max(newest, w)
+	}
+	if window > newest {
 		m.land(p)
-		closeTarget(p.conn, at.target)
 	}
 }
 
@@ -1181,10 +1253,9 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	m.mu.Lock()
 	_, claimed := m.adopting[targetID]
 	stale := m.proc != p || !claimed || m.wasGone(targetID)
-	said, early := m.born[targetID]
-	delete(m.born, targetID)
 	if stale {
 		delete(m.adopting, targetID)
+		delete(m.born, targetID)
 	}
 	m.mu.Unlock()
 	if stale {
@@ -1199,7 +1270,14 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	t, err := attachTab(ctx, p.conn, targetID)
 	// Where the browser put it is what it said as it started, if it said:
 	// where it is by now is something else, since a page opened after it
-	// may have covered it, or this manager put another in front.
+	// may have covered it, or this manager put another in front. Looked
+	// for once the page is attached, which is after it has said it: a
+	// page claimed with nothing ahead of it has its turn before it has
+	// said anything.
+	m.mu.Lock()
+	said, early := m.born[targetID]
+	delete(m.born, targetID)
+	m.mu.Unlock()
 	behind, known, popup := false, false, false
 	if err == nil {
 		if early {
@@ -1214,22 +1292,17 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	m.mu.Lock()
 	_, claimed = m.adopting[targetID]
 	delete(m.adopting, targetID)
-	// What it said as it started may have come since this turn began.
-	delete(m.born, targetID)
 	if err != nil {
 		// Not attached, it can be no conversation's tab: closed rather than
 		// left open in the browser where nothing reaches it, and so are the
 		// pages it opened before it closed. If it was the last the
-		// conversation waited for, the tab it works in is put in front,
-		// as after a page that is added.
+		// conversation waited for, what is in front is settled, as after
+		// a page that is added.
 		m.markGone(targetID)
-		var active *Tab
-		if c := m.convs[conv]; c != nil && !m.waiting(conv) {
-			active = c.current()
-		}
 		m.mu.Unlock()
-		front(active)
+		after := m.settle(conv)
 		release()
+		after()
 		closeTarget(p.conn, targetID)
 		return
 	}
@@ -1242,46 +1315,59 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 		return
 	}
 	t.opener = openerID
-	// More of the conversation's pages are waiting to be added: what is
-	// in front is settled by the last of them, and until then nothing is
-	// brought forward, since that would cover one of those opened in
-	// front and still waiting.
-	more := m.waiting(conv)
 	inFront := known && !behind
 	c := m.convs[conv]
 	switch {
 	case c == nil:
-		c = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
+		// Its only tab, and so the one it works in, wherever it is.
+		c = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{}), unshown: !inFront}
 		m.convs[conv] = c
 	case known && behind:
 		c.addBehind(t)
-	case inFront || more:
+	case inFront:
 		c.add(t)
 	default:
 		// Not known to be in front: whoever watches is told once it has
-		// been brought forward and has painted, below, not now.
+		// been brought forward and has painted, not now.
 		c.addUntold(t)
 	}
-	active := c.current()
 	m.mu.Unlock()
-	if more {
-		return
-	}
-	// The tab the conversation works in is put in front, which changes
-	// nothing when it is there. It may not be: a page opened in front
-	// can have been covered since, by a page opened after it that closed
-	// before it was anybody's tab, and then brought forward again by the
-	// browser over the tab the list says is in front.
-	if active != t || inFront {
-		front(active)
-		return
-	}
-	// The tab it works in, and behind (the only tab the conversation has
-	// left) or not known to be in front: brought forward, and whoever
-	// watches told once it has painted, as for a tab switched to.
-	after := m.showActive(conv, t)
+	after := m.settle(conv)
 	release()
 	after()
+}
+
+// settle puts the tab conv works in in front, in conv's turn, once no
+// more of its pages wait to be added, and returns the rest, for after
+// the turn (see showActive).
+//
+// While more wait, nothing is brought forward: that would cover one of
+// them that the browser opened in front, and the last of them settles
+// it. Then the tab it works in is put in front, which changes nothing
+// when it is there. It may not be: a page opened in front can have been
+// covered since by one opened after it that closed before it was
+// anybody's tab, after which the browser brings some other tab forward.
+// A tab that became the active one without being known to be in front
+// (see convTabs.unshown) is brought forward as one switched to, and
+// whoever watches told once it has painted.
+//
+// A tab switch, or a close, that comes while a page waits does bring its
+// tab forward. If that page was opened in front and had not said so as it
+// started, it then says "hidden" and is listed behind.
+func (m *Manager) settle(conv string) (after func()) {
+	m.mu.Lock()
+	c := m.convs[conv]
+	if c == nil || m.waiting(conv) {
+		m.mu.Unlock()
+		return func() {}
+	}
+	active, unshown := c.current(), c.unshown
+	m.mu.Unlock()
+	if unshown {
+		return m.showActive(conv, active)
+	}
+	front(active)
+	return func() {}
 }
 
 // waiting is whether a page claimed for conv is still to be attached.
@@ -1314,19 +1400,14 @@ func (m *Manager) bornAt(p *process, targetID, said string) {
 	}
 }
 
-// refront puts the tab conv works in back in front, in conv's turn: a
-// page of its that was never attached has closed, and if it had been in
-// front the browser has brought some other tab of that window forward.
+// refront settles what is in front for conv, in conv's turn: a page of
+// its that was never attached has closed, and if it had been in front
+// the browser has brought some other tab of that window forward.
 func (m *Manager) refront(conv string, q *queue, tk uint64) {
 	_ = m.await(context.Background(), q, tk)
-	defer m.done(q)
-	m.mu.Lock()
-	var active *Tab
-	if c := m.convs[conv]; c != nil && !m.waiting(conv) {
-		active = c.current()
-	}
-	m.mu.Unlock()
-	front(active)
+	after := m.settle(conv)
+	m.done(q)
+	after()
 }
 
 // destroyed is the browser saying a page closed. Called in the connection's
@@ -1342,14 +1423,17 @@ func (m *Manager) destroyed(p *process, targetID string) {
 		m.mu.Unlock()
 		return
 	}
-	if m.landing != nil && m.landing.target == targetID {
-		// The landing window's page, closed by something other than
-		// this manager, which takes it out of landing before it closes
-		// it: there is to be one.
-		m.landing = nil
+	if _, landing := m.landings[targetID]; landing {
+		// A landing window's page, closed by something other than this
+		// manager, which takes one out of the list before it closes it.
+		// If that leaves none, one is made.
+		delete(m.landings, targetID)
 		m.markGone(targetID)
+		none := len(m.landings) == 0
 		m.mu.Unlock()
-		go m.land(p)
+		if none {
+			go m.land(p)
+		}
 		return
 	}
 	if conv, claimed := m.adopting[targetID]; claimed {

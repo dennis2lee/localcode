@@ -1016,6 +1016,114 @@ func TestAPageThatDoesNotSayWhereItIsIsToldOfOncePainted(t *testing.T) {
 	}
 }
 
+// What a page said as it started is what its adding goes by, though it
+// came while the page was being attached: a page claimed with nothing
+// ahead of it has its turn before it has said anything.
+func TestWhatAPageSaidWhileItWasAttachedIsGoneBy(t *testing.T) {
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Target.attachToTarget": {1}})
+	// Asked now, it would say it is in front.
+	sb.answers("Runtime.evaluate", map[string]any{"result": map[string]any{"value": "visible tabbed"}})
+	m, p := managerOn(sb)
+	m.created(p, "A", "B")
+	sb.waitHeld(t, "Target.attachToTarget#1")
+	m.bornAt(p, "B", "hidden tabbed")
+	let["Target.attachToTarget"][1]()
+	drained(t, m, "c1")
+	if ids, active := tabsOf(m, "c1"); fmt.Sprint(ids) != "[A B]" || active != "A" {
+		t.Fatalf("the tabs are %v and the conversation works in %s, want [A B] and A: it was opened behind", ids, active)
+	}
+	if n := sb.count("Runtime.evaluate"); n != 0 {
+		t.Errorf("the page was asked where it is %d times though it had said", n)
+	}
+	m.mu.Lock()
+	left := len(m.born)
+	m.mu.Unlock()
+	if left != 0 {
+		t.Errorf("%d pages' words are kept once the page is a tab", left)
+	}
+}
+
+// A tab that became the active one without being known to be in front,
+// while more pages waited, is brought forward and told of once painted
+// when the last of them is added, though that one is added behind.
+func TestATabNotKnownToBeInFrontIsShownOnceTheLastPageIsAdded(t *testing.T) {
+	t.Run("it did not say where it was", func(t *testing.T) {
+		sb, let := newScriptedBrowser(t,
+			map[string]string{"Runtime.evaluate": "Execution context was destroyed"},
+			map[string][]int{"Target.attachToTarget": {1}, "Runtime.evaluate": {4}})
+		m, p := managerOn(sb)
+		m.mu.Lock()
+		watching := m.convs["c1"].changed
+		m.mu.Unlock()
+		m.created(p, "A", "B")
+		sb.waitHeld(t, "Target.attachToTarget#1")
+		m.created(p, "A", "C")
+		queuedBehind(t, m, "c1", 2)
+		m.bornAt(p, "C", "hidden tabbed")
+		let["Target.attachToTarget"][1]()
+		// B is asked three times and says nothing; C had said. Then B is
+		// waited on to paint, which is held.
+		sb.waitHeld(t, "Runtime.evaluate#4")
+		if ids, active := tabsOf(m, "c1"); fmt.Sprint(ids) != "[A B C]" || active != "B" {
+			t.Fatalf("the tabs are %v and the conversation works in %s, want [A B C] and B", ids, active)
+		}
+		if got := fmt.Sprint(sb.fronted()); got != "[B]" {
+			t.Fatalf("put in front: %s, want [B], once and after the last page", got)
+		}
+		select {
+		case <-watching:
+			t.Fatal("whoever watches the conversation was told before the tab had painted")
+		default:
+		}
+		let["Runtime.evaluate"][4]()
+		select {
+		case <-watching:
+		case <-time.After(2 * time.Second):
+			t.Error("whoever watches the conversation was not told once the tab had painted")
+		}
+	})
+	t.Run("the only tab left, opened behind", func(t *testing.T) {
+		sb, let := newScriptedBrowser(t, nil, map[string][]int{"Target.attachToTarget": {1, 2}})
+		m, p := managerOn(sb)
+		ctx := ctxFor(t)
+		held, err := m.queued(ctx, "c1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		closed := make(chan error, 1)
+		go func() { closed <- m.CloseTabID(ctx, "c1", "A") }()
+		queuedBehind(t, m, "c1", 2)
+		m.created(p, "A", "B")
+		m.bornAt(p, "B", "hidden tabbed")
+		m.created(p, "A", "C")
+		m.bornAt(p, "C", "hidden tabbed")
+		queuedBehind(t, m, "c1", 4)
+		held()
+		if err := <-closed; err != nil {
+			t.Fatal(err)
+		}
+		sb.waitHeld(t, "Target.attachToTarget#1")
+		let["Target.attachToTarget"][1]()
+		sb.waitHeld(t, "Target.attachToTarget#2")
+		m.mu.Lock()
+		watching := m.convs["c1"].changed
+		m.mu.Unlock()
+		if got := sb.fronted(); len(got) != 0 {
+			t.Fatalf("put in front while a page waits: %v", got)
+		}
+		let["Target.attachToTarget"][2]()
+		drained(t, m, "c1")
+		select {
+		case <-watching:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("whoever watches was never told of the tab brought forward (put in front: %v)", sb.fronted())
+		}
+		if got := fmt.Sprint(sb.fronted()); got != "[B]" {
+			t.Errorf("put in front: %s, want [B]", got)
+		}
+	})
+}
+
 // With more of its pages still to be added, nothing of the conversation's
 // is brought forward: that would cover one opened in front that waits.
 // The last of them settles what is in front.

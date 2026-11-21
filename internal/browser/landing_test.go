@@ -213,66 +213,216 @@ func TestTheFirstPopupMakesTheLandingWindow(t *testing.T) {
 	drawn(t, ctx, tabs["two"], "the other conversation's page")
 }
 
+// landingsOf is the landing windows the manager lists.
+func landingsOf(m *Manager) map[string]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]int{}
+	for target, window := range m.landings {
+		out[target] = window
+	}
+	return out
+}
+
 // The landing window is the window made last. Two made at once are told
 // apart by their numbers and the later kept; and one whose page closes
 // under this manager is made again.
 func TestTheLandingWindowIsTheOneMadeLast(t *testing.T) {
 	sb, _ := newScriptedBrowser(t, nil, nil)
 	m, p := managerOn(sb)
-	landingNow := func() landing {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		if m.landing == nil {
-			return landing{}
+	is := func(what string, want map[string]int) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for fmt.Sprint(landingsOf(m)) != fmt.Sprint(want) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: the landing windows are %v, want %v", what, landingsOf(m), want)
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		return *m.landing
 	}
 	// None is kept before a popup.
 	sb.answers("Browser.getWindowForTarget", map[string]any{"windowId": 7})
 	m.land(p)
-	if got := landingNow(); got != (landing{}) {
-		t.Fatalf("a landing window is kept with no popup: %+v", got)
-	}
+	is("with no popup", map[string]int{})
 	sb.waitClosed(t, "T1")
 
 	m.mu.Lock()
 	m.popups = true
 	m.mu.Unlock()
 	m.land(p)
-	if got := landingNow(); got != (landing{target: "T2", window: 7}) {
-		t.Fatalf("the landing window is %+v, want the one just made", got)
-	}
+	is("the first", map[string]int{"T2": 7})
 	// One made before it, and answered after: not kept.
 	sb.answers("Browser.getWindowForTarget", map[string]any{"windowId": 5})
 	m.land(p)
-	if got := landingNow(); got.target != "T2" {
-		t.Fatalf("the landing window is %+v, want still the later one", got)
-	}
+	is("one made earlier", map[string]int{"T2": 7})
 	sb.waitClosed(t, "T3")
 	// One made after it takes its place, and the old one's page closes.
 	sb.answers("Browser.getWindowForTarget", map[string]any{"windowId": 9})
 	m.land(p)
-	if got := landingNow(); got != (landing{target: "T4", window: 9}) {
-		t.Fatalf("the landing window is %+v, want the one made last", got)
-	}
+	is("one made later", map[string]int{"T4": 9})
 	sb.waitClosed(t, "T2")
 	// Its page closes, by something else: another is made.
 	sb.answers("Browser.getWindowForTarget", map[string]any{"windowId": 11})
 	m.destroyed(p, "T4")
-	deadline := time.Now().Add(2 * time.Second)
-	for landingNow().target != "T5" {
-		if time.Now().After(deadline) {
-			t.Fatalf("the landing window's page closed and the landing window is %+v, want a new one", landingNow())
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	is("after its page closed", map[string]int{"T5": 11})
 	// A tab this manager opens is followed by a new one.
 	sb.answers("Browser.getWindowForTarget", map[string]any{"windowId": 13})
 	if _, err := m.NewTab(ctxFor(t), "c1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := landingNow(); got.window != 13 || got.target == "T5" {
-		t.Fatalf("after a tab of the manager's own the landing window is %+v, want a new one", got)
+	is("after a tab of the manager's own", map[string]int{"T7": 13})
+	sb.waitClosed(t, "T5")
+	// One the browser does not give a number for is no use, and closed;
+	// the one there is stays.
+	sb.answers("Browser.getWindowForTarget", map[string]any{"windowId": 0})
+	m.land(p)
+	is("one with no number", map[string]int{"T7": 13})
+	sb.waitClosed(t, "T9")
+}
+
+// A landing window is one from the moment the browser has made it: a
+// page that lands in it before its number is known has landed, the window
+// is not kept as the landing window, and another is made.
+func TestAPageThatLandsWhileTheLandingWindowIsMadeHasLanded(t *testing.T) {
+	// The number of the first landing window (the first question of its
+	// kind) is held; every window is number 7.
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Browser.getWindowForTarget": {1}})
+	sb.answers("Browser.getWindowForTarget", map[string]any{"windowId": 7})
+	m, p := managerOn(sb)
+	m.mu.Lock()
+	m.popups = true
+	m.convs["c2"] = &convTabs{tabs: []*Tab{{conn: sb.conn, targetID: "C", session: "sC"}}, changed: make(chan struct{})}
+	m.mu.Unlock()
+	made := make(chan struct{})
+	go func() {
+		m.land(p)
+		close(made)
+	}()
+	sb.waitHeld(t, "Browser.getWindowForTarget#1")
+	// A page of another conversation's popup lands in it now.
+	m.created(p, "C", "B")
+	m.bornAt(p, "B", "visible tabbed")
+	drained(t, m, "c2")
+	let["Browser.getWindowForTarget"][1]()
+	<-made
+	if got := landingsOf(m); len(got) != 1 || got["T1"] != 0 {
+		if _, kept := got["T1"]; kept {
+			t.Fatalf("the window the page landed in is kept as a landing window: %v", got)
+		}
+	}
+	sb.waitClosed(t, "T1")
+	if ids, _ := tabsOf(m, "c2"); fmt.Sprint(ids) != "[C B]" {
+		t.Errorf("the page that landed is not its conversation's tab: %v", ids)
+	}
+}
+
+// A landing window that could not be made is made at the next page in a
+// popup, and one whose page has closed by the time its number is known
+// is not kept.
+func TestALandingWindowThatFailedIsMadeAgain(t *testing.T) {
+	t.Run("no number for it", func(t *testing.T) {
+		sb, _ := newScriptedBrowser(t, nil, nil)
+		sb.answers("Browser.getWindowForTarget", map[string]any{"windowId": 0})
+		m, p := managerOn(sb)
+		m.created(p, "A", "P1")
+		m.bornAt(p, "P1", "visible popup")
+		drained(t, m, "c1")
+		if got := landingsOf(m); len(got) != 0 {
+			t.Fatalf("a window with no number is kept as a landing window: %v", got)
+		}
+		sb.answers("Browser.getWindowForTarget", map[string]any{"windowId": 9})
+		m.created(p, "A", "P2")
+		m.bornAt(p, "P2", "visible popup")
+		drained(t, m, "c1")
+		if got := landingsOf(m); len(got) != 1 {
+			t.Fatalf("after the next popup the landing windows are %v, want one", got)
+		}
+	})
+	t.Run("its page closed before it was listed", func(t *testing.T) {
+		sb, _ := newScriptedBrowser(t, nil, nil)
+		sb.answers("Browser.getWindowForTarget", map[string]any{"windowId": 7})
+		m, p := managerOn(sb)
+		m.mu.Lock()
+		m.popups = true
+		// The browser said the page had closed before its making was
+		// answered: T1 is the next page it makes.
+		m.markGone("T1")
+		m.mu.Unlock()
+		m.land(p)
+		if got := landingsOf(m); len(got) != 0 {
+			t.Fatalf("a closed page is kept as a landing window: %v", got)
+		}
+	})
+	t.Run("its page closed while it was made", func(t *testing.T) {
+		sb, let := newScriptedBrowser(t, nil, map[string][]int{"Browser.getWindowForTarget": {1}})
+		sb.answers("Browser.getWindowForTarget", map[string]any{"windowId": 7})
+		m, p := managerOn(sb)
+		m.mu.Lock()
+		m.popups = true
+		m.mu.Unlock()
+		made := make(chan struct{})
+		go func() {
+			m.land(p)
+			close(made)
+		}()
+		sb.waitHeld(t, "Browser.getWindowForTarget#1")
+		m.destroyed(p, "T1")
+		let["Browser.getWindowForTarget"][1]()
+		<-made
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			got := landingsOf(m)
+			if _, dead := got["T1"]; !dead && len(got) == 1 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the landing windows are %v, want one that is not the closed T1", got)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
+}
+
+// A link opened in a window of its own, with Shift held, is in a tabbed
+// window the browser made: the window made last. A new landing window is
+// made after it, or what a popup's page opened next landed in that
+// window, over its conversation's page.
+func TestAWindowTheBrowserMadeIsFollowedByALandingWindow(t *testing.T) {
+	m := testManager(t)
+	ctx := ctxFor(t)
+	site := popupSite(t)
+	open := func(conv string) *Tab {
+		t.Helper()
+		tab, err := m.Tab(ctx, conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tab.Navigate(ctx, site); err != nil {
+			t.Fatal(err)
+		}
+		return tab
+	}
+	first := open("one")
+	if err := clickWith(40, popupY, "left", 0)(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	popup := activeWhen(t, ctx, m, "one", first)
+	// The other conversation opens a link in a window of its own.
+	other := open("two")
+	if err := clickWith(40, plainY, "left", ModShift)(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	inWindow := activeWhen(t, ctx, m, "two", other)
+	drained(t, m, "two")
+	// And then the popup's page opens a tab.
+	if err := clickWith(40, blankY, "left", 0)(ctx, popup); err != nil {
+		t.Fatal(err)
+	}
+	opened := activeWhen(t, ctx, m, "one", first, popup)
+	drawn(t, ctx, opened, "the page the popup's link opened")
+	drawn(t, ctx, inWindow, "the other conversation's page, in the window the browser made for it")
+	if a, b := windowOf(ctx, m.proc.conn, opened.TargetID()), windowOf(ctx, m.proc.conn, inWindow.TargetID()); a == b {
+		t.Errorf("the page the popup's link opened is in the other conversation's window (%d)", a)
 	}
 }
 
@@ -302,7 +452,7 @@ func TestNoLandingWindowBeforeAPopup(t *testing.T) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.landing != nil || m.popups {
-		t.Errorf("a landing window is kept with no popup: %+v", m.landing)
+	if len(m.landings) != 0 || m.popups {
+		t.Errorf("a landing window is kept with no popup: %v", m.landings)
 	}
 }

@@ -41,8 +41,8 @@ Project rules for agents working in this repo.
   the attempt's log, and a force-cancelled attempt may keep none at all.
   The 44-minute hang above is still undiagnosed for exactly this reason.
 * What it runs, and why each is in it rather than left to memory:
-  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 3,039 tests
-    and 1,376 subtests over 34 packages, two of the tests skipped on macOS.
+  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 3,044 tests
+    and 1,398 subtests over 34 packages, two of the tests skipped on macOS.
     The same suite runs a second time without `-race`
     (`go test ./... -count=1 -timeout 10m`), because a test whose timing
     only holds at race-detector speed passes the race lane and fails for
