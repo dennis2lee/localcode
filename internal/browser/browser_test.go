@@ -27,7 +27,7 @@ func testManager(t *testing.T) *Manager {
 	if err := os.WriteFile(filepath.Join(dir, profileNameFile), []byte("Default\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(Options{DataDir: dir})
+	m := NewManager(Options{DataDir: dir, ChromePath: os.Getenv("LC_PROBE_BROWSER")})
 	t.Cleanup(m.Close)
 	return m
 }

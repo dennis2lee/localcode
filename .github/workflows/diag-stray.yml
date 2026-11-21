@@ -1,0 +1,43 @@
+# Measurement only: what a modified click on a link makes the browser do,
+# on the systems a release ships for. Lives on diag/stray-tabs, never on
+# main.
+name: diag-stray
+
+on:
+  push:
+    branches: ['diag/stray-tabs']
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            browser: ''
+            name: windows-chrome
+          - os: windows-latest
+            browser: 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+            name: windows-edge
+          - os: ubuntu-latest
+            browser: ''
+            name: linux-chrome
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+      - name: probe
+        timeout-minutes: 30
+        shell: bash
+        env:
+          LC_PROBE: '1'
+          LC_PROBE_BROWSER: ${{ matrix.browser }}
+        run: go test ./internal/browser -run 'TestZZProbeStray' -count=1 -timeout 25m -v 2>&1 | grep -E 'RESULT|EV |^(ok|FAIL|---|panic)|_test.go' || true
