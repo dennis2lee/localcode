@@ -1,7 +1,7 @@
-# Diagnostic, not part of the release: where a click the panel sends lands
-# under a zoomed profile, a scaled display, and Ctrl+wheel, on Windows with
-# Chrome and with Edge.
-name: diag-browser-zoom
+# Diagnostic, not part of the release: which keys, sent the way the panel
+# sends them, leave the page unable to take typing or a click, with and
+# without the native key code, on Windows (Chrome, Edge) and Linux.
+name: diag-browser-keys
 
 on:
   push:
@@ -12,21 +12,38 @@ permissions:
 
 jobs:
   probe:
-    runs-on: windows-latest
-    timeout-minutes: 20
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        browser: [chrome, edge]
+        include:
+          - { os: windows-latest, browser: chrome }
+          - { os: windows-latest, browser: edge }
+          - { os: ubuntu-latest, browser: chrome }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
-      - name: Probe
-        timeout-minutes: 12
+      - name: Keys, as sent today
+        timeout-minutes: 15
         shell: pwsh
         run: |
           if ('${{ matrix.browser }}' -eq 'edge') { $env:LC_PROBE_BROWSER = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' }
-          "browser override: '$env:LC_PROBE_BROWSER'"
-          go test -count=1 -timeout 10m -run 'TestZZProbe' -v ./internal/browser/
+          go test -count=1 -timeout 14m -run 'TestZZProbeKeys' -v ./internal/browser/
+      - name: Keys, without the native key code
+        if: always()
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          if ('${{ matrix.browser }}' -eq 'edge') { $env:LC_PROBE_BROWSER = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' }
+          $env:LC_PROBE_NO_NATIVE = '1'
+          go test -count=1 -timeout 14m -run 'TestZZProbeKeys' -v ./internal/browser/
+      - name: The package's own tests, without the native key code
+        if: always()
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          $env:LC_PROBE_NO_NATIVE = '1'
+          go test -count=1 -timeout 10m -skip 'TestZZProbe' ./internal/browser/

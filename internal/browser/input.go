@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -261,7 +262,10 @@ func (t *Tab) KeyEvent(ctx context.Context, e KeyEvent) error {
 	params := map[string]any{"type": e.Type, "key": e.Key, "code": e.Code, "modifiers": e.Modifiers}
 	if e.KeyCode != 0 {
 		params["windowsVirtualKeyCode"] = e.KeyCode
-		params["nativeVirtualKeyCode"] = e.KeyCode
+		// DIAG ONLY, never merged.
+		if os.Getenv("LC_PROBE_NO_NATIVE") == "" {
+			params["nativeVirtualKeyCode"] = e.KeyCode
+		}
 	}
 	if e.Text != "" {
 		params["text"] = e.Text

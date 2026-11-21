@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ref: [main]
+        ref: [main, fix/browser-page-zoom]
         # The zoom level the browser's profile carries for every page:
         # none, or 125% (1.2 to the power of the level).
         page_zoom: ['', '1.2239010857415449']
@@ -187,18 +187,19 @@ jobs:
             $x0 = [int]($u.X + $u.Width / 2); $y = [int]($u.Bottom + 2)
             while ($y -lt $b.Height - 1 -and -not (& $white $x0 $y)) { $y++ }
             $top = $y
-            while ($y -lt $b.Height - 1 -and (& $white $x0 ($y + 1))) { $y++ }
-            $bottom = $y
             # Along a row just under the top, which no element of the page
             # reaches: the page's own field and button are not white.
             $mid = $top + 3
             $l = $x0; while ($l -gt 0 -and (& $white ($l - 1) $mid)) { $l-- }
             $r = $x0; while ($r -lt $b.Width - 1 -and (& $white ($r + 1) $mid)) { $r++ }
             $bmp.Dispose()
-            return @{ X = $l; Y = $top; W = $r - $l + 1; H = $bottom - $top + 1 }
+            # The view keeps the page's shape, so its height follows from
+            # its width: a column down it would stop at the page's field.
+            $w = $r - $l + 1
+            return @{ X = $l; Y = $top; W = $w; H = [int]($w * 800 / 1280) }
           }
           $v = ViewRect
-          "view (white area) at $($v.X),$($v.Y) size $($v.W)x$($v.H); expected height for its width $([int]($v.W * 800 / 1280))"
+          "view at $($v.X),$($v.Y) size $($v.W)x$($v.H)"
           function Aim($px, $py) { @{ X = $v.X + $v.W * $px * $seen / 1280; Y = $v.Y + $v.H * $py * $seen / 800 } }
           $p = Aim 400 130
           Activate
@@ -214,6 +215,19 @@ jobs:
           ClickAt $p.X $p.Y
           "RESULT mouse-on-button (${{ matrix.ref }}, page zoom [${{ matrix.page_zoom }}]): clicked screen $([int]$p.X),$([int]$p.Y) aiming at the button :: $(Title)"
           Shot 'after-button'
+
+          "--- C: the zoom shortcut, typed with the panel's page in focus"
+          $before = Title
+          $p = Aim 640 700
+          ClickAt $p.X $p.Y
+          [System.Windows.Forms.SendKeys]::SendWait('^=')
+          Start-Sleep 1
+          [System.Windows.Forms.SendKeys]::SendWait('^=')
+          Start-Sleep 1
+          Api Post "/api/sessions/$id/browser/navigate" @{ url = 'http://127.0.0.1:8765/page.html?after-shortcut' } | Out-Null
+          Start-Sleep 3
+          "RESULT zoom-shortcut (${{ matrix.ref }}, page zoom [${{ matrix.page_zoom }}]): the page reloaded after two Ctrl+= says :: $(Title)"
+          Shot 'after-shortcut'
 
       - name: Keep the screenshots
         if: always()
