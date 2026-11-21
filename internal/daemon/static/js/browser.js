@@ -102,12 +102,18 @@ const SHORTCUTS = { a: 'selectAll', c: 'copy', x: 'cut', v: 'paste' };
 // the key so the page carries it out: the browser does not take Cmd+C or
 // Cmd+V from a key event alone on macOS. Paste is the page reading the
 // clipboard itself, so the person's Cmd+V pastes what they copied.
+//
+// With Shift held as well, only Z (redo) and V (a browser pastes on
+// Ctrl+Shift+V too) are editing shortcuts. Ctrl+Shift+C is not a copy in
+// a browser, and sent as one it put the selection on the clipboard under
+// a page that uses the keys for something of its own.
 export function editCommandFor(e, mac = isMac()) {
   const primary = mac ? e.metaKey : e.ctrlKey;
   const other = mac ? e.ctrlKey : e.metaKey;
   if (!primary || other || e.altKey || typeof e.key !== 'string') return '';
   const k = e.key.toLowerCase();
   if (k === 'z') return e.shiftKey ? 'redo' : 'undo';
+  if (e.shiftKey && k !== 'v') return '';
   if (k === 'y' && !mac) return 'redo';
   return SHORTCUTS[k] || '';
 }

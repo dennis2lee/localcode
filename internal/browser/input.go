@@ -230,14 +230,19 @@ var editingCommands = map[string]string{"a": "selectAll", "c": "copy", "x": "cut
 var panelCommands = map[string]bool{"selectAll": true, "copy": true, "cut": true, "paste": true, "undo": true, "redo": true}
 
 // commandsFor is the editing command a key with its modifiers stands for,
-// if any: Ctrl or Cmd with one of the keys above, and nothing else held
-// but Shift.
+// if any: Ctrl or Cmd with one of the keys above and nothing else held,
+// and with Shift held as well only Z, which is redo. Ctrl+Shift+C is not
+// a copy in a browser, and sent as one it put the selection on the
+// clipboard under a page that uses the keys for something of its own.
 func commandsFor(key string, mods int) []string {
 	if mods&(ModCtrl|ModMeta) == 0 || mods&ModAlt != 0 {
 		return nil
 	}
 	k := strings.ToLower(key)
-	if mods&ModShift != 0 && k == "z" {
+	if mods&ModShift != 0 {
+		if k != "z" {
+			return nil
+		}
 		k = "Z"
 	}
 	if c, ok := editingCommands[k]; ok {
@@ -320,14 +325,47 @@ var namedKeys = map[string]keyDef{
 	"arrowright": {"ArrowRight", "ArrowRight", 39, ""}, "right": {"ArrowRight", "ArrowRight", 39, ""},
 	"home": {"Home", "Home", 36, ""}, "end": {"End", "End", 35, ""},
 	"pageup": {"PageUp", "PageUp", 33, ""}, "pagedown": {"PageDown", "PageDown", 34, ""},
+	"plus": {"+", "Equal", 187, "+"}, "minus": {"-", "Minus", 189, "-"},
+}
+
+// keyPlace is where a key is on the keyboard: the code and the Windows
+// key code a page reads to know which key was pressed.
+type keyPlace struct {
+	code    string
+	keyCode int
+}
+
+// punctuation is where the keys that are neither letters nor digits are
+// on a US keyboard, by the character each types alone or with Shift. A
+// page that takes Ctrl+/ or Ctrl+plus as a shortcut often reads the key
+// code, and a key sent with none was not one it knew.
+var punctuation = map[rune]keyPlace{
+	'=': {"Equal", 187}, '+': {"Equal", 187}, '-': {"Minus", 189}, '_': {"Minus", 189},
+	',': {"Comma", 188}, '<': {"Comma", 188}, '.': {"Period", 190}, '>': {"Period", 190},
+	'/': {"Slash", 191}, '?': {"Slash", 191}, ';': {"Semicolon", 186}, ':': {"Semicolon", 186},
+	'\'': {"Quote", 222}, '"': {"Quote", 222}, '`': {"Backquote", 192}, '~': {"Backquote", 192},
+	'[': {"BracketLeft", 219}, '{': {"BracketLeft", 219}, ']': {"BracketRight", 221}, '}': {"BracketRight", 221},
+	'\\': {"Backslash", 220}, '|': {"Backslash", 220},
+	')': {"Digit0", 48}, '!': {"Digit1", 49}, '@': {"Digit2", 50}, '#': {"Digit3", 51}, '$': {"Digit4", 52},
+	'%': {"Digit5", 53}, '^': {"Digit6", 54}, '&': {"Digit7", 55}, '*': {"Digit8", 56}, '(': {"Digit9", 57},
 }
 
 // parseKeys reads a key combination such as "Enter", "ctrl+a",
-// "shift+Tab" or "cmd+l".
+// "shift+Tab" or "cmd+l". The key is what follows the last "+", and the
+// plus key itself when the combination ends in one: "ctrl++", which is
+// also "ctrl+plus".
 func parseKeys(combo string) (keyDef, int, error) {
-	parts := strings.Split(combo, "+")
+	last := combo
+	var held []string
+	switch i := strings.LastIndex(combo, "+"); {
+	case combo == "+":
+	case len(combo) > 2 && strings.HasSuffix(combo, "++"):
+		last, held = "+", strings.Split(combo[:len(combo)-2], "+")
+	case i >= 0:
+		last, held = combo[i+1:], strings.Split(combo[:i], "+")
+	}
 	mods := 0
-	for _, m := range parts[:len(parts)-1] {
+	for _, m := range held {
 		switch strings.ToLower(strings.TrimSpace(m)) {
 		case "ctrl", "control":
 			mods |= ModCtrl
@@ -341,8 +379,14 @@ func parseKeys(combo string) (keyDef, int, error) {
 			return keyDef{}, 0, fmt.Errorf("unknown modifier %q in %q", m, combo)
 		}
 	}
-	last := strings.TrimSpace(parts[len(parts)-1])
+	// With Ctrl, Cmd or Alt held a key is a shortcut and types nothing:
+	// Ctrl+Enter is a key press, not a line break, as it is from the panel.
+	shortcut := mods&(ModCtrl|ModMeta|ModAlt) != 0
+	last = strings.TrimSpace(last)
 	if def, ok := namedKeys[strings.ToLower(last)]; ok {
+		if shortcut {
+			def.text = ""
+		}
 		return def, mods, nil
 	}
 	if len(last) >= 2 && (last[0] == 'f' || last[0] == 'F') {
@@ -358,9 +402,11 @@ func parseKeys(combo string) (keyDef, int, error) {
 			def.code, def.keyCode = "Key"+upper, int(upper[0])
 		} else if '0' <= r && r <= '9' {
 			def.code, def.keyCode = "Digit"+last, int(r)
+		} else if at, ok := punctuation[r]; ok {
+			def.code, def.keyCode = at.code, at.keyCode
 		}
-		if mods&(ModCtrl|ModMeta|ModAlt) != 0 {
-			def.text = "" // a shortcut, not a character
+		if shortcut {
+			def.text = ""
 		}
 		return def, mods, nil
 	}
