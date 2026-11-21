@@ -90,6 +90,20 @@ function step(dir) {
   applyZoom(below.length ? below[below.length - 1] : MIN);
 }
 
+// zoomKey is what a key event asks of the window's zoom: 1 for a step in,
+// -1 for a step out, 0 for back to 100%, and null when it is not a zoom
+// shortcut. The browser panel reads it too: a zoom shortcut is the
+// window's, and is not passed on to the page in the panel.
+export function zoomKey(e) {
+  if (!e.ctrlKey && !e.metaKey) return null;
+  // "=" is the unshifted key on the same cap as "+", which is what
+  // ctrl+plus actually delivers on most layouts.
+  if (e.key === '+' || e.key === '=') return 1;
+  if (e.key === '-' || e.key === '_') return -1;
+  if (e.key === '0') return 0;
+  return null;
+}
+
 export function wireZoom(target) {
   const el = target || document;
   applyZoom(read());
@@ -101,18 +115,10 @@ export function wireZoom(target) {
   }, { passive: false });
 
   el.addEventListener('keydown', (e) => {
-    if (!e.ctrlKey && !e.metaKey) return;
-    // "=" is the unshifted key on the same cap as "+", which is what
-    // ctrl+plus actually delivers on most layouts.
-    if (e.key === '+' || e.key === '=') {
-      e.preventDefault();
-      step(1);
-    } else if (e.key === '-' || e.key === '_') {
-      e.preventDefault();
-      step(-1);
-    } else if (e.key === '0') {
-      e.preventDefault();
-      applyZoom(1);
-    }
+    const dir = zoomKey(e);
+    if (dir === null) return;
+    e.preventDefault();
+    if (dir === 0) applyZoom(1);
+    else step(dir);
   });
 }

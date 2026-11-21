@@ -412,27 +412,34 @@ async function churn(n) {
 	}
 }
 
-// Preloading goes off in the profile, and nothing else in it changes:
-// not a setting, not a number too long for a float64.
-func TestNoPreloadingLeavesTheRestOfThePreferences(t *testing.T) {
+// Preloading goes off in the profile and its page zoom goes, the default
+// and each site's, and nothing else in it changes: not a setting, not a
+// number too long for a float64.
+func TestTheProfilesOwnSettingsLeaveTheRestOfThePreferences(t *testing.T) {
 	dir := t.TempDir()
-	in := `{"net":{"network_prediction_options":0,"other":true},"profile":{"last_engagement_time":"13350000000000001","exit_type":"Normal"},"big":13350000000000001}`
+	in := `{"net":{"network_prediction_options":0,"other":true},"profile":{"last_engagement_time":"13350000000000001","exit_type":"Normal"},"big":13350000000000001,` +
+		`"partition":{"default_zoom_level":{"x":1.2239010857415449},"per_host_zoom_levels":{"x":{"example.com":{"last_modified":"13370000000000000","zoom_level":2.2239010857415449}}},"kept":7}}`
 	if err := os.WriteFile(filepath.Join(dir, "Preferences"), []byte(in), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := noPreloading(dir); err != nil {
+	if err := ownPreferences(dir); err != nil {
 		t.Fatal(err)
 	}
 	out, _ := os.ReadFile(filepath.Join(dir, "Preferences"))
-	for _, want := range []string{`"network_prediction_options":2`, `"other":true`, `"exit_type":"Normal"`, `"big":13350000000000001`, `"last_engagement_time":"13350000000000001"`} {
+	for _, want := range []string{`"network_prediction_options":2`, `"other":true`, `"exit_type":"Normal"`, `"big":13350000000000001`, `"last_engagement_time":"13350000000000001"`, `"partition":{"kept":7}`} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("Preferences lack %s: %s", want, out)
+		}
+	}
+	for _, gone := range []string{"default_zoom_level", "per_host_zoom_levels", "example.com"} {
+		if strings.Contains(string(out), gone) {
+			t.Errorf("Preferences still hold %s: %s", gone, out)
 		}
 	}
 	// A file that is not an object is started over, null included.
 	for _, bad := range []string{"null", "[]", `"x"`, "", "{"} {
 		os.WriteFile(filepath.Join(dir, "Preferences"), []byte(bad), 0o600)
-		if err := noPreloading(dir); err != nil {
+		if err := ownPreferences(dir); err != nil {
 			t.Errorf("Preferences %q: %v", bad, err)
 		}
 		if out, _ := os.ReadFile(filepath.Join(dir, "Preferences")); !strings.Contains(string(out), `"network_prediction_options":2`) {
@@ -441,7 +448,7 @@ func TestNoPreloadingLeavesTheRestOfThePreferences(t *testing.T) {
 	}
 	// A profile with no Preferences yet gets one.
 	fresh := filepath.Join(t.TempDir(), "Default")
-	if err := noPreloading(fresh); err != nil {
+	if err := ownPreferences(fresh); err != nil {
 		t.Fatal(err)
 	}
 	if out, _ := os.ReadFile(filepath.Join(fresh, "Preferences")); !strings.Contains(string(out), `"network_prediction_options":2`) {

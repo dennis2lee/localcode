@@ -16,6 +16,7 @@
 
 import { app, session } from './state.js';
 import { api } from './api.js';
+import { zoomKey } from './zoom.js';
 
 // The page size the daemon renders every tab at (browser.ViewportWidth and
 // ViewportHeight), which is the frame of every coordinate sent back.
@@ -560,13 +561,20 @@ export function initBrowserPanel() {
     }
   });
   view.addEventListener('contextmenu', (e) => e.preventDefault());
+  // The window's zoom shortcut stays the window's: js/zoom.js takes it.
+  // Sent on to the page as well, Ctrl+plus zoomed the page in the panel
+  // on Windows and Linux, the browser kept that zoom for the site, and a
+  // zoomed page is not where its picture says it is: every click after it
+  // missed, and with no field focused the typing went nowhere.
   view.addEventListener('keydown', (e) => {
+    if (zoomKey(e) !== null) return;
     e.preventDefault();
     const key = keyEventFor(e, true);
     if (key.commands && key.commands[0] === 'paste') lastPasteKey = Date.now();
     sendInput({ key });
   });
   view.addEventListener('keyup', (e) => {
+    if (zoomKey(e) !== null) return;
     e.preventDefault();
     sendInput({ key: keyEventFor(e, false) });
   });

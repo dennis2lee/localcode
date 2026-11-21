@@ -651,6 +651,49 @@ test('a shortcut carries the editing command, by the platform\'s own modifier', 
     'a key coming up carries the command a second time');
 });
 
+// The window's zoom shortcut (js/zoom.js) is the window's alone. Passed on
+// to the page as well, Ctrl+plus zoomed the page in the panel on Windows
+// and Linux, the browser kept that zoom for the site, and every click
+// after it missed: a zoomed page is not where its picture says it is.
+test('the window\'s zoom shortcut is not passed on to the page', async () => {
+  const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
+  const view = app.el('browser-view');
+  const shortcuts = [
+    { key: '=', code: 'Equal', keyCode: 187, ctrlKey: true },
+    { key: '+', code: 'Equal', keyCode: 187, ctrlKey: true, shiftKey: true },
+    { key: '-', code: 'Minus', keyCode: 189, ctrlKey: true },
+    { key: '0', code: 'Digit0', keyCode: 48, ctrlKey: true },
+    { key: '+', code: 'NumpadAdd', keyCode: 107, ctrlKey: true },
+    { key: '=', code: 'Equal', keyCode: 187, metaKey: true },
+  ];
+  for (const k of shortcuts) {
+    view.fire('keydown', k);
+    view.fire('keyup', k);
+  }
+  await app.settle();
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/sess-1/browser/input').map((c) => c.body), [],
+    'a zoom shortcut reached the page');
+
+  // The same keys with no Ctrl or Cmd are characters, and go to the page.
+  view.fire('keydown', { key: '=', code: 'Equal', keyCode: 187 });
+  view.fire('keydown', { key: '0', code: 'Digit0', keyCode: 48 });
+  await app.settle();
+  const sent = app.callsTo('POST', '/api/sessions/sess-1/browser/input').map((c) => c.body.key.text);
+  assert.deepEqual(sent, ['=', '0']);
+});
+
+test('a zoom shortcut says which way the window zooms', async () => {
+  const app = await load({ init: false });
+  const { zoomKey } = app.internals;
+  assert.equal(zoomKey({ key: '=', ctrlKey: true }), 1);
+  assert.equal(zoomKey({ key: '+', metaKey: true }), 1);
+  assert.equal(zoomKey({ key: '-', ctrlKey: true }), -1);
+  assert.equal(zoomKey({ key: '_', ctrlKey: true }), -1);
+  assert.equal(zoomKey({ key: '0', ctrlKey: true }), 0);
+  assert.equal(zoomKey({ key: '=' }), null, 'a character, not a shortcut');
+  assert.equal(zoomKey({ key: 'a', ctrlKey: true }), null);
+});
+
 test('a paste shortcut pastes once, from the page\'s side', async () => {
   const app = await load({ globals: { lcGUI: true }, routes: settingsWith({ browser: true }) });
   const view = app.el('browser-view');

@@ -113,7 +113,7 @@ func start(ctx context.Context, path, dataDir, profile string, imported bool) (*
 	closeStale(portFile)
 	// Left by an earlier run, it names a port nobody is listening on.
 	_ = os.Remove(portFile)
-	if err := noPreloading(filepath.Join(dataDir, profile)); err != nil {
+	if err := ownPreferences(filepath.Join(dataDir, profile)); err != nil {
 		return nil, fmt.Errorf("set up the profile: %w", err)
 	}
 
@@ -246,13 +246,26 @@ func (p *process) kill() {
 	}
 }
 
-// noPreloading turns off the browser's "Preload pages" setting in the
-// profile's Preferences, before the browser reads them. With it on, a
-// page can have the browser fetch another page ahead of a click (link
-// prefetch, speculation rules, prerender). The browser makes those
-// requests itself, outside what the guard can see, so a page could have
-// a denied site fetched with the profile's cookies.
-func noPreloading(profileDir string) error {
+// ownPreferences sets, in the profile's Preferences before the browser
+// reads them, the two settings this browser cannot take from the person's
+// own. It runs at every start, so a profile copied by an earlier version
+// is put right too.
+//
+// "Preload pages" is turned off. With it on, a page can have the browser
+// fetch another page ahead of a click (link prefetch, speculation rules,
+// prerender). The browser makes those requests itself, outside what the
+// guard can see, so a page could have a denied site fetched with the
+// profile's cookies.
+//
+// The page zoom is taken out: the default one, and each site's own. The
+// panel and the model address a page by a point in the 1280x800 picture
+// of it, and the browser takes a point in the page's own layout pixels.
+// The two are the same only at 100%. A profile copied from a browser set
+// to 125% laid every page out 1024 pixels wide, drawn at 1280, and every
+// click landed a quarter further from the corner than it was aimed: a
+// click on a field reached the empty page beside it, and the typing after
+// it went nowhere (measured, with Chrome and Edge, on macOS and Windows).
+func ownPreferences(profileDir string) error {
 	path := filepath.Join(profileDir, "Preferences")
 	prefs := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
@@ -275,6 +288,12 @@ func noPreloading(profileDir string) error {
 	// 2 is "never" (chrome::NetworkPredictionOptions).
 	net["network_prediction_options"] = 2
 	prefs["net"] = net
+	// Zoom levels are kept by storage partition under these two keys;
+	// with neither, every page is at 100%.
+	if partition, _ := prefs["partition"].(map[string]any); partition != nil {
+		delete(partition, "default_zoom_level")
+		delete(partition, "per_host_zoom_levels")
+	}
 	data, err := json.Marshal(prefs)
 	if err != nil {
 		return err

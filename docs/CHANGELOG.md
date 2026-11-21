@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.176.2
+
+A click or a key on the browser panel reaches the page where it was aimed when the browser's profile had pages zoomed.
+
+**Fixed**
+
+* A click on the browser panel landing away from where it was aimed, and the typing after it reaching no field, when the copied Chrome or Edge profile had pages zoomed, by default or for the site: the profile's zoom is removed at every start, and every page is at 100%
+* Ctrl+plus, Ctrl+minus and Ctrl+0 on the browser panel zooming the page in it as well as the window, on Windows and Linux, with the same missed clicks on that site from then on: the shortcut zooms the window only, and the browser tool's `key` action refuses it
+
 ## v0.176.1
 
 One conversation waiting on the browser no longer holds up the others' browser work, and archiving a conversation closes its browser tabs.
