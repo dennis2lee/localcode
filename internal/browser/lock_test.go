@@ -196,7 +196,7 @@ func TestATabOpeningForAClosedConversationIsNotPublished(t *testing.T) {
 	}()
 	waitHeld(t, held, "the new tab")
 	closed := make(chan struct{})
-	go func() { m.CloseTab("c1"); close(closed) }()
+	go func() { <-m.CloseTab("c1"); close(closed) }()
 	release()
 	<-opened
 	<-closed
@@ -232,7 +232,7 @@ func TestAClosedPageIsRememberedLongEnough(t *testing.T) {
 func TestClosingAConversationDropsItsQueue(t *testing.T) {
 	m, _, _, release := standIn(t, "Target.createTarget")
 	release()
-	m.CloseTab("c1")
+	<-m.CloseTab("c1")
 	m.mu.Lock()
 	_, kept := m.queues["c1"]
 	m.mu.Unlock()

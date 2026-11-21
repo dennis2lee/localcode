@@ -194,8 +194,13 @@ func TestThePanelDrivesThePage(t *testing.T) {
 		t.Fatal(err)
 	}
 	del.Body.Close()
-	if d.Browser.Existing(id) != nil {
-		t.Error("the deleted conversation's tab is still open")
+	// Closed in the conversation's turn, after the delete has answered.
+	deadline := time.Now().Add(5 * time.Second)
+	for d.Browser.Existing(id) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the deleted conversation's tab is still open")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

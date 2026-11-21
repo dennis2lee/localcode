@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"localcode/internal/agent"
@@ -610,22 +609,17 @@ func (d *Daemon) forgetDeleted(ids []string) {
 	d.announceDeleted(ids...)
 }
 
-// closeBrowserTabs closes the browser tabs of every session in ids, side by
-// side: each waits behind its own session's browser work, and a page slow
-// to close in one holds up none of the others.
+// closeBrowserTabs closes the browser tabs of every session in ids. Each
+// close waits its turn behind its own session's browser work, in the
+// background: the handler that deletes or archives waits on no page, and
+// a page slow to close in one session holds up none of the others.
 func (d *Daemon) closeBrowserTabs(ids []string) {
 	if d.Browser == nil {
 		return
 	}
-	var wg sync.WaitGroup
 	for _, sid := range ids {
-		wg.Add(1)
-		go func(sid string) {
-			defer wg.Done()
-			d.Browser.CloseTab(sid)
-		}(sid)
+		d.Browser.CloseTab(sid)
 	}
-	wg.Wait()
 }
 
 // handleDeleteAllSessions wipes every session (visible and background-task

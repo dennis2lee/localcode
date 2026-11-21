@@ -1884,7 +1884,7 @@ Archiving preserves the title, workspace, permissions, effort, list rank, and ev
 
 Group membership is kept too, though an archived session shows in no group while it is away — it is not in the panel. Retrieving it puts it back where it was.
 
-Browser tabs are not kept. Archiving closes the conversation's tabs, and those of its background tasks, and retrieving it starts with none, as a new conversation does. Deleting a conversation closes its tabs too.
+Browser tabs are not kept. Archiving closes the conversation's tabs, and those of its background tasks, the browser panel opens none while it is archived, and retrieving it starts with none, as a new conversation does. Deleting a conversation closes its tabs too.
 
 The log continues accepting completion and missed-schedule events. Archived sessions cannot start new work.
 

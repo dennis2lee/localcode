@@ -224,9 +224,10 @@ func (m *Manager) dropAll() {
 // opener active again, as a browser does, when it was opened by a link
 // and the opener is still open; otherwise the one before it in the list.
 type convTabs struct {
-	tabs    []*Tab
-	active  int
-	changed chan struct{} // closed when the active tab changes
+	tabs     []*Tab
+	active   int
+	changed  chan struct{} // closed when the active tab changes
+	switches uint64        // showActive calls so far: which one tells
 }
 
 func (c *convTabs) current() *Tab {
@@ -240,6 +241,21 @@ func (c *convTabs) current() *Tab {
 func (c *convTabs) notify() {
 	close(c.changed)
 	c.changed = make(chan struct{})
+}
+
+// closed tells whoever watches c that a tab of it was removed, when next,
+// the active tab remove reported, is nil: none is left (told for the last
+// time), or the active one is the same. A watcher can be on the removed
+// one even then, because a switch away from it is told only once the tab
+// switched to paints (see showActive); told now, it moves to the active
+// one. A change of active tab is told by showActive. Called with m.mu.
+func (c *convTabs) closed(next *Tab) {
+	switch {
+	case len(c.tabs) == 0:
+		close(c.changed)
+	case next == nil:
+		c.notify()
+	}
 }
 
 // add appends t and makes it the active tab.
@@ -316,17 +332,26 @@ func painted(t *Tab) {
 // whoever is watching the conversation that it changed. Told first, a
 // stream started on a tab not yet painting and stayed on one frame.
 // Nothing is told if another change came in the meantime; that one tells.
-// Not called with m.mu held.
+// That holds for a switch back to the same tab too (A to B, to A, to B):
+// the first switch to B can finish waiting while B is behind A, and a
+// stream started then stays on one frame. Not called with m.mu held.
 func (m *Manager) showActive(conv string, t *Tab) (after func()) {
 	if t == nil {
 		return func() {}
 	}
+	m.mu.Lock()
+	var n uint64
+	if c := m.convs[conv]; c != nil {
+		c.switches++
+		n = c.switches
+	}
+	m.mu.Unlock()
 	front(t)
 	return func() {
 		painted(t)
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if c := m.convs[conv]; c != nil && c.current() == t {
+		if c := m.convs[conv]; c != nil && c.current() == t && c.switches == n {
 			c.notify()
 		}
 	}
@@ -391,6 +416,10 @@ func (m *Manager) Tab(ctx context.Context, conv string) (*Tab, error) {
 		return nil, err
 	}
 	defer release()
+	// A caller that stopped waiting is told so, whatever the turn finds.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if t := m.Existing(conv); t != nil {
 		return t, nil
 	}
@@ -562,19 +591,25 @@ func (m *Manager) CloseTabID(ctx context.Context, conv, id string) error {
 	}
 	t := c.tabs[i]
 	next := c.remove(i)
+	c.closed(next)
 	if len(c.tabs) == 0 {
 		delete(m.convs, conv)
-		close(c.changed)
 	}
 	m.markGone(t.targetID)
 	m.mu.Unlock()
 	after := m.showActive(conv, next)
 	// The page closes after the turn: a page that is slow to close holds
-	// up nothing of the conversation's that comes after.
+	// up nothing of the conversation's that comes after. It closes while
+	// the next one paints, and neither waits for the other.
 	release()
 	release = nil
+	discarded := make(chan struct{})
+	go func() {
+		t.discard()
+		close(discarded)
+	}()
 	after()
-	t.discard()
+	<-discarded
 	return nil
 }
 
@@ -779,6 +814,11 @@ func (m *Manager) created(p *process, openerID, targetID string) {
 		// Opened by a page this manager has let go of (its conversation
 		// closed while the page was still there): nobody's, so closed.
 		orphan := m.wasGone(openerID)
+		if orphan {
+			// And so is a page it opens before its close reaches the
+			// browser.
+			m.markGone(targetID)
+		}
 		m.mu.Unlock()
 		if orphan {
 			go closeTarget(p.conn, targetID)
@@ -800,12 +840,25 @@ func (m *Manager) created(p *process, openerID, targetID string) {
 func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, targetID string) {
 	_ = m.await(context.Background(), q, tk)
 	defer m.done(q)
+	m.mu.Lock()
+	_, claimed := m.adopting[targetID]
+	stale := m.proc != p || !claimed || m.wasGone(targetID)
+	if stale {
+		delete(m.adopting, targetID)
+	}
+	m.mu.Unlock()
+	if stale {
+		// Its conversation closed, or it did, while it waited for its
+		// turn: nobody's, closed without attaching to it.
+		closeTarget(p.conn, targetID)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	t, err := attachTab(ctx, p.conn, targetID)
 
 	m.mu.Lock()
-	_, claimed := m.adopting[targetID]
+	_, claimed = m.adopting[targetID]
 	delete(m.adopting, targetID)
 	if err != nil {
 		// Not attached, it can be no conversation's tab: closed rather than
@@ -888,9 +941,9 @@ func (m *Manager) forget(conv string, q *queue, tk uint64, targetID string) {
 	}
 	t := c.tabs[i]
 	next := c.remove(i)
+	c.closed(next)
 	if len(c.tabs) == 0 {
 		delete(m.convs, conv)
-		close(c.changed)
 	}
 	conn := m.connLocked()
 	m.mu.Unlock()
@@ -915,42 +968,54 @@ func (m *Manager) connLocked() *cdp.Conn {
 // CloseTab closes every page conv has, in its turn: after the work asked
 // for before it, a tab still opening included, so nothing it opens
 // outlives the conversation. Its claims go too, so a page one of its tabs
-// opened is closed rather than adopted.
-func (m *Manager) CloseTab(conv string) {
-	release, _ := m.queued(context.Background(), conv)
+// opened is closed rather than adopted. It returns as soon as its turn is
+// taken, so whoever deletes or archives a conversation waits on no page;
+// what it returns is closed once the pages are.
+func (m *Manager) CloseTab(conv string) <-chan struct{} {
 	m.mu.Lock()
-	c := m.convs[conv]
-	delete(m.convs, conv)
-	for target, owner := range m.adopting {
-		if owner == conv {
-			delete(m.adopting, target)
-			// A page it opens before its attach closes it is closed too.
-			m.markGone(target)
-		}
-	}
-	if c != nil {
-		for _, t := range c.tabs {
-			m.markGone(t.targetID)
-		}
-	}
+	q, tk := m.ticket(conv)
 	m.mu.Unlock()
-	// The pages close after the turn, and side by side: nothing of the
-	// conversation's is listed any more, and a page slow to close holds
-	// up no other.
-	release()
-	if c == nil {
-		return
-	}
-	var wg sync.WaitGroup
-	for _, t := range c.tabs {
-		wg.Add(1)
-		go func(t *Tab) {
-			defer wg.Done()
-			t.discard()
-		}(t)
-	}
-	wg.Wait()
-	close(c.changed)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = m.await(context.Background(), q, tk)
+		m.mu.Lock()
+		c := m.convs[conv]
+		delete(m.convs, conv)
+		for target, owner := range m.adopting {
+			if owner == conv {
+				delete(m.adopting, target)
+				// A page it opens before its attach closes it is closed too.
+				m.markGone(target)
+			}
+		}
+		if c != nil {
+			for _, t := range c.tabs {
+				m.markGone(t.targetID)
+			}
+			// Whoever watches is told now, not once the pages are closed:
+			// the conversation has no tab from here on.
+			close(c.changed)
+		}
+		m.mu.Unlock()
+		// The pages close after the turn, and side by side: nothing of the
+		// conversation's is listed any more, and a page slow to close holds
+		// up no other.
+		m.done(q)
+		if c == nil {
+			return
+		}
+		var wg sync.WaitGroup
+		for _, t := range c.tabs {
+			wg.Add(1)
+			go func(t *Tab) {
+				defer wg.Done()
+				t.discard()
+			}(t)
+		}
+		wg.Wait()
+	}()
+	return done
 }
 
 // Close quits the browser. After a start in progress, which would

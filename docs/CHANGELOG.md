@@ -7,7 +7,7 @@ One conversation waiting on the browser no longer holds up the others' browser w
 **Fixed**
 
 * The browser's lock held while waiting on the browser: opening a tab, attaching a tab a link opened, starting the browser or copying the profile kept every other conversation's browser panel, tab switches and browser tool waiting behind it
-* An archived conversation's browser tabs, left open and running on the shelf: closed when it is archived, and not brought back when it is retrieved
+* An archived conversation's browser tabs, left open and running on the shelf: closed when it is archived, none opened for it while it is archived, and none brought back when it is retrieved
 * A browser page that opened but failed to set up, left open in the browser with no tab showing it: closed
 
 ## v0.176.0

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"localcode/internal/browser"
 )
@@ -83,9 +85,10 @@ func TestThePanelOpensSwitchesAndClosesTabs(t *testing.T) {
 	}
 }
 
-// Archiving a conversation closes its browser tabs, and retrieving it does
-// not bring them back: a page left running on the shelf goes on loading
-// and holding its logins for a conversation nobody is in.
+// Archiving a conversation closes its browser tabs, none opens for it on
+// the shelf, and retrieving it does not bring them back: a page left
+// running on the shelf goes on loading and holding its logins for a
+// conversation nobody is in.
 func TestArchivingAConversationClosesItsTabs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts a browser")
@@ -113,13 +116,65 @@ func TestArchivingAConversationClosesItsTabs(t *testing.T) {
 	if code := post(base + "/archive"); code != http.StatusOK {
 		t.Fatalf("archive = %d", code)
 	}
+	// The close runs in the conversation's turn, after the archive has
+	// answered.
+	deadline := time.Now().Add(5 * time.Second)
+	for d.Browser.Existing(id) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the archived conversation's tab is still open")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if code := post(base + "/browser/tabs"); code != http.StatusForbidden {
+		t.Errorf("a new tab for the archived conversation = %d, want 403", code)
+	}
 	if d.Browser.Existing(id) != nil {
-		t.Error("the archived conversation's tab is still open")
+		t.Error("a tab opened for the archived conversation")
 	}
 	if code := post(base + "/retrieve"); code != http.StatusOK {
 		t.Fatalf("retrieve = %d", code)
 	}
 	if d.Browser.Existing(id) != nil {
 		t.Error("retrieving the conversation brought its tab back")
+	}
+}
+
+// Every route that starts or drives the browser refuses an archived
+// conversation, as the rest of the daemon does: archiving closed its tabs,
+// and none opens for it on the shelf.
+func TestTheBrowserRefusesAnArchivedConversation(t *testing.T) {
+	d := newTestDaemon(t, "http://127.0.0.1:1")
+	d.Browser = browser.NewManager(browser.Options{ChromePath: "/no/such/chrome", DataDir: t.TempDir()})
+	d.Loop.Config.SetBrowserRuntime(true)
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+	if _, err := d.Loop.Store.CreateSessionIn("b1", "", "general-purpose", t.TempDir(), true); err != nil {
+		t.Fatal(err)
+	}
+	base := srv.URL + "/api/sessions/b1"
+	do := func(method, url, body string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest(method, url, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+	if resp := do(http.MethodPost, base+"/archive", "{}"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("archive = %d", resp.StatusCode)
+	}
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodPost, "/browser/tabs", "{}"},
+		{http.MethodPost, "/browser/tabs/T1/activate", "{}"},
+		{http.MethodDelete, "/browser/tabs/T1", ""},
+		{http.MethodPost, "/browser/navigate", `{"url":"https://example.com/"}`},
+		{http.MethodPost, "/browser/input", `{"text":"x"}`},
+	} {
+		if resp := do(c.method, base+c.path, c.body); resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s %s on an archived conversation = %d, want 403", c.method, c.path, resp.StatusCode)
+		}
 	}
 }

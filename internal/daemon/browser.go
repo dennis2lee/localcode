@@ -103,6 +103,11 @@ func (d *Daemon) browserOn(w http.ResponseWriter, r *http.Request) (string, bool
 		writeError(w, http.StatusConflict, errors.New("the browser is off; turn it on in the settings window or with /browser on"))
 		return "", false
 	}
+	// Archiving closed the conversation's tabs, and none opens for it on
+	// the shelf.
+	if sess, err := d.Loop.Store.Get(id); err == nil && refuseArchived(w, sess) {
+		return "", false
+	}
 	return id, true
 }
 
@@ -279,7 +284,11 @@ func (d *Daemon) handleBrowserCloseTab(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tabs": tabList(d.Browser.Tabs(ctx, id))})
+	// A limit of its own: the close can use most of the one above,
+	// waiting for the next tab to paint.
+	listCtx, cancelList := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancelList()
+	writeJSON(w, http.StatusOK, map[string]any{"tabs": tabList(d.Browser.Tabs(listCtx, id))})
 }
 
 // handleBrowserNavigate is the panel's address bar and its back, forward

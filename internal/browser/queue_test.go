@@ -3,6 +3,8 @@ package browser
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -118,7 +120,7 @@ func TestAPageThatFailsToAttachIsClosed(t *testing.T) {
 		sb.waitHeld(t, "Target.createTarget#1")
 		deleted := make(chan struct{})
 		go func() {
-			m.CloseTab("c1")
+			<-m.CloseTab("c1")
 			close(deleted)
 		}()
 		queuedBehind(t, m, "c1", 2)
@@ -168,29 +170,33 @@ func TestAPageThatFailsToAttachIsClosed(t *testing.T) {
 
 // A popup opens another while it attaches, and the conversation is
 // deleted between the two. Neither is any conversation's, and neither is
-// left open in the browser.
+// left open in the browser: the second is closed without being attached,
+// and so is a page it opens before its close reaches the browser.
 func TestAPopupOfADeletedConversationsPopupIsClosed(t *testing.T) {
-	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Target.attachToTarget": {1, 2}})
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Target.attachToTarget": {1}})
 	m, p := managerOn(sb)
 	m.created(p, "A", "B")
 	sb.waitHeld(t, "Target.attachToTarget#1")
-	deleted := make(chan struct{})
-	go func() {
-		m.CloseTab("c1")
-		close(deleted)
-	}()
+	deleted := m.CloseTab("c1")
 	queuedBehind(t, m, "c1", 2)
 	m.created(p, "B", "C")
 	let["Target.attachToTarget"][1]()
 	<-deleted
-	sb.waitHeld(t, "Target.attachToTarget#2")
-	// C, still open while it attaches, opens E.
-	m.created(p, "C", "E")
-	let["Target.attachToTarget"][2]()
 	drained(t, m, "c1")
-	got, _ := tabsOf(m, "c1")
-	if closed := sb.closed(); got != nil || !contains(closed, "E") {
-		t.Errorf("tabs %v, closed %v; want no tabs and E closed", got, closed)
+	m.created(p, "C", "E")
+	deadline := time.Now().Add(2 * time.Second)
+	for !contains(sb.closed(), "E") {
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	closed := sb.closed()
+	if got, _ := tabsOf(m, "c1"); got != nil || !contains(closed, "B") || !contains(closed, "C") || !contains(closed, "E") {
+		t.Errorf("tabs %v, closed %v; want no tabs and B, C and E closed", got, closed)
+	}
+	if n := sb.count("Target.attachToTarget"); n != 1 {
+		t.Errorf("%d attaches, want 1: the deleted conversation's second popup was attached", n)
 	}
 }
 
@@ -253,9 +259,168 @@ func TestASlowPaintHoldsUpNoClose(t *testing.T) {
 	switched := make(chan error, 1)
 	go func() { switched <- m.ActivateTab("c1", "B") }()
 	sb.waitHeld(t, "Runtime.evaluate#1")
-	prompt(t, "closing the conversation", func() { m.CloseTab("c1") })
+	prompt(t, "closing the conversation", func() { <-m.CloseTab("c1") })
 	let["Runtime.evaluate"][1]()
 	if err := <-switched; err != nil {
 		t.Errorf("the switch: %v", err)
+	}
+}
+
+// A page opened by a page nobody has any more is closed, and so is a page
+// that one opens before its close reaches the browser.
+func TestAPageAnOrphanOpensIsClosed(t *testing.T) {
+	sb, _ := newScriptedBrowser(t, nil, nil)
+	m, p := managerOn(sb)
+	m.destroyed(p, "X") // in no list: remembered as gone
+	m.created(p, "X", "C")
+	m.created(p, "C", "E")
+	deadline := time.Now().Add(2 * time.Second)
+	for !contains(sb.closed(), "C") || !contains(sb.closed(), "E") {
+		if time.Now().After(deadline) {
+			t.Fatalf("closed %v; want C and E", sb.closed())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Closing a tab that is not the active one tells whoever watches: a
+// switch away from it is told only once the tab switched to paints, so a
+// watcher can still be on it.
+func TestClosingABackgroundTabTellsTheWatcher(t *testing.T) {
+	sb, _ := newScriptedBrowser(t, nil, nil)
+	m, _ := managerOn(sb)
+	c := m.convs["c1"]
+	c.tabs = append(c.tabs, &Tab{conn: sb.conn, targetID: "B", session: "sB"})
+	c.active = 1
+	changed := c.changed
+	if err := m.CloseTabID(context.Background(), "c1", "A"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	default:
+		t.Error("the watcher was not told a tab closed")
+	}
+	if got, active := tabsOf(m, "c1"); len(got) != 1 || active != "B" {
+		t.Errorf("tabs = %v, active %s; want B alone", got, active)
+	}
+}
+
+// Closing a conversation returns once its turn is taken, behind a tab
+// still opening, and closes what that opened when the turn comes.
+func TestClosingAConversationWaitsOnNoPage(t *testing.T) {
+	m, _, held, release := standIn(t, "Target.createTarget")
+	go func() { _, _ = m.NewTab(context.Background(), "c1") }()
+	waitHeld(t, held, "the new tab")
+	var done <-chan struct{}
+	prompt(t, "asking to close the conversation", func() { done = m.CloseTab("c1") })
+	release()
+	<-done
+	if got, _ := tabsOf(m, "c1"); got != nil {
+		t.Errorf("the closed conversation has tabs: %v", got)
+	}
+}
+
+// Whoever watches a closed conversation is told when its tabs go from the
+// list, not once its pages have closed in the browser.
+func TestClosingAConversationTellsTheWatcherFirst(t *testing.T) {
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Target.closeTarget": {1}})
+	m, _ := managerOn(sb)
+	changed := m.convs["c1"].changed
+	done := m.CloseTab("c1")
+	sb.waitHeld(t, "Target.closeTarget#1")
+	select {
+	case <-changed:
+	case <-time.After(2 * time.Second):
+		t.Error("the watcher was told only once the page closed")
+	}
+	let["Target.closeTarget"][1]()
+	<-done
+}
+
+// Closing the active tab closes its page while the tab that becomes
+// active paints, not after it.
+func TestAClosedTabsPageClosesWhileTheNextPaints(t *testing.T) {
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Runtime.evaluate": {1}})
+	m, _ := managerOn(sb)
+	c := m.convs["c1"]
+	c.tabs = append(c.tabs, &Tab{conn: sb.conn, targetID: "B", session: "sB"})
+	c.active = 1
+	closing := make(chan error, 1)
+	go func() { closing <- m.CloseTabID(context.Background(), "c1", "B") }()
+	sb.waitHeld(t, "Runtime.evaluate#1")
+	deadline := time.Now().Add(2 * time.Second)
+	for !contains(sb.closed(), "B") {
+		if time.Now().After(deadline) {
+			t.Fatal("the closed tab's page waited for the next tab to paint")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	let["Runtime.evaluate"][1]()
+	if err := <-closing; err != nil {
+		t.Error(err)
+	}
+}
+
+// Switching A to B, back to A and to B again tells whoever watches once
+// the last switch's tab paints, not when the first switch's wait ends.
+func TestOnlyTheLastSwitchTellsTheWatcher(t *testing.T) {
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Runtime.evaluate": {1, 2, 3}})
+	m, _ := managerOn(sb)
+	m.convs["c1"].tabs = append(m.convs["c1"].tabs, &Tab{conn: sb.conn, targetID: "B", session: "sB"})
+	for i, id := range []string{"B", "A", "B"} {
+		go func() { _ = m.ActivateTab("c1", id) }()
+		sb.waitHeld(t, fmt.Sprintf("Runtime.evaluate#%d", i+1))
+	}
+	m.mu.Lock()
+	changed := m.convs["c1"].changed
+	m.mu.Unlock()
+	let["Runtime.evaluate"][1]()
+	select {
+	case <-changed:
+		t.Fatal("told by the first switch to B while the last one had not painted")
+	case <-time.After(50 * time.Millisecond):
+	}
+	let["Runtime.evaluate"][3]()
+	select {
+	case <-changed:
+	case <-time.After(2 * time.Second):
+		t.Error("the last switch did not tell the watcher")
+	}
+}
+
+// expiresOnWake is a context that reports itself expired once told to,
+// without ending Done: a caller whose limit runs out at the moment its
+// turn is served.
+type expiresOnWake struct {
+	context.Context
+	expired atomic.Bool
+}
+
+func (c *expiresOnWake) Err() error {
+	if c.expired.Load() {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// The tab asked for by a caller whose limit ran out as its turn came is
+// not handed over: the caller is told it stopped waiting.
+func TestTheTabAskedForTooLateIsNotHandedOver(t *testing.T) {
+	sb, let := newScriptedBrowser(t, nil, map[string][]int{"Target.attachToTarget": {1}})
+	m, p := managerOn(sb)
+	m.created(p, "A", "B")
+	sb.waitHeld(t, "Target.attachToTarget#1")
+	ctx := &expiresOnWake{Context: context.Background()}
+	asked := make(chan error, 1)
+	go func() {
+		_, err := m.Tab(ctx, "c1")
+		asked <- err
+	}()
+	queuedBehind(t, m, "c1", 2)
+	ctx.expired.Store(true)
+	let["Target.attachToTarget"][1]()
+	if err := <-asked; !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Tab: %v, want the deadline", err)
 	}
 }
