@@ -641,7 +641,7 @@ func TestAPageSaysWhereItIsAsItStarts(t *testing.T) {
 	for _, tc := range []struct {
 		name, want string
 		mods       int
-	}{{"behind", "hidden", 0}, {"in front", "visible", ModShift}} {
+	}{{"behind", "hidden tabbed", 0}, {"in front", "visible tabbed", ModShift}} {
 		t.Run(tc.name, func(t *testing.T) {
 			first, err := m.Tab(ctx, tc.name)
 			if err != nil {

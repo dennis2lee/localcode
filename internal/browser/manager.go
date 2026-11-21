@@ -87,6 +87,17 @@ type Manager struct {
 	// born is where the browser put each page that is claimed and not
 	// yet attached, as the page said when it started: see bornAt.
 	born map[string]string
+	// popups is that a conversation has had a page in a popup window on
+	// this browser, and landing the window kept for what such a page
+	// opens: see land.
+	popups  bool
+	landing *landing
+}
+
+// landing is the landing window: its blank page, and its window's id.
+type landing struct {
+	target string
+	window int
 }
 
 // ask is one link a page asked the browser to open in a tab or a window
@@ -250,6 +261,7 @@ func (m *Manager) dropAll() {
 	m.adopting = map[string]string{}
 	m.born = map[string]string{}
 	m.asks = nil
+	m.popups, m.landing = false, nil
 }
 
 // convTabs is a conversation's pages, in the order they were opened, and
@@ -505,7 +517,7 @@ func (m *Manager) openFor(ctx context.Context) (*Tab, error) {
 	p, err := m.running(ctx)
 	var t *Tab
 	if err == nil {
-		t, err = openTab(ctx, p.conn)
+		t, err = openTab(ctx, p.conn, func() { m.landAfter(p) })
 	}
 	m.mu.Lock()
 	switch {
@@ -981,6 +993,108 @@ func (m *Manager) made(p *process, targetID, url string) {
 	m.claim(p, a.conv, a.from, targetID)
 }
 
+// land makes a new landing window, the newest window the browser has,
+// and closes the page of the one before. Not called with m.mu.
+//
+// A page in a popup window, one a script opened with a size as a sign-in
+// window is, has no tab strip. A tab it opens (a link with target=_blank,
+// window.open with no size, a link opened with a key held) the browser
+// puts in another window: the tabbed window that was made last. Measured
+// on Chrome on macOS, Linux and Windows and on Edge on Windows: it is
+// the one made last and no other, whichever tab was put in front, brought
+// forward or clicked in since. That window was whichever conversation's
+// had opened a tab last, so one conversation's page was put in another's
+// window: in front, where it covered that conversation's page, which the
+// browser then stopped drawing, or behind, to cover it when switched to.
+//
+// So once a conversation has had a page in a popup window, the window
+// made last is kept one of this manager's own, with a blank page and no
+// conversation's: the landing window. What a popup's page opens lands
+// there, with nothing of anybody's to cover. A page that has landed
+// there has that window from then on: a new landing window is made, and
+// the old one's blank page closed (see landed). A tab this manager opens
+// is in a new window too, so a new landing window is made right after
+// each (see landAfter). Before the first popup there is none, and
+// nothing is made or asked.
+//
+// Windows are numbered in the order they are made, which is how two
+// landing windows made at once are told apart: the later one is kept.
+//
+// What is left: a popup's page that opens a tab in the moment between
+// this manager's own new window and the landing window made after it
+// lands in that new window; two pages of different conversations that
+// land in the landing window before either is seen share it; and a page
+// that says its window has a toolbar when it has none is not known to be
+// in a popup.
+func (m *Manager) land(p *process) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var made struct {
+		TargetID string `json:"targetId"`
+	}
+	if err := p.conn.Call(ctx, "", "Target.createTarget", map[string]any{"url": blankPage, "newWindow": true}, &made); err != nil {
+		return
+	}
+	mine := &landing{target: made.TargetID, window: windowOf(ctx, p.conn, made.TargetID)}
+	m.mu.Lock()
+	old := mine
+	if m.proc == p && m.popups && mine.window != 0 && (m.landing == nil || mine.window > m.landing.window) {
+		old, m.landing = m.landing, mine
+	}
+	m.mu.Unlock()
+	if old != nil {
+		closeTarget(p.conn, old.target)
+	}
+}
+
+// landAfter makes a new landing window after a window of this manager's
+// own making, if there is to be one: see land. Not called with m.mu.
+func (m *Manager) landAfter(p *process) {
+	m.mu.Lock()
+	wanted := m.proc == p && m.popups
+	m.mu.Unlock()
+	if wanted {
+		m.land(p)
+	}
+}
+
+// landed looks at where a page that is becoming a conversation's tab is:
+// see land. A page in a popup window is the reason for a landing window,
+// and the first makes one. A page in the landing window has landed: the
+// window is its own from here, a new landing window is made first, and
+// then the blank page it landed beside is closed. Called in the page's
+// conversation's turn, not with m.mu.
+func (m *Manager) landed(ctx context.Context, p *process, targetID string, popup bool) {
+	m.mu.Lock()
+	if m.proc != p {
+		m.mu.Unlock()
+		return
+	}
+	first := popup && !m.popups
+	if popup {
+		m.popups = true
+	}
+	at := m.landing
+	m.mu.Unlock()
+	if first {
+		m.land(p)
+		return
+	}
+	if at == nil || windowOf(ctx, p.conn, targetID) != at.window {
+		return
+	}
+	m.mu.Lock()
+	taken := m.landing == at
+	if taken {
+		m.landing = nil
+	}
+	m.mu.Unlock()
+	if taken {
+		m.land(p)
+		closeTarget(p.conn, at.target)
+	}
+}
+
 // owner is the conversation a page belongs to: listed in its tabs, or
 // claimed for it while it waits to be attached. "" for none. Called with
 // m.mu.
@@ -1086,14 +1200,15 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	// Where the browser put it is what it said as it started, if it said:
 	// where it is by now is something else, since a page opened after it
 	// may have covered it, or this manager put another in front.
-	behind, known := false, false
+	behind, known, popup := false, false, false
 	if err == nil {
 		if early {
-			behind, known = placed(said)
+			behind, known, popup = placed(said)
 		}
 		if !known {
-			behind, known = t.where(ctx)
+			behind, known, popup = t.where(ctx)
 		}
+		m.landed(ctx, p, targetID, popup)
 	}
 
 	m.mu.Lock()
@@ -1225,6 +1340,16 @@ func (m *Manager) destroyed(p *process, targetID string) {
 	if m.proc != p {
 		// A browser that was replaced: its tabs were dropped with it.
 		m.mu.Unlock()
+		return
+	}
+	if m.landing != nil && m.landing.target == targetID {
+		// The landing window's page, closed by something other than
+		// this manager, which takes it out of landing before it closes
+		// it: there is to be one.
+		m.landing = nil
+		m.markGone(targetID)
+		m.mu.Unlock()
+		go m.land(p)
 		return
 	}
 	if conv, claimed := m.adopting[targetID]; claimed {

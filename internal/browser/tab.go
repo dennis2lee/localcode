@@ -45,16 +45,19 @@ const blankPage = "about:blank"
 // tab in front of each window, and the screencast the panel shows is
 // built from those paints: two conversations' tabs in one window left the
 // one behind with no frames at all.
-func openTab(ctx context.Context, conn *cdp.Conn) (*Tab, error) {
+//
+// made, if not nil, is called once the browser has made the page and its
+// window, before the page is attached: see Manager.land.
+func openTab(ctx context.Context, conn *cdp.Conn, made func()) (*Tab, error) {
 	// The browser makes the page whether or not the caller still waits
 	// for it. Asked for apart from the caller, it is closed once it is
 	// there when the caller stopped waiting, rather than left open with
 	// nobody told its id.
-	type made struct {
+	type newPage struct {
 		id  string
 		err error
 	}
-	answer := make(chan made, 1)
+	answer := make(chan newPage, 1)
 	go func() {
 		var created struct {
 			TargetID string `json:"targetId"`
@@ -62,9 +65,9 @@ func openTab(ctx context.Context, conn *cdp.Conn) (*Tab, error) {
 		askCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		err := conn.Call(askCtx, "", "Target.createTarget", map[string]any{"url": blankPage, "newWindow": true}, &created)
-		answer <- made{created.TargetID, err}
+		answer <- newPage{created.TargetID, err}
 	}()
-	var page made
+	var page newPage
 	select {
 	case page = <-answer:
 	case <-ctx.Done():
@@ -78,6 +81,9 @@ func openTab(ctx context.Context, conn *cdp.Conn) (*Tab, error) {
 	if page.err != nil {
 		return nil, page.err
 	}
+	if made != nil {
+		made()
+	}
 	t, err := attachTab(ctx, conn, page.id)
 	if err != nil {
 		// The page is there whether or not it could be attached: closed,
@@ -86,6 +92,18 @@ func openTab(ctx context.Context, conn *cdp.Conn) (*Tab, error) {
 		return nil, err
 	}
 	return t, nil
+}
+
+// windowOf is the id of the window the page targetID is in, 0 if the
+// browser does not say.
+func windowOf(ctx context.Context, conn *cdp.Conn, targetID string) int {
+	var out struct {
+		WindowID int `json:"windowId"`
+	}
+	if err := conn.Call(ctx, "", "Browser.getWindowForTarget", map[string]any{"targetId": targetID}, &out); err != nil {
+		return 0
+	}
+	return out.WindowID
 }
 
 // closeTarget closes a page by its target id, with a deadline of its own:
@@ -173,22 +191,29 @@ func attachTab(ctx context.Context, conn *cdp.Conn, targetID string) (*Tab, erro
 	return t, nil
 }
 
-// whereIs asks a page where the browser put it: whether it is the tab
-// in front of its window, which is the only one the browser draws, or
-// behind another. The page says so from the moment it is made (measured:
-// a page opened in front or in a window of its own says "visible" at
-// once, one opened behind says "hidden").
-const whereIs = `document.visibilityState`
+// whereIs asks a page where the browser put it.
+//
+// Whether it is the tab in front of its window, which is the only one
+// the browser draws, or behind another. The page says so from the moment
+// it is made (measured: a page opened in front or in a window of its own
+// says "visible" at once, one opened behind says "hidden").
+//
+// And whether its window is a popup window, one a script opened with a
+// size, which has no tab strip (measured: such a window says its toolbar
+// is not visible, a tabbed one that it is). See Manager.land.
+const whereIs = `document.visibilityState + ' ' + (toolbar.visible ? 'tabbed' : 'popup')`
 
 // placed reads what a page said to whereIs: behind is that it is behind
-// another tab, and known that it said one or the other.
-func placed(said string) (behind, known bool) {
-	return said == "hidden", said == "hidden" || said == "visible"
+// another tab, known that it said one or the other, and popup that it is
+// in a popup window.
+func placed(said string) (behind, known, popup bool) {
+	state, window, _ := strings.Cut(said, " ")
+	return state == "hidden", state == "hidden" || state == "visible", window == "popup"
 }
 
 // where asks the page where it is now: see whereIs. A page that does not
 // answer is not known to be anywhere.
-func (t *Tab) where(ctx context.Context) (behind, known bool) {
+func (t *Tab) where(ctx context.Context) (behind, known, popup bool) {
 	var said string
 	// A page that is still loading can swap the document the question
 	// was put to, and the question fails; it is put again.
@@ -199,7 +224,7 @@ func (t *Tab) where(ctx context.Context) (behind, known bool) {
 			break
 		}
 	}
-	return false, false
+	return false, false, false
 }
 
 // opening is when a click or a key that can open a link in a tab or a

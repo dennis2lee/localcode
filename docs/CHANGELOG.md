@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-A link opened in a tab or a window of its own from the browser panel is one of the conversation's tabs.
+A link opened in a tab or a window of its own from the browser panel is one of the conversation's tabs, and a page opened from a popup window covers no other conversation's page.
 
 **Fixed**
 
@@ -14,6 +14,7 @@ A link opened in a tab or a window of its own from the browser panel is one of t
 * The browser tool's `key` action refusing `ctrl++` and `ctrl+plus`, and pressing a punctuation key (`ctrl+=`, `ctrl+-`, `ctrl+/`) with no key code for a page to read
 * `ctrl+Enter` and `cmd+Enter` from the `key` action typing a line break as well as pressing the key
 * Ctrl+Shift or Cmd+Shift with A, C, X or Y carrying an editing command (select all, copy, cut, redo) to the page, from the panel and from the `key` action
+* A page opened from a popup window (a link in a sign-in window that opens a new tab, for instance) put in the window of whichever conversation had opened a tab last, where it covered that conversation's page and left its panel on a still picture: such a page gets a window of its own
 * On macOS, the browser aborted at start ("the browser exited at once") when another Chrome was starting or quitting at that moment: it is started without the copy of itself Chrome makes at every start, and the message says how the process ended
 
 ## v0.176.2
