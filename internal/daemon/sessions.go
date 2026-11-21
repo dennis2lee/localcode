@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"localcode/internal/agent"
@@ -406,6 +407,11 @@ func (d *Daemon) handleArchiveSession(w http.ResponseWriter, r *http.Request) {
 	// The memory an idle conversation was holding. Recoverable: the
 	// history is replayed from the event log if it is ever retrieved.
 	d.Loop.ReleaseSessionMemory(id)
+	// Its browser tabs, and those of everything under it, are not kept:
+	// a page left running on the shelf goes on loading, timing out and
+	// holding its logins for a conversation nobody is in. Retrieving it
+	// starts with no tab, as a new conversation does.
+	d.closeBrowserTabs(ids)
 	// The timers are left alone on purpose. A booking has never run a
 	// turn in an archived conversation — Scheduler.fire looks at the
 	// parent and marks the row missed on sight — so an armed timer on
@@ -599,11 +605,27 @@ func (d *Daemon) forgetDeleted(ids []string) {
 		if d.Loop.Schedules != nil {
 			d.Loop.Schedules.ForgetSession(sid)
 		}
-		if d.Browser != nil {
-			d.Browser.CloseTab(sid)
-		}
 	}
+	d.closeBrowserTabs(ids)
 	d.announceDeleted(ids...)
+}
+
+// closeBrowserTabs closes the browser tabs of every session in ids, side by
+// side: each waits behind its own session's browser work, and a page slow
+// to close in one holds up none of the others.
+func (d *Daemon) closeBrowserTabs(ids []string) {
+	if d.Browser == nil {
+		return
+	}
+	var wg sync.WaitGroup
+	for _, sid := range ids {
+		wg.Add(1)
+		go func(sid string) {
+			defer wg.Done()
+			d.Browser.CloseTab(sid)
+		}(sid)
+	}
+	wg.Wait()
 }
 
 // handleDeleteAllSessions wipes every session (visible and background-task
@@ -666,10 +688,8 @@ func (d *Daemon) handleDeleteAllSessions(w http.ResponseWriter, r *http.Request)
 		if d.Loop.Schedules != nil {
 			d.Loop.Schedules.ForgetSession(sid)
 		}
-		if d.Browser != nil {
-			d.Browser.CloseTab(sid)
-		}
 	}
+	d.closeBrowserTabs(currentIDs)
 	d.announceDeleted(currentIDs...)
 	w.WriteHeader(http.StatusNoContent)
 }

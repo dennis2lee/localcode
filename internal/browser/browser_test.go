@@ -184,7 +184,8 @@ func TestAConversationFollowsANewTab(t *testing.T) {
 	if loc, _ := cur.Location(ctx); loc.Title != "Second" {
 		t.Errorf("new tab is at %+v", loc)
 	}
-	cur.close(ctx)
+	// Closed in the browser, as the page closing itself would be.
+	closeTarget(cur.conn, cur.targetID)
 	for time.Now().Before(deadline) {
 		if m.Existing("conv1") == tab {
 			return

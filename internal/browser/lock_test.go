@@ -2,114 +2,10 @@ package browser
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/base64"
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"sync"
 	"testing"
 	"time"
-
-	"localcode/internal/cdp"
 )
-
-// stallingBrowser is a stand-in for a browser's DevTools endpoint that
-// answers every call at once, except the method named, which it holds
-// until release is called (or the test ends). Enough websocket to speak to
-// cdp.Dial on loopback.
-func stallingBrowser(t *testing.T, stall string) (*cdp.Conn, <-chan struct{}, func()) {
-	t.Helper()
-	held := make(chan struct{}, 4)
-	release := make(chan struct{})
-	var once sync.Once
-	let := func() { once.Do(func() { close(release) }) }
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, rw, err := w.(http.Hijacker).Hijack()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
-		rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " +
-			base64.StdEncoding.EncodeToString(sum[:]) + "\r\n\r\n")
-		rw.Flush()
-		var mu sync.Mutex
-		write := func(p []byte) {
-			hdr := []byte{0x81}
-			if len(p) < 126 {
-				hdr = append(hdr, byte(len(p)))
-			} else {
-				hdr = append(hdr, 126, byte(len(p)>>8), byte(len(p)))
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			_, _ = conn.Write(append(hdr, p...))
-		}
-		for {
-			var b [2]byte
-			if _, err := io.ReadFull(rw, b[:]); err != nil {
-				return
-			}
-			n := int(b[1] & 0x7F)
-			if n == 126 {
-				var ext [2]byte
-				if _, err := io.ReadFull(rw, ext[:]); err != nil {
-					return
-				}
-				n = int(binary.BigEndian.Uint16(ext[:]))
-			}
-			var mask [4]byte
-			if _, err := io.ReadFull(rw, mask[:]); err != nil {
-				return
-			}
-			p := make([]byte, n)
-			if _, err := io.ReadFull(rw, p); err != nil {
-				return
-			}
-			for i := range p {
-				p[i] ^= mask[i%4]
-			}
-			if b[0]&0x0F == 8 {
-				return
-			}
-			var req struct {
-				ID     int64  `json:"id"`
-				Method string `json:"method"`
-			}
-			if json.Unmarshal(p, &req) != nil {
-				continue
-			}
-			answer := func() {
-				resp, _ := json.Marshal(map[string]any{"id": req.ID, "result": map[string]any{}})
-				write(resp)
-			}
-			if req.Method == stall {
-				held <- struct{}{}
-				go func() {
-					<-release
-					answer()
-				}()
-				continue
-			}
-			answer()
-		}
-	}))
-	conn, err := cdp.Dial("ws://" + strings.TrimPrefix(srv.URL, "http://") + "/devtools/browser/stand-in")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		let()
-		conn.Close()
-		srv.Close()
-	})
-	return conn, held, let
-}
 
 // prompt fails the test if f takes longer than a lock held for no reason
 // would let it.
@@ -247,7 +143,7 @@ func TestAPageThatClosesWhileItAttachesIsNotPublished(t *testing.T) {
 	m, p, held, release := standIn(t, "Target.attachToTarget")
 	m.created(p, "A", "B")
 	waitHeld(t, held, "the attach")
-	m.destroyed("B")
+	m.destroyed(p, "B")
 	release()
 	drained(t, m, "c1")
 	if got, active := tabsOf(m, "c1"); len(got) != 1 || active != "A" {
@@ -280,7 +176,7 @@ func TestAPopupOutlivesItsOpenerClosing(t *testing.T) {
 	m, p, held, release := standIn(t, "Target.attachToTarget")
 	m.created(p, "A", "B")
 	waitHeld(t, held, "the attach")
-	m.destroyed("A")
+	m.destroyed(p, "A")
 	release()
 	drained(t, m, "c1")
 	if got, active := tabsOf(m, "c1"); len(got) != 1 || active != "B" {
@@ -315,7 +211,7 @@ func TestATabOpeningForAClosedConversationIsNotPublished(t *testing.T) {
 func TestAClosedPageIsRememberedLongEnough(t *testing.T) {
 	m := NewManager(Options{})
 	for i := 0; i <= 300; i++ {
-		m.destroyed(fmt.Sprintf("x%d", i))
+		m.destroyed(nil, fmt.Sprintf("x%d", i))
 	}
 	m.mu.Lock()
 	kept := m.wasGone("x0")
@@ -328,5 +224,19 @@ func TestAClosedPageIsRememberedLongEnough(t *testing.T) {
 	}
 	if stale {
 		t.Error("a page closed longer ago than goneFor is still remembered")
+	}
+}
+
+// Closing a conversation's tabs drops its queue too, when nothing else
+// waits in it: a deleted or archived conversation leaves nothing behind.
+func TestClosingAConversationDropsItsQueue(t *testing.T) {
+	m, _, _, release := standIn(t, "Target.createTarget")
+	release()
+	m.CloseTab("c1")
+	m.mu.Lock()
+	_, kept := m.queues["c1"]
+	m.mu.Unlock()
+	if kept {
+		t.Error("the closed conversation's queue is still there")
 	}
 }

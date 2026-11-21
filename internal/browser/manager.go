@@ -89,9 +89,12 @@ const goneFor = 2 * time.Minute
 
 // queue is one conversation's browser work, in the order it was asked
 // for: tickets are handed out in that order and served one at a time.
-// Its condition is on Manager.mu.
+// Its condition is on Manager.mu. A queue with no ticket out is dropped,
+// so there is one only while the conversation has work in it.
 type queue struct {
+	conv          string
 	next, serving uint64
+	abandoned     map[uint64]bool // tickets given up by callers that stopped waiting
 	turn          *sync.Cond
 }
 
@@ -99,7 +102,7 @@ type queue struct {
 func (m *Manager) ticket(conv string) (*queue, uint64) {
 	q := m.queues[conv]
 	if q == nil {
-		q = &queue{turn: sync.NewCond(&m.mu)}
+		q = &queue{conv: conv, abandoned: map[uint64]bool{}, turn: sync.NewCond(&m.mu)}
 		m.queues[conv] = q
 	}
 	tk := q.next
@@ -107,31 +110,57 @@ func (m *Manager) ticket(conv string) (*queue, uint64) {
 	return q, tk
 }
 
-// await waits for tk to come up in q. Called without m.mu.
-func (m *Manager) await(q *queue, tk uint64) {
+// await waits for tk to come up in q, or for ctx to end, and then gives
+// the ticket up: it is skipped when it comes up, so the queue goes on.
+// Called without m.mu.
+func (m *Manager) await(ctx context.Context, q *queue, tk uint64) error {
+	// A condition cannot wait on a context; ending it wakes every waiter,
+	// and each looks at its own.
+	stop := context.AfterFunc(ctx, func() {
+		m.mu.Lock()
+		q.turn.Broadcast()
+		m.mu.Unlock()
+	})
+	defer stop()
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	for q.serving != tk {
+		if err := ctx.Err(); err != nil {
+			q.abandoned[tk] = true
+			return err
+		}
 		q.turn.Wait()
 	}
-	m.mu.Unlock()
+	return nil
 }
 
-// done passes q's turn to the next ticket. Called without m.mu.
+// done passes q's turn to the next ticket still wanted, and drops the
+// queue once none is out. Called without m.mu.
 func (m *Manager) done(q *queue) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	q.serving++
+	for q.abandoned[q.serving] {
+		delete(q.abandoned, q.serving)
+		q.serving++
+	}
 	q.turn.Broadcast()
-	m.mu.Unlock()
+	if q.serving == q.next && m.queues[q.conv] == q {
+		delete(m.queues, q.conv)
+	}
 }
 
 // queued takes a ticket for conv and waits for it, and returns the
-// function that passes the turn on.
-func (m *Manager) queued(conv string) func() {
+// function that passes the turn on; an error, and no turn, if ctx ended
+// first.
+func (m *Manager) queued(ctx context.Context, conv string) (func(), error) {
 	m.mu.Lock()
 	q, tk := m.ticket(conv)
 	m.mu.Unlock()
-	m.await(q, tk)
-	return func() { m.done(q) }
+	if err := m.await(ctx, q, tk); err != nil {
+		return nil, err
+	}
+	return func() { m.done(q) }, nil
 }
 
 // wasGone is whether the page targetID closed while in no list. Called
@@ -242,7 +271,7 @@ func (c *convTabs) remove(i int) *Tab {
 	return nil
 }
 
-// bringForward puts t in front of its window and waits for it to paint
+// front and painted put t in front of its window and wait for it to paint
 // there. A browser with no window paints only the tab in front of each
 // window, and the screencast the panel shows is built from those paints.
 // A tab a link opened sits in its opener's window, in front of it, so a
@@ -250,8 +279,15 @@ func (c *convTabs) remove(i int) *Tab {
 // worked on it. And a screencast started the moment the tab comes forward
 // sends one frame and then nothing (measured: a second later, it streams),
 // so this waits for two animation frames, which a page that is not shown
-// does not run. Not called with m.mu held: it waits on the browser.
-func bringForward(t *Tab) {
+// does not run.
+//
+// It comes in two parts. front puts the tab in front: the browser does
+// that without the page, and it runs in the conversation's turn, because
+// two of them reaching the browser out of order would leave the wrong tab
+// in front. painted waits for the page, which a busy or hung page can make
+// take seconds, so it runs after the turn and holds up nothing of the
+// conversation's that comes after. Neither is called with m.mu held.
+func front(t *Tab) {
 	if t == nil {
 		return
 	}
@@ -259,6 +295,15 @@ func bringForward(t *Tab) {
 	defer cancel()
 	_ = t.conn.Call(ctx, "", "Target.activateTarget", map[string]any{"targetId": t.targetID}, nil)
 	_ = t.conn.Call(ctx, t.session, "Page.bringToFront", nil, nil)
+}
+
+// painted waits, up to five seconds, for t to paint two frames: see front.
+func painted(t *Tab) {
+	if t == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	_ = t.conn.Call(ctx, t.session, "Runtime.evaluate", map[string]any{
 		"expression":    "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))",
 		"awaitPromise":  true,
@@ -266,20 +311,24 @@ func bringForward(t *Tab) {
 	}, nil)
 }
 
-// showActive brings conv's active tab t forward, then tells whoever is
-// watching the conversation that it changed: told first, a stream started
-// on a tab not yet painting and stayed on one frame. Nothing is told if
-// another change came in the meantime; that one tells. Not called with
-// m.mu held.
-func (m *Manager) showActive(conv string, t *Tab) {
+// showActive puts conv's active tab t in front, in conv's turn, and
+// returns the rest, for after the turn: wait for t to paint, then tell
+// whoever is watching the conversation that it changed. Told first, a
+// stream started on a tab not yet painting and stayed on one frame.
+// Nothing is told if another change came in the meantime; that one tells.
+// Not called with m.mu held.
+func (m *Manager) showActive(conv string, t *Tab) (after func()) {
 	if t == nil {
-		return
+		return func() {}
 	}
-	bringForward(t)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if c := m.convs[conv]; c != nil && c.current() == t {
-		c.notify()
+	front(t)
+	return func() {
+		painted(t)
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if c := m.convs[conv]; c != nil && c.current() == t {
+			c.notify()
+		}
 	}
 }
 
@@ -326,11 +375,22 @@ var errReplaced = errors.New("the browser restarted while the tab opened; try ag
 // Tab returns conv's tab, starting the browser and opening the tab if
 // either is not there yet.
 func (m *Manager) Tab(ctx context.Context, conv string) (*Tab, error) {
-	if t := m.Existing(conv); t != nil {
-		return t, nil
+	// The tab there now, if nothing of the conversation's is under way: a
+	// page a link opened that is still attaching, or a tab opening, is
+	// about to be the one it works in, and the answer waits for it.
+	m.mu.Lock()
+	if m.queues[conv] == nil {
+		if t := m.existingLocked(conv); t != nil {
+			m.mu.Unlock()
+			return t, nil
+		}
 	}
-	defer m.queued(conv)()
-	// A call ahead of this one in the queue may have opened it.
+	m.mu.Unlock()
+	release, err := m.queued(ctx, conv)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	if t := m.Existing(conv); t != nil {
 		return t, nil
 	}
@@ -356,6 +416,10 @@ func (m *Manager) Tab(ctx context.Context, conv string) (*Tab, error) {
 // and let it go. On failure m.mu is not held and the tab, if one opened,
 // is closed.
 func (m *Manager) openFor(ctx context.Context) (*Tab, error) {
+	// A caller that stopped waiting while queued opens nothing.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	p, err := m.running(ctx)
 	var t *Tab
 	if err == nil {
@@ -374,7 +438,7 @@ func (m *Manager) openFor(ctx context.Context) (*Tab, error) {
 	}
 	m.mu.Unlock()
 	if t != nil {
-		t.close(ctx)
+		t.discard()
 	}
 	return nil, err
 }
@@ -415,7 +479,11 @@ func (m *Manager) Tabs(ctx context.Context, conv string) []TabInfo {
 // NewTab opens an empty tab for conv and makes it the active one, starting
 // the browser if it is not running.
 func (m *Manager) NewTab(ctx context.Context, conv string) (*Tab, error) {
-	defer m.queued(conv)()
+	release, err := m.queued(ctx, conv)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	t, err := m.openFor(ctx)
 	if err != nil {
 		return nil, err
@@ -431,36 +499,56 @@ func (m *Manager) NewTab(ctx context.Context, conv string) (*Tab, error) {
 
 // ActivateTab makes conv's tab id the one it works in.
 func (m *Manager) ActivateTab(conv, id string) error {
-	defer m.queued(conv)()
+	release, err := m.queued(context.Background(), conv)
+	if err != nil {
+		return err
+	}
 	m.mu.Lock()
 	c := m.convs[conv]
 	// A browser that has gone away took its tabs with it, whatever the
 	// list still says until the next start clears it.
 	if c == nil || !m.alive() {
 		m.mu.Unlock()
+		release()
 		return ErrNoSuchTab
 	}
 	i := c.index(id)
 	if i < 0 {
 		m.mu.Unlock()
+		release()
 		return ErrNoSuchTab
 	}
 	changed := i != c.active
 	c.active = i
 	t := c.current()
 	m.mu.Unlock()
+	after := func() { painted(t) }
 	if changed {
-		m.showActive(conv, t)
+		after = m.showActive(conv, t)
 	} else {
-		bringForward(t)
+		front(t)
 	}
+	release()
+	after()
 	return nil
 }
 
 // CloseTabID closes conv's tab id. When it was the active one, the tab
 // before it becomes active; when it was the last, conv has none.
 func (m *Manager) CloseTabID(ctx context.Context, conv, id string) error {
-	defer m.queued(conv)()
+	release, err := m.queued(ctx, conv)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	// A caller that stopped waiting changes nothing.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	c := m.convs[conv]
 	if c == nil || !m.alive() {
@@ -478,13 +566,15 @@ func (m *Manager) CloseTabID(ctx context.Context, conv, id string) error {
 		delete(m.convs, conv)
 		close(c.changed)
 	}
-	conn := m.connLocked()
+	m.markGone(t.targetID)
 	m.mu.Unlock()
-	if conn != nil {
-		conn.Forget(t.session)
-	}
-	t.close(ctx)
-	m.showActive(conv, next)
+	after := m.showActive(conv, next)
+	// The page closes after the turn: a page that is slow to close holds
+	// up nothing of the conversation's that comes after.
+	release()
+	release = nil
+	after()
+	t.discard()
 	return nil
 }
 
@@ -493,6 +583,11 @@ func (m *Manager) CloseTabID(ctx context.Context, conv, id string) error {
 func (m *Manager) Existing(conv string) *Tab {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.existingLocked(conv)
+}
+
+// existingLocked is Existing, called with m.mu.
+func (m *Manager) existingLocked(conv string) *Tab {
 	if !m.alive() {
 		return nil
 	}
@@ -646,7 +741,7 @@ func (m *Manager) watchTargets(p *process) {
 			TargetID string `json:"targetId"`
 		}
 		if json.Unmarshal(params, &ev) == nil {
-			m.destroyed(ev.TargetID)
+			m.destroyed(p, ev.TargetID)
 		}
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -675,12 +770,19 @@ func (m *Manager) owner(targetID string) string {
 // waits on the browser, is adopt's.
 func (m *Manager) created(p *process, openerID, targetID string) {
 	m.mu.Lock()
-	conv := ""
-	if m.proc == p {
-		conv = m.owner(openerID)
-	}
-	if conv == "" {
+	if m.proc != p {
 		m.mu.Unlock()
+		return
+	}
+	conv := m.owner(openerID)
+	if conv == "" {
+		// Opened by a page this manager has let go of (its conversation
+		// closed while the page was still there): nobody's, so closed.
+		orphan := m.wasGone(openerID)
+		m.mu.Unlock()
+		if orphan {
+			go closeTarget(p.conn, targetID)
+		}
 		return
 	}
 	m.adopting[targetID] = conv
@@ -696,7 +798,7 @@ func (m *Manager) created(p *process, openerID, targetID string) {
 // gone), the browser replaced, or the page already closed; a
 // conversation whose last tab closed meanwhile has this one as its tab.
 func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, targetID string) {
-	m.await(q, tk)
+	_ = m.await(context.Background(), q, tk)
 	defer m.done(q)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -706,13 +808,19 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	_, claimed := m.adopting[targetID]
 	delete(m.adopting, targetID)
 	if err != nil {
+		// Not attached, it can be no conversation's tab: closed rather than
+		// left open in the browser where nothing reaches it, and so are the
+		// pages it opened before it closed.
+		m.markGone(targetID)
 		m.mu.Unlock()
+		closeTarget(p.conn, targetID)
 		return
 	}
 	if m.proc != p || !claimed || m.wasGone(targetID) {
 		m.mu.Unlock()
-		// The page a deleted conversation's tab opened is nobody's.
-		t.close(ctx)
+		// The page a deleted conversation's tab opened is nobody's, and a
+		// page that closed while it attached is not a tab.
+		t.discard()
 		return
 	}
 	t.opener = openerID
@@ -730,8 +838,22 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 // conversation's queue, behind its attach, and is dropped in its turn; a
 // page of none is remembered in gone, for a tab that closed before it
 // could be listed.
-func (m *Manager) destroyed(targetID string) {
+func (m *Manager) destroyed(p *process, targetID string) {
 	m.mu.Lock()
+	if m.proc != p {
+		// A browser that was replaced: its tabs were dropped with it.
+		m.mu.Unlock()
+		return
+	}
+	if _, claimed := m.adopting[targetID]; claimed {
+		// Closed before it was attached: never a tab. Its attach finds the
+		// claim gone and the page in gone, and adds nothing; a tab of the
+		// conversation stays the one it works in.
+		delete(m.adopting, targetID)
+		m.markGone(targetID)
+		m.mu.Unlock()
+		return
+	}
 	conv := m.owner(targetID)
 	if conv == "" {
 		m.markGone(targetID)
@@ -745,8 +867,13 @@ func (m *Manager) destroyed(targetID string) {
 
 // forget drops a page that closed from conv, in conv's turn.
 func (m *Manager) forget(conv string, q *queue, tk uint64, targetID string) {
-	m.await(q, tk)
-	defer m.done(q)
+	_ = m.await(context.Background(), q, tk)
+	turn := true
+	defer func() {
+		if turn {
+			m.done(q)
+		}
+	}()
 	m.mu.Lock()
 	c := m.convs[conv]
 	i := -1
@@ -770,7 +897,10 @@ func (m *Manager) forget(conv string, q *queue, tk uint64, targetID string) {
 	if conn != nil {
 		conn.Forget(t.session)
 	}
-	m.showActive(conv, next)
+	after := m.showActive(conv, next)
+	turn = false
+	m.done(q)
+	after()
 }
 
 // connLocked is the running browser's connection, or nil. Called with
@@ -787,24 +917,39 @@ func (m *Manager) connLocked() *cdp.Conn {
 // outlives the conversation. Its claims go too, so a page one of its tabs
 // opened is closed rather than adopted.
 func (m *Manager) CloseTab(conv string) {
-	defer m.queued(conv)()
+	release, _ := m.queued(context.Background(), conv)
 	m.mu.Lock()
 	c := m.convs[conv]
 	delete(m.convs, conv)
 	for target, owner := range m.adopting {
 		if owner == conv {
 			delete(m.adopting, target)
+			// A page it opens before its attach closes it is closed too.
+			m.markGone(target)
+		}
+	}
+	if c != nil {
+		for _, t := range c.tabs {
+			m.markGone(t.targetID)
 		}
 	}
 	m.mu.Unlock()
+	// The pages close after the turn, and side by side: nothing of the
+	// conversation's is listed any more, and a page slow to close holds
+	// up no other.
+	release()
 	if c == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	var wg sync.WaitGroup
 	for _, t := range c.tabs {
-		t.close(ctx)
+		wg.Add(1)
+		go func(t *Tab) {
+			defer wg.Done()
+			t.discard()
+		}(t)
 	}
+	wg.Wait()
 	close(c.changed)
 }
 

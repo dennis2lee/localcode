@@ -82,3 +82,44 @@ func TestThePanelOpensSwitchesAndClosesTabs(t *testing.T) {
 		t.Errorf("closing the last tab answered %s", body)
 	}
 }
+
+// Archiving a conversation closes its browser tabs, and retrieving it does
+// not bring them back: a page left running on the shelf goes on loading
+// and holding its logins for a conversation nobody is in.
+func TestArchivingAConversationClosesItsTabs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a browser")
+	}
+	if _, err := browser.Find(""); err != nil {
+		t.Skip("no Chrome or Edge here")
+	}
+	d, srv, id := browserDaemon(t)
+	base := srv.URL + "/api/sessions/" + id
+	post := func(url string) int {
+		t.Helper()
+		resp, err := http.Post(url, "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := post(base + "/browser/tabs"); code != http.StatusOK {
+		t.Fatalf("new tab = %d", code)
+	}
+	if d.Browser.Existing(id) == nil {
+		t.Fatal("no tab to archive with")
+	}
+	if code := post(base + "/archive"); code != http.StatusOK {
+		t.Fatalf("archive = %d", code)
+	}
+	if d.Browser.Existing(id) != nil {
+		t.Error("the archived conversation's tab is still open")
+	}
+	if code := post(base + "/retrieve"); code != http.StatusOK {
+		t.Fatalf("retrieve = %d", code)
+	}
+	if d.Browser.Existing(id) != nil {
+		t.Error("retrieving the conversation brought its tab back")
+	}
+}

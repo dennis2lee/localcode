@@ -44,7 +44,29 @@ func openTab(ctx context.Context, conn *cdp.Conn) (*Tab, error) {
 	if err := conn.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "newWindow": true}, &created); err != nil {
 		return nil, err
 	}
-	return attachTab(ctx, conn, created.TargetID)
+	t, err := attachTab(ctx, conn, created.TargetID)
+	if err != nil {
+		// The page is there whether or not it could be attached: closed,
+		// or it stays open in the browser and in no list.
+		closeTarget(conn, created.TargetID)
+		return nil, err
+	}
+	return t, nil
+}
+
+// closeTarget closes a page by its target id, with a deadline of its own:
+// the caller's may be what ran out.
+func closeTarget(conn *cdp.Conn, targetID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = conn.Call(ctx, "", "Target.closeTarget", map[string]any{"targetId": targetID}, nil)
+}
+
+// discard drops a tab nobody will list: its event handlers go and its page
+// closes.
+func (t *Tab) discard() {
+	t.conn.Forget(t.session)
+	closeTarget(t.conn, t.targetID)
 }
 
 // attachTab attaches to an existing page, such as one a link opened.
@@ -101,14 +123,17 @@ func attachTab(ctx context.Context, conn *cdp.Conn, targetID string) (*Tab, erro
 		}
 		t.mu.Unlock()
 	})
+	// From here a failure leaves a session with handlers on it: they go.
 	for _, m := range []string{"Page.enable", "Runtime.enable"} {
 		if err := conn.Call(ctx, t.session, m, nil, nil); err != nil {
+			conn.Forget(t.session)
 			return nil, err
 		}
 	}
 	if err := conn.Call(ctx, t.session, "Emulation.setDeviceMetricsOverride", map[string]any{
 		"width": ViewportWidth, "height": ViewportHeight, "deviceScaleFactor": 1, "mobile": false,
 	}, nil); err != nil {
+		conn.Forget(t.session)
 		return nil, err
 	}
 	return t, nil
@@ -116,12 +141,6 @@ func attachTab(ctx context.Context, conn *cdp.Conn, targetID string) (*Tab, erro
 
 // TargetID is the page's id in the browser.
 func (t *Tab) TargetID() string { return t.targetID }
-
-// close closes the page.
-func (t *Tab) close(ctx context.Context) {
-	_ = t.conn.Call(ctx, "", "Target.closeTarget", map[string]any{"targetId": t.targetID}, nil)
-	t.conn.Forget(t.session)
-}
 
 // Settle gives an action a moment to take effect: a click or a key that
 // starts a navigation has the new page loaded, up to 5s, before the model
