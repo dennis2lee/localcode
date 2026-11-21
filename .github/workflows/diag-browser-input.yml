@@ -19,9 +19,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        zoom_steps: [0, 1]
+        ref: [main]
+        # The zoom level the browser's profile carries for every page:
+        # none, or 125% (1.2 to the power of the level).
+        page_zoom: ['', '1.2239010857415449']
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
@@ -42,6 +47,11 @@ jobs:
           # A profile name already chosen, so nothing is copied from the
           # runner's own Chrome.
           Set-Content -Encoding ascii "$env:USERPROFILE\.localcode\browser\localcode-profile" "Default"
+          if ('${{ matrix.page_zoom }}') {
+            New-Item -ItemType Directory "$env:USERPROFILE\.localcode\browser\Default" -Force | Out-Null
+            [IO.File]::WriteAllText("$env:USERPROFILE\.localcode\browser\Default\Preferences", '{"partition":{"default_zoom_level":{"x":${{ matrix.page_zoom }}}}}')
+            "profile seeded with page zoom level ${{ matrix.page_zoom }}"
+          }
           @"
           {
             "auto_update": false,
@@ -55,7 +65,7 @@ jobs:
 
           New-Item -ItemType Directory site -Force | Out-Null
           @"
-          <!doctype html><html><head><title>ready</title>
+          <!doctype html><html><head><title>loading</title>
           <style>body{margin:0;font:20px sans-serif;background:#fff}
           #f{position:absolute;left:100px;top:100px;width:600px;height:60px;font-size:28px}
           #b{position:absolute;left:100px;top:300px;width:300px;height:100px;font-size:28px}</style></head>
@@ -63,6 +73,7 @@ jobs:
           <script>
           const log = [];
           function t(s) { log.push(s); document.title = log.slice(-8).join(' | '); }
+          document.title = 'ready innerWidth=' + innerWidth;
           document.addEventListener('mousedown', e => t('down@' + e.clientX + ',' + e.clientY + ' on ' + (e.target.id || e.target.tagName)));
           document.getElementById('b').addEventListener('click', () => t('clicked'));
           document.getElementById('f').addEventListener('focus', () => t('focus f'));
@@ -148,21 +159,16 @@ jobs:
           $row = Find ([System.Windows.Automation.AutomationElement]::NameProperty) 'probe'
           if ($row) { $r = $row.Current.BoundingRectangle; Activate; ClickAt ($r.X + 12) ($r.Y + $r.Height / 2); "opened the conversation from its row at $r" } else { "no row named probe" }
 
-          for ($z = 0; $z -lt ${{ matrix.zoom_steps }}; $z++) { Activate; [System.Windows.Forms.SendKeys]::SendWait('^='); Start-Sleep 1 }
-
           "navigate: $(Api Post "/api/sessions/$id/browser/navigate" @{ url = 'http://127.0.0.1:8765/page.html' } | ConvertTo-Json -Compress)"
           Start-Sleep 4
-          "title after navigate: $(Title)"
+          $first = Title
+          "title after navigate: $first"
+          # How much bigger than its own layout the page is drawn: a person
+          # aims at what they see.
+          $seen = 1.0
+          if ($first -match 'innerWidth=(\d+)') { $seen = 1280.0 / [double]$Matches[1] }
+          "the page is drawn at $seen times its layout"
           Shot 'after-navigate'
-
-          "--- A: input sent to the daemon directly"
-          Api Post "/api/sessions/$id/browser/input" @{ mouse = @{ type = 'mousePressed'; x = 400; y = 130; button = 'left'; buttons = 1; clickCount = 1 } } | Out-Null
-          Api Post "/api/sessions/$id/browser/input" @{ mouse = @{ type = 'mouseReleased'; x = 400; y = 130; button = 'left'; buttons = 0; clickCount = 1 } } | Out-Null
-          Api Post "/api/sessions/$id/browser/input" @{ text = 'api' } | Out-Null
-          Start-Sleep 1
-          "RESULT api (zoom steps ${{ matrix.zoom_steps }}): $(Title)"
-          Api Post "/api/sessions/$id/browser/navigate" @{ url = 'http://127.0.0.1:8765/page.html?2' } | Out-Null
-          Start-Sleep 3
 
           "--- B: the real mouse and keyboard on the panel"
           # The view has no accessible name, so it is found by its pixels:
@@ -183,7 +189,9 @@ jobs:
             $top = $y
             while ($y -lt $b.Height - 1 -and (& $white $x0 ($y + 1))) { $y++ }
             $bottom = $y
-            $mid = [int](($top + $bottom) / 2)
+            # Along a row just under the top, which no element of the page
+            # reaches: the page's own field and button are not white.
+            $mid = $top + 3
             $l = $x0; while ($l -gt 0 -and (& $white ($l - 1) $mid)) { $l-- }
             $r = $x0; while ($r -lt $b.Width - 1 -and (& $white ($r + 1) $mid)) { $r++ }
             $bmp.Dispose()
@@ -191,20 +199,20 @@ jobs:
           }
           $v = ViewRect
           "view (white area) at $($v.X),$($v.Y) size $($v.W)x$($v.H); expected height for its width $([int]($v.W * 800 / 1280))"
-          function Aim($px, $py) { @{ X = $v.X + $v.W * $px / 1280; Y = $v.Y + $v.H * $py / 800 } }
+          function Aim($px, $py) { @{ X = $v.X + $v.W * $px * $seen / 1280; Y = $v.Y + $v.H * $py * $seen / 800 } }
           $p = Aim 400 130
           Activate
           ClickAt $p.X $p.Y
-          "RESULT mouse-on-field (zoom steps ${{ matrix.zoom_steps }}): clicked screen $([int]$p.X),$([int]$p.Y) aiming at page 400,130 :: $(Title)"
+          "RESULT mouse-on-field (${{ matrix.ref }}, page zoom [${{ matrix.page_zoom }}]): clicked screen $([int]$p.X),$([int]$p.Y) aiming at the field :: $(Title)"
           $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
           "focused after the click: '$($focused.Current.Name)' id '$($focused.Current.AutomationId)' type $($focused.Current.ControlType.ProgrammaticName)"
           [System.Windows.Forms.SendKeys]::SendWait('hello')
           Start-Sleep 2
-          "RESULT keyboard (zoom steps ${{ matrix.zoom_steps }}): $(Title)"
+          "RESULT keyboard (${{ matrix.ref }}, page zoom [${{ matrix.page_zoom }}]): $(Title)"
           Shot 'after-typing'
           $p = Aim 250 350
           ClickAt $p.X $p.Y
-          "RESULT mouse-on-button (zoom steps ${{ matrix.zoom_steps }}): clicked screen $([int]$p.X),$([int]$p.Y) aiming at page 250,350 :: $(Title)"
+          "RESULT mouse-on-button (${{ matrix.ref }}, page zoom [${{ matrix.page_zoom }}]): clicked screen $([int]$p.X),$([int]$p.Y) aiming at the button :: $(Title)"
           Shot 'after-button'
 
       - name: Keep the screenshots

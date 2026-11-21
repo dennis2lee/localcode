@@ -82,6 +82,10 @@ func launchArgs(dataDir, profile string, imported bool) []string {
 			args = append(args, "--password-store=basic")
 		}
 	}
+	// DIAG ONLY, never merged: extra flags for a probe.
+	if extra := os.Getenv("LC_PROBE_ARGS"); extra != "" {
+		args = append(args, strings.Fields(extra)...)
+	}
 	return append(args, "about:blank")
 }
 
