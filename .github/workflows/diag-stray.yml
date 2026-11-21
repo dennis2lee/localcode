@@ -1,6 +1,5 @@
-# Measurement only: why a page a link opened behind is not listed on the
-# macOS runner under the gate's load. Lives on diag/stray-tabs, never on
-# main.
+# Measurement only: what each Chrome version does with a link opened in a
+# tab of its own. Lives on diag/stray-tabs, never on main.
 name: diag-stray
 
 on:
@@ -11,31 +10,55 @@ permissions:
   contents: read
 
 jobs:
-  gate:
+  versions:
     strategy:
       fail-fast: false
       matrix:
-        n: [1, 2, 3, 4]
-    name: macos-gate-${{ matrix.n }}
-    runs-on: macos-latest
-    timeout-minutes: 40
+        os: [ubuntu-latest, macos-latest]
+        milestone: ['140', '146', '150', '153', '155', '156', '157', '158']
+    name: ${{ matrix.os }}-chrome-${{ matrix.milestone }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
           cache: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: which browser
+      - name: get that Chrome
         shell: bash
         run: |
-          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version || true
-          sysctl -n hw.ncpu hw.memsize
-      - name: the gate, with the browser manager telling what it does
-        timeout-minutes: 30
+          python3 - <<'PY'
+          import json, os, platform, urllib.request, zipfile, stat, sys
+          want = os.environ['MILESTONE']
+          plat = 'mac-arm64' if platform.system() == 'Darwin' else 'linux64'
+          data = json.load(urllib.request.urlopen('https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json'))
+          picks = [v for v in data['versions'] if v['version'].split('.')[0] == want and any(d['platform'] == plat for d in v['downloads'].get('chrome', []))]
+          if not picks:
+              print('no build for milestone', want); sys.exit(0)
+          v = picks[-1]
+          url = [d['url'] for d in v['downloads']['chrome'] if d['platform'] == plat][0]
+          print('version', v['version'], url)
+          urllib.request.urlretrieve(url, 'chrome.zip')
+          PY
+          if [ -f chrome.zip ]; then
+            mkdir -p "$RUNNER_TEMP/cft" && unzip -q chrome.zip -d "$RUNNER_TEMP/cft"
+            if [ "$(uname)" = Darwin ]; then
+              bin="$RUNNER_TEMP/cft/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+            else
+              bin="$RUNNER_TEMP/cft/chrome-linux64/chrome"
+              sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+            fi
+            "$bin" --version || true
+            echo "LC_PROBE_BROWSER=$bin" >> "$GITHUB_ENV"
+          fi
+        env:
+          MILESTONE: ${{ matrix.milestone }}
+      - name: the tests, with the browser manager telling what it does
+        timeout-minutes: 15
         shell: bash
         env:
           LC_PROBE_LOG: '1'
-        run: ./scripts/check.sh || true
+        run: |
+          if [ -z "$LC_PROBE_BROWSER" ]; then echo "no browser for this milestone"; exit 0; fi
+          go test ./internal/browser -run 'TestALinkOpenedInATabOfItsOwn|TestTheSameLinkOpened|TestAConversationFollowsANewTab' -count=1 -timeout 12m -v 2>&1 | grep -E 'PROBE .*(targetCreated|asked|ask |created|adopt)|^\s*(---|===|ok|FAIL)|_test.go' | cut -c1-260 || true
