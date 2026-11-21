@@ -329,6 +329,31 @@ func TestLaunchArgsKeepEveryTabRunning(t *testing.T) {
 	}
 }
 
+// The features turned off are in one flag: the browser takes the last
+// --disable-features it is given and drops the others. Background fetch
+// is a request outside the guard; the copy a browser on macOS makes of
+// itself at every start has another browser starting beside it abort.
+func TestLaunchArgsTurnFeaturesOffInOneFlag(t *testing.T) {
+	var off []string
+	for _, a := range launchArgs("/d", "Default", true) {
+		if rest, ok := strings.CutPrefix(a, "--disable-features="); ok {
+			off = append(off, rest)
+		}
+	}
+	if len(off) != 1 {
+		t.Fatalf("the browser is started with %d --disable-features flags (%q), want one", len(off), off)
+	}
+	for _, feature := range []string{"BackgroundFetch", "MacAppCodeSignClone"} {
+		found := false
+		for _, f := range strings.Split(off[0], ",") {
+			found = found || f == feature
+		}
+		if !found {
+			t.Errorf("the browser is started with %s on: --disable-features=%s", feature, off[0])
+		}
+	}
+}
+
 func TestLaunchArgsKeepAFreshProfileOffTheKeychain(t *testing.T) {
 	has := func(args []string, flag string) bool {
 		for _, a := range args {

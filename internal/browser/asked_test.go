@@ -13,8 +13,9 @@ import (
 )
 
 // linkSite serves a page with a link and, under it, a button that opens
-// the link's page from a script; /framed is a page with that page in a
-// frame from another site, and /second what the link opens.
+// the link's page from a script and a form that is sent to it; /framed is
+// a page with that page in a frame from another site, and /second what
+// the link opens.
 func linkSite(t *testing.T) string {
 	t.Helper()
 	var port string
@@ -31,7 +32,8 @@ func linkSite(t *testing.T) string {
 			fmt.Fprint(w, `<!doctype html><title>Links</title>
 <style>a,button{position:absolute;left:10px;width:200px;height:30px;display:block}</style>
 <a id=link href="/second" style="top:10px">second</a>
-<button onclick="window.open('/second')" style="top:60px">open</button>`)
+<button onclick="window.open('/second')" style="top:60px">open</button>
+<form action="/second" method="post"><button style="top:110px">send</button></form>`)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -43,10 +45,11 @@ func linkSite(t *testing.T) string {
 	return srv.URL
 }
 
-// Where linkSite's link and button are on the page.
+// Where linkSite's link, its button and its form's button are on the page.
 const (
 	linkX, linkY     = 40, 25
 	buttonX, buttonY = 40, 75
+	sendX, sendY     = 40, 125
 )
 
 // newTabKey is the key that, held, opens a link in a tab of its own: Cmd
@@ -164,6 +167,8 @@ func TestALinkOpenedInATabOfItsOwnIsTheConversations(t *testing.T) {
 			}
 			return tab.Press(ctx, keyName+"+Enter")
 		}},
+		// A form sent with the key held is asked for as a link is.
+		{"a form, Ctrl or Cmd", "/", false, false, clickWith(sendX, sendY, "left", key)},
 		{"in a frame from another site, Ctrl or Cmd", "/framed", false, false, clickWith(linkX, linkY, "left", key)},
 		{"in a frame from another site, Shift", "/framed", true, false, clickWith(linkX, linkY, "left", ModShift)},
 		// Not a link: the page opens it from a script, and the browser

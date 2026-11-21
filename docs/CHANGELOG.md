@@ -9,6 +9,7 @@ A link opened in a tab or a window of its own from the browser panel is one of t
 * A link on the browser panel opened with the wheel, or with Ctrl, Cmd or Shift held, and Enter on a focused link with one of them held, opening a page that was in no tab strip and could not be closed: the page is a tab of the conversation, behind the tab shown for Ctrl, Cmd or the wheel, and the tab shown with Shift
 * The browser panel left on a still picture that took no click after a link was opened in front of the page (Ctrl+Shift+click, Cmd+Shift+click, Shift with the wheel): the page opened is the tab shown
 * A page a script opened from a click with Ctrl or Cmd held made the tab shown although the browser had opened it behind and did not draw it: its tab is added behind
+* On macOS, the browser aborted at start ("the browser exited at once") when another Chrome was starting or quitting at that moment: it is started without the copy of itself Chrome makes at every start, and the message says how the process ended
 
 ## v0.176.2
 
