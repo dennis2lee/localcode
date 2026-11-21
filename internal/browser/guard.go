@@ -136,9 +136,14 @@ func (m *Manager) guardTarget(p *process, params json.RawMessage, within string)
 	if ev.WaitingForDebugger {
 		pending = append(pending, conn.Go(ctx, sess, "Runtime.runIfWaitingForDebugger", nil))
 	}
+	t0 := time.Now()
+	var errs []error
 	for _, ch := range pending {
-		<-ch
+		if err := <-ch; err != nil {
+			errs = append(errs, err)
+		}
 	}
+	probef("guard %s %.8s waiting=%v answered in %s errs=%v", ev.TargetInfo.Type, ev.TargetInfo.TargetID, ev.WaitingForDebugger, time.Since(t0).Round(time.Millisecond), errs)
 }
 
 // forgetDetached drops the handlers of a session whose target is gone: a

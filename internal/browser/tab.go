@@ -156,7 +156,10 @@ func attachTab(ctx context.Context, conn *cdp.Conn, targetID string) (*Tab, erro
 	})
 	// From here a failure leaves a session with handlers on it: they go.
 	for _, m := range []string{"Page.enable", "Runtime.enable"} {
-		if err := conn.Call(ctx, t.session, m, nil, nil); err != nil {
+		t0 := time.Now()
+		err := conn.Call(ctx, t.session, m, nil, nil)
+		probef("attachTab %.8s %s err=%v in %s", targetID, m, err, time.Since(t0).Round(time.Millisecond))
+		if err != nil {
 			conn.Forget(t.session)
 			return nil, err
 		}

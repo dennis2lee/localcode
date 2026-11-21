@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"localcode/internal/cdp"
 	"os"
 	"path/filepath"
@@ -398,6 +399,14 @@ func (c *convTabs) index(targetID string) int {
 		}
 	}
 	return -1
+}
+
+var probeLog = os.Getenv("LC_PROBE_LOG") != ""
+
+func probef(format string, args ...any) {
+	if probeLog {
+		fmt.Fprintf(os.Stderr, "PROBE %s "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, args...)...)
+	}
 }
 
 // NewManager returns a manager that starts nothing until a tab is asked
@@ -809,11 +818,14 @@ func (m *Manager) watchTargets(p *process) {
 			return
 		}
 		from := ev.TargetInfo.OpenerID
+		probef("targetCreated id=%.8s url=%q opener=%.8s", ev.TargetInfo.TargetID, ev.TargetInfo.URL, from)
 		if from == "" {
 			// No page opened it, as the browser tells it: one a page asked
 			// for, or not a conversation's (a tab this manager is opening,
 			// the page the browser starts with).
-			if from = m.asked(p, ev.TargetInfo.URL); from == "" {
+			from = m.asked(p, ev.TargetInfo.URL)
+			probef("asked id=%.8s -> from=%.8s", ev.TargetInfo.TargetID, from)
+			if from == "" {
 				return
 			}
 		}
@@ -892,6 +904,7 @@ func (m *Manager) ask(p *process, from, frame, sess string, params json.RawMessa
 	if ev.URL == "" || ev.URL == blankPage {
 		return
 	}
+	probef("ask kept from=%.8s frame=%.8s sess=%.8s %s %q", from, frame, sess, ev.Disposition, ev.URL)
 	m.asks = append(m.fresh(), ask{from: from, url: ev.URL, at: time.Now()})
 	if len(m.asks) > askMax {
 		m.asks = m.asks[len(m.asks)-askMax:]
@@ -958,6 +971,7 @@ func (m *Manager) created(p *process, openerID, targetID string) {
 		return
 	}
 	conv := m.owner(openerID)
+	probef("created opener=%.8s target=%.8s conv=%q", openerID, targetID, conv)
 	if conv == "" {
 		// Opened by a page this manager has let go of (its conversation
 		// closed while the page was still there): nobody's, so closed.
@@ -1012,6 +1026,7 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 		delete(m.adopting, targetID)
 	}
 	m.mu.Unlock()
+	probef("adopt turn target=%.8s stale=%v claimed=%v", targetID, stale, claimed)
 	if stale {
 		// Its conversation closed, or it did, while it waited for its
 		// turn: nobody's, closed without attaching to it.
@@ -1021,8 +1036,12 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	t0 := time.Now()
 	t, err := attachTab(ctx, p.conn, targetID)
+	probef("adopt attach target=%.8s err=%v in %s", targetID, err, time.Since(t0).Round(time.Millisecond))
+	t1 := time.Now()
 	behind := err == nil && t.behind(ctx)
+	probef("adopt behind target=%.8s behind=%v in %s", targetID, behind, time.Since(t1).Round(time.Millisecond))
 
 	m.mu.Lock()
 	_, claimed = m.adopting[targetID]
@@ -1075,6 +1094,7 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 // page of none is remembered in gone, for a tab that closed before it
 // could be listed.
 func (m *Manager) destroyed(p *process, targetID string) {
+	probef("targetDestroyed id=%.8s", targetID)
 	m.mu.Lock()
 	if m.proc != p {
 		// A browser that was replaced: its tabs were dropped with it.

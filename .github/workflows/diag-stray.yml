@@ -1,5 +1,5 @@
-# Measurement only: what a modified click on a link makes the browser do,
-# on the systems a release ships for. Lives on diag/stray-tabs, never on
+# Measurement only: why a page a link opened behind is not listed on the
+# macOS runner under the gate's load. Lives on diag/stray-tabs, never on
 # main.
 name: diag-stray
 
@@ -11,22 +11,13 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  gate:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            browser: ''
-            name: windows-chrome
-          - os: windows-latest
-            browser: 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
-            name: windows-edge
-          - os: ubuntu-latest
-            browser: ''
-            name: linux-chrome
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+        n: [1, 2]
+    name: macos-gate-${{ matrix.n }}
+    runs-on: macos-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -34,10 +25,17 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: true
-      - name: probe
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: which browser
+        shell: bash
+        run: |
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version || true
+          sysctl -n hw.ncpu hw.memsize
+      - name: the gate, with the browser manager telling what it does
         timeout-minutes: 30
         shell: bash
         env:
-          LC_PROBE: '1'
-          LC_PROBE_BROWSER: ${{ matrix.browser }}
-        run: go test ./internal/browser -run 'TestZZProbeStray' -count=1 -timeout 25m -v 2>&1 | grep -E 'RESULT|EV |^(ok|FAIL|---|panic)|_test.go' || true
+          LC_PROBE_LOG: '1'
+        run: ./scripts/check.sh || true
