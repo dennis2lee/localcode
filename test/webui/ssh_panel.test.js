@@ -153,6 +153,9 @@ test('Korean composed by an input method is sent once, when it is done', async (
   input.fire('input', { isComposing: true });
   input.fire('compositionend', {});
   input.fire('input', { isComposing: false });
+  // The composed text is taken on a timer after compositionend; wait for
+  // it rather than count on it firing within settle's turns.
+  await app.wait(30);
   await settle();
   assert.deepEqual(app.callsTo('POST', /\/ssh\/t1\/input$/).map((c) => c.body), [{ text: '한' }]);
 });
@@ -287,4 +290,27 @@ test('a key an input method is composing with stays off the page\'s own shortcut
   assert.equal(ev.defaultPrevented, false, 'the input method still gets it');
   assert.equal(stopped, 1, 'Escape while composing does not stop the turn');
   assert.equal(app.callsTo('POST', /\/ssh\/t1\/input$/).length, 0);
+});
+
+test('the next syllable started before the composed one is sent is not sent with it', async () => {
+  const app = await withTerminal();
+  const input = app.el('ssh-input');
+  input.fire('compositionstart', {});
+  input.value = '한';
+  input.fire('input', { isComposing: true });
+  input.fire('compositionend', {});
+  // The next syllable starts in the same task, before the timer.
+  input.fire('compositionstart', {});
+  input.value = '한ㄱ';
+  input.fire('input', { isComposing: true });
+  await app.wait(30);
+  await settle();
+  assert.equal(input.value, '한ㄱ', 'the box is not emptied under a composition');
+  input.value = '한글';
+  input.fire('input', { isComposing: true });
+  input.fire('compositionend', {});
+  await app.wait(30);
+  await settle();
+  assert.deepEqual(plain(app.callsTo('POST', /\/ssh\/t1\/input$/).map((c) => c.body)), [{ text: '한' }, { text: '글' }]);
+  assert.equal(input.value, '', 'emptied once nothing is composed');
 });

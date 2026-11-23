@@ -520,14 +520,25 @@ func TestARunSaysThePersonTypedDuringIt(t *testing.T) {
 }
 
 func TestRunRefusesWhatTheShellWouldNotRunAsWritten(t *testing.T) {
-	for _, c := range []string{"echo a\nrm x", "echo \x1b[A", "ls\tx", "echo hi!there", `echo "!!"`, "", "  "} {
+	for _, c := range []string{"echo a\nrm x", "echo \x1b[A", "ls\tx", "", "  "} {
 		if err := CheckCommand(c); err == nil {
 			t.Errorf("%q was taken", c)
 		}
 	}
-	for _, c := range []string{"echo 'hi!there'", "[ ! -f x ]", "a != b", "echo hi!", `echo \!x`, "echo 안녕"} {
+	for _, c := range []string{"echo hi!there", "echo 안녕", "kill -9 $!"} {
 		if err := CheckCommand(c); err != nil {
 			t.Errorf("%q: %v", c, err)
+		}
+	}
+	// Without integration, history expansion may be on.
+	for _, c := range []string{"echo hi!there", `echo "!!"`} {
+		if err := checkHistory(c); err == nil {
+			t.Errorf("history: %q was taken", c)
+		}
+	}
+	for _, c := range []string{"echo 'hi!there'", "[ ! -f x ]", "a != b", "echo hi!", `echo \!x`} {
+		if err := checkHistory(c); err != nil {
+			t.Errorf("history: %q: %v", c, err)
 		}
 	}
 }

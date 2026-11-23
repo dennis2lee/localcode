@@ -34,10 +34,12 @@ import (
 //   - Every mark carries the terminal's nonce, so output that merely
 //     contains a mark is not taken for one.
 //   - It adds itself once, survives set -u and zsh's NO_UNSET.
+//   - It turns history expansion off ("set +H", zsh's "nobanghist"), so
+//     "!" and "^" cannot turn the line run approved into another one.
 
 // integrationLine is the line for nonce.
 func integrationLine(nonce string) string {
-	return ` __lc_n=` + nonce + `; __lc_p(){ local s=$?; printf '\033]133;D;%s;lc=%s\007' "$s" "$__lc_n"; return $s; }; __lc_c(){ printf '\033]133;C;lc=%s\007' "$__lc_n"; }; if [ -n "${ZSH_VERSION-}" ]; then typeset -ga precmd_functions preexec_functions; precmd_functions=(__lc_p ${precmd_functions:#__lc_p}); preexec_functions=(__lc_c ${preexec_functions:#__lc_c}); else case ";${PROMPT_COMMAND-};" in *";__lc_p;"*) ;; *) PROMPT_COMMAND="__lc_p${PROMPT_COMMAND:+;$PROMPT_COMMAND}";; esac; PS0="$(__lc_c)${PS0-}"; fi`
+	return ` __lc_n=` + nonce + `; __lc_p(){ local s=$?; printf '\033]133;D;%s;lc=%s\007' "$s" "$__lc_n"; return $s; }; __lc_c(){ printf '\033]133;C;lc=%s\007' "$__lc_n"; }; if [ -n "${ZSH_VERSION-}" ]; then setopt nobanghist; typeset -ga precmd_functions preexec_functions; precmd_functions=(__lc_p ${precmd_functions:#__lc_p}); preexec_functions=(__lc_c ${preexec_functions:#__lc_c}); else set +H; case ";${PROMPT_COMMAND-};" in *";__lc_p;"*) ;; *) PROMPT_COMMAND="__lc_p${PROMPT_COMMAND:+;$PROMPT_COMMAND}";; esac; PS0="$(__lc_c)${PS0-}"; fi`
 }
 
 var shellPath = regexp.MustCompile(`^/[^\s]*$`)

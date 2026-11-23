@@ -167,13 +167,13 @@ func TestHostNamesAreLowerCasedForRulesAndKnownHosts(t *testing.T) {
 }
 
 func TestHistorySubstitutionIsRefused(t *testing.T) {
-	for _, c := range []string{"^echo ^", "  ^a^b", `echo "'"; !echo`, `echo "it's" !echo`, `echo "a!b"`} {
-		if err := CheckCommand(c); err == nil {
+	for _, c := range []string{"^echo ^", "  ^a^b", `echo "'"; !echo`, `echo "it's" !echo`, `echo "a!b"`, `echo "hi!"`, `echo $'it\'s' !echo`} {
+		if err := checkHistory(c); err == nil {
 			t.Errorf("%q was taken", c)
 		}
 	}
-	for _, c := range []string{`echo "it's fine"`, `echo 'a^b'`, `echo "hi!"`, `[ ! -d x ]`, `echo a^b`} {
-		if err := CheckCommand(c); err != nil {
+	for _, c := range []string{`echo "it's fine"`, `echo 'a^b'`, `[ ! -d x ]`, `echo a^b`, `echo $!;`, `kill -9 $!; true`, `echo ${!x}`, `echo $'a\'b'`} {
+		if err := checkHistory(c); err != nil {
 			t.Errorf("%q: %v", c, err)
 		}
 	}
@@ -210,7 +210,13 @@ func TestThePersonsLineIsTheirsWhereverTheCursorIs(t *testing.T) {
 	if _, err := term.Run(context.Background(), "echo MODEL", 10*time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
 		t.Fatalf("got %v", err)
 	}
-	// Ctrl+U empties it, and the line is free again.
+	// Ctrl+U at the start of the line erases nothing: still theirs.
+	term.PersonInput(&PersonKey{Key: "u", Ctrl: true}, "", "")
+	time.Sleep(700 * time.Millisecond)
+	if _, err := term.Run(context.Background(), "echo MODEL", 10*time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
+		t.Fatalf("after Ctrl+A Ctrl+U: %v", err)
+	}
+	// From the end, Ctrl+U empties it, and the line is free again.
 	term.PersonInput(&PersonKey{Key: "e", Ctrl: true}, "", "")
 	term.PersonInput(&PersonKey{Key: "u", Ctrl: true}, "", "")
 	time.Sleep(700 * time.Millisecond)
@@ -238,5 +244,120 @@ func TestNoRunTypesIntoACommandThatHasNotEnded(t *testing.T) {
 	}
 	if res := run(t, term, "echo after"); res.Output != "after" {
 		t.Fatalf("after: %+v", res)
+	}
+}
+
+// Keys that leave the line empty do not lock the model out: Ctrl+L draws
+// the prompt at the top, and a new size makes the shell draw it again.
+func TestAnEmptyLineIsEmptyWhereverThePromptIsDrawn(t *testing.T) {
+	old := personYield
+	personYield = 200 * time.Millisecond
+	defer func() { personYield = old }()
+	for _, shell := range []string{"/bin/bash", "/bin/zsh"} {
+		t.Run(filepath.Base(shell), func(t *testing.T) {
+			addr, home := startRealSSHD(t, shell)
+			me, _ := user.Current()
+			m := testManager(t, home)
+			term, _ := m.Open("c1", me.Username+"@"+addr, ByModel)
+			term.WaitConnected(context.Background())
+			within(t, 15*time.Second, "integrated", func() bool { return term.Info().Integrated })
+			settled(t, term)
+			run(t, term, "echo one; echo two; echo three")
+			settled(t, term)
+			term.PersonInput(&PersonKey{Key: "l", Ctrl: true}, "", "")
+			time.Sleep(600 * time.Millisecond)
+			if res := run(t, term, "echo after-clear"); res.Output != "after-clear" {
+				t.Fatalf("after Ctrl+L: %+v", res)
+			}
+			settled(t, term)
+			term.PersonInput(nil, "x", "")
+			term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+			term.ViewerSize("v", 90, 30)
+			time.Sleep(800 * time.Millisecond)
+			if res := run(t, term, "echo after-resize"); res.Output != "after-resize" {
+				t.Fatalf("after typing, erasing and a resize: %+v", res)
+			}
+		})
+	}
+}
+
+// At the prompt, commands go through run: type takes no line end there,
+// key no Enter, and what the model typed and did not run is not run with
+// the next command.
+func TestAtThePromptCommandsGoThroughRun(t *testing.T) {
+	s := startServer(t)
+	m := testManager(t, testHome(t, s, true))
+	term := connected(t, m, s)
+	if err := term.Type("rm -rf x", true, term.PersonGen()); !errors.Is(err, ErrUseRun) {
+		t.Fatalf("type with enter: %v", err)
+	}
+	if err := term.Type("rm -rf x\n", false, term.PersonGen()); !errors.Is(err, ErrUseRun) {
+		t.Fatalf("type with a line end: %v", err)
+	}
+	for _, k := range []string{"Enter", "ctrl+j", "ctrl+m", "ctrl+o", "Tab", "Escape", "ctrl+x"} {
+		if err := term.Keys(k, term.PersonGen()); !errors.Is(err, ErrUseRun) {
+			t.Errorf("key %s: %v", k, err)
+		}
+	}
+	if err := term.Type("half", false, term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if _, err := term.Run(context.Background(), "echo x", time.Second, term.PersonGen()); !errors.Is(err, ErrModelLine) {
+		t.Fatalf("run onto the model's own text: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		if err := term.Keys("Backspace", term.PersonGen()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	if res := run(t, term, "echo clean"); res.Output != "clean" {
+		t.Fatalf("after clearing it: %+v", res)
+	}
+}
+
+// ED 3 clears the scrollback where it comes: what follows it in the same
+// read is kept.
+func TestClearingTheScrollbackKeepsWhatCameAfter(t *testing.T) {
+	m := NewManager(Options{Home: t.TempDir(), DataDir: t.TempDir(), LocalUser: "me"})
+	term := newTerminal(m, "c", "t1", "h", ByModel)
+	defer term.end("done")
+	var b strings.Builder
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&b, "OLD %d\r\n", i)
+	}
+	b.WriteString("\x1b[H\x1b[2J\x1b[3J")
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&b, "NEW %d\r\n", i)
+	}
+	term.output([]byte(b.String()))
+	r, _ := term.Read(200, false)
+	all := strings.Join(append(r.Scrollback, r.Screen...), "\n")
+	if strings.Contains(all, "OLD") || !strings.Contains(all, "NEW 1\n") {
+		t.Fatalf("scrollback:\n%s", all)
+	}
+}
+
+// History expansion is off in a shell with integration: "!" and "^" in a
+// command are the characters typed.
+func TestHistoryExpansionIsOffInAnIntegratedShell(t *testing.T) {
+	for _, shell := range []string{"/bin/bash", "/bin/zsh"} {
+		t.Run(filepath.Base(shell), func(t *testing.T) {
+			addr, home := startRealSSHD(t, shell)
+			me, _ := user.Current()
+			m := testManager(t, home)
+			term, _ := m.Open("c1", me.Username+"@"+addr, ByModel)
+			term.WaitConnected(context.Background())
+			within(t, 15*time.Second, "integrated", func() bool { return term.Info().Integrated })
+			settled(t, term)
+			run(t, term, "echo first")
+			if res := run(t, term, `echo "hi!" !! a!b`); res.Output != "hi! !! a!b" {
+				t.Fatalf("! expanded: %+v", res)
+			}
+			if res := run(t, term, "^first^second^ 2>/dev/null; echo done"); strings.Contains(res.Output, "second") {
+				t.Fatalf("^ substituted: %+v", res)
+			}
+		})
 	}
 }

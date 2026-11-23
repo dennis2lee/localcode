@@ -875,8 +875,14 @@ func (e *Emulator) registerDefaultCsiHandlers() {
 		if bottom < 1 {
 			bottom = height
 		}
-
 		if top >= bottom {
+			return false
+		}
+		// localcode: margins inside the screen, cut to it. A bottom margin
+		// past it sent scrolling and the cursor past the last row, and
+		// panicked. See LOCALCODE.md.
+		bottom = min(bottom, height)
+		if top-1 >= bottom {
 			return false
 		}
 
@@ -908,8 +914,13 @@ func (e *Emulator) registerDefaultCsiHandlers() {
 			if right < 1 {
 				right = width
 			}
-
 			if left >= right {
+				return false
+			}
+			// localcode: margins inside the screen, cut to it. See
+			// LOCALCODE.md.
+			right = min(right, width)
+			if left-1 >= right {
 				return false
 			}
 

@@ -57,6 +57,8 @@ var (
 	ErrLineNotEmpty = errors.New("the person has typed part of a command line in this terminal and not run it; ask them to finish or clear it")
 	ErrNotConnected = errors.New("this terminal is not connected")
 	ErrChanged      = errors.New("the person typed in this terminal while the question was open, so what was approved may no longer fit; read the screen and decide again")
+	ErrModelLine    = errors.New("the command line has text you typed and did not run; clear it first (key ctrl+e ctrl+u)")
+	ErrUseRun       = errors.New("at the shell's prompt, commands go through run, which the rules for commands see: type takes text without a line end there, and key takes only line-editing keys (arrows, Home, End, Backspace, Delete, ctrl+a, ctrl+e, ctrl+b, ctrl+f, ctrl+k, ctrl+u, ctrl+w, ctrl+l, ctrl+c)")
 )
 
 // Waits a test shortens.
@@ -135,19 +137,18 @@ type Terminal struct {
 	promptX     int
 	promptY     int
 	promptKnown bool
-	// personTyped is the person having typed since the prompt (or since
-	// their last Enter without integration): what they typed may still be
-	// on the line, unsent. promptRest and promptNext are the cursor's row
-	// right of the prompt and the row under it as the prompt left them,
-	// so a line the person typed and erased reads as empty again.
+	// personTyped and modelTyped are the person, or the model, having
+	// typed on the prompt's line since the prompt: what they typed may
+	// still be there, unsent. promptLeft, promptRest and promptNext are the
+	// prompt as it left the line (the cursor's row left of the cursor, what
+	// is right of it, the row under it), so a line typed on and erased,
+	// or a prompt redrawn elsewhere (Ctrl+L), reads as empty again.
 	personTyped bool
+	modelTyped  bool
+	promptLeft  string
 	promptRest  string
 	promptNext  string
 	personGen   uint64
-	// modelLine is what the model typed on the prompt's line and has not
-	// run yet: a command the rules would deny must not be built up with
-	// type and run with key.
-	modelLine   string
 	integrating bool
 	lastPerson  time.Time
 	hold        bool
@@ -349,10 +350,58 @@ const screenChunk = 1024
 // emulator is returned as an error, so a remote that finds one ends its
 // own terminal rather than the program.
 func (t *Terminal) feed(p []byte) error {
-	t.mu.Lock()
-	if t.state == StateEnded {
-		t.mu.Unlock()
+	if !t.track(p) {
 		return nil
+	}
+	// Clearing the screen with its scrollback (ED 3, which clear sends)
+	// clears the terminal's own scrollback too, where it comes in the
+	// output: what was cleared is not there for the model to read, and
+	// what came after it is.
+	for len(p) > 0 {
+		upto := len(p)
+		clears := false
+		if i := bytes.Index(p, ed3); i >= 0 {
+			upto, clears = i+len(ed3), true
+		}
+		part := p[:upto]
+		for len(part) > 0 {
+			n := min(len(part), screenChunk)
+			if err := t.draw(part[:n]); err != nil {
+				return err
+			}
+			part = part[n:]
+		}
+		if clears {
+			t.mu.Lock()
+			t.scrollFirst += len(t.scroll)
+			t.scroll = nil
+			t.mu.Unlock()
+		}
+		p = p[upto:]
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if w := t.run; w != nil && t.emu.IsAltScreen() {
+		w.alt = true
+		t.finishRun(w)
+	}
+	t.lastOutput = time.Now()
+	if !t.running {
+		t.armSettle()
+	}
+	t.notify()
+	return nil
+}
+
+var ed3 = []byte("\x1b[3J")
+
+// track reads the marks in a read of the shell's output and feeds the
+// waiting run's capture. It reports false for a terminal that has ended.
+func (t *Terminal) track(p []byte) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.state == StateEnded {
+		return false
 	}
 	from := 0
 	for _, ev := range t.marks.feed(p) {
@@ -376,57 +425,29 @@ func (t *Terminal) feed(p []byte) error {
 			t.promptKnown = false
 			t.integrated = true
 			t.personTyped = false
-			t.modelLine = ""
+			t.modelTyped = false
 		}
 		from = ev.end
 	}
 	if w := t.run; w != nil && from < len(p) {
 		w.out.write(p[from:])
 	}
-	t.mu.Unlock()
-
-	// Clearing the screen with its scrollback (ED 3, which clear sends)
-	// clears the terminal's own scrollback too: what was cleared is not
-	// there for the model to read afterwards.
-	clearsHistory := bytes.Contains(p, []byte("\x1b[3J"))
-	for len(p) > 0 {
-		n := min(len(p), screenChunk)
-		t.mu.Lock()
-		err := t.draw(p[:n])
-		t.drainScrollback()
-		t.mu.Unlock()
-		if err != nil {
-			return err
-		}
-		p = p[n:]
-	}
-
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if clearsHistory {
-		t.scrollFirst += len(t.scroll)
-		t.scroll = nil
-	}
-	if w := t.run; w != nil && t.emu.IsAltScreen() {
-		w.alt = true
-		t.finishRun(w)
-	}
-	t.lastOutput = time.Now()
-	if !t.running {
-		t.armSettle()
-	}
-	t.notify()
-	return nil
+	return true
 }
 
-// draw writes output to the emulator. Called with mu held.
+// draw writes output to the emulator and moves what scrolled off into the
+// scrollback, under the lock. A panic in the emulator is returned as an
+// error, with the lock released.
 func (t *Terminal) draw(b []byte) (err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("%v", r)
 		}
 	}()
 	_, _ = t.emu.Write(b)
+	t.drainScrollback()
 	return nil
 }
 
@@ -446,14 +467,19 @@ func (t *Terminal) armSettle() {
 		t.settle.Stop()
 	}
 	t.settle = time.AfterFunc(promptSettle, func() {
+		defer func() {
+			if r := recover(); r != nil {
+				go t.end(fmt.Sprintf("the terminal stopped: %v", r))
+			}
+		}()
 		t.mu.Lock()
 		defer t.mu.Unlock()
-		if t.running || t.personTyped || !t.integrated || time.Since(t.lastOutput) < promptSettle {
+		if t.running || t.personTyped || t.modelTyped || !t.integrated || time.Since(t.lastOutput) < promptSettle {
 			return
 		}
 		pos := t.emu.CursorPosition()
 		t.promptX, t.promptY, t.promptKnown = pos.X, pos.Y, true
-		t.promptRest, t.promptNext = t.rowsAfterCursor()
+		t.promptLeft, t.promptRest, t.promptNext = t.aroundCursor()
 		t.notify()
 	})
 }
@@ -478,23 +504,26 @@ func (t *Terminal) drainScrollback() {
 	}
 }
 
-// rowsAfterCursor is the cursor's row from the cursor on, and the row
-// under it, as raw cells (spaces kept). Called with mu held.
-func (t *Terminal) rowsAfterCursor() (string, string) {
+// aroundCursor is the cursor's row left of the cursor (as it is), what
+// is right of it, and the row under it (both with runs of spaces made
+// one, so a right-hand prompt redrawn at another width still reads the
+// same). Called with mu held.
+func (t *Terminal) aroundCursor() (left, rest, next string) {
 	pos := t.emu.CursorPosition()
-	row := func(y, from int) string {
+	cells := func(y, from, to int) string {
 		if y >= t.emu.Height() {
 			return ""
 		}
 		var b strings.Builder
-		for x := from; x < t.emu.Width(); x++ {
+		for x := from; x < to && x < t.emu.Width(); x++ {
 			if c := t.emu.CellAt(x, y); c != nil {
 				b.WriteString(c.Content)
 			}
 		}
 		return b.String()
 	}
-	return row(pos.Y, pos.X), row(pos.Y+1, 0)
+	squeeze := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	return cells(pos.Y, 0, pos.X), squeeze(cells(pos.Y, pos.X, t.emu.Width())), squeeze(cells(pos.Y+1, 0, t.emu.Width()))
 }
 
 // cursorLine is the text of the line the cursor is on. Called with mu
@@ -1043,27 +1072,39 @@ func (t *Terminal) modelMayAct() error {
 	return nil
 }
 
-// lineHasPersonText reports text the person typed and has not sent,
-// which the model's input would be added to. Called with mu held.
-//
-// The cursor alone cannot say: after Ctrl+A it is back at the prompt
-// with the text still after it. So the line counts as having the
-// person's text from their first key until their Enter, Ctrl+C or
-// Ctrl+U, or the next prompt, unless the prompt's row and the one under
-// it are exactly as the prompt left them, the cursor at its place (text
-// typed and erased). A full-screen program has no command line.
-func (t *Terminal) lineHasPersonText() bool {
-	if !t.personTyped || t.emu.IsAltScreen() || (t.integrated && t.running) {
+// lineEmpty reports the prompt's line as the prompt left it: the cursor
+// at the prompt's column, the prompt's text left of it, and nothing new
+// right of it or under it. Where the prompt is on the screen does not
+// matter (Ctrl+L draws it at the top). Called with mu held.
+func (t *Terminal) lineEmpty() bool {
+	if !t.promptKnown {
 		return false
 	}
-	if t.integrated && t.promptKnown {
-		pos := t.emu.CursorPosition()
-		rest, next := t.rowsAfterCursor()
-		if pos.X == t.promptX && pos.Y == t.promptY && rest == t.promptRest && next == t.promptNext {
-			return false
-		}
-	}
-	return true
+	left, rest, next := t.aroundCursor()
+	return t.emu.CursorPosition().X == t.promptX && left == t.promptLeft && rest == t.promptRest && next == t.promptNext
+}
+
+// atPrompt reports a shell with integration waiting at its prompt: no
+// command running, no full-screen program. Called with mu held.
+func (t *Terminal) atPrompt() bool {
+	return t.integrated && !t.running && !t.emu.IsAltScreen()
+}
+
+// lineHasPersonText reports text the person typed on the prompt's line
+// and has not sent, which the model's input would be added to: from their
+// first key until their Enter or Ctrl+C, or the next prompt, unless the
+// line is as the prompt left it. Where the cursor is does not matter:
+// after Ctrl+A, or a Ctrl+U at the start of the line, the text is still
+// there. Without integration nothing says where a prompt is, and only the
+// 10 second yield holds. Called with mu held.
+func (t *Terminal) lineHasPersonText() bool {
+	return t.personTyped && t.atPrompt() && !t.lineEmpty()
+}
+
+// lineHasModelText is lineHasPersonText for what the model typed and did
+// not run. Called with mu held.
+func (t *Terminal) lineHasModelText() bool {
+	return t.modelTyped && t.atPrompt() && !t.lineEmpty()
 }
 
 // WaitPrompt waits up to d for the shell to be at a prompt it has
@@ -1092,15 +1133,6 @@ func (t *Terminal) WaitPrompt(ctx context.Context, d time.Duration) bool {
 		}
 	}
 	return false
-}
-
-// PendingLine is what the model has typed on the prompt's line and not
-// run, and whether the shell is at a prompt (integrated, no command
-// running), where text followed by Enter is a command.
-func (t *Terminal) PendingLine() (string, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.modelLine, t.integrated && !t.running && !t.emu.IsAltScreen()
 }
 
 // PersonGen counts the person's inputs, so a caller can tell whether the
@@ -1133,9 +1165,10 @@ var (
 )
 
 // CheckCommand refuses a command run cannot type as written: more than
-// one line, control characters, or history expansion an interactive bash
-// or zsh would apply ("!" outside single quotes, "^old^new" at the start),
-// so the line the shell runs would not be the one that was approved.
+// one line, control characters, or a Tab. History expansion is the
+// shell's other way of running a line that is not the one approved: it is
+// off in a shell with integration, and checkHistory refuses it in one
+// without.
 func CheckCommand(command string) error {
 	if strings.TrimSpace(command) == "" {
 		return errors.New("no command")
@@ -1151,25 +1184,42 @@ func CheckCommand(command string) error {
 			return fmt.Errorf("control character %U in the command; use key for keys", r)
 		}
 	}
+	return nil
+}
+
+// checkHistory refuses a line a shell's history expansion could rewrite:
+// "^" starting it, or "!" that is not in single quotes (plain or $'...')
+// and not "$!" or "${!". Conservative: a "!" this cannot place is refused.
+func checkHistory(command string) error {
 	if strings.HasPrefix(strings.TrimLeft(command, " "), "^") {
 		return errors.New(`a line starting with "^" is the shell's history substitution; quote the "^" or start the line otherwise`)
 	}
 	const (
 		plain = iota
 		single
+		ansi // $'...', where a backslash escapes
 		double
 	)
 	quote := plain
 	rs := []rune(command)
 	for i := 0; i < len(rs); i++ {
+		r := rs[i]
 		switch quote {
 		case single:
-			if rs[i] == '\'' {
+			if r == '\'' {
+				quote = plain
+			}
+			continue
+		case ansi:
+			switch r {
+			case '\\':
+				i++
+			case '\'':
 				quote = plain
 			}
 			continue
 		case double:
-			switch rs[i] {
+			switch r {
 			case '\\':
 				i++
 				continue
@@ -1178,25 +1228,34 @@ func CheckCommand(command string) error {
 				continue
 			}
 		case plain:
-			switch rs[i] {
+			switch r {
 			case '\\':
 				i++
 				continue
 			case '\'':
-				quote = single
+				if i > 0 && rs[i-1] == '$' {
+					quote = ansi
+				} else {
+					quote = single
+				}
 				continue
 			case '"':
 				quote = double
 				continue
 			}
 		}
-		if rs[i] != '!' || i+1 >= len(rs) {
+		if r != '!' {
 			continue
 		}
-		switch next := rs[i+1]; {
-		case next == ' ', next == '=', next == '(':
+		// $! and ${!name} are parameters, not history.
+		if i > 0 && (rs[i-1] == '$' || (rs[i-1] == '{' && i > 1 && rs[i-2] == '$')) {
 			continue
-		case next == '"' && quote == double:
+		}
+		if i+1 >= len(rs) {
+			continue
+		}
+		switch rs[i+1] {
+		case ' ', '=', '(':
 			continue
 		}
 		return errors.New(`the shell would expand "!" from its history here; put that part in single quotes`)
@@ -1261,10 +1320,22 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 		t.mu.Unlock()
 		return RunResult{}, ErrLineNotEmpty
 	}
+	if t.lineHasModelText() {
+		t.mu.Unlock()
+		return RunResult{}, ErrModelLine
+	}
+	// History expansion is off in a shell with integration (integrate.go);
+	// in one without, the line is refused where the shell would expand it.
+	if !t.integrated {
+		if err := checkHistory(command); err != nil {
+			t.mu.Unlock()
+			return RunResult{}, err
+		}
+	}
 	w := &runWait{out: capture{max: captureLimit}, done: make(chan struct{}), personGen: t.personGen}
 	t.run = w
 	integrated := t.integrated
-	t.modelLine = ""
+	t.modelTyped = false
 	if t.integrated {
 		t.running = true
 	}
@@ -1385,14 +1456,12 @@ func (t *Terminal) Type(text string, enter bool, gen uint64) error {
 	if enter {
 		text += "\r"
 	}
-	if t.integrated && !t.running {
-		if i := strings.LastIndex(text, "\r"); i >= 0 {
-			t.running = true
-			t.runStarted = time.Now()
-			t.modelLine = text[i+1:]
-		} else {
-			t.modelLine += text
+	if t.atPrompt() {
+		// A command at the prompt goes through run.
+		if strings.ContainsAny(text, "\r\t") {
+			return ErrUseRun
 		}
+		t.modelTyped = true
 	}
 	t.emu.SendText(text)
 	t.notify()
@@ -1417,19 +1486,44 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 	if t.lineHasPersonText() {
 		return ErrLineNotEmpty
 	}
-	for _, ev := range evs {
-		if ev.Code == uv.KeyEnter && ev.Mod == 0 && t.integrated && !t.running {
-			t.running = true
-			t.runStarted = time.Now()
-			t.modelLine = ""
-		} else if ev.Mod == uv.ModCtrl && (ev.Code == 'c' || ev.Code == 'u') {
-			t.modelLine = ""
+	if t.atPrompt() {
+		for _, ev := range evs {
+			if !lineEditingKey(ev) {
+				return ErrUseRun
+			}
 		}
+		t.modelTyped = true
+	}
+	for _, ev := range evs {
 		t.sendKey(ev)
 	}
 	t.notify()
 	go t.m.used(t)
 	return nil
+}
+
+// lineEditingKey is a key the model may press at the shell's prompt:
+// one that moves, deletes, clears or interrupts, and none that runs the
+// line (Enter, ctrl+j, ctrl+m, ctrl+o), completes it (Tab), or starts a
+// sequence another key finishes (Escape, ctrl+x).
+func lineEditingKey(ev uv.KeyPressEvent) bool {
+	if ev.Text != "" {
+		return true
+	}
+	if ev.Mod == 0 {
+		switch ev.Code {
+		case uv.KeyLeft, uv.KeyRight, uv.KeyUp, uv.KeyDown, uv.KeyHome, uv.KeyEnd, uv.KeyBackspace, uv.KeyDelete:
+			return true
+		}
+		return false
+	}
+	if ev.Mod == uv.ModCtrl {
+		switch ev.Code {
+		case 'a', 'e', 'b', 'f', 'k', 'u', 'w', 'l', 'c':
+			return true
+		}
+	}
+	return false
 }
 
 // sendKey sends one key. Called with mu held.
@@ -1464,7 +1558,6 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 	}
 	t.lastPerson = time.Now()
 	t.personGen++
-	t.modelLine = ""
 	enter := false
 	clears := false
 	switch {
@@ -1475,8 +1568,9 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		}
 		t.sendKey(ev)
 		enter = ev.Code == uv.KeyEnter && ev.Text == ""
-		// Ctrl+C and Ctrl+U leave the line empty.
-		clears = ev.Mod == uv.ModCtrl && (ev.Code == 'c' || ev.Code == 'u')
+		// Ctrl+C leaves the line empty. Ctrl+U does not, at the start of
+		// the line: whether it is empty is lineEmpty's to say.
+		clears = ev.Mod == uv.ModCtrl && ev.Code == 'c'
 	case text != "":
 		text = cleanText(text)
 		text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\r"), "\n", "\r")
@@ -1534,7 +1628,6 @@ func (t *Terminal) applySize() {
 	}
 	t.cols, t.rows = cols, rows
 	t.emu.Resize(cols, rows)
-	t.promptKnown = false
 	select {
 	case t.resized <- struct{}{}:
 	default:

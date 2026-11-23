@@ -299,6 +299,10 @@ func (e *Emulator) Write(p []byte) (n int, err error) {
 			e.flushGrapheme()
 		}
 	}
+	// localcode: whatever a sequence did, the cursors end the write inside
+	// the screen. See LOCALCODE.md.
+	e.scrs[0].clampCursors()
+	e.scrs[1].clampCursors()
 	return len(p), nil
 }
 

@@ -54,7 +54,7 @@ let scrollNext = 0;       // the number of the next scrollback line expected
 let rowKeys = [];         // the screen's rows as last drawn
 let questionShown = 0;    // the id of the question whose form is drawn
 const questionsSeen = new Set(); // questions that have shown the panel once
-let composing = false;
+let composing = false;     // an input method is composing in the typing box
 const queue = [];
 let sending = false;
 let sizeTimer = null;
@@ -744,25 +744,47 @@ export function initSSHPanel() {
     if (e.target !== input) onKey(e);
   });
   input.addEventListener('compositionstart', () => { composing = true; });
-  // The composed text is taken once the browser has finished with the
-  // composition: emptied inside compositionend, the box can lose the start
-  // of the next syllable in some browsers. Until then, an input event
-  // leaves it alone.
-  let flushing = false;
-  const flush = () => {
-    flushing = false;
-    const text = input.value;
-    input.value = '';
+  // Text reaches the shell from the typing box by position: everything
+  // before sentUpTo has been sent. An input method composes at the end of
+  // the box (from compStart), and what it composes is sent once it
+  // commits, after the browser has finished with the event. The box is
+  // emptied only when nothing is being composed and nothing waits to be
+  // sent: emptied in the middle, it lost or resent the start of the next
+  // syllable.
+  let sentUpTo = 0;
+  let compStart = 0;
+  let pending = null;
+  const sendUpTo = (end) => {
+    const text = input.value.substring(sentUpTo, end);
+    sentUpTo = Math.max(sentUpTo, end);
     if (text) send({ text });
   };
+  const tidy = () => {
+    if (composing || pending) return;
+    input.value = '';
+    sentUpTo = 0;
+    compStart = 0;
+  };
+  input.addEventListener('compositionstart', () => {
+    // Plain text typed before the composition goes first.
+    sendUpTo(input.value.length);
+    composing = true;
+    compStart = input.value.length;
+  });
   input.addEventListener('compositionend', () => {
     composing = false;
-    flushing = true;
-    setTimeout(flush, 0);
+    if (pending) clearTimeout(pending);
+    pending = setTimeout(() => {
+      pending = null;
+      // A composition started since (the next syllable) is not sent.
+      sendUpTo(composing ? compStart : input.value.length);
+      tidy();
+    }, 0);
   });
   input.addEventListener('input', (e) => {
-    if (composing || e.isComposing || flushing) return;
-    flush();
+    if (composing || e.isComposing || pending) return;
+    sendUpTo(input.value.length);
+    tidy();
   });
   term.addEventListener('paste', (e) => {
     const text = e.clipboardData && e.clipboardData.getData('text');

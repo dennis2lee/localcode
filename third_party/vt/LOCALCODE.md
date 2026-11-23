@@ -35,6 +35,15 @@ a goroutine, so remote output could end the program. Saved and current
 cursors of both screens are now kept inside the screen on a resize and a
 restore, and setting or clearing a tab stop checks the column.
 
+## Margins past the screen
+
+`handlers.go` (DECSTBM `r`, DECSLRM `s`) and `emulator.go` (`Write`): a
+bottom or right margin past the screen was taken as given, so scrolling
+indexed past the last row and panicked, and the cursor could be left off
+the screen. Margins are cut to the screen (a region that starts on it is
+kept, as the upstream tests expect), and every write ends with both
+screens' cursors inside them.
+
 ## Counts with no bound
 
 `csi_cursor.go` (REP), `handlers.go` (SU, SD): REP repeated the last

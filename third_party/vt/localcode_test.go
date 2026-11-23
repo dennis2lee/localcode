@@ -44,3 +44,28 @@ func TestARepeatCountDoesNotOutlastTheScreen(t *testing.T) {
 		t.Fatalf("took %s", d)
 	}
 }
+
+func TestMarginsPastTheScreenKeepTheCursorOnIt(t *testing.T) {
+	for _, in := range []string{
+		"\x1b[5;99999r\x1b[S",
+		"\x1b[5;99999r\x1b[10T",
+		"\x1b[5;99999r\x1b[99H\n",
+		"\x1b[5;99999r\x1bM\x1b[L\x1b[M",
+		"\x1b[?69h\x1b[2;999s\x1b[999C",
+		"\x1b[?69h\x1b[2;999s\x1b[?6h\x1b[1;999H",
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%q: panic %v", in, r)
+				}
+			}()
+			e := NewEmulator(80, 24)
+			go io.Copy(io.Discard, e)
+			e.WriteString(in)
+			if p := e.CursorPosition(); p.X < 0 || p.X >= 80 || p.Y < 0 || p.Y >= 24 {
+				t.Errorf("%q: cursor at %v on an 80x24 screen", in, p)
+			}
+		}()
+	}
+}

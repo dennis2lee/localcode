@@ -115,17 +115,7 @@ func TestADelegatedSubAgentIsNotOfferedSSH(t *testing.T) {
 	}
 }
 
-type fakePrompt struct {
-	pending  string
-	atPrompt bool
-}
-
-func (f fakePrompt) PendingLine() (string, bool) { return f.pending, f.atPrompt }
-func (f fakePrompt) Info() sshterm.Info {
-	return sshterm.Info{Integrated: true, Shell: "bash"}
-}
-
-// A command the rules deny is not built at the prompt with type and key.
+// A line the rules deny is not sent with type either.
 func TestADeniedCommandCannotBeTyped(t *testing.T) {
 	loop := sshLoop(t)
 	loop.Config.Permissions = map[string]config.ToolPermission{
@@ -133,24 +123,19 @@ func TestADeniedCommandCannotBeTyped(t *testing.T) {
 	}
 	loop.Config.SetSkipPermissionsRuntime(true)
 	tool := NewSSHTool(loop)
-	ctx := context.Background()
+	info := sshterm.Info{Integrated: true, Shell: "bash"}
 	for _, c := range []struct {
-		term  fakePrompt
 		text  string
 		enter bool
 		want  bool
 	}{
-		{fakePrompt{"", true}, "rm -rf x", true, true},
-		{fakePrompt{"", true}, "rm -rf x", false, true},
-		{fakePrompt{"r", true}, "m -rf x", false, true},
-		{fakePrompt{"rm -rf x", true}, "", true, true},
-		{fakePrompt{"", true}, "ls\nrm -rf x", false, true},
-		{fakePrompt{"", false}, "rm -rf x", true, false},
-		{fakePrompt{"", true}, "ls -la", true, false},
+		{"rm -rf x", true, true},
+		{"ls\nrm -rf x\n", false, true},
+		{"rm -rf x", false, false},
+		{"ls -la", true, false},
 	} {
-		got := tool.deniedAsCommand(ctx, c.term, c.text, c.enter) != ""
-		if got != c.want {
-			t.Errorf("pending %q + %q (enter %v, at prompt %v): denied %v", c.term.pending, c.text, c.enter, c.term.atPrompt, got)
+		if got := tool.deniedLines(context.Background(), info, c.text, c.enter) != ""; got != c.want {
+			t.Errorf("%q (enter %v): denied %v", c.text, c.enter, got)
 		}
 	}
 }

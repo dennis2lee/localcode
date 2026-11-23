@@ -71,7 +71,7 @@ func (SSHTool) Description() string {
 Actions:
 - connect {host, user?, port?}: open a connection and its shell. host may be an alias from the user's ~/.ssh/config. Host keys, passwords and passphrases are answered by the user in the panel; the call waits for them. Returns the terminal's id (t1, t2, ...).
 - run {command, terminal?, timeout?}: type a one-line command and Enter, and wait until it finishes (timeout in seconds, default 120, at most 600). Returns its output and exit status. A command still running at the timeout keeps running: use wait, read, or key ctrl+c.
-- type {text, enter?, terminal?}: type text into whatever runs in the terminal (an editor, a REPL, a prompt), then Enter when enter is true.
+- type {text, enter?, terminal?}: type text into whatever runs in the terminal (an editor, a REPL, a program's question, a nested shell such as sudo -i), then Enter when enter is true. At the shell's own prompt, commands go through run: type there takes no line end, and key only line-editing keys.
 - key {keys, terminal?}: press keys, space-separated: "ctrl+c", "Enter", "Escape", "Up", "Tab", "q", "ctrl+d", "F1".
 - read {terminal?, scrollback?}: the screen as text, and up to scrollback earlier lines.
 - wait {terminal?, seconds?, for?}: wait until text for is on the screen, or the running command finishes (default 10 seconds, at most 300).
@@ -80,7 +80,7 @@ Actions:
 
 terminal defaults to the one you used last.
 
-Never ask the user for a password, passphrase or one-time code in the conversation, and never type one: when a command waits for one, tell the user to type it in the SSH panel. When the user is typing in a terminal or holds it, your input there is refused; say what you need and wait.`
+Never ask the user for a password, passphrase or one-time code in the conversation, and never type one: when a command waits for one, tell the user to type it in the SSH panel. When the user is typing in a terminal or holds it, your input there is refused; say what you need and wait. In a shell where run reports exit statuses, history expansion is off: "!" and "^" are typed as they are.`
 }
 
 func (SSHTool) InputSchema() json.RawMessage {
@@ -399,7 +399,7 @@ func (t SSHTool) typeText(ctx context.Context, term *sshterm.Terminal, in sshInp
 		subject += "\n"
 		shown += " then Enter"
 	}
-	if refusal := t.deniedAsCommand(ctx, term, in.Text, in.Enter); refusal != "" {
+	if refusal := t.deniedLines(ctx, info, in.Text, in.Enter); refusal != "" {
 		return tools.Result{Content: refusal, IsError: true, Refused: true}
 	}
 	describe := fmt.Sprintf("ssh %s (%s): type %q", info.Target, term.ID, shown)
@@ -421,11 +421,6 @@ func (t SSHTool) key(ctx context.Context, term *sshterm.Terminal, in sshInput) t
 	}
 	info := term.Info()
 	gen := term.PersonGen()
-	if pressesEnter(in.Keys) {
-		if refusal := t.deniedAsCommand(ctx, term, "", true); refusal != "" {
-			return tools.Result{Content: refusal, IsError: true, Refused: true}
-		}
-	}
 	describe := fmt.Sprintf("ssh %s (%s): press %s", info.Target, term.ID, in.Keys)
 	if ok, why := t.loop.Tools.PermitNamed(ctx, config.SSHInputToolName, "key "+in.Keys, describe, true); !ok {
 		return tools.Result{Content: why, IsError: true, Refused: true}
@@ -436,47 +431,32 @@ func (t SSHTool) key(ctx context.Context, term *sshterm.Terminal, in sshInput) t
 	return t.afterInput(ctx, term, "Pressed.")
 }
 
-// deniedAsCommand is the refusal for text that, typed at the shell's
-// prompt, makes a command the rules for "ssh" deny: the lines it
-// completes, with what the model typed on the line before, and the line
-// left unfinished. Typed into a program (no prompt), it is not a command.
-func (t SSHTool) deniedAsCommand(ctx context.Context, term promptLine, text string, enter bool) string {
-	pending, atPrompt := term.PendingLine()
-	if !atPrompt || t.loop.Config == nil {
+// deniedLines is the refusal for typed text whose lines, each sent with
+// Enter, a deny rule for "ssh" covers. At the shell's own prompt a
+// command goes through run (the terminal refuses a line end there), so
+// this is for a nested shell (sudo -i, ssh) or a program reading lines:
+// a line the rules deny is not sent there either. A command put together
+// key by key is not seen; docs/USAGE.md says so.
+func (t SSHTool) deniedLines(ctx context.Context, info sshterm.Info, text string, enter bool) string {
+	if t.loop.Config == nil {
 		return ""
 	}
-	full := strings.ReplaceAll(pending+text, "\r\n", "\n")
-	full = strings.ReplaceAll(full, "\r", "\n")
-	posix := config.WithRemoteShell(ctx, remotePOSIX(term.Info()))
-	for _, line := range strings.Split(full, "\n") {
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(text, "\n")
+	if !enter {
+		// The last line has no Enter: it is not sent as a line yet.
+		lines = lines[:len(lines)-1]
+	}
+	posix := config.WithRemoteShell(ctx, remotePOSIX(info))
+	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		if t.loop.Config.ResolvePermissionFor(posix, config.SSHToolName, line, true) == config.DecisionDeny {
-			return fmt.Sprintf("typed at the shell's prompt, %q is a command a permission rule for %q denies", line, config.SSHToolName)
+			return fmt.Sprintf("%q, sent as a line, is a command a permission rule for %q denies", line, config.SSHToolName)
 		}
 	}
 	return ""
-}
-
-// promptLine is what deniedAsCommand reads of a terminal.
-type promptLine interface {
-	PendingLine() (string, bool)
-	Info() sshterm.Info
-}
-
-// pressesEnter reports keys that include a plain Enter.
-func pressesEnter(keys string) bool {
-	evs, err := sshterm.ParseKeys(keys)
-	if err != nil {
-		return false
-	}
-	for _, ev := range evs {
-		if ev.Code == '\r' && ev.Mod == 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // afterInput waits a moment for the screen to answer what was typed, and
