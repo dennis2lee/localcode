@@ -353,6 +353,7 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 	// in: the binary is the user's own, so replacing it needs nobody's
 	// password.
 	d.AllowUpdateInstall = loopbackOnly(listen)
+	d.ListenHost = listenHost(listen)
 
 	// And before the TUI, for the same reason the headless path does it
 	// before its listener: nothing has been drawn, no conversation has
@@ -485,6 +486,7 @@ func runSuccessor(configPath string, in inherited) error {
 	d.NoteTakeover()
 	listen := in.ln.Addr().String()
 	d.AllowUpdateInstall = loopbackOnly(listen)
+	d.ListenHost = listenHost(listen)
 	srv := &http.Server{Handler: d.Handler()}
 	d.Shutdown = func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -573,6 +575,15 @@ func runTUIClient(serverURL, agentName string, prog *atomic.Pointer[tea.Program]
 // machine. An empty or wildcard host is every interface, which is the
 // answer "no" — and so is anything that does not parse, because a
 // permission granted on a string nobody understood is not one.
+// listenHost is the host part of a listen address.
+func listenHost(listen string) string {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return listen
+	}
+	return strings.Trim(host, "[]")
+}
+
 func loopbackOnly(listen string) bool {
 	host, _, err := net.SplitHostPort(listen)
 	if err != nil {

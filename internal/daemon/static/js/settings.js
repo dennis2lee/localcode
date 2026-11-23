@@ -24,6 +24,7 @@ import { app } from './state.js';
 import * as apiClient from './api.js';
 import { wireTypography, renderTypography } from './typography.js';
 import { inGUI, renderBrowserPanel } from './browser.js';
+import { renderSSHPanel } from './ssh.js';
 
 export const settings = new Modal(settingsModalEl);
 
@@ -71,6 +72,7 @@ export function openSettings() {
   selectSettingsTab(settingsTabs.length ? settingsTabs[0].name : '');
   renderSmartAgent();
   renderBrowserSetting();
+  renderSSHSetting();
   renderOrchestrate();
   renderModelInvocable();
   renderKeepGoing();
@@ -288,6 +290,105 @@ async function importBrowserProfile() {
     browserNoteEl.textContent = `Not copied: ${err}`;
   } finally {
     browserImportBtn.disabled = false;
+  }
+}
+
+// SSH.
+//
+// In the desktop window and the Web UI, where the SSH panel is. Off
+// closes every connection, which the note says before it happens. The
+// list is every connection open now, in any conversation: a shell left
+// open in a conversation nobody is looking at is a login somebody should
+// be able to find and end.
+
+const sshEl = (id) => document.getElementById(id);
+
+function renderSSHSetting(warning) {
+  const box = sshEl('ssh-checkbox');
+  if (!box) return;
+  box.checked = !!app.ssh;
+  box.disabled = !app.sshAvailable;
+  const warn = sshEl('ssh-warn');
+  if (warn) {
+    warn.textContent = warning || '';
+    warn.hidden = !warning;
+  }
+  const note = sshEl('ssh-note');
+  if (note) {
+    note.textContent = app.ssh
+      ? 'On. The model asks before it connects, runs a command, or types: as bash asks, with the same rules ("ssh_connect" for hosts, "ssh" for commands, "ssh_input" for typing). Host keys and passwords are asked of you in the SSH panel. Turning it off closes every connection.'
+      : 'Off.';
+  }
+  renderSSHLive();
+}
+
+async function renderSSHLive() {
+  const list = sshEl('ssh-live');
+  if (!list) return;
+  const clearList = () => { for (const c of [...list.children]) c.remove(); };
+  if (!app.ssh) {
+    clearList();
+    return;
+  }
+  let rows = [];
+  try {
+    rows = await apiClient.listSSH();
+  } catch (err) {
+    rows = [];
+  }
+  clearList();
+  if (!Array.isArray(rows) || rows.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'note';
+    p.textContent = 'No connection is open.';
+    list.appendChild(p);
+    return;
+  }
+  for (const r of rows) {
+    const row = document.createElement('div');
+    row.className = 'ssh-live-row';
+    const what = document.createElement('span');
+    what.textContent = `${r.target} (${r.id}) in ${r.title || r.session}`;
+    what.title = what.textContent;
+    const close = document.createElement('button');
+    close.className = 'icon-btn';
+    close.textContent = 'Close';
+    close.addEventListener('click', async () => {
+      close.disabled = true;
+      try {
+        await apiClient.closeSSH(r.session, r.id);
+      } catch (err) {
+        // The list below says what is still open.
+      }
+      renderSSHLive();
+    });
+    row.append(what, close);
+    list.appendChild(row);
+  }
+}
+
+// refreshSSHIfOpen redraws the switch when it was changed elsewhere.
+export function refreshSSHIfOpen() {
+  if (settings.isOpen) renderSSHSetting();
+}
+
+async function toggleSSH() {
+  const box = sshEl('ssh-checkbox');
+  const enabled = box.checked;
+  box.disabled = true;
+  try {
+    const res = await apiClient.setSSH(enabled);
+    app.ssh = res && 'ssh' in res ? !!res.ssh : enabled;
+    renderSSHSetting(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
+    renderSSHPanel();
+  } catch (err) {
+    box.checked = !enabled;
+    const note = sshEl('ssh-note');
+    if (note) note.textContent = `Not changed: ${err}`;
+  } finally {
+    box.disabled = false;
   }
 }
 
@@ -620,6 +721,7 @@ export function initSettings() {
   smartAgentCheckbox.addEventListener('change', toggleSmartAgent);
   browserCheckbox.addEventListener('change', toggleBrowser);
   browserImportBtn.addEventListener('click', importBrowserProfile);
+  sshEl('ssh-checkbox')?.addEventListener('change', toggleSSH);
   orchestrateCheckbox.addEventListener('change', toggleOrchestrate);
   modelInvocableCheckbox.addEventListener('change', toggleModelInvocable);
   keepGoingCheckbox.addEventListener('change', toggleKeepGoing);

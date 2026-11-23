@@ -1,0 +1,1434 @@
+package sshterm
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"regexp"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/vt"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
+)
+
+// A terminal: one SSH connection and the interactive shell in it, kept
+// for as long as its conversation exists, and shared by the model and
+// the person.
+//
+// The emulator holds the screen. Everything that reads or changes it
+// takes mu: the shell's output, the person's keys, the model's actions,
+// a snapshot for the panel. The emulator's replies to the shell (a device
+// attributes answer, the bytes of a key) go out through a pump that never
+// waits on mu, into a bounded buffer a separate writer sends on, so a
+// shell that stops reading cannot stall the screen.
+
+// State is where a terminal's connection is.
+type State string
+
+const (
+	StateConnecting State = "connecting"
+	StateConnected  State = "connected"
+	StateEnded      State = "ended"
+)
+
+// Opener is who opened a terminal.
+type Opener string
+
+const (
+	ByModel  Opener = "model"
+	ByPerson Opener = "person"
+)
+
+// Refusals of the model's actions, said to the model as they are.
+var (
+	ErrHeld         = errors.New("the person is holding this terminal (Hold in the SSH panel): its screen and input are theirs until they release it; ask them in the conversation, or wait")
+	ErrPersonActive = errors.New("the person typed in this terminal in the last few seconds; wait for them, or ask them in the conversation")
+	ErrBusy         = errors.New("a command is still running in this terminal; use wait or read, or key ctrl+c to stop it")
+	ErrLineNotEmpty = errors.New("the person has typed part of a command line in this terminal and not run it; ask them to finish or clear it")
+	ErrNotConnected = errors.New("this terminal is not connected")
+	ErrChanged      = errors.New("the person typed in this terminal while the question was open, so what was approved may no longer fit; read the screen and decide again")
+)
+
+// Waits a test shortens.
+var (
+	// personYield is how long after the person's last key the model's
+	// input is refused.
+	personYield = 10 * time.Second
+	// lostAfter is how long a "running" shell has to be quiet at a line
+	// that looks like a prompt for its integration to count as lost (a
+	// nested shell, which prints no marks).
+	lostAfter = 3 * time.Second
+	// inputAfter is how long a command has to be quiet at a line that
+	// looks like a question for run to return.
+	inputAfter = 3 * time.Second
+)
+
+const (
+	// questionWait is how long a question waits for the person.
+	questionWait = 5 * time.Minute
+	// scrollbackLines is how much scrollback a terminal keeps.
+	scrollbackLines = 5000
+	// promptSettle is how long output has to be quiet after a command
+	// ends for the cursor to be taken as where the prompt leaves it.
+	promptSettle = 150 * time.Millisecond
+	// inputLimit bounds input queued for a shell that is not reading.
+	inputLimit = 1 << 20
+	// captureLimit bounds what run keeps of a command's output.
+	captureLimit = 1 << 20
+
+	MinCols, MaxCols = 40, 300
+	MinRows, MaxRows = 10, 120
+	DefaultCols      = 100
+	DefaultRows      = 30
+)
+
+// Terminal is one connection and its shell.
+type Terminal struct {
+	ID     string
+	Conv   string
+	Spec   string
+	Opener Opener
+	// Epoch tells this terminal's scrollback numbering from another's
+	// under the same id (a reconnect, a restarted daemon).
+	Epoch string
+
+	m      *Manager
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	mu       sync.Mutex
+	state    State
+	reason   string
+	target   Target
+	server   string
+	shell    string
+	question *Question
+	answers  chan Answer
+	qseq     int
+
+	emu   *vt.Emulator
+	cols  int
+	rows  int
+	sizes map[string][2]int // viewer → cols, rows
+	title string
+
+	scroll      []Line
+	scrollFirst int
+
+	marks       markScanner
+	integrated  bool
+	running     bool
+	runStarted  time.Time
+	promptX     int
+	promptY     int
+	promptKnown bool
+	personTyped bool // the person typed since the last prompt
+	personGen   uint64
+	lastPerson  time.Time
+	hold        bool
+	lastOutput  time.Time
+	settle      *time.Timer
+	run         *runWait
+	endedAt     time.Time
+	endedFlag   atomic.Bool
+
+	changed chan struct{}
+	version uint64
+
+	client  *ssh.Client
+	session *ssh.Session
+	closers []io.Closer
+
+	inMu    sync.Mutex
+	inBuf   []byte
+	inReady chan struct{}
+	inLost  bool
+
+	// resized wakes the sender of window-change requests, which sends
+	// the size current when it runs: requests sent one per goroutine
+	// arrived out of order.
+	resized chan struct{}
+}
+
+// runWait is the model's run, waiting for its command to finish.
+type runWait struct {
+	out       capture
+	started   bool // a C mark said where the output starts
+	done      chan struct{}
+	status    string
+	ended     bool // a D mark ended it
+	alt       bool
+	personGen uint64
+}
+
+func newNonce() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+func newTerminal(m *Manager, conv, id, spec string, by Opener) *Terminal {
+	ctx, cancel := context.WithCancel(context.Background())
+	t := &Terminal{
+		ID: id, Conv: conv, Spec: spec, Opener: by, Epoch: newNonce(),
+		m: m, ctx: ctx, cancel: cancel,
+		state:   StateConnecting,
+		answers: make(chan Answer, 1),
+		cols:    DefaultCols, rows: DefaultRows,
+		sizes:   map[string][2]int{},
+		changed: make(chan struct{}),
+		inReady: make(chan struct{}, 1),
+		resized: make(chan struct{}, 1),
+	}
+	t.marks.nonce = newNonce()
+	t.emu = vt.NewEmulator(t.cols, t.rows)
+	t.emu.SetScrollbackSize(scrollbackLines)
+	t.emu.SetCallbacks(vt.Callbacks{
+		Title: func(s string) {
+			if r := []rune(s); len(r) > 200 {
+				s = string(r[:200])
+			}
+			t.title = s
+		},
+	})
+	go t.pump()
+	return t
+}
+
+// notify tells watchers the terminal changed. Called with mu held.
+func (t *Terminal) notify() {
+	t.version++
+	close(t.changed)
+	t.changed = make(chan struct{})
+	t.m.touched(t.Conv)
+}
+
+// Changed is closed the next time the terminal changes.
+func (t *Terminal) Changed() <-chan struct{} {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.changed
+}
+
+// Version counts the terminal's changes.
+func (t *Terminal) Version() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.version
+}
+
+// pump moves the emulator's input (keys, replies to queries) to the
+// writer's buffer. It never takes mu, and never waits on the shell.
+func (t *Terminal) pump() {
+	buf := make([]byte, 4096)
+	for {
+		n, err := t.emu.Read(buf)
+		if n > 0 {
+			t.inMu.Lock()
+			if len(t.inBuf)+n > inputLimit {
+				t.inLost = true
+			} else {
+				t.inBuf = append(t.inBuf, buf[:n]...)
+			}
+			t.inMu.Unlock()
+			select {
+			case t.inReady <- struct{}{}:
+			default:
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// writer sends queued input to the shell's stdin.
+func (t *Terminal) writer(stdin io.Writer) {
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case <-t.inReady:
+		}
+		t.inMu.Lock()
+		b := t.inBuf
+		t.inBuf = nil
+		t.inMu.Unlock()
+		if len(b) == 0 {
+			continue
+		}
+		if _, err := stdin.Write(b); err != nil {
+			return
+		}
+	}
+}
+
+// reader feeds the shell's output to the screen and the tracker.
+func (t *Terminal) reader(r io.Reader) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			t.output(buf[:n])
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (t *Terminal) output(p []byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.state == StateEnded {
+		return
+	}
+	from := 0
+	for _, ev := range t.marks.feed(p) {
+		w := t.run
+		switch ev.kind {
+		case 'C':
+			if w != nil {
+				// The output starts here: what came before was the
+				// shell echoing the command.
+				w.out = capture{max: captureLimit}
+				w.started = true
+			}
+			t.running = true
+		case 'D':
+			if w != nil {
+				w.out.write(p[from:ev.end])
+				w.status, w.ended = ev.status, true
+				t.finishRun(w)
+			}
+			t.running = false
+			t.personTyped = false
+			t.promptKnown = false
+			t.integrated = true
+		}
+		from = ev.end
+	}
+	if w := t.run; w != nil && from < len(p) {
+		w.out.write(p[from:])
+	}
+	_, _ = t.emu.Write(p)
+	t.drainScrollback()
+	if w := t.run; w != nil && t.emu.IsAltScreen() {
+		w.alt = true
+		t.finishRun(w)
+	}
+	t.lastOutput = time.Now()
+	if !t.running {
+		t.armSettle()
+	}
+	t.notify()
+}
+
+// finishRun ends the model's wait. Called with mu held.
+func (t *Terminal) finishRun(w *runWait) {
+	if t.run == w {
+		t.run = nil
+		close(w.done)
+		t.applySize()
+	}
+}
+
+// armSettle records where the prompt left the cursor once output has
+// been quiet for promptSettle after a command ended. Called with mu held.
+func (t *Terminal) armSettle() {
+	if t.settle != nil {
+		t.settle.Stop()
+	}
+	t.settle = time.AfterFunc(promptSettle, func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if t.running || t.personTyped || !t.integrated || time.Since(t.lastOutput) < promptSettle {
+			return
+		}
+		pos := t.emu.CursorPosition()
+		t.promptX, t.promptY, t.promptKnown = pos.X, pos.Y, true
+		t.notify()
+	})
+}
+
+// drainScrollback moves the lines the emulator scrolled off the top into
+// the terminal's own scrollback, so every line has a number a viewer can
+// ask from. Called with mu held.
+func (t *Terminal) drainScrollback() {
+	n := t.emu.ScrollbackLen()
+	if n == 0 {
+		return
+	}
+	width := t.emu.Width()
+	for y := 0; y < n; y++ {
+		yy := y
+		t.scroll = append(t.scroll, lineOf(width, func(x int) *uv.Cell { return t.emu.ScrollbackCellAt(x, yy) }))
+	}
+	t.emu.ClearScrollback()
+	if over := len(t.scroll) - scrollbackLines; over > 0 {
+		t.scroll = append(t.scroll[:0:0], t.scroll[over:]...)
+		t.scrollFirst += over
+	}
+}
+
+// cursorLine is the text of the line the cursor is on. Called with mu
+// held.
+func (t *Terminal) cursorLine() string {
+	pos := t.emu.CursorPosition()
+	return lineOf(t.emu.Width(), func(x int) *uv.Cell { return t.emu.CellAt(x, pos.Y) }).Text()
+}
+
+// looksLikePrompt is a line ending the way shell prompts end.
+func looksLikePrompt(line string) bool {
+	line = strings.TrimRight(line, " ")
+	for _, end := range []string{"$", "#", "%", ">", "❯", "➜", "»", "λ"} {
+		if strings.HasSuffix(line, end) {
+			return true
+		}
+	}
+	return false
+}
+
+// lostIntegration reports a shell said to be running a command that has
+// been quiet at what looks like a prompt: a nested shell (sudo -i, ssh,
+// docker exec) prints no marks. Called with mu held.
+func (t *Terminal) lostIntegration() bool {
+	return t.integrated && t.running && time.Since(t.lastOutput) >= lostAfter && looksLikePrompt(t.cursorLine())
+}
+
+// ask puts a question to the person and waits for the answer.
+func (t *Terminal) ask(ctx context.Context, q Question) (Answer, error) {
+	t.mu.Lock()
+	t.qseq++
+	q.ID = t.qseq
+	t.question = &q
+	select {
+	case <-t.answers:
+	default:
+	}
+	t.notify()
+	t.mu.Unlock()
+	t.m.asking(t)
+	defer func() {
+		t.mu.Lock()
+		if t.question != nil && t.question.ID == q.ID {
+			t.question = nil
+			t.notify()
+		}
+		t.mu.Unlock()
+		t.m.asked(t)
+	}()
+	timer := time.NewTimer(questionWait)
+	defer timer.Stop()
+	select {
+	case a := <-t.answers:
+		if !a.Accept {
+			return a, errNotAnswered
+		}
+		return a, nil
+	case <-ctx.Done():
+		return Answer{}, ctx.Err()
+	case <-t.ctx.Done():
+		return Answer{}, errors.New("the terminal was closed")
+	case <-timer.C:
+		return Answer{}, errors.New("nobody answered in the SSH panel")
+	}
+}
+
+// Answer answers the question with id. Only the panel's route calls
+// this; no tool action does. A host key is accepted only with the
+// fingerprint the question showed.
+func (t *Terminal) Answer(id int, a Answer, fingerprint string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	q := t.question
+	if q == nil || q.ID != id {
+		return errors.New("that question is no longer asked")
+	}
+	if a.Accept {
+		switch q.Kind {
+		case AskHostKey:
+			if q.HostKey == nil || fingerprint != q.HostKey.Fingerprint {
+				return errors.New("the fingerprint does not match the one asked about")
+			}
+		case AskPrompts:
+			if len(a.Values) != len(q.Prompts) {
+				return fmt.Errorf("want %d answers", len(q.Prompts))
+			}
+		default:
+			if len(a.Values) != 1 {
+				return errors.New("want one answer")
+			}
+		}
+	}
+	select {
+	case t.answers <- a:
+	default:
+		return errors.New("that question has been answered")
+	}
+	t.question = nil
+	t.notify()
+	return nil
+}
+
+// connect makes the connection and starts the shell, in its own
+// goroutine: the terminal is in the panel from the start.
+func (t *Terminal) connect(ctx context.Context) {
+	if err := t.dialAndStart(ctx); err != nil {
+		t.end("could not connect: " + err.Error())
+		return
+	}
+	t.integrate()
+}
+
+func (t *Terminal) dialAndStart(ctx context.Context) error {
+	spec, err := ParseSpec(t.Spec)
+	if err != nil {
+		return err
+	}
+	o := t.m.opts
+	cfg, err := loadConfig(o.Home, o.SystemDir)
+	if err != nil {
+		return fmt.Errorf("reading ~/.ssh/config: %w", err)
+	}
+	target := cfg.resolve(spec, o.LocalUser, o.Home)
+	t.mu.Lock()
+	t.target = target
+	t.notify()
+	t.mu.Unlock()
+	if target.ProxyCommand != "" {
+		return fmt.Errorf("~/.ssh/config gives %s a ProxyCommand; localcode does not run local commands for SSH. Use ProxyJump instead, or connect to a host it can reach directly", spec.Host)
+	}
+	var hops []Target
+	for _, hop := range target.ProxyJump {
+		hs, err := ParseSpec(hop)
+		if err != nil {
+			return fmt.Errorf("ProxyJump %q: %w", hop, err)
+		}
+		hops = append(hops, cfg.resolve(hs, o.LocalUser, o.Home))
+	}
+	if o.CheckTarget != nil {
+		if err := o.CheckTarget(t.Conv, t.Opener, Route{Asked: spec, Target: target, Hops: hops}); err != nil {
+			return err
+		}
+	}
+	var via *ssh.Client
+	for _, ht := range hops {
+		c, err := t.handshake(ctx, via, ht)
+		if err != nil {
+			return fmt.Errorf("jump host %s: %w", ht, err)
+		}
+		t.mu.Lock()
+		t.closers = append(t.closers, c)
+		t.mu.Unlock()
+		via = c
+	}
+	client, err := t.handshake(ctx, via, target)
+	if err != nil {
+		return err
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		client.Close()
+		return err
+	}
+	for _, kv := range o.Env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k != "" {
+			_ = sess.Setenv(k, v)
+		}
+	}
+	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 38400, ssh.TTY_OP_OSPEED: 38400}
+	t.mu.Lock()
+	cols, rows := t.cols, t.rows
+	t.mu.Unlock()
+	if err := sess.RequestPty("xterm-256color", rows, cols, modes); err != nil {
+		client.Close()
+		return fmt.Errorf("the server refused a terminal: %w", err)
+	}
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		client.Close()
+		return err
+	}
+	stdout, err := sess.StdoutPipe()
+	if err != nil {
+		client.Close()
+		return err
+	}
+	stderr, err := sess.StderrPipe()
+	if err != nil {
+		client.Close()
+		return err
+	}
+	if err := sess.Shell(); err != nil {
+		client.Close()
+		return fmt.Errorf("the server refused a shell: %w", err)
+	}
+	t.mu.Lock()
+	if t.state == StateEnded {
+		t.mu.Unlock()
+		client.Close()
+		return errors.New("closed while connecting")
+	}
+	t.client, t.session = client, sess
+	t.server = string(client.ServerVersion())
+	t.state = StateConnected
+	t.notify()
+	t.mu.Unlock()
+
+	go t.writer(stdin)
+	go t.sizer(sess)
+	go t.reader(stdout)
+	go t.reader(stderr)
+	go t.keepalive(client, target)
+	go func() {
+		err := sess.Wait()
+		reason := "the shell exited"
+		var exit *ssh.ExitError
+		if errors.As(err, &exit) {
+			reason = fmt.Sprintf("the shell exited with status %d", exit.ExitStatus())
+		} else if err != nil {
+			reason = "the connection ended: " + err.Error()
+		}
+		t.end(reason)
+	}()
+	return nil
+}
+
+// Route is where a connection goes: what was asked for, where it
+// resolved to, and the jump hosts on the way.
+type Route struct {
+	Asked  Spec
+	Target Target
+	Hops   []Target
+}
+
+// watchdog closes a connection whose handshake takes longer than d,
+// counting only the time nobody is being asked something.
+type watchdog struct {
+	mu    sync.Mutex
+	timer *time.Timer
+	d     time.Duration
+	done  bool
+}
+
+func newWatchdog(d time.Duration, fire func()) *watchdog {
+	w := &watchdog{d: d}
+	w.timer = time.AfterFunc(d, fire)
+	return w
+}
+
+func (w *watchdog) pause() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.done {
+		w.timer.Stop()
+	}
+}
+
+func (w *watchdog) resume() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.done {
+		w.timer.Reset(w.d)
+	}
+}
+
+func (w *watchdog) stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.done = true
+	w.timer.Stop()
+}
+
+// handshake connects to target, through via when it is not nil.
+func (t *Terminal) handshake(ctx context.Context, via *ssh.Client, target Target) (*ssh.Client, error) {
+	o := t.m.opts
+	if via == nil && o.Permits != nil && !o.Permits(target.Host) {
+		return nil, fmt.Errorf("network.egress does not allow %s", target.Host)
+	}
+	dctx, cancel := context.WithTimeout(ctx, target.ConnectTimeout)
+	defer cancel()
+	var conn net.Conn
+	var err error
+	if via != nil {
+		conn, err = via.DialContext(dctx, "tcp", target.Address())
+	} else {
+		conn, err = t.m.dial(dctx, "tcp", target.Address())
+	}
+	if err != nil {
+		return nil, err
+	}
+	var timedOut bool
+	var tmu sync.Mutex
+	dog := newWatchdog(target.ConnectTimeout, func() {
+		tmu.Lock()
+		timedOut = true
+		tmu.Unlock()
+		conn.Close()
+	})
+	defer dog.stop()
+	// The handshake has no context of its own: closing the connection is
+	// how a stopped turn or a closed terminal ends it.
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-t.ctx.Done():
+			conn.Close()
+		case <-stop:
+		}
+	}()
+	defer close(stop)
+	ask := func(qctx context.Context, q Question) (Answer, error) {
+		dog.pause()
+		defer dog.resume()
+		return t.ask(qctx, q)
+	}
+	hostAsk := func(qctx context.Context, hq HostKeyQuestion) (bool, error) {
+		a, err := ask(qctx, Question{Kind: AskHostKey, For: target.String(), HostKey: &hq})
+		if err != nil {
+			if errors.Is(err, errNotAnswered) {
+				return false, nil
+			}
+			return false, err
+		}
+		return a.Accept, nil
+	}
+	agentPath := target.IdentityAgent
+	if agentPath == "" || agentPath == "SSH_AUTH_SOCK" {
+		agentPath = o.Agent
+	}
+	ag, closeAgent := openAgent(agentPath)
+	defer closeAgent()
+	keys := newHostKeys(o, target)
+	config := &ssh.ClientConfig{
+		User:              target.User,
+		Auth:              authMethods(ctx, target, o.Home, ag, ask),
+		HostKeyCallback:   keys.callback(ctx, target.KnownName(), hostAsk),
+		HostKeyAlgorithms: keys.algorithms(target.KnownName()),
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, target.Address(), config)
+	if err != nil {
+		conn.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		tmu.Lock()
+		to := timedOut
+		tmu.Unlock()
+		if to {
+			return nil, fmt.Errorf("%s did not finish the SSH handshake within %s", target.Address(), target.ConnectTimeout)
+		}
+		return nil, err
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// keepalive asks the server for a reply every interval, and ends the
+// terminal after count intervals with none.
+func (t *Terminal) keepalive(c *ssh.Client, target Target) {
+	tick := time.NewTicker(target.AliveInterval)
+	defer tick.Stop()
+	done := make(chan error, 1)
+	inflight := false
+	missed := 0
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case err := <-done:
+			inflight = false
+			if err == nil {
+				missed = 0
+			}
+		case <-tick.C:
+			if inflight {
+				missed++
+				if missed >= target.AliveCountMax {
+					t.end(fmt.Sprintf("the server did not answer %d keepalives, %s apart", missed, target.AliveInterval))
+					return
+				}
+				continue
+			}
+			inflight = true
+			go func() {
+				_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+				done <- err
+			}()
+		}
+	}
+}
+
+// end closes the connection, once, and keeps the screen.
+func (t *Terminal) end(reason string) {
+	t.mu.Lock()
+	if t.state == StateEnded {
+		t.mu.Unlock()
+		return
+	}
+	t.state = StateEnded
+	t.reason = reason
+	t.endedAt = time.Now()
+	t.endedFlag.Store(true)
+	t.running = false
+	if w := t.run; w != nil {
+		t.finishRun(w)
+	}
+	if t.settle != nil {
+		t.settle.Stop()
+	}
+	client, closers := t.client, t.closers
+	t.notify()
+	t.mu.Unlock()
+	t.cancel()
+	if client != nil {
+		client.Close()
+	}
+	for i := len(closers) - 1; i >= 0; i-- {
+		closers[i].Close()
+	}
+	if pw, ok := t.emu.InputPipe().(*io.PipeWriter); ok {
+		pw.Close()
+	}
+	t.m.ended(t)
+}
+
+// Info is a terminal's state, for the panel and the model.
+type Info struct {
+	ID          string    `json:"id"`
+	Epoch       string    `json:"epoch"`
+	Spec        string    `json:"spec"`
+	Target      string    `json:"target,omitempty"`
+	State       State     `json:"state"`
+	Reason      string    `json:"reason,omitempty"`
+	Server      string    `json:"server,omitempty"`
+	Shell       string    `json:"shell,omitempty"`
+	Integrated  bool      `json:"integrated"`
+	Running     bool      `json:"running"`
+	Alt         bool      `json:"alt"`
+	Held        bool      `json:"held"`
+	Opener      Opener    `json:"opener"`
+	Question    *Question `json:"question,omitempty"`
+	Title       string    `json:"title,omitempty"`
+	Cols        int       `json:"cols"`
+	Rows        int       `json:"rows"`
+	InputLost   bool      `json:"input_lost,omitempty"`
+	ScrollFirst int       `json:"scroll_first"`
+	ScrollNext  int       `json:"scroll_next"`
+}
+
+// Info reads the terminal's state.
+func (t *Terminal) Info() Info {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.infoLocked()
+}
+
+func (t *Terminal) infoLocked() Info {
+	in := Info{
+		ID: t.ID, Epoch: t.Epoch, Spec: t.Spec, State: t.state, Reason: t.reason, Server: t.server, Shell: t.shell,
+		Integrated: t.integrated, Running: t.running, Alt: t.emu.IsAltScreen(), Held: t.hold,
+		Opener: t.Opener, Title: t.title, Cols: t.cols, Rows: t.rows,
+		ScrollFirst: t.scrollFirst, ScrollNext: t.scrollFirst + len(t.scroll),
+	}
+	if t.target.Host != "" {
+		in.Target = t.target.String()
+	}
+	if t.question != nil {
+		q := *t.question
+		in.Question = &q
+	}
+	t.inMu.Lock()
+	in.InputLost = t.inLost
+	t.inMu.Unlock()
+	return in
+}
+
+// Target is where the terminal connected, once it is known.
+func (t *Terminal) Target() Target {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.target
+}
+
+// Snapshot is the screen now.
+func (t *Terminal) Snapshot() Screen {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.screenLocked()
+}
+
+func (t *Terminal) screenLocked() Screen {
+	w, h := t.emu.Width(), t.emu.Height()
+	s := Screen{Cols: w, Rows: h, Alt: t.emu.IsAltScreen(), Title: t.title}
+	s.Lines = make([]Line, h)
+	for y := 0; y < h; y++ {
+		yy := y
+		s.Lines[y] = lineOf(w, func(x int) *uv.Cell { return t.emu.CellAt(x, yy) })
+	}
+	pos := t.emu.CursorPosition()
+	s.CursorX, s.CursorY, s.Cursor = pos.X, pos.Y, !t.emu.CursorHidden()
+	return s
+}
+
+// Scrollback returns up to max scrollback lines from number from on,
+// and the number of the first line returned (later than from when those
+// lines were dropped, or when max cut the front).
+func (t *Terminal) Scrollback(from, max int) ([]Line, int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if from < t.scrollFirst {
+		from = t.scrollFirst
+	}
+	i := from - t.scrollFirst
+	if i >= len(t.scroll) {
+		return nil, t.scrollFirst + len(t.scroll)
+	}
+	lines := t.scroll[i:]
+	if max > 0 && len(lines) > max {
+		from += len(lines) - max
+		lines = lines[len(lines)-max:]
+	}
+	return append([]Line(nil), lines...), from
+}
+
+// modelMayAct refuses the model while the person has the terminal.
+// Called with mu held.
+func (t *Terminal) modelMayAct() error {
+	if t.hold {
+		return ErrHeld
+	}
+	if t.state != StateConnected {
+		if t.state == StateEnded {
+			return fmt.Errorf("%w: it ended (%s); connect again", ErrNotConnected, t.reason)
+		}
+		return fmt.Errorf("%w yet", ErrNotConnected)
+	}
+	if !t.lastPerson.IsZero() && time.Since(t.lastPerson) < personYield {
+		return ErrPersonActive
+	}
+	return nil
+}
+
+// lineHasPersonText reports the person's unsent text on the prompt line.
+// Called with mu held.
+func (t *Terminal) lineHasPersonText() bool {
+	if !t.integrated || t.running || !t.personTyped {
+		return false
+	}
+	pos := t.emu.CursorPosition()
+	return !t.promptKnown || pos.X != t.promptX || pos.Y != t.promptY
+}
+
+// PersonGen counts the person's inputs, so a caller can tell whether the
+// person typed between two moments.
+func (t *Terminal) PersonGen() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.personGen
+}
+
+// RunResult is what run saw.
+type RunResult struct {
+	Output   string
+	Status   string // the exit status, "" when not known
+	Finished bool   // the shell said the command finished
+	Alt      bool   // a full-screen program took the screen
+	Asking   bool   // output stopped at what looks like a question
+	TimedOut bool
+	Lost     bool   // the shell stopped saying when commands end
+	Ended    string // the terminal ended while waiting
+	Person   bool   // the person typed in the terminal during the command
+	Took     time.Duration
+	// Integrated is whether the shell says when a command ends.
+	Integrated bool
+}
+
+var (
+	askingSecret = regexp.MustCompile(`(?i)(password|passphrase|passcode|verification code|비밀번호|암호)[^\n]{0,80}[:：]\s*$`)
+	askingInput  = regexp.MustCompile(`(\?|\]|:|\))\s*$`)
+)
+
+// CheckCommand refuses a command run cannot type as written: more than
+// one line, control characters, or a "!" an interactive bash or zsh
+// would expand from history, so the line the shell runs would not be the
+// one that was approved.
+func CheckCommand(command string) error {
+	if strings.TrimSpace(command) == "" {
+		return errors.New("no command")
+	}
+	for _, r := range command {
+		if r == '\n' || r == '\r' {
+			return errors.New("run takes one line; join commands with ; or &&, or use type for text over several lines")
+		}
+		if r == '\t' {
+			return errors.New("a Tab would complete rather than type; use spaces")
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return fmt.Errorf("control character %U in the command; use key for keys", r)
+		}
+	}
+	inSingle := false
+	rs := []rune(command)
+	for i := 0; i < len(rs); i++ {
+		switch rs[i] {
+		case '\\':
+			if !inSingle {
+				i++
+			}
+		case '\'':
+			inSingle = !inSingle
+		case '!':
+			if inSingle || i+1 >= len(rs) {
+				continue
+			}
+			switch rs[i+1] {
+			case ' ', '=', '(':
+				continue
+			}
+			return errors.New(`the shell would expand "!" from its history here; put that part in single quotes`)
+		}
+	}
+	return nil
+}
+
+// Run types command and Enter, and waits until the shell says the
+// command finished, for at most timeout. gen is PersonGen when the call
+// was approved: a person who typed since gets ErrChanged.
+func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duration, gen uint64) (RunResult, error) {
+	if err := CheckCommand(command); err != nil {
+		return RunResult{}, err
+	}
+	// A prompt still being drawn after the last command: typing into it
+	// would be echoed twice.
+	settleBy := time.Now().Add(3 * time.Second)
+	for {
+		t.mu.Lock()
+		if !t.integrated || t.running || t.promptKnown || t.personTyped || time.Now().After(settleBy) {
+			break
+		}
+		ch := t.changed
+		t.mu.Unlock()
+		select {
+		case <-ch:
+		case <-time.After(promptSettle):
+		case <-ctx.Done():
+			return RunResult{}, ctx.Err()
+		}
+	}
+	// mu is held here.
+	if err := t.modelMayAct(); err != nil {
+		t.mu.Unlock()
+		return RunResult{}, err
+	}
+	if t.personGen != gen {
+		t.mu.Unlock()
+		return RunResult{}, ErrChanged
+	}
+	lost := false
+	if t.integrated && t.running {
+		if !t.lostIntegration() {
+			t.mu.Unlock()
+			return RunResult{}, ErrBusy
+		}
+		lost = true
+	}
+	if t.lineHasPersonText() {
+		t.mu.Unlock()
+		return RunResult{}, ErrLineNotEmpty
+	}
+	w := &runWait{out: capture{max: captureLimit}, done: make(chan struct{}), personGen: t.personGen}
+	t.run = w
+	integrated := t.integrated && !lost
+	if t.integrated {
+		t.running = true
+	}
+	t.runStarted = time.Now()
+	t.emu.SendText(command + "\r")
+	t.notify()
+	t.mu.Unlock()
+	t.m.used(t)
+
+	start := time.Now()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	poll := time.NewTicker(250 * time.Millisecond)
+	defer poll.Stop()
+	res := RunResult{Integrated: integrated, Lost: lost}
+wait:
+	for {
+		select {
+		case <-w.done:
+			break wait
+		case <-ctx.Done():
+			t.mu.Lock()
+			if t.run == w {
+				t.run = nil
+				// Stop the command this call started, unless the person
+				// has stepped in since.
+				if t.state == StateConnected && t.personGen == w.personGen && (t.running || !t.integrated) {
+					t.sendKey(uv.KeyPressEvent{Code: 'c', Mod: uv.ModCtrl})
+				}
+				t.applySize()
+			}
+			t.mu.Unlock()
+			return RunResult{}, ctx.Err()
+		case <-deadline.C:
+			res.TimedOut = true
+			break wait
+		case <-poll.C:
+			t.mu.Lock()
+			if t.run == w {
+				quiet := time.Since(t.lastOutput)
+				line := t.cursorLine()
+				switch {
+				case quiet > 700*time.Millisecond && time.Since(start) > 700*time.Millisecond && askingSecret.MatchString(line):
+					res.Asking = true
+					t.finishRun(w)
+				case quiet > inputAfter && t.emu.CursorPosition().X > 0 && askingInput.MatchString(strings.TrimRight(line, " ")+" ") && !looksLikePrompt(line):
+					res.Asking = true
+					t.finishRun(w)
+				case !integrated && quiet > 2*time.Second && time.Since(start) > 2*time.Second:
+					t.finishRun(w)
+				case integrated && t.lostIntegration():
+					res.Lost = true
+					t.finishRun(w)
+				}
+			}
+			t.mu.Unlock()
+		}
+	}
+	t.mu.Lock()
+	if t.run == w {
+		t.run = nil
+		t.applySize()
+	}
+	res.Output = w.out.text(!w.started)
+	res.Status = w.status
+	res.Finished = w.ended
+	res.Alt = w.alt
+	res.Person = t.personGen != w.personGen
+	if t.state == StateEnded {
+		res.Ended = t.reason
+	}
+	t.mu.Unlock()
+	if res.Asking {
+		t.m.asking(t)
+	}
+	res.Took = time.Since(start).Round(100 * time.Millisecond)
+	return res, nil
+}
+
+// cleanText removes what would end a bracketed paste early or act as a
+// key: the paste brackets, and control characters other than line ends
+// and tabs.
+func cleanText(s string) string {
+	s = strings.ReplaceAll(s, "\x1b[200~", "")
+	s = strings.ReplaceAll(s, "\x1b[201~", "")
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// Type types text into whatever runs in the terminal, then Enter when
+// enter. Line ends in text are typed as Enter; control characters are
+// left out (key sends keys).
+func (t *Terminal) Type(text string, enter bool, gen uint64) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.modelMayAct(); err != nil {
+		return err
+	}
+	if t.personGen != gen {
+		return ErrChanged
+	}
+	if t.lineHasPersonText() {
+		return ErrLineNotEmpty
+	}
+	text = cleanText(text)
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\r"), "\n", "\r")
+	if enter {
+		text += "\r"
+	}
+	if strings.Contains(text, "\r") && t.integrated && !t.running {
+		t.running = true
+		t.runStarted = time.Now()
+	}
+	t.emu.SendText(text)
+	t.notify()
+	go t.m.used(t)
+	return nil
+}
+
+// Keys presses keys, written in the tool's key grammar.
+func (t *Terminal) Keys(keys string, gen uint64) error {
+	evs, err := ParseKeys(keys)
+	if err != nil {
+		return err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.modelMayAct(); err != nil {
+		return err
+	}
+	if t.personGen != gen {
+		return ErrChanged
+	}
+	if t.lineHasPersonText() {
+		return ErrLineNotEmpty
+	}
+	for _, ev := range evs {
+		if ev.Code == uv.KeyEnter && ev.Mod == 0 && t.integrated && !t.running {
+			t.running = true
+			t.runStarted = time.Now()
+		}
+		t.sendKey(ev)
+	}
+	t.notify()
+	go t.m.used(t)
+	return nil
+}
+
+// sendKey sends one key. Called with mu held.
+func (t *Terminal) sendKey(ev uv.KeyPressEvent) {
+	if seq, ok := encodeSpecial(ev); ok {
+		t.emu.SendText(seq)
+		return
+	}
+	if ev.Text != "" {
+		t.emu.SendText(ev.Text)
+		return
+	}
+	t.emu.SendKeys(ev)
+}
+
+// PersonKey is a key the person pressed in the panel.
+type PersonKey struct {
+	Key   string `json:"key"`
+	Ctrl  bool   `json:"ctrl"`
+	Alt   bool   `json:"alt"`
+	Meta  bool   `json:"meta"`
+	Shift bool   `json:"shift"`
+}
+
+// PersonInput is the person typing: a key, text (typed or composed by an
+// input method), or a paste.
+func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.state != StateConnected {
+		return ErrNotConnected
+	}
+	t.lastPerson = time.Now()
+	t.personGen++
+	enter := false
+	switch {
+	case k != nil:
+		ev, ok := personKeyEvent(*k)
+		if !ok {
+			return nil
+		}
+		t.sendKey(ev)
+		enter = ev.Code == uv.KeyEnter && ev.Text == ""
+	case text != "":
+		text = cleanText(text)
+		text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\r"), "\n", "\r")
+		t.emu.SendText(text)
+		enter = strings.Contains(text, "\r")
+	case paste != "":
+		paste = cleanText(paste)
+		paste = strings.ReplaceAll(strings.ReplaceAll(paste, "\r\n", "\r"), "\n", "\r")
+		t.emu.Paste(paste)
+	}
+	if t.integrated && !t.running {
+		if enter {
+			t.running = true
+			t.runStarted = time.Now()
+			t.personTyped = false
+		} else {
+			t.personTyped = true
+		}
+	}
+	t.notify()
+	return nil
+}
+
+// ViewerSize records the size a viewer's visible panel fits; zero cols
+// forgets the viewer (its panel was hidden, or it went away). The
+// terminal takes the smallest size among the viewers, so no viewer
+// cuts off what another shows, and keeps its size with none.
+func (t *Terminal) ViewerSize(viewer string, cols, rows int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if cols <= 0 || rows <= 0 {
+		delete(t.sizes, viewer)
+	} else {
+		t.sizes[viewer] = [2]int{max(MinCols, min(MaxCols, cols)), max(MinRows, min(MaxRows, rows))}
+	}
+	t.applySize()
+}
+
+// applySize resizes to the smallest viewer size, unless a run is
+// waiting: a resize makes the shell redraw its line, which would land in
+// the command's output. Called with mu held.
+func (t *Terminal) applySize() {
+	if t.run != nil || len(t.sizes) == 0 {
+		return
+	}
+	cols, rows := MaxCols, MaxRows
+	for _, s := range t.sizes {
+		cols, rows = min(cols, s[0]), min(rows, s[1])
+	}
+	if cols == t.cols && rows == t.rows {
+		return
+	}
+	t.cols, t.rows = cols, rows
+	t.emu.Resize(cols, rows)
+	t.promptKnown = false
+	select {
+	case t.resized <- struct{}{}:
+	default:
+	}
+	t.notify()
+}
+
+// sizer sends the terminal's size to the server whenever it changes.
+func (t *Terminal) sizer(sess *ssh.Session) {
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case <-t.resized:
+		}
+		t.mu.Lock()
+		cols, rows := t.cols, t.rows
+		t.mu.Unlock()
+		if err := sess.WindowChange(rows, cols); err != nil {
+			return
+		}
+	}
+}
+
+// SetHold holds the terminal for the person, or lets go of it.
+func (t *Terminal) SetHold(on bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.hold = on
+	t.notify()
+}
+
+// ReadResult is the screen as the model reads it.
+type ReadResult struct {
+	Info       Info
+	Screen     []string
+	Scrollback []string
+	CursorX    int
+	CursorY    int
+	RunningFor time.Duration
+}
+
+// Read is the screen as text, with up to scrollback lines before it.
+// For the model it is refused while the person holds the terminal.
+func (t *Terminal) Read(scrollback int, forModel bool) (ReadResult, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if forModel && t.hold {
+		return ReadResult{}, ErrHeld
+	}
+	r := ReadResult{Info: t.infoLocked()}
+	s := t.screenLocked()
+	for _, l := range s.Lines {
+		r.Screen = append(r.Screen, l.Text())
+	}
+	for len(r.Screen) > 0 && r.Screen[len(r.Screen)-1] == "" && len(r.Screen)-1 > s.CursorY {
+		r.Screen = r.Screen[:len(r.Screen)-1]
+	}
+	if scrollback > 0 {
+		from := max(0, len(t.scroll)-scrollback)
+		for _, l := range t.scroll[from:] {
+			r.Scrollback = append(r.Scrollback, l.Text())
+		}
+	}
+	r.CursorX, r.CursorY = s.CursorX, s.CursorY
+	if t.running {
+		r.RunningFor = time.Since(t.runStarted).Round(time.Second)
+	}
+	return r, nil
+}
+
+// Wait waits until text is on the screen (when text is not empty), or
+// the running command finishes, or d passes. Refused while the person
+// holds the terminal.
+func (t *Terminal) Wait(ctx context.Context, d time.Duration, text string) (bool, error) {
+	deadline := time.NewTimer(d)
+	defer deadline.Stop()
+	for {
+		t.mu.Lock()
+		if t.hold {
+			t.mu.Unlock()
+			return false, ErrHeld
+		}
+		ch := t.changed
+		ended := t.state == StateEnded
+		done := false
+		if text != "" {
+			for y := 0; y < t.emu.Height() && !done; y++ {
+				yy := y
+				if strings.Contains(lineOf(t.emu.Width(), func(x int) *uv.Cell { return t.emu.CellAt(x, yy) }).Text(), text) {
+					done = true
+				}
+			}
+		} else if t.integrated && !t.running {
+			done = true
+		}
+		t.mu.Unlock()
+		if done {
+			return true, nil
+		}
+		if ended {
+			return false, nil
+		}
+		select {
+		case <-ch:
+		case <-deadline.C:
+			return false, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+}
+
+// Close ends the connection.
+func (t *Terminal) Close(reason string) {
+	t.end(reason)
+}
+
+// openAgent connects to the agent: path names one, "none" none, and ""
+// the one SSH_AUTH_SOCK names. Nil when there is none.
+func openAgent(path string) (agent.ExtendedAgent, func()) {
+	if strings.EqualFold(path, "none") {
+		return nil, func() {}
+	}
+	conn, err := dialAgent(path)
+	if err != nil || conn == nil {
+		return nil, func() {}
+	}
+	return agent.NewClient(conn), func() { conn.Close() }
+}

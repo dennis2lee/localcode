@@ -57,6 +57,12 @@
   --run: #e09a4e;
   --warn: #e9c46b;
   --err: #e0796a;
+  /* The SSH terminal's sixteen colours, as a remote program names them
+     (0 to 7, then their bright forms), tuned for --ink behind them. */
+  --ansi-0: #45403b;  --ansi-1: #e0796a;  --ansi-2: #8fbf7f;  --ansi-3: #e5c07b;
+  --ansi-4: #7f9fe0;  --ansi-5: #c58fd8;  --ansi-6: #67bfc6;  --ansi-7: #d8d2ca;
+  --ansi-8: #78716a;  --ansi-9: #f2958a;  --ansi-10: #a9d69b; --ansi-11: #f2d48f;
+  --ansi-12: #9db8f2; --ansi-13: #dba9ea; --ansi-14: #86d6dd; --ansi-15: #fbf7f0;
 
   /* Faces, all three of them already on the machine: this page is served
      from the binary and never asks the network for anything.
@@ -918,6 +924,136 @@ main:has(> #browser-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #rig
   pointer-events: none;
 }
 .browser-empty[hidden] { display: none; }
+/* The SSH panel, in its own column after the browser panel. Its
+   terminal fills what the panel has below the strip and the status line,
+   so the panel is a column rather than a scrolling list. Like the browser
+   panel it gives way first in a narrow window (flex-shrink), down to
+   resize.js SSH_BOUNDS.min; when the browser and SSH panels together do
+   not fit, showing one hides the other (resize.js makeRoomFor). */
+#ssh-panel {
+  width: 560px;
+  min-width: 320px;
+  flex-shrink: 100;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#ssh-panel[hidden], #resize-ssh[hidden] { display: none; }
+/* Its own display (a column) outranks aside.collapsed; collapsing it
+   has to say so again. */
+#ssh-panel.collapsed { display: none; }
+#ssh-panel > .side-section { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 0; }
+main:has(> #ssh-panel:not([hidden]):not(.collapsed)) > #center { min-width: 280px; }
+main:has(> #ssh-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #right-panel) { flex-shrink: 1; min-width: 160px; }
+#toggle-ssh[hidden] { display: none; }
+/* Something in a hidden SSH panel wants you: a host key, a password. */
+#toggle-ssh.attention { color: var(--warn); }
+.ssh-tabs { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
+.ssh-tab-list { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
+.ssh-tab {
+  display: flex; align-items: center; flex: 0 1 200px; min-width: 80px;
+  border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--bg);
+}
+.ssh-tab.active { background: var(--raised); border-color: var(--interactive); }
+.ssh-tab-open {
+  display: flex; align-items: center; gap: 6px;
+  flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
+  background: transparent; border: 0; color: var(--muted); font: inherit; font-size: var(--t-ui);
+  padding: 2px 2px 2px 8px; text-align: left;
+}
+.ssh-tab-open > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.ssh-tab.active .ssh-tab-open { color: var(--text); }
+.ssh-tab-close { background: transparent; border: 0; color: var(--faint); padding: 0 6px; font-size: 14px; line-height: 1; }
+.ssh-tab-close:hover { color: var(--text); }
+.ssh-tab-new { padding: 2px 6px; }
+/* A state is a shape as well as a colour: a ring while connecting, a
+   filled dot when connected, a dash when ended, a ring in --warn when it
+   waits for you. */
+.ssh-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--faint); }
+.ssh-dot.connected { background: var(--ok); border-color: var(--ok); }
+.ssh-dot.ended { border-radius: 1px; height: 2px; border-width: 0; background: var(--faint); }
+.ssh-dot.asking { border-color: var(--warn); background: transparent; }
+.ssh-dot.held { background: var(--warn); border-color: var(--warn); border-radius: 1px; }
+.ssh-connect { display: flex; gap: 4px; margin-top: 6px; }
+.ssh-connect[hidden] { display: none; }
+#ssh-target {
+  flex: 1; min-width: 0;
+  background: var(--raised); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-ctl);
+  padding: 2px 6px; font: inherit; font-size: var(--t-ui);
+}
+.ssh-bar { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+.ssh-bar[hidden] { display: none; }
+.ssh-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--t-ui); }
+#ssh-hold[aria-pressed="true"] { border-color: var(--warn); color: var(--warn); }
+/* A question from localcode, not from the remote: drawn as the app's own
+   dialog, so text a remote program prints cannot pass for one. */
+.ssh-question {
+  border: 1px solid var(--interactive); border-radius: var(--r-ctl);
+  background: var(--raised); padding: 8px 10px; margin: 0 0 8px;
+  display: flex; flex-direction: column; gap: 6px; font-size: var(--t-ui);
+}
+.ssh-question[hidden] { display: none; }
+.ssh-question .ssh-q-who { color: var(--muted); }
+.ssh-question .ssh-q-fp { font-family: var(--f-mono); font-size: var(--t-code); overflow-wrap: anywhere; color: var(--text); }
+.ssh-question label { display: flex; flex-direction: column; gap: 2px; color: var(--text); }
+.ssh-question input {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-ctl);
+  padding: 3px 6px; font: inherit;
+}
+.ssh-question .ssh-q-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.ssh-term {
+  position: relative; flex: 1; min-height: 120px; margin-bottom: 12px;
+  background: var(--ink); border: 1px solid var(--border); border-radius: var(--r-ctl);
+  overflow: hidden; outline: none;
+}
+.ssh-term[hidden] { display: none; }
+.ssh-term:focus-within { border-color: var(--interactive); }
+/* No horizontal scroll: a scrollbar there takes a row's height, and the
+   screen is sized to the panel, so its top row went under the bar. Lines
+   from when the terminal was wider are cut at the edge, as a terminal
+   cuts them. */
+.ssh-lines {
+  position: absolute; inset: 0; overflow-x: hidden; overflow-y: auto; padding: 4px 6px;
+  font-family: var(--f-mono); font-size: var(--t-code); line-height: 1.3;
+  color: var(--text); cursor: text;
+}
+.ssh-row { height: 1.3em; white-space: pre; }
+.ssh-screen { position: relative; }
+.ssh-cursor { position: absolute; left: 0; top: 0; width: 1ch; height: 1.3em; background: var(--text); opacity: 0.55; pointer-events: none; }
+.ssh-cursor[hidden] { display: none; }
+.ssh-term:not(:focus-within) .ssh-cursor { background: transparent; outline: 1px solid var(--muted); opacity: 1; }
+/* Where typing goes: invisible, at the cursor, so an input method's
+   candidate window opens beside the text it composes. */
+.ssh-input {
+  position: absolute; left: 0; top: 0; width: 2ch; height: 1.3em;
+  opacity: 0; border: 0; padding: 0; margin: 0; resize: none; overflow: hidden;
+  font-family: var(--f-mono); font-size: var(--t-code); color: transparent; background: transparent;
+}
+.ssh-w { display: inline-block; width: 2ch; text-align: center; }
+.ssh-bold { font-weight: 700; }
+.ssh-faint { opacity: 0.6; }
+.ssh-italic { font-style: italic; }
+.ssh-under { text-decoration: underline; }
+.ssh-strike { text-decoration: line-through; }
+.ssh-under.ssh-strike { text-decoration: underline line-through; }
+.ssh-conceal { color: transparent; }
+.f0 { color: var(--ansi-0); }   .f1 { color: var(--ansi-1); }   .f2 { color: var(--ansi-2); }   .f3 { color: var(--ansi-3); }
+.f4 { color: var(--ansi-4); }   .f5 { color: var(--ansi-5); }   .f6 { color: var(--ansi-6); }   .f7 { color: var(--ansi-7); }
+.f8 { color: var(--ansi-8); }   .f9 { color: var(--ansi-9); }   .f10 { color: var(--ansi-10); } .f11 { color: var(--ansi-11); }
+.f12 { color: var(--ansi-12); } .f13 { color: var(--ansi-13); } .f14 { color: var(--ansi-14); } .f15 { color: var(--ansi-15); }
+.b0 { background: var(--ansi-0); }   .b1 { background: var(--ansi-1); }   .b2 { background: var(--ansi-2); }   .b3 { background: var(--ansi-3); }
+.b4 { background: var(--ansi-4); }   .b5 { background: var(--ansi-5); }   .b6 { background: var(--ansi-6); }   .b7 { background: var(--ansi-7); }
+.b8 { background: var(--ansi-8); }   .b9 { background: var(--ansi-9); }   .b10 { background: var(--ansi-10); } .b11 { background: var(--ansi-11); }
+.b12 { background: var(--ansi-12); } .b13 { background: var(--ansi-13); } .b14 { background: var(--ansi-14); } .b15 { background: var(--ansi-15); }
+/* Reverse video with the terminal's own colours. */
+.ssh-rev-fg { color: var(--ink); }
+.ssh-rev-bg { background: var(--text); }
+.ssh-empty[hidden] { display: none; }
+.ssh-live { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.ssh-live-row { display: flex; align-items: center; gap: 8px; font-size: var(--t-ui); }
+.ssh-live-row > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+
 /* A capture the browser tool saved, under the call that took it. */
 .tool-snapshot {
   display: block; max-width: min(100%, 640px); margin: 6px 0 2px;

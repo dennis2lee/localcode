@@ -169,6 +169,21 @@ func (c *Config) SetBrowserRuntime(v bool) {
 	c.Browser = &v
 }
 
+// SSHLive reports whether SSH is on right now.
+func (c *Config) SSHLive() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.SSH != nil && *c.SSH
+}
+
+// SetSSHRuntime changes the live SSH setting. The in-memory counterpart
+// to SetSSHInFile.
+func (c *Config) SetSSHRuntime(v bool) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.SSH = &v
+}
+
 // OrchestrateLive reports whether the Orchestrate tool is on right now,
 // read the same way and for the same reasons as SmartAgentLive.
 func (c *Config) OrchestrateLive() bool {

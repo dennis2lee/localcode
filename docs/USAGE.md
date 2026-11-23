@@ -21,7 +21,7 @@ LocalCode supports interactive TUI, Web UI, desktop, daemon, and one-shot CLI wo
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [What stop reaches](#what-stop-reaches), [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [Shell escape](#shell-escape), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/clear](#clear), [/rewind](#rewind), [Sampling](#sampling-temperature-top_p-top_k), [/review](#review), [/redo](#redo), [/model-invocable](#model-invocable), [/usage totals](#usage-totals), [/export](#export), [/mcps](#mcps), [What the transcript shows](#what-the-transcript-shows), [Where localcode may connect](#where-localcode-may-connect), [What a session log holds](#what-a-session-log-holds-and-who-can-read-it), [/llm-doctor](#llm-doctor), [/context](#context), [The switches](#the-switches), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Archive](#archiving-a-conversation), [Referring to another conversation](#referring-to-another-conversation-with-name), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
 | [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Pasting an image](#pasting-an-image), [Status bar](#status-bar-under-the-prompt), [Settings](#settings), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn), [Redirecting a turn](#redirecting-a-turn-while-it-runs) |
-| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Browser](#browser), [Leaving the project](#leaving-the-project), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Debate](#debate), [Effort](#effort), [Zoom and what a reload keeps](#zoom-and-what-a-reload-keeps), [Debug log](#debug-log), [Scheduled tasks](#scheduled-tasks), [Repeating tasks](#repeating-tasks), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm), [Checking for updates](#checking-for-updates) |
+| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Browser](#browser), [SSH](#ssh), [Leaving the project](#leaving-the-project), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Debate](#debate), [Effort](#effort), [Zoom and what a reload keeps](#zoom-and-what-a-reload-keeps), [Debug log](#debug-log), [Scheduled tasks](#scheduled-tasks), [Repeating tasks](#repeating-tasks), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm), [Checking for updates](#checking-for-updates) |
 | [Known limitations](#known-limitations) | |
 
 ## Part 1. Getting started
@@ -421,6 +421,7 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `smart_agent` | Turns on the work-order prompt, enhanced tools, fallback, the turn log, cache markers and credential-path checks. It delegates nothing. Off unless set to true; also `/config smart_agent` and the settings window. See [Smart Agent](#smart-agent). |
 | `browser` | Gives the model a web browser, shown in the desktop window's browser panel. Off unless set to true; also `/browser` and the settings window. See [Browser](#browser). |
+| `ssh` | Gives the model SSH connections to work in, shown in the SSH panel of the desktop window and the Web UI. Off unless set to true; also `/ssh` and the settings window. See [SSH](#ssh). |
 | `browser_path` | The browser to run instead of the Chrome or Edge found in the usual places. |
 | `model_invocable` | The switch for whether the model may run commands itself. Off unless set; `/model-invocable` toggles it. On opens nothing by itself: each built-in must be named in `model_commands`, and each custom command or skill must opt in from its own frontmatter. See [/model-invocable](#model-invocable). |
 | `model_commands` | Which built-in commands the model may run, each with its leading slash. Empty, the default, means none. Inert while `model_invocable` is off. |
@@ -1685,6 +1686,7 @@ Permission rules answer "which tool, on which path". They say nothing about dest
 | A shell command's own connections | `curl`, a package manager, a test suite that calls an API: a separate process with its own sockets. Nothing inside this program can stop those. Refusing to *run* commands whose names look networked would be theatre — a script, a different binary name, or a here-document defeats it in seconds. What bounds them is the permission prompt on `bash`, and below that the operating system: a firewall, a network namespace, or a proxy the child inherits. |
 | An MCP server started as a subprocess | Same reason: it is a child process. A *remote* MCP server is reached by localcode itself and is covered. |
 | The [browser](#browser)'s pages | Chrome or Edge is a child process and opens its own connections. What bounds it is a `deny` rule for `browser`: the browser sends no HTTP request to a URL it matches. WebSockets are not checked. The browser is off unless the setting is on. |
+| [SSH](#ssh) connections past the first hop | localcode applies `network.egress` to the first host it dials for SSH. The hops after a jump host are dialed by that host. A command run in an SSH terminal is a process on another machine. |
 
 ### What a session log holds, and who can read it
 
@@ -1759,6 +1761,7 @@ The following daemon commands work in both clients.
 |---|---|---|
 | `/smart-agent` | `smart_agent` | The work-order prompt, the enhanced tools (paged reads, `update_plan`, `ask_user`), the fallback chain, the trace, the prompt cache markers and the guards. It delegates nothing. See [Smart Agent](#smart-agent). |
 | `/browser` | `browser` | The web browser shown in the desktop window's browser panel, for the model to work in. See [Browser](#browser). |
+| `/ssh` | `ssh` | SSH connections for the model to work in, shown in the SSH panel. Off closes every connection. See [SSH](#ssh). |
 | `/orchestrate` | `orchestrate` | Delegation: the specialist roster, `Task`, the background pair, the delegation policy and the Orchestrate tool. Reports the agents it can delegate to, or says why there are none. See [Orchestration](#orchestration). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also on the settings Muse tab. |
@@ -1827,6 +1830,7 @@ These commands are recognized by the client or the daemon rather than sent to th
 | `/smart-agent` | Toggles the Smart Agent bundle and saves the choice. `/smart-agent on\|off` sets it outright. Answered by the daemon, so both clients have it. See [The switches](#the-switches). |
 | `/auto-delegate` | Toggles auto-delegation the same way. |
 | `/browser` | Toggles the browser the same way. Off closes the browser and every tab in it. See [Browser](#browser). |
+| `/ssh` | Toggles SSH the same way. Off closes every SSH connection. See [SSH](#ssh). |
 | `/permission-skip-all` | Allows every prompt in this conversation, the workspace boundary included. |
 | `/permission-skip-tools` | Allows every tool prompt in this conversation, and still asks before a path leaves the workspace. |
 | `/read-outside` | Reading outside the workspace: `on`, `off`, or `mem-clear` to forget the directories approved at a prompt. See [Leaving the project](#leaving-the-project). |
@@ -1883,6 +1887,8 @@ The Archive count refreshes on initial load and after every archive or retrieval
 Archiving preserves the title, workspace, permissions, effort, list rank, and event log. `GET /api/sessions/{id}` and its event stream remain readable.
 
 Group membership is kept too, though an archived session shows in no group while it is away — it is not in the panel. Retrieving it puts it back where it was.
+
+SSH connections are not kept either. Archiving or deleting a conversation closes its SSH connections. See [SSH](#ssh).
 
 Browser tabs are not kept. Archiving closes the conversation's tabs, and those of its background tasks, the browser panel opens none while it is archived, and retrieving it starts with none, as a new conversation does. Deleting a conversation closes its tabs too.
 
@@ -2310,6 +2316,7 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | `Skill` | No | Load a skill body by name. Registered only when skills exist. |
 | `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. One run at a time per directory, so a concurrent panel of reviewers does not start several copies of your test suite in one tree; a call that queued says so. |
 | `browser` | No | Work a web page in the browser shown in the desktop window's browser panel: open, read, screenshot, click, type, key, scroll. Offered only with the browser setting on and the conversation open in the desktop window. A deny rule matches the page's URL. See [Browser](#browser). |
+| `ssh` | Yes, inside the tool | Work on other machines over SSH, in terminals shown in the SSH panel: connect, run, type, key, read, wait, list, close. Offered with the ssh setting on, in a turn that is not a scheduled run. Asks under `ssh_connect`, `ssh` and `ssh_input`. See [SSH](#ssh). |
 | `session_read` | No | Read another conversation on this daemon: `mode=summary` for what it concluded and which files it touched, `mode=transcript` for its messages a page at a time. Not offered to a delegated sub agent. See [Referring to another conversation](#referring-to-another-conversation-with-name) |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server. Never in a turn `localcode run` builds itself, which connects no MCP servers; a `--session` turn routed to a running daemon has the daemon's. |
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only with [orchestration](#orchestration) on and 2 or more agents to delegate to. |
@@ -2858,6 +2865,94 @@ Limits:
 * Downloads and file pickers are not handled.
 * Some sites refuse a browser with no window.
 * On Windows a file the running Edge or Chrome holds open cannot be copied. The import report names it.
+
+### SSH
+
+The model can open SSH connections and work in them, and you can work in the same terminals. Each terminal is shown in the SSH panel, its own column after the browser panel, in the desktop window and in the Web UI. A terminal stays connected for as long as its conversation exists in the running localcode, between turns and while the panel is hidden, so a shell keeps its directory, its variables and the programs running in it.
+
+| Item | Behavior |
+|---|---|
+| Turning it on | The settings window's SSH section, `/ssh on`, or `"ssh": true` in config.json. Off unless set. Turning it off closes every connection. |
+| Where it works | The panel is in the desktop window and in the Web UI. The model is offered the `ssh` tool while the setting is on, in any turn but a scheduled run: a scheduled run has nobody to answer a host key or a password. A turn started from the TUI has the tool; its questions are answered in the panel of a desktop window or Web UI. |
+| Lifetime | A connection ends when you close it, when the model closes one it opened, when the remote shell exits, when the server misses 3 keepalives (30 seconds apart, or `ServerAliveInterval` and `ServerAliveCountMax` from `~/.ssh/config`), when the conversation is archived or deleted, when the setting is turned off, or when localcode stops. Closing the desktop window stops localcode. `/update` with connections open names them and updates only when run again within two minutes. Nothing else ends one: there is no idle timeout. Work that must outlive localcode belongs in `tmux` or `screen` on the remote. |
+| Limits | 8 open connections per conversation and 32 in all. An ended terminal stays in the panel with its last screen until it is closed; a conversation keeps at most 8, the oldest going first. |
+| `~/.ssh/config` | Read on every connect. Used: `Host`, `Match` with `all`, `host`, `originalhost`, `user` and `localuser`, `Include`, `HostName`, `User`, `Port`, `IdentityFile`, `IdentitiesOnly`, `IdentityAgent`, `CertificateFile`, `ProxyJump`, `UserKnownHostsFile`, `GlobalKnownHostsFile`, `HostKeyAlias`, `ServerAliveInterval`, `ServerAliveCountMax`, `ConnectTimeout`. A `Match` with any other criterion never matches; `Match exec` is never run. `/etc/ssh/ssh_config` is read after it. |
+| Not supported | `ProxyCommand` (it runs a local command; use `ProxyJump`), agent forwarding, X11, port forwarding, and keys held by a security key unless your SSH agent holds them. |
+| Authentication | In OpenSSH's order: the keys in your SSH agent (`SSH_AUTH_SOCK`, or the OpenSSH agent on Windows), your key files, keyboard-interactive, then a password. An encrypted key file asks for its passphrase only when the server accepts its public key. |
+| Host keys | Checked against `/etc/ssh/ssh_known_hosts`, `~/.ssh/known_hosts` and `~/.localcode/ssh/known_hosts`, hashed names and `@cert-authority` and `@revoked` lines included. A key that differs from the one on record ends the connection, naming both fingerprints; fix the file yourself. A host with no key on record is a question in the panel, showing the fingerprint. An accepted key is written to `~/.localcode/ssh/known_hosts`. `~/.ssh` is never written. |
+| Locale | `LANG` and every `LC_*` of localcode's environment are sent to the server, as OpenSSH sends them by default. A server that accepts them (`AcceptEnv`) runs the shell in your locale, which is what lets it read Korean typed into it. |
+
+**Questions only you answer.** A host key, a password, a passphrase and a server's own prompts (a one-time code) are asked in the panel, in a box localcode draws above the terminal, and never in the conversation. The model cannot answer them: no action of the `ssh` tool does. An answer goes from the panel to the connection and nowhere else: not into the conversation, an event, a log or a file. A question shows a hidden panel, marks the conversation as asking in the session list, and waits 5 minutes. A server gives up sooner if its own login time runs out (OpenSSH's `LoginGraceTime` is 2 minutes); connect again.
+
+**Taking over.** The terminal is shared. What you type goes to the shell at once. The model's `run`, `type` and `key` are refused for 10 seconds after you type, and while you have typed part of a command line and not run it. **Hold**, beside the status line, keeps the model out of a terminal until you let go: its input, and its `read` and `wait` too, so what is on the screen while you hold it is yours. The model cannot close a terminal you opened or one you hold. A `run` result says when you typed during the command.
+
+**The panel.** The tab strip has one tab per terminal, `×` to close it, and `+` to open one: type `user@host:port` or a `Host` from `~/.ssh/config`. The status line says where the terminal is connected, the shell, and whether a command is running. Reconnect opens a new connection in an ended terminal's tab. Click the terminal to type in it. Drag to select text.
+
+| Key | In the terminal |
+|---|---|
+| Typing, Enter, Tab, Escape, arrows, Ctrl+letter | Go to the shell. Escape does not stop the turn, Tab does not change the agent, and Ctrl+F does not open find, while the terminal has the keys. |
+| Korean and other input methods | The composed text is sent when the input method finishes it. |
+| Copy | Cmd+C on macOS; Ctrl+C or Ctrl+Shift+C elsewhere, while text in the terminal is selected. Without a selection, Ctrl+C is the interrupt. |
+| Paste | Cmd+V on macOS; Ctrl+Shift+V or Shift+Insert elsewhere. Sent as a bracketed paste when the shell asked for one. Ctrl+V alone goes to the shell. |
+| Cmd shortcuts, Ctrl+plus and Ctrl+minus | The window's. |
+
+The terminal takes the size of the smallest panel showing it, so no window cuts off what another shows. A hidden panel does not count. Output already on the screen is not reflowed when the size changes.
+
+**Knowing when a command ends.** After the first prompt, localcode types one line into a bash or zsh shell, once, where you can see it: ` __lc_n=...; __lc_p(){ ... }; ...`. It has the shell print an invisible mark before each prompt carrying the exit status, and one as each command starts, both with a number that only this terminal knows, so output that prints a mark is not taken for one. The line starts with a space, which keeps it out of the history where `HISTCONTROL=ignorespace` or zsh's `HIST_IGNORE_SPACE` is set. It keeps `$?` for prompt commands after it. It is typed only when the login shell is bash or zsh and the first screen ends in a prompt.
+
+| Case | What `run` does |
+|---|---|
+| bash or zsh | Returns when the command ends, with its output and exit status. |
+| Another shell (fish, csh, a Windows server's shell) | Returns when output has been quiet for 2 seconds, with no exit status. |
+| A nested shell (`sudo -i`, `su`, `ssh`, `docker exec`) | The nested shell prints no marks. When the terminal has been quiet for 3 seconds at a line that ends like a prompt, `run` says the end is not known, and the next `run` can type. The marks come back when the nested shell exits. |
+| A full-screen program (an editor, `top`) | Returns at once and says so: the model works it with `read`, `key` and `wait`. |
+| A command that stops at a question | Output stopped at a line that looks like a password prompt, or for 3 seconds at a line ending in `?`, `]`, `:` or `)`. `run` returns and says the command may be waiting for input. A password is for you, in the panel. |
+| The timeout (120 seconds, at most 600) | Returns what came so far. The command goes on running. |
+| The turn stopped | Ctrl+C goes to the command `run` started, unless you typed in the terminal since. |
+
+`run` takes one line. It refuses a line with a control character, a Tab (the shell would complete rather than type), or a `!` that bash or zsh would expand from history (put that part in single quotes), so the line the shell runs is the line that was approved.
+
+**Permissions.** The tool asks before it acts, as `bash` does, under three keys:
+
+| Key | Asked for | Matched against |
+|---|---|---|
+| `ssh_connect` | `connect` | The alias as written when it is not the host itself, the target as `user@host:port`, and each jump host: `prod-db deploy@10.0.0.5:22 via me@bastion:22`. "For this session" and "always" cover that subject exactly. |
+| `ssh` | `run` | The command, decided as a `bash` line is: each command of the line on its own, with "for this session" generalising to the program (`systemctl *`). The question names the host; a grant covers every host. An allow decided by splitting the line holds only when the terminal's shell is bash or zsh; otherwise it asks. |
+| `ssh_input` | `type` and `key` | `type <text>` or `key <keys>`. Asked every time: no "for this session". A rule still answers it. |
+
+A deny rule for `ssh_connect` also keeps the model off a terminal you opened to that host: every action on it is refused. `read`, `wait`, `list` and `close` ask nothing. `skip_permissions` turns these questions into allows, as it does for `bash`; a deny still denies.
+
+```json
+"permission": {
+  "ssh_connect": [{ "match": "*prod*", "decision": "deny" }],
+  "ssh": [{ "match": "git *", "decision": "allow" }, { "match": "rm *", "decision": "deny" }]
+}
+```
+
+The `ssh` tool's actions:
+
+| Action | Input | What it does |
+|---|---|---|
+| `connect` | `host`, `user`, `port` | Opens a connection and its shell, and waits for the questions you answer in the panel. Returns the terminal id (`t1`, `t2`, ...) and the first screen. |
+| `run` | `command`, `terminal`, `timeout` | Types the line and Enter and waits for it to end (see above). |
+| `type` | `text`, `enter`, `terminal` | Types text into whatever runs in the terminal, then Enter when `enter` is true. |
+| `key` | `keys`, `terminal` | Presses keys, space-separated: `ctrl+c`, `Enter`, `Escape`, `Up`, `Tab`, `F1`. |
+| `read` | `terminal`, `scrollback` | The screen as text, with up to 500 earlier lines. |
+| `wait` | `terminal`, `seconds`, `for` | Waits up to 300 seconds for text on the screen, or for the running command to end. |
+| `list` | | The conversation's terminals and their state. |
+| `close` | `terminal` | Ends a connection the model opened. |
+
+`terminal` defaults to the one the model used last.
+
+What remote output can do is limited to the screen. A remote program's title is shown as text. It cannot write to your clipboard (OSC 52 is ignored) or have its title typed back into the shell. Text on the screen is data to the model, as `bash` output is: a file that tells the model to do something is still only a file.
+
+**Limits.**
+
+* The daemon has no authentication. A program running as you on this computer, a command the model runs through `bash` included, can call the SSH panel's routes as the window does. It could also run `ssh` itself with the same keys: the boundary is `bash`'s permission rules. The routes refuse requests from another website and from a name pointed at this computer.
+* Connections do not survive localcode stopping, an update, the computer sleeping long enough for the server to drop it, or a network change. Use `tmux` or `screen` on the remote for work that must.
+* A key held only by a security key (FIDO) works only through your SSH agent.
+* The model's grants for remote commands are not per host. Deny the hosts the model must not reach with `ssh_connect`.
+* The terminal is xterm-like. Mouse reporting is not supported.
 
 ### Leaving the project
 

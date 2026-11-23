@@ -307,6 +307,15 @@ func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		asking[id] = true
 	}
+	// So does an SSH terminal waiting for a host key or a password.
+	if d.SSH != nil {
+		for id := range d.SSH.Asking() {
+			if asking == nil {
+				asking = map[string]bool{}
+			}
+			asking[id] = true
+		}
+	}
 	type listed struct {
 		session.Session
 		Busy   bool `json:"busy"`
@@ -411,6 +420,9 @@ func (d *Daemon) handleArchiveSession(w http.ResponseWriter, r *http.Request) {
 	// holding its logins for a conversation nobody is in. Retrieving it
 	// starts with no tab, as a new conversation does.
 	d.closeBrowserTabs(ids)
+	// Its SSH connections close too: a shell kept open on another machine
+	// for a conversation on the shelf is a login nobody is watching.
+	d.closeSSH(ids, "the conversation was archived")
 	// The timers are left alone on purpose. A booking has never run a
 	// turn in an archived conversation — Scheduler.fire looks at the
 	// parent and marks the row missed on sight — so an armed timer on
@@ -606,6 +618,7 @@ func (d *Daemon) forgetDeleted(ids []string) {
 		}
 	}
 	d.closeBrowserTabs(ids)
+	d.closeSSH(ids, "the conversation was deleted")
 	d.announceDeleted(ids...)
 }
 
@@ -684,6 +697,7 @@ func (d *Daemon) handleDeleteAllSessions(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	d.closeBrowserTabs(currentIDs)
+	d.closeSSH(currentIDs, "the conversation was deleted")
 	d.announceDeleted(currentIDs...)
 	w.WriteHeader(http.StatusNoContent)
 }

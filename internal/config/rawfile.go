@@ -318,6 +318,19 @@ func SetBrowserInFile(path string, enabled bool) error {
 	})
 }
 
+// SetSSHInFile writes the top-level "ssh" key, leaving every other key
+// untouched.
+func SetSSHInFile(path string, enabled bool) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal ssh: %w", err)
+		}
+		raw["ssh"] = encoded
+		return nil
+	})
+}
+
 // SetOrchestrateInFile writes the top-level "orchestrate" key, leaving
 // every other key untouched.
 //

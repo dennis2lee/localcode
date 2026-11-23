@@ -104,6 +104,38 @@ func (l *Loop) routeBrowser(sessionID, text string) (bool, error) {
 	return true, l.replyText(sessionID, b.String())
 }
 
+// routeSSH answers "/ssh [on|off]".
+func (l *Loop) routeSSH(sessionID, text string) (bool, error) {
+	arg, ok := matchToggleCommand(text, "/ssh")
+	if !ok {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+
+	want, valid := toggleArg(arg, l.Config.SSHLive())
+	if !valid {
+		return true, l.replyText(sessionID, "usage: /ssh [on|off]")
+	}
+	l.Config.SetSSHRuntime(want)
+	if !want && l.CloseSSH != nil {
+		// Off means off now: every connection closes, as it does from the
+		// settings window.
+		l.CloseSSH()
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "ssh: %s", onOff(want))
+	if want {
+		b.WriteString("\nThe model is offered the ssh tool. Its connections are shown in the SSH panel of the desktop window and the Web UI, where you can watch, type, and answer passwords and host keys.")
+	} else {
+		b.WriteString("\nEvery SSH connection was closed.")
+	}
+	b.WriteString(l.persist(func(path string) error { return config.SetSSHInFile(path, want) }))
+
+	l.announceConfig(sessionID)
+	return true, l.replyText(sessionID, b.String())
+}
+
 // routeOrchestrate answers "/orchestrate [on|off]".
 func (l *Loop) routeOrchestrate(sessionID, text string) (bool, error) {
 	arg, ok := matchToggleCommand(text, "/orchestrate")
@@ -343,6 +375,7 @@ func (l *Loop) announceConfig(sessionID string) {
 		"smart_agent":          l.SmartAgentEnabled(),
 		"orchestrate":          l.OrchestrateEnabled(),
 		"browser":              l.Config.BrowserLive(),
+		"ssh":                  l.Config.SSHLive(),
 	})
 	l.announceSettings()
 }
@@ -411,6 +444,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "config", Description: "show settings, or change one with /config <name> on|off", Usage: "[<name> on|off]"},
 		{Name: "smart-agent", Description: "turn the Smart Agent bundle on or off", Usage: "[on|off]"},
 		{Name: "browser", Description: "let the model use the web browser shown in the desktop window's browser panel", Usage: "[on|off]"},
+		{Name: "ssh", Description: "let the model open SSH connections and work in them, shown in the SSH panel", Usage: "[on|off]"},
 		{Name: "orchestrate", Description: "turn delegation on or off: the specialists, Task, TaskBackground, TaskCollect and Orchestrate", Usage: "[on|off]"},
 		{Name: "workflow", Description: "saved orchestration plans: list them, show one, run one by name, resume a run, save the last plan, delete one", Usage: "[list|show <name>|run <name> [args]|resume [run]|save <name>|delete <name>]"},
 		{Name: "auto-delegate", Description: "turn auto-delegation on or off", Usage: "[on|off]"},

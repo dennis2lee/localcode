@@ -47,6 +47,7 @@ import { initResizers } from './resize.js';
 import { tryComplete, resetCompletion } from './complete.js';
 import { initSettings, settings } from './settings.js';
 import { initBrowserPanel, renderBrowserPanel } from './browser.js';
+import { initSSHPanel, renderSSHPanel } from './ssh.js';
 import { wireExternalLinks } from './links.js';
 
 agentSelectEl.addEventListener('change', async () => {
@@ -323,6 +324,7 @@ function initWindowControls() {
 async function init() {
   initWindowControls();
   initBrowserPanel();
+  initSSHPanel();
   wireExternalLinks();
   initResizers();
   initSettings();
@@ -350,6 +352,7 @@ async function init() {
   // Likewise the browser panel: the conversation can open before the
   // setting that decides whether the panel is drawn has arrived.
   renderBrowserPanel();
+  renderSSHPanel();
 
   // The section stays collapsed by default: it is where things go to be
   // out of the way. What it does not do any more is stay unloaded, for
@@ -417,6 +420,8 @@ export { setPanelWidth, CENTER_MIN } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
 export { renderBrowserPanel, STALE_FALLBACK_MS, pagePoint, keyEventFor, editCommandFor, modifierBits, browserShown, inGUI } from './browser.js';
+export { renderSSHPanel, runStyle, keyAction, fitSize, sshShown, VIEWER, SCROLL_KEEP } from './ssh.js';
+export { fitsWith, makeRoomFor, SSH_BOUNDS } from './resize.js';
 export { snapshotURL } from './transcript.js';
 export { externalHref, openExternally } from './links.js';
 export { linkify, splitURL } from './markdown.js';

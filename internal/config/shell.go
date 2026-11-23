@@ -112,11 +112,12 @@ var unsafeShellConstructs = []string{"$(", "`", "<(", ">(", ">"}
 // literal text cannot start matching it now.
 func (c *Config) resolveSegment(ctx context.Context, segment string, staticRequiresPermission bool) Decision {
 	ctx = context.WithValue(ctx, shellSegmentKey{}, strings.TrimSpace(segment))
-	raw := c.resolveOne(ctx, BashToolName, segment, staticRequiresPermission)
+	tool := shellToolOf(ctx)
+	raw := c.resolveOne(ctx, tool, segment, staticRequiresPermission)
 	unquoted := unquoteShellText(segment)
 	norm := raw
 	if unquoted != segment {
-		norm = c.resolveOne(ctx, BashToolName, unquoted, staticRequiresPermission)
+		norm = c.resolveOne(ctx, tool, unquoted, staticRequiresPermission)
 	}
 	if raw == DecisionDeny || norm == DecisionDeny {
 		return DecisionDeny

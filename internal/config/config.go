@@ -203,6 +203,12 @@ type Config struct {
 	// localcode finds in the usual places.
 	BrowserPath string `json:"browser_path,omitempty"`
 
+	// SSH gives the model SSH connections to work in, shown in the SSH
+	// panel of the desktop window and the Web UI, where the person can
+	// watch and type too. Off unless set; toggled from the settings window
+	// and "/ssh on|off". See internal/sshterm.
+	SSH *bool `json:"ssh,omitempty"`
+
 	// Orchestrate turns on the Orchestrate tool: a plan of delegated
 	// stages, authored by filling in that tool's input schema and run by a
 	// Go loop rather than by the model deciding one step at a time. See

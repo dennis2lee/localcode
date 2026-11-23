@@ -170,6 +170,9 @@ export const answerQuestion = (sessionID, id, answer) =>
 export const setAutoDelegate = (patch) => api('POST', '/api/settings/auto-delegate', patch);
 export const setSmartAgent = (enabled) => api('POST', '/api/settings/smart-agent', { enabled });
 export const setBrowser = (enabled) => api('POST', '/api/settings/browser', { enabled });
+export const setSSH = (enabled) => api('POST', '/api/settings/ssh', { enabled });
+export const listSSH = () => api('GET', '/api/ssh');
+export const closeSSH = (session, terminal) => api('DELETE', `/api/sessions/${encodeURIComponent(session)}/ssh/${encodeURIComponent(terminal)}`, {});
 export const importBrowserProfile = () => api('POST', '/api/browser/import');
 export const setOrchestrate = (enabled) => api('POST', '/api/settings/orchestrate', { enabled });
 export const setModelInvocable = (enabled) => api('POST', '/api/settings/model-invocable', { enabled });

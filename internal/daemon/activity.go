@@ -35,6 +35,9 @@ func (d *Daemon) activityOf(id string) sessionActivity {
 	if d.Loop != nil && d.Loop.Input.Asking()[id] {
 		a.Asking = true
 	}
+	if d.SSH != nil && d.SSH.Asking()[id] {
+		a.Asking = true
+	}
 	return a
 }
 
@@ -66,3 +69,8 @@ func (d *Daemon) ownedElsewhereFor(id string) bool {
 	}
 	return false
 }
+
+// AnnounceActivity is announceActivity for a part of the program outside
+// the daemon that changes what a session is doing: an SSH terminal
+// starting or stopping to ask the person something.
+func (d *Daemon) AnnounceActivity(id string) { d.announceActivity(id) }

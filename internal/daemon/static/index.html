@@ -118,6 +118,9 @@
   <symbol id="i-globe" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
     <circle cx="8" cy="8" r="5.75"/><path d="M2.25 8h11.5M8 2.25c1.6 1.6 2.4 3.5 2.4 5.75S9.6 12.15 8 13.75M8 2.25C6.4 3.85 5.6 5.75 5.6 8s.8 4.15 2.4 5.75"/>
   </symbol>
+  <symbol id="i-terminal" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"/><path d="M4.5 6.25l2 1.75-2 1.75M8.25 10.25h3.25"/>
+  </symbol>
   <symbol id="i-server" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
     <rect x="2.25" y="2.75" width="11.5" height="4.5" rx="1"/><rect x="2.25" y="8.75" width="11.5" height="4.5" rx="1"/>
     <path d="M4.75 5h.01M4.75 11h.01"/>
@@ -178,6 +181,10 @@
          panel is: in the desktop window with the browser on. Hiding it
          keeps its page running, so the model keeps the browser. -->
     <button class="panel-toggle" id="toggle-browser" title="show/hide the browser panel" hidden><svg class="ico"><use href="#i-globe"/></svg></button>
+    <!-- Hides the SSH panel and shows it again. There while SSH is on.
+         Hiding it keeps every connection: the model keeps working in
+         them, and a question for you shows the panel again. -->
+    <button class="panel-toggle" id="toggle-ssh" title="show/hide the SSH panel" hidden><svg class="ico"><use href="#i-terminal"/></svg></button>
     <button class="panel-toggle" id="toggle-right" title="show/hide the tasks and MCP panel"><svg class="ico"><use href="#i-drawer"/></svg></button>
   </div>
 </header>
@@ -312,6 +319,46 @@
         <img id="browser-view" alt="" tabindex="0" draggable="false">
         <p class="note browser-empty" id="browser-empty">No page yet. Type an address above, or ask the model to use the browser.</p>
       </div>
+    </div>
+  </aside>
+  <!--
+    The SSH terminals the model and you work in, in a column of their own
+    after the browser panel. There while SSH is on, in the desktop window
+    and in the Web UI: js/ssh.js shows it, follows the conversation on
+    screen, and draws the terminal its tab strip selects from a stream of
+    screens. Keys typed in the terminal go to the shell, so you can take
+    over at any point; Hold keeps the model out of a terminal, its screen
+    included, until you let go. Questions only you may answer (a host key,
+    a password) are asked here, never in the conversation.
+  -->
+  <div class="resizer" id="resize-ssh" title="drag to resize" hidden></div>
+  <aside id="ssh-panel" hidden>
+    <div class="side-section">
+      <h2>SSH</h2>
+      <div class="ssh-tabs">
+        <div class="ssh-tab-list" id="ssh-tab-list" role="tablist"></div>
+        <button class="icon-btn ssh-tab-new" id="ssh-tab-new" title="open a connection"><svg class="ico ico-12"><use href="#i-plus"/></svg></button>
+      </div>
+      <form class="ssh-connect" id="ssh-connect" hidden>
+        <input id="ssh-target" type="text" placeholder="user@host:port, or a Host from ~/.ssh/config" spellcheck="false" autocomplete="off" autocapitalize="off">
+        <button type="submit" class="icon-btn">Connect</button>
+        <button type="button" class="icon-btn" id="ssh-connect-cancel">Cancel</button>
+      </form>
+      <div class="ssh-bar" id="ssh-bar" hidden>
+        <span class="ssh-status" id="ssh-status"></span>
+        <button class="icon-btn" id="ssh-hold" aria-pressed="false" title="keep the model out of this terminal, its screen included, until you let go">Hold</button>
+        <button class="icon-btn" id="ssh-reconnect" title="open a new connection to the same host in this tab" hidden>Reconnect</button>
+      </div>
+      <div class="ssh-question" id="ssh-question" role="dialog" aria-live="polite" hidden></div>
+      <p class="note warn" id="ssh-error" hidden></p>
+      <div class="ssh-term" id="ssh-term" tabindex="0" hidden>
+        <div class="ssh-lines" id="ssh-lines">
+          <div id="ssh-scroll"></div>
+          <div class="ssh-screen" id="ssh-screen"><div class="ssh-cursor" id="ssh-cursor" hidden></div></div>
+        </div>
+        <textarea class="ssh-input" id="ssh-input" aria-label="type into the terminal" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+      </div>
+      <p class="note ssh-empty" id="ssh-empty">No connection yet. Press + to open one, or ask the model to connect.</p>
     </div>
   </aside>
   <div class="resizer" id="resize-right" title="drag to resize"></div>
@@ -589,6 +636,22 @@
         <p class="note" id="browser-note"></p>
         <p class="note warn" id="browser-warn" hidden></p>
         <button class="icon-btn" id="browser-import-btn" title="copy your everyday Chrome profile in again, for sites you signed in to since; the browser restarts">copy Chrome profile again</button>
+      </div>
+    </div>
+
+    <!--
+      SSH. In the desktop window and the Web UI, where the SSH panel is.
+    -->
+    <div id="ssh-settings">
+      <h4 class="settings-section">SSH</h4>
+      <div class="settings-field">
+        <div class="check-row">
+          <input type="checkbox" id="ssh-checkbox">
+          <label for="ssh-checkbox">Let the model open SSH connections and work in them, shown in the SSH panel beside the conversation</label>
+        </div>
+        <p class="note" id="ssh-note"></p>
+        <p class="note warn" id="ssh-warn" hidden></p>
+        <div class="ssh-live" id="ssh-live"></div>
       </div>
     </div>
 

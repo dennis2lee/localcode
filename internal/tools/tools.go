@@ -620,6 +620,30 @@ func (r *Registry) permit(ctx context.Context, name, subject, describe string, o
 	return true, ""
 }
 
+// PermitNamed asks the permission question under name, a rule name that
+// need not be a registered tool: the ssh tool asks about connecting
+// ("ssh_connect") and typing ("ssh_input") under names of their own, and
+// about its remote commands ("ssh") with the command as the subject. The
+// question is asked as a tool that requires permission does: a rule, a
+// session or always approval, or the person answers it. once asks it for
+// this use only (see Ask.Once).
+func (r *Registry) PermitNamed(ctx context.Context, name, subject, describe string, once bool) (bool, string) {
+	if refusal := r.gate(ctx, name, askOnly{name}, nil, subject, describe, once); refusal != nil {
+		return false, refusal.Content
+	}
+	return true, ""
+}
+
+// askOnly stands for a question PermitNamed asks: it requires permission
+// and runs nothing.
+type askOnly struct{ name string }
+
+func (a askOnly) Name() string                                  { return a.name }
+func (askOnly) Description() string                             { return "" }
+func (askOnly) InputSchema() json.RawMessage                    { return nil }
+func (askOnly) RequiresPermission(json.RawMessage) bool         { return true }
+func (askOnly) Execute(context.Context, json.RawMessage) Result { return Result{IsError: true} }
+
 func schema(properties string, required ...string) json.RawMessage {
 	req, _ := json.Marshal(required)
 	return json.RawMessage(fmt.Sprintf(`{"type":"object","properties":%s,"required":%s}`, properties, req))

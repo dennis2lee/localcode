@@ -1,7 +1,7 @@
 import {
-  leftPanel, rightPanel, browserPanel, centerEl,
-  resizeLeftHandle, resizeRightHandle, resizeBrowserHandle,
-  toggleLeftBtn, toggleRightBtn, toggleBrowserBtn,
+  leftPanel, rightPanel, browserPanel, sshPanel, centerEl,
+  resizeLeftHandle, resizeRightHandle, resizeBrowserHandle, resizeSshHandle,
+  toggleLeftBtn, toggleRightBtn, toggleBrowserBtn, toggleSshBtn,
 } from './dom.js';
 
 // Every panel is a flex item with a fixed width, so resizing is just
@@ -23,6 +23,11 @@ export const SIDE_BOUNDS = { min: 160, max: 640 };
 // (every box here is border-box). Below its minimum the page is too small
 // to read or to click on.
 export const BROWSER_BOUNDS = { min: 360, max: 1280 + 2 + 24 + 1 };
+
+// The SSH panel holds a terminal. Below its minimum a terminal is too
+// narrow for a shell prompt and a command; above its maximum it would be
+// wider than any terminal sshterm makes (300 columns).
+export const SSH_BOUNDS = { min: 320, max: 1400 };
 
 // What a drag leaves the transcript, however wide the panel being dragged
 // is allowed to be. A window narrower than every panel's width put
@@ -74,7 +79,42 @@ function roomFor(panel) {
   if (browserPanel && panel !== browserPanel && !browserPanel.hidden && !browserPanel.classList.contains('collapsed')) {
     room += Math.max(0, widthOf(browserPanel) - BROWSER_BOUNDS.min);
   }
+  if (sshPanel && panel !== sshPanel && panel !== browserPanel && !sshPanel.hidden && !sshPanel.classList.contains('collapsed')) {
+    room += Math.max(0, widthOf(sshPanel) - SSH_BOUNDS.min);
+  }
   return room;
+}
+
+const showing = (p) => !!p && !p.hidden && !p.classList.contains('collapsed');
+
+// fitsWith reports whether the window holds every panel that would be on
+// screen at its minimum, with panel shown too: the side panels, the
+// transcript, the browser and SSH panels, and a handle for each.
+export function fitsWith(panel, width = (typeof window !== 'undefined' ? window.innerWidth : 0)) {
+  if (!width) return true;
+  let need = CENTER_MIN;
+  const add = (p, min) => {
+    if (p === panel || showing(p)) need += min + 4;
+  };
+  add(leftPanel, SIDE_BOUNDS.min);
+  add(rightPanel, SIDE_BOUNDS.min);
+  add(browserPanel, BROWSER_BOUNDS.min);
+  add(sshPanel, SSH_BOUNDS.min);
+  return need <= width;
+}
+
+// makeRoomFor hides the other of the browser and SSH panels when the
+// window cannot hold both beside everything else: they take turns, and
+// the one just shown wins. The side panels and the transcript keep their
+// room; a person who wants both can hide a side panel.
+export function makeRoomFor(panel, width) {
+  const other = panel === sshPanel ? browserPanel : panel === browserPanel ? sshPanel : null;
+  if (!other || !showing(other) || fitsWith(panel, width)) return;
+  const handle = other === sshPanel ? resizeSshHandle : resizeBrowserHandle;
+  const btn = other === sshPanel ? toggleSshBtn : toggleBrowserBtn;
+  setCollapsed(other, handle, true);
+  store({ [other === sshPanel ? 'sshCollapsed' : 'browserCollapsed']: true });
+  if (btn) btn.setAttribute('aria-expanded', 'false');
 }
 
 // A handle drags one panel. side is which edge of that panel the handle
@@ -165,10 +205,27 @@ function attachToggle(btn, panel, handle, key) {
   if (!btn) return;
   btn.addEventListener('click', () => {
     const collapsed = !panel.classList.contains('collapsed');
+    if (!collapsed) makeRoomFor(panel);
     setCollapsed(panel, handle, collapsed);
     store({ [key]: collapsed });
     btn.setAttribute('aria-expanded', String(!collapsed));
+    if (!collapsed) btn.classList.remove('attention');
   });
+}
+
+// expandPanel shows a collapsed panel the program wants seen (the SSH
+// panel, when a terminal asks the person something), as its toggle
+// would, and remembers that.
+export function expandPanel(name) {
+  if (name !== 'ssh' || !sshPanel) return;
+  if (!sshPanel.classList.contains('collapsed')) return;
+  makeRoomFor(sshPanel);
+  setCollapsed(sshPanel, resizeSshHandle, false);
+  store({ sshCollapsed: false });
+  if (toggleSshBtn) {
+    toggleSshBtn.setAttribute('aria-expanded', 'true');
+    toggleSshBtn.classList.remove('attention');
+  }
 }
 
 // The browser panel is there while the browser setting is on in the
@@ -180,13 +237,17 @@ export function initResizers() {
   if (typeof saved.left === 'number') setPanelWidth(leftPanel, saved.left);
   if (typeof saved.right === 'number') setPanelWidth(rightPanel, saved.right);
   if (typeof saved.browser === 'number' && browserPanel) setPanelWidth(browserPanel, saved.browser, BROWSER_BOUNDS);
+  if (typeof saved.ssh === 'number' && sshPanel) setPanelWidth(sshPanel, saved.ssh, SSH_BOUNDS);
   setCollapsed(leftPanel, resizeLeftHandle, saved.leftCollapsed === true);
   setCollapsed(rightPanel, resizeRightHandle, saved.rightCollapsed === true);
   setCollapsed(browserPanel, resizeBrowserHandle, saved.browserCollapsed === true);
+  setCollapsed(sshPanel, resizeSshHandle, saved.sshCollapsed === true);
   attach(resizeLeftHandle, leftPanel, 'left', 'left', SIDE_BOUNDS);
   attach(resizeRightHandle, rightPanel, 'right', 'right', SIDE_BOUNDS);
   attach(resizeBrowserHandle, browserPanel, 'right', 'browser', BROWSER_BOUNDS);
+  attach(resizeSshHandle, sshPanel, 'right', 'ssh', SSH_BOUNDS);
   attachToggle(toggleLeftBtn, leftPanel, resizeLeftHandle, 'leftCollapsed');
   attachToggle(toggleRightBtn, rightPanel, resizeRightHandle, 'rightCollapsed');
   attachToggle(toggleBrowserBtn, browserPanel, resizeBrowserHandle, 'browserCollapsed');
+  attachToggle(toggleSshBtn, sshPanel, resizeSshHandle, 'sshCollapsed');
 }

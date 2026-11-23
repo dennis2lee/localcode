@@ -35,6 +35,8 @@ var leftOutOfARun = map[string]string{
 		"could only block until the turn gave up",
 	"browser": "offered only to a conversation a GUI window is showing, " +
 		"and a run has no window",
+	"ssh": "its host keys and passwords are answered in a panel a run does " +
+		"not have, and a connection outliving the run would be one nobody owns",
 }
 
 func TestTheOneShotRosterDiffersFromTheDaemonsOnlyOnPurpose(t *testing.T) {

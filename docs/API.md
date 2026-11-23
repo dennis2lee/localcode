@@ -132,13 +132,14 @@ A session object in answers is `{"id", "agent", "title", "workspace",
 state instead of merging events: `auto_compact_enabled`,
 `auto_compact_percent`, `keep_going`, `fold_thinking`, `muse_profiles`,
 `repeat_limit`, `smart_agent`, `browser`, `browser_available`,
-`browser_import`, `orchestrate`, `model_invocable`,
+`browser_import`, `ssh`, `ssh_available`, `orchestrate`, `model_invocable`,
 `model_commands`, `orchestrate_roster`, `show_tps`, `show_thinking`,
 `show_timestamps`, `auto_delegate`, `auto_delegate_agent`,
 `auto_delegate_match`, `skip_permissions`, `permission_rules`,
 `can_edit_permissions`. `muse_profiles` lists the profiles whose model ID
 contains `muse`, sorted, and is `[]` when none does. `browser_available`
-is whether a Chrome or Edge was found to run. `browser_import` is
+is whether a Chrome or Edge was found to run. `ssh_available` is whether
+the daemon has an SSH manager. `browser_import` is
 `{"from", "profile", "skipped"}` for the last copy of the person's
 profile, or `null` before the first. Changes are announced
 on the broadcast as `settings.changed`; a client that was not connected
@@ -150,6 +151,8 @@ re-reads this endpoint on load.
 | `POST /api/settings/auto-delegate` | `{"enabled"?, "agent"?, "match"?}`; pointers, so one field can move alone | `204` | `400` unknown agent or fewer than two agents configured; `400` bad body (text error); `500` applied for this run but not persisted (text error) |
 | `POST /api/settings/smart-agent` | `{"enabled"}` | `200 {"smart_agent", "applied": true, "persisted", "error"?}`; `applied` is always true, `persisted` is the part that can fail | `400` bad body (text error) |
 | `POST /api/settings/browser` | `{"enabled"}`; off also quits the browser | `200 {"browser", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
+| `POST /api/settings/ssh` | `{"enabled"}`; off also closes every SSH connection | `200 {"ssh", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
+| `GET /api/ssh` | nothing | `200 [{"session", "title", "id", "target", "state"}]`: every SSH connection open now, in any conversation | `403` refused by the SSH request guard (see SSH below) |
 | `POST /api/browser/import` | nothing | `200 {"from", "profile", "skipped"}`: copies the person's Chrome or Edge profile in again and restarts the browser, closing every tab | `404` no browser in this daemon; `409` the browser setting is off; `400` no profile to copy |
 | `POST /api/settings/orchestrate` | `{"enabled"}` | `200 {"orchestrate", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/model-invocable` | `{"enabled"}` | `200 {"model_invocable", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
@@ -263,6 +266,43 @@ model's browser sends, so a page it opens cannot drive the API.
 | `DELETE /api/sessions/{id}/browser/tabs/{tab}` | nothing | `200 {"tabs"}`: the tab is closed; when it was the active one, the one before it is | `404` no such tab; `409` the setting is off |
 | `POST /api/sessions/{id}/browser/input` | one of `{"mouse": {"type", "x", "y", "button"?, "buttons"?, "clickCount"?, "deltaX"?, "deltaY"?, "modifiers"?}}`, `{"key": {"type", "key", "code", "text"?, "keyCode"?, "modifiers"?, "commands"?}}`, `{"text"}`, in page pixels. `buttons` is the held buttons as a mask (left 1, right 2, middle 4); a move with one held is a drag. `commands` is editing commands for the key: `selectAll`, `copy`, `cut`, `paste`, `undo`, `redo` | `204` | `400` bad event or another command; `409` the setting is off, or no tab |
 | `GET /api/sessions/{id}/snapshots/{name}` | nothing | `200 image/png`: a snapshot the `browser` tool saved, from `.localcode/snapshots/` under the conversation's working directory, or under the home directory for a conversation with none. A snapshot saved before the conversation moved to another working directory is found where its `tool.end` says it was saved. `name` is the file name `tool.end` gave in `snapshot` | `404` no such conversation, a name not in the tool's own shape (`YYYYMMDD-HHMMSS-NNN.png`), no such file, or a file that is not a regular one |
+
+### SSH (per session)
+
+The SSH panel. Every route answers `404` when the daemon has no SSH
+manager or the session is unknown, and `404` for an unknown terminal.
+Connect, input and reconnect answer `409` while the ssh setting is off
+and `403` for an archived conversation.
+
+Every SSH route, and `GET /api/ssh`, passes a request guard first and
+answers `403` when it refuses: a `POST` or `DELETE` whose
+`Content-Type` is not `application/json`; a `Sec-Fetch-Site` other than
+`same-origin` or `none`; an `Origin` whose host is not the request's
+`Host`; or a `Host` that is a name other than `localhost` and the name
+the daemon was started to listen on (an address is accepted). The guard
+refuses what another website could send. It cannot tell the panel from a
+local program: the daemon has no authentication.
+
+A terminal's `Info` is `{"id", "epoch", "spec", "target"?, "state":
+"connecting"|"connected"|"ended", "reason"?, "server"?, "shell"?,
+"integrated", "running", "alt", "held", "opener": "model"|"person",
+"question"?, "title"?, "cols", "rows", "input_lost"?, "scroll_first",
+"scroll_next"}`. `question` is `{"id", "kind":
+"host_key"|"password"|"passphrase"|"prompts", "for", "host_key"?:
+{"host", "key_type", "fingerprint"}, "key"?, "name"?, "instruction"?,
+"prompts"?: [{"text", "echo"}]}`.
+
+| Method and path | Takes | Answers | Errors |
+|---|---|---|---|
+| `GET /api/sessions/{id}/ssh` | nothing | `200 {"enabled", "terminals": [Info], "wants"}`; `wants` counts the times a terminal wanted the person (a question, a command at a password prompt) | `403`; `404` |
+| `GET /api/sessions/{id}/ssh/stream` | query `viewer`, `terminal`, `epoch`, `from` | `200 text/event-stream`. Every frame is an unnamed event `{"kind", "data"}`: `state` (as the route above, sent when it changes), `screen` `{"terminal", "epoch", "screen": {"cols", "rows", "lines", "cx", "cy", "cursor", "alt", "title"?}}` for the terminal named, and `scroll` `{"terminal", "epoch", "from", "lines"}`, the lines that scrolled off its top, numbered from `from`. A line is runs `{"t", "f"?, "b"?, "a"?, "w"?}`: text, colours (`"0"` to `"15"` or `#rrggbb`), flags (bold 1, faint 2, italic 4, underline 8, reverse 16, strike 32, conceal 64, blink 128), and a wide character. With `epoch` and `from` the scrollback resumes there; otherwise the last 1000 lines come first. Ending the stream forgets the viewer's size | `403`; `404` |
+| `POST /api/sessions/{id}/ssh/connect` | `{"target"}`: `[user@]host[:port]` or a `Host` from `~/.ssh/config` | `200 {"terminal"}`: the terminal, connecting; questions arrive as its `question` | `400` a target that does not parse, or the limit; `403`; `409` the setting is off |
+| `POST /api/sessions/{id}/ssh/{term}/input` | one of `{"key": {"key", "ctrl"?, "alt"?, "shift"?, "meta"?}}`, `{"text"}`, `{"paste"}`. `key` is a DOM key name; a key with `meta` is the window's and is dropped. A paste is bracketed when the shell asked for it | `204` | `403`; `409` the terminal is not connected or the setting is off |
+| `POST /api/sessions/{id}/ssh/{term}/size` | `{"viewer", "cols", "rows"}`; `cols` 0 forgets the viewer. The terminal takes the smallest size among its viewers, 40 to 300 columns and 10 to 120 rows | `204` | `400` no viewer; `403` |
+| `POST /api/sessions/{id}/ssh/{term}/hold` | `{"on"}` | `204`: while held, the model's every action on the terminal is refused, `read` and `wait` included | `403` |
+| `POST /api/sessions/{id}/ssh/{term}/answer` | `{"question", "accept", "values"?, "fingerprint"?}`: `values` for a password, a passphrase or prompts, one per prompt; `fingerprint`, the one the question showed, to accept a host key | `204` | `403`; `409` the question is no longer asked, the fingerprint does not match, or the wrong number of values |
+| `POST /api/sessions/{id}/ssh/{term}/reconnect` | `{}` | `200 {"terminal"}`: a new connection to the same place under the same id and a new `epoch` | `403`; `409` the terminal is still connected, or the setting is off |
+| `DELETE /api/sessions/{id}/ssh/{term}` | `{}` | `204`: the connection is closed and the terminal removed | `403`; `404` |
 
 ### Effort and model (per session)
 

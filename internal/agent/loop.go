@@ -13,6 +13,7 @@ import (
 	"localcode/internal/provider"
 	"localcode/internal/session"
 	"localcode/internal/skills"
+	"localcode/internal/sshterm"
 	"localcode/internal/tools"
 	"localcode/internal/trace"
 )
@@ -256,6 +257,11 @@ type Loop struct {
 	// conversation's browser panel right now. The browser tool is offered
 	// only then: see hiddenTools. Nil (no daemon, no GUI) means never.
 	BrowserViewing func(sessionID string) bool
+	// CloseSSH closes every SSH connection, for "/ssh off". Nil when
+	// there is no SSH manager.
+	CloseSSH func()
+	// SSH holds the conversations' SSH terminals. Nil when there is none.
+	SSH *sshterm.Manager
 	// CloseBrowser quits the browser, for "/browser off". Nil when there
 	// is none.
 	CloseBrowser func()

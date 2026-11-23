@@ -329,6 +329,7 @@ var RegisteredToolNames = []string{
 	"Command",
 	"Verdict",
 	"browser",
+	"ssh",
 	"Debate",
 	"update_plan",
 	"ask_user",
@@ -337,6 +338,11 @@ var RegisteredToolNames = []string{
 	"memory_search",
 	"memory_forget",
 }
+
+// RuleOnlyKeys are permission keys that name no tool of their own: the
+// ssh tool asks about connecting and about typing under these names, so
+// a rule can be written for each apart from the rules for its commands.
+var RuleOnlyKeys = []string{SSHConnectToolName, SSHInputToolName}
 
 // IgnoredOpencodeTools lists opencode tools that localcode does not
 // implement. A rule for one of these is vacuous in localcode because
@@ -469,6 +475,11 @@ func ValidPermissionKey(name string) bool {
 			return true
 		}
 	}
+	for _, key := range RuleOnlyKeys {
+		if name == key {
+			return true
+		}
+	}
 	if _, ok := ToolAliases[name]; ok {
 		return true
 	}
@@ -486,6 +497,12 @@ func AcceptedPermissionKeys() string {
 	seen := make(map[string]bool)
 	var list []string
 	for _, name := range RegisteredToolNames {
+		if !seen[name] {
+			seen[name] = true
+			list = append(list, name)
+		}
+	}
+	for _, name := range RuleOnlyKeys {
 		if !seen[name] {
 			seen[name] = true
 			list = append(list, name)
@@ -511,6 +528,44 @@ func AcceptedPermissionKeys() string {
 // than a plain string, so its permission subject needs to be taken apart
 // before matching. See ResolvePermission.
 const BashToolName = "bash"
+
+// The ssh tool's rule names. SSHToolName's subject is a command for the
+// remote shell, resolved as a bash line is: segment by segment, with the
+// same grants. SSHConnectToolName's is where a connection goes, and
+// SSHInputToolName's is text or keys typed into whatever runs there.
+const (
+	SSHToolName        = "ssh"
+	SSHConnectToolName = "ssh_connect"
+	SSHInputToolName   = "ssh_input"
+)
+
+// IsShellTool reports a tool whose subject is a shell command line.
+func IsShellTool(name string) bool {
+	return name == BashToolName || name == SSHToolName
+}
+
+// shellToolKey carries which shell tool a line is being resolved for, so
+// the segment and deny-reach checks look up that tool's rules. Bash when
+// absent.
+type shellToolKey struct{}
+
+func shellToolOf(ctx context.Context) string {
+	if v, ok := ctx.Value(shellToolKey{}).(string); ok {
+		return v
+	}
+	return BashToolName
+}
+
+// remoteShellKey carries whether the remote shell a line is for splits
+// commands as a POSIX shell does (bash or zsh, as its integration said).
+type remoteShellKey struct{}
+
+// WithRemoteShell marks ctx as resolving a command for a remote shell
+// that is POSIX or not. Without it a remote shell is taken as not, and an
+// allow decided by splitting the line becomes ask.
+func WithRemoteShell(ctx context.Context, posix bool) context.Context {
+	return context.WithValue(ctx, remoteShellKey{}, posix)
+}
 
 // ResolvePermission decides whether a call to toolName is allowed
 // automatically, must ask the user, or is denied outright. subject is
@@ -541,6 +596,19 @@ func (c *Config) ResolvePermission(toolName, subject string, staticRequiresPermi
 func (c *Config) ResolvePermissionFor(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision {
 	if toolName == BashToolName && subject != "" {
 		return c.resolveShellCommand(ctx, subject, staticRequiresPermission)
+	}
+	if toolName == SSHToolName {
+		if subject == "" {
+			// The ssh tool's call itself: it asks inside, under this name
+			// with the command, or under ssh_connect and ssh_input. Here
+			// only a deny decides.
+			if d := c.resolveOne(ctx, toolName, subject, false); d == DecisionDeny {
+				return DecisionDeny
+			}
+			return DecisionAllow
+		}
+		posix, _ := ctx.Value(remoteShellKey{}).(bool)
+		return c.resolveShellCommandUnder(context.WithValue(ctx, shellToolKey{}, SSHToolName), subject, staticRequiresPermission, posix)
 	}
 	return c.resolveOne(ctx, toolName, subject, staticRequiresPermission)
 }
@@ -633,7 +701,7 @@ func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string,
 	defer c.permMu.RUnlock()
 
 	literal := subject
-	if segment, ok := ctx.Value(shellSegmentKey{}).(string); ok && toolName == BashToolName {
+	if segment, ok := ctx.Value(shellSegmentKey{}).(string); ok && toolName == shellToolOf(ctx) {
 		literal = segment
 	}
 
@@ -784,7 +852,7 @@ func PermissionRuleFor(toolName, subject string) PermissionRule {
 	if subject == "" {
 		return PermissionRule{Match: "*", Decision: DecisionAllow}
 	}
-	if toolName == BashToolName {
+	if IsShellTool(toolName) {
 		fields := strings.Fields(subject)
 		if len(fields) > 0 {
 			if strings.ContainsAny(fields[0], "*?") {

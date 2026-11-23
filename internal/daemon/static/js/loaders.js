@@ -98,6 +98,8 @@ export async function loadSettings() {
     app.browser = !!s.browser;
     app.browserAvailable = s.browser_available !== false;
     app.browserImport = s.browser_import || null;
+    app.ssh = !!s.ssh;
+    app.sshAvailable = s.ssh_available !== false;
     app.orchestrate = !!s.orchestrate;
     app.modelInvocable = !!s.model_invocable;
     app.modelCommands = Array.isArray(s.model_commands) ? s.model_commands : [];

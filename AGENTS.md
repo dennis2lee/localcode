@@ -41,8 +41,8 @@ Project rules for agents working in this repo.
   the attempt's log, and a force-cancelled attempt may keep none at all.
   The 44-minute hang above is still undiagnosed for exactly this reason.
 * What it runs, and why each is in it rather than left to memory:
-  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 3,044 tests
-    and 1,398 subtests over 34 packages, two of the tests skipped on macOS.
+  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 3,095 tests
+    and 1,400 subtests over 35 packages, two of the tests skipped on macOS.
     The same suite runs a second time without `-race`
     (`go test ./... -count=1 -timeout 10m`), because a test whose timing
     only holds at race-detector speed passes the race lane and fails for
@@ -69,12 +69,16 @@ Project rules for agents working in this repo.
     that is no longer reported. The "written, tested, never called" shape
     has shipped twice (v0.55.0, v0.57.0); `-test=false` is what makes it
     visible, at the cost of listing the functions only tests call.
-  * The Web UI suite (907 tests in 75 files, deliberately also run by
+  * The Web UI suite (920 tests in 76 files, deliberately also run by
     `TestWebUI`, which skips itself when node is absent), the doc-link
     checker, `gofmt`, and `git diff --check HEAD` — `HEAD` because the bare form
     compares against the index and so inspects nothing once changes are
     staged, which is the state a release is cut from.
 * Keep the default build pure Go. The GUI (`internal/gui`) is behind the `gui` build tag and uses CGo; never make a non-tagged package import it.
+* `third_party/vt` is a patched copy of `github.com/charmbracelet/x/vt`,
+  used through a `replace` directive in go.mod. Read its `LOCALCODE.md`
+  before upgrading or dropping it: the patch is what keeps Korean typed at
+  the right margin on the SSH panel's screen.
 * Roughly twenty tests in this repo police the repository rather than the
   product: an AST walk over every process-spawn site, the prompt-asset
   inventory in both directions, config drift against the built-in roster,

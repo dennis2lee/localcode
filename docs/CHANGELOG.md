@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+The model can open SSH connections and work in them, in terminals shown in an SSH panel of their own that you share with it.
+
+**Added**
+
+* The `ssh` tool: `connect`, `run`, `type`, `key`, `read`, `wait`, `list` and `close`, in terminals that stay connected between turns for as long as the conversation exists
+* The SSH panel, in the desktop window and the Web UI: a column after the browser panel with its own header toggle, one tab per terminal, the terminal's screen, typing, copy and paste, Korean input, and `+` to open a connection
+* Questions only the person answers, in the panel: host keys (accepted into `~/.localcode/ssh/known_hosts`), passwords, passphrases and one-time codes
+* Hold, which keeps the model out of a terminal, its screen included, until the person lets go
+* Exit statuses and the end of a command from bash and zsh, through a line typed into the shell once, with marks only that terminal knows
+* Permission keys `ssh_connect`, `ssh` and `ssh_input`; remote commands are decided as `bash` lines are
+* `~/.ssh/config` with `Host`, `Match`, `Include`, `ProxyJump`, `IdentityAgent`, `CertificateFile` and `HostKeyAlias`; the SSH agent; encrypted keys asked for only when the server accepts them
+* The `ssh` setting, `/ssh on|off`, and the settings window's SSH section with every open connection and a Close button for each
+* `/update` naming the SSH connections it would close, and updating when run again within two minutes
+
 ## v0.176.3
 
 A link opened in a tab or a window of its own from the browser panel is one of the conversation's tabs, and a page opened from a popup window covers no other conversation's page.

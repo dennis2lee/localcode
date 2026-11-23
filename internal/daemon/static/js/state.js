@@ -58,6 +58,10 @@ export const app = {
   // copy of the person's profile did (from, profile, skipped), or null.
   browserAvailable: true,
   browserImport: null,
+  // The SSH setting: whether the model may open SSH connections, shown in
+  // the SSH panel. See ssh.js.
+  ssh: false,
+  sshAvailable: true,
   orchestrate: false,         // the Orchestrate tool, a separate switch
   modelInvocable: false,      // whether the model may run this session's commands
   modelCommands: [],          // which ones it may run, with their slashes

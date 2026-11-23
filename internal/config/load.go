@@ -485,6 +485,9 @@ func (c *Config) merge(other *Config) {
 	if other.Browser != nil {
 		c.Browser = other.Browser
 	}
+	if other.SSH != nil {
+		c.SSH = other.SSH
+	}
 	// A program to run, from a file that can already name the shell, the
 	// hooks and the verify command, so no more trusted than those.
 	if other.BrowserPath != "" {

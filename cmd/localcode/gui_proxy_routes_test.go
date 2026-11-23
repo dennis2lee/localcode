@@ -99,6 +99,12 @@ func TestEveryRouteThePageCallsWorksThroughTheWindowProxy(t *testing.T) {
 		// Refused with the browser off, which is the point here: the
 		// route reaches the daemon, and no profile is copied by a test.
 		{method: "POST", path: "/api/browser/import", body: `{}`, ok: only(409)},
+		{method: "POST", path: "/api/settings/ssh", body: `{"enabled":false}`, ok: only(200)},
+		// Through the SSH routes' own guard as well: the window's proxy
+		// keeps the Host an address, which the guard accepts.
+		{method: "GET", path: "/api/ssh", ok: only(200)},
+		{method: "DELETE", path: "/api/sessions/" + sid + "/ssh/t-nope", body: `{}`,
+			ok: only(404), note: "no such terminal"},
 		{method: "POST", path: "/api/settings/orchestrate", body: `{"enabled":false}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/settings/model-invocable", body: `{"enabled":false}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/settings/auto-delegate", body: `{"enabled":false}`, ok: only(200, 204)},

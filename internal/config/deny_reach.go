@@ -90,7 +90,7 @@ func (c *Config) denyReaches(ctx context.Context, segment string, staticRequires
 				continue
 			}
 			tctx := context.WithValue(ctx, shellSegmentKey{}, t)
-			if c.resolveOneStrict(tctx, BashToolName, t, staticRequiresPermission) == DecisionDeny {
+			if c.resolveOneStrict(tctx, shellToolOf(ctx), t, staticRequiresPermission) == DecisionDeny {
 				return true
 			}
 		}

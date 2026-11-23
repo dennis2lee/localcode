@@ -228,17 +228,21 @@ func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []
 		// An agent's own list is its own, except for the browser: that is
 		// offered by where the conversation is shown, not by who runs it,
 		// and naming it does not put a desktop window in front of anyone.
-		if !l.browserOffered(ctx) {
+		// The ssh tool likewise follows its setting and whether anybody
+		// can answer its questions.
+		browser, ssh := l.browserOffered(ctx), l.sshOffered(ctx)
+		if !browser || !ssh {
 			out := make([]string, 0, len(agentCfg.Tools))
 			for _, name := range agentCfg.Tools {
-				if name != BrowserToolName {
-					out = append(out, name)
+				if (name == BrowserToolName && !browser) || (name == SSHToolName && !ssh) {
+					continue
 				}
+				out = append(out, name)
 			}
 			if len(out) == 0 {
-				// The browser was the agent's only tool. An empty list
-				// means no restriction at all, so the agent would get
-				// every tool there is; this one matches none.
+				// The browser or ssh was the agent's only tool. An empty
+				// list means no restriction at all, so the agent would
+				// get every tool there is; this one matches none.
 				return []string{noToolOffered}
 			}
 			return out
@@ -437,6 +441,11 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	// model works in where nobody can see it is not what was asked for.
 	if !l.browserOffered(ctx) {
 		hidden[BrowserToolName] = true
+	}
+	// SSH while it is on and the turn has somebody to answer a host key
+	// or a password.
+	if !l.sshOffered(ctx) {
+		hidden[SSHToolName] = true
 	}
 	// Answer belongs to one role in one situation: a stage that declared
 	// what it returns, which is given it explicitly through the pinned

@@ -37,6 +37,8 @@ Every coding agent runs one model in one loop and asks it to review its own work
 
 **A browser you can watch it use.** In the desktop window the model can [work a web page](docs/USAGE.md#browser) the way a person does, in Chrome or Edge shown in a panel of its own beside the conversation and signed in with a copy of your profile. It takes snapshots, saved as files and shown in the conversation. The panel takes your clicks and keys too; the model's turn does not pause for them, so stop the turn to work the page alone. A deny rule keeps the browser from sending a site any HTTP request.
 
+**SSH terminals you share with it.** With SSH on, the model can [open SSH connections and work in them](docs/USAGE.md#ssh), in terminals shown in a panel of their own in the desktop window and the Web UI. A terminal stays connected between turns for as long as the conversation exists, so its shell keeps its directory and what runs in it. You type in the same terminal, hold it to keep the model out, and answer host keys and passwords in the panel; the model never sees them. It reads your `~/.ssh/config`, keys and agent, and asks before it connects, runs a command or types, with rules per host and per command.
+
 **You can see what the model will see.** [`/context`](https://dennis2lee.github.io/localcode/where-localcode-differs.html#prompt-inventory) reports the next request piece by piece (source, trust class, token estimate) without a model call. Another conversation reaches this one only through [`#name`](https://dennis2lee.github.io/localcode/where-localcode-differs.html#reference), as a tool result the model asked for, never spliced into your prompt.
 
 ## On the same model

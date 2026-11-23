@@ -260,6 +260,7 @@ func TestMergeFieldsGuard(t *testing.T) {
 		"WriteOutsideWorkspace": true,
 		"SmartAgent":            true,
 		"Browser":               true,
+		"SSH":                   true,
 		"BrowserPath":           true,
 		"Orchestrate":           true,
 		"TraceMaxAgeDays":       true,

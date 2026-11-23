@@ -141,6 +141,9 @@ export const detachBtn = document.getElementById('detach-btn');
 export const toggleLeftBtn = document.getElementById('toggle-left');
 export const toggleRightBtn = document.getElementById('toggle-right');
 export const toggleBrowserBtn = document.getElementById('toggle-browser');
+export const sshPanel = document.getElementById('ssh-panel');
+export const resizeSshHandle = document.getElementById('resize-ssh');
+export const toggleSshBtn = document.getElementById('toggle-ssh');
 export const appVersionEl = document.getElementById('app-version');
 
 // The settings window.

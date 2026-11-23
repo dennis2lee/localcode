@@ -22,6 +22,7 @@ import (
 	"localcode/internal/session"
 	"localcode/internal/shell"
 	"localcode/internal/skills"
+	"localcode/internal/sshterm"
 	"localcode/internal/tools"
 	"localcode/internal/trace"
 	"localcode/internal/userdirs"
@@ -361,6 +362,36 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	loop.BrowserViewing = d.BrowserViewing
 	loop.CloseBrowser = browserManager.Close
 
+	// SSH connections the model and the person work in, shown in the SSH
+	// panel. Registered unconditionally and hidden per turn: it is offered
+	// while the setting is on. Nothing connects until it is used.
+	sshManager := sshterm.NewManager(sshterm.Options{
+		Home:      e.home,
+		DataDir:   filepath.Join(e.home, ".localcode", "ssh"),
+		SystemDir: sshSystemDir(),
+		LocalUser: localUserName(),
+		Agent:     sshterm.DefaultAgent(os.Getenv),
+		Env:       sshterm.LocaleEnv(os.Environ()),
+		Permits:   cfg.EgressPolicy().Permits,
+		// A connection the model asked for is checked again where it
+		// resolved to, just before it is made: ~/.ssh/config can change
+		// between the question and the dial.
+		CheckTarget: func(conv string, by sshterm.Opener, r sshterm.Route) error {
+			if by != sshterm.ByModel {
+				return nil
+			}
+			if loop.Config.DeniedAnywhere(config.SSHConnectToolName, agent.SSHConnectSubject(r)) {
+				return fmt.Errorf("a permission rule for %q denies %s", config.SSHConnectToolName, r.Target.Host)
+			}
+			return nil
+		},
+		OnAsking: d.AnnounceActivity,
+	})
+	registry.Register(agent.NewSSHTool(loop))
+	d.SSH = sshManager
+	loop.SSH = sshManager
+	loop.CloseSSH = func() { sshManager.CloseAll("SSH was turned off", false) }
+
 	// "/update": the same install the settings window's button performs,
 	// reached from the prompt box so the TUI has it too. The daemon owns
 	// it because everything the refusal is made of is the daemon's — which
@@ -492,6 +523,8 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		// The browser is a child process, and one left running holds its
 		// profile directory locked against the next daemon's.
 		browserManager.Close()
+		// SSH connections end with the daemon that holds them.
+		sshManager.CloseAll("localcode stopped", true)
 		closeMCPServers()
 		if loop.Trace != nil {
 			loop.Trace.Close()

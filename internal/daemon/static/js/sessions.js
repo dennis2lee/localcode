@@ -1,5 +1,6 @@
 import { sessionListEl, sessionIdEl, archiveToggleEl, archiveListEl, inputEl } from './dom.js';
 import { renderBrowserPanel } from './browser.js';
+import { renderSSHPanel } from './ssh.js';
 import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft, sessionWorking, overlayActivity } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, appendTool, clearTranscript } from './transcript.js';
@@ -1179,6 +1180,7 @@ export function selectSession(id, agent, workspace) {
   clearTranscript();
   renderTasks();
   renderBrowserPanel();
+  renderSSHPanel();
   setWaiting(false);
   // Through the Modal object, not by reaching past it to the class list.
   // The class is an output of that object and never an input, so hiding

@@ -37,6 +37,8 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"browser":              d.Loop.Config.BrowserLive(),
 		"browser_available":    d.Browser != nil && d.Browser.Available(),
 		"browser_import":       d.browserImport(),
+		"ssh":                  d.Loop.Config.SSHLive(),
+		"ssh_available":        d.SSH != nil,
 		"orchestrate":          d.Loop.OrchestrateEnabled(),
 		"model_invocable":      d.Loop.ModelInvocableEnabled(),
 		"model_commands":       d.Loop.ModelCommandNames(),
