@@ -306,10 +306,19 @@ func TestAtThePromptCommandsGoThroughRun(t *testing.T) {
 	if _, err := term.Run(context.Background(), "echo x", time.Second, term.PersonGen()); !errors.Is(err, ErrModelLine) {
 		t.Fatalf("run onto the model's own text: %v", err)
 	}
+	// Erased, it is still refused: the screen does not say what the model
+	// left on the line (spaces can push it out of sight).
 	for i := 0; i < 4; i++ {
 		if err := term.Keys("Backspace", term.PersonGen()); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := term.Run(context.Background(), "echo x", time.Second, term.PersonGen()); !errors.Is(err, ErrModelLine) {
+		t.Fatalf("run after erasing: %v", err)
+	}
+	// Ctrl+C discards the line.
+	if err := term.Keys("ctrl+c", term.PersonGen()); err != nil {
+		t.Fatal(err)
 	}
 	time.Sleep(300 * time.Millisecond)
 	if res := run(t, term, "echo clean"); res.Output != "clean" {
@@ -359,5 +368,58 @@ func TestHistoryExpansionIsOffInAnIntegratedShell(t *testing.T) {
 				t.Fatalf("^ substituted: %+v", res)
 			}
 		})
+	}
+}
+
+// A control character is a key by its name only: as itself it passed for
+// text at the prompt, and zsh's ^O ran the line.
+func TestAControlCharacterIsNotAKeyName(t *testing.T) {
+	for _, k := range []string{"\x0f", "\x1b", "\x18", "\x04", "\x16", "\x7f"} {
+		if _, err := ParseKeys(k); err == nil {
+			t.Errorf("%q was taken", k)
+		}
+	}
+	for _, k := range []string{"ctrl+o", "Escape", "a", "한"} {
+		if _, err := ParseKeys(k); err != nil {
+			t.Errorf("%q: %v", k, err)
+		}
+	}
+}
+
+// A line sent while a command runs and nothing asks for input waits in
+// the terminal and is read by the shell as its next command: refused.
+// A program that asks, or a nested shell at its prompt, takes one.
+func TestNoLineIsLeftForTheShellToRunNext(t *testing.T) {
+	old := personYield
+	personYield = 100 * time.Millisecond
+	defer func() { personYield = old }()
+	s := startServer(t)
+	m := testManager(t, testHome(t, s, true))
+	term := connected(t, m, s)
+	if res, _ := term.Run(context.Background(), "sleep 2s", 300*time.Millisecond, term.PersonGen()); !res.TimedOut {
+		t.Fatalf("%+v", res)
+	}
+	if err := term.Type("touch x", true, term.PersonGen()); !errors.Is(err, ErrTypeahead) {
+		t.Fatalf("type with enter: %v", err)
+	}
+	if err := term.Type("touch x", false, term.PersonGen()); err != nil {
+		t.Fatalf("type without enter: %v", err)
+	}
+	for _, k := range []string{"Enter", "ctrl+j", "ctrl+m", "ctrl+o"} {
+		if err := term.Keys(k, term.PersonGen()); !errors.Is(err, ErrTypeahead) {
+			t.Errorf("key %s: %v", k, err)
+		}
+	}
+	if ok, _ := term.Wait(context.Background(), 5*time.Second, ""); !ok {
+		t.Fatal("never ended")
+	}
+	// A program asking takes an answer.
+	go func() { term.Run(context.Background(), "ask", 5*time.Second, term.PersonGen()) }()
+	within(t, 5*time.Second, "the question", func() bool {
+		r, _ := term.Read(0, false)
+		return strings.Contains(strings.Join(r.Screen, "\n"), "[Y/n]")
+	})
+	if err := term.Type("y", true, term.PersonGen()); err != nil {
+		t.Fatalf("answering a question: %v", err)
 	}
 }

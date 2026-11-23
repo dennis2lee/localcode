@@ -57,7 +57,8 @@ var (
 	ErrLineNotEmpty = errors.New("the person has typed part of a command line in this terminal and not run it; ask them to finish or clear it")
 	ErrNotConnected = errors.New("this terminal is not connected")
 	ErrChanged      = errors.New("the person typed in this terminal while the question was open, so what was approved may no longer fit; read the screen and decide again")
-	ErrModelLine    = errors.New("the command line has text you typed and did not run; clear it first (key ctrl+e ctrl+u)")
+	ErrModelLine    = errors.New("the command line has text you typed and did not run; clear it first with key ctrl+c")
+	ErrTypeahead    = errors.New("a command is running and nothing on the screen is waiting for input: a line sent now would be read by the shell as its next command once this one ends. Wait for it to end and use run, or answer it when it asks (read shows when)")
 	ErrUseRun       = errors.New("at the shell's prompt, commands go through run, which the rules for commands see: type takes text without a line end there, and key takes only line-editing keys (arrows, Home, End, Backspace, Delete, ctrl+a, ctrl+e, ctrl+b, ctrl+f, ctrl+k, ctrl+u, ctrl+w, ctrl+l, ctrl+c)")
 )
 
@@ -504,26 +505,33 @@ func (t *Terminal) drainScrollback() {
 	}
 }
 
-// aroundCursor is the cursor's row left of the cursor (as it is), what
-// is right of it, and the row under it (both with runs of spaces made
-// one, so a right-hand prompt redrawn at another width still reads the
-// same). Called with mu held.
-func (t *Terminal) aroundCursor() (left, rest, next string) {
+// aroundCursor is the cursor's row left of the cursor, what is right of
+// it, and every row under it to the bottom of the screen, as the cells
+// hold them (trailing blanks trimmed, nothing else). Called with mu held.
+func (t *Terminal) aroundCursor() (left, rest, below string) {
 	pos := t.emu.CursorPosition()
+	w, h := t.emu.Width(), t.emu.Height()
 	cells := func(y, from, to int) string {
-		if y >= t.emu.Height() {
-			return ""
-		}
 		var b strings.Builder
-		for x := from; x < to && x < t.emu.Width(); x++ {
+		for x := from; x < to && x < w; x++ {
 			if c := t.emu.CellAt(x, y); c != nil {
-				b.WriteString(c.Content)
+				if c.Content == "" && c.Width == 0 {
+					continue // the second half of a wide character
+				}
+				if c.Content == "" {
+					b.WriteByte(' ')
+				} else {
+					b.WriteString(c.Content)
+				}
 			}
 		}
 		return b.String()
 	}
-	squeeze := func(s string) string { return strings.Join(strings.Fields(s), " ") }
-	return cells(pos.Y, 0, pos.X), squeeze(cells(pos.Y, pos.X, t.emu.Width())), squeeze(cells(pos.Y+1, 0, t.emu.Width()))
+	var rows []string
+	for y := pos.Y + 1; y < h; y++ {
+		rows = append(rows, strings.TrimRight(cells(y, 0, w), " "))
+	}
+	return cells(pos.Y, 0, pos.X), strings.TrimRight(cells(pos.Y, pos.X, w), " "), strings.TrimRight(strings.Join(rows, "\n"), "\n")
 }
 
 // cursorLine is the text of the line the cursor is on. Called with mu
@@ -1101,10 +1109,13 @@ func (t *Terminal) lineHasPersonText() bool {
 	return t.personTyped && t.atPrompt() && !t.lineEmpty()
 }
 
-// lineHasModelText is lineHasPersonText for what the model typed and did
-// not run. Called with mu held.
+// lineHasModelText reports text the model typed at the prompt and did
+// not run. Not judged by the screen: what the screen shows can hide it (a
+// line of spaces pushes the rest out of sight). It holds until the next
+// prompt, or the model's own Ctrl+C, which discards the whole line in
+// bash and zsh. Called with mu held.
 func (t *Terminal) lineHasModelText() bool {
-	return t.modelTyped && t.atPrompt() && !t.lineEmpty()
+	return t.modelTyped && t.atPrompt()
 }
 
 // WaitPrompt waits up to d for the shell to be at a prompt it has
@@ -1462,6 +1473,8 @@ func (t *Terminal) Type(text string, enter bool, gen uint64) error {
 			return ErrUseRun
 		}
 		t.modelTyped = true
+	} else if t.typeaheadOnly() && strings.Contains(text, "\r") {
+		return ErrTypeahead
 	}
 	t.emu.SendText(text)
 	t.notify()
@@ -1493,6 +1506,16 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 			}
 		}
 		t.modelTyped = true
+		if last := evs[len(evs)-1]; last.Mod == uv.ModCtrl && last.Code == 'c' {
+			// Ctrl+C discards the whole line.
+			t.modelTyped = false
+		}
+	} else if t.typeaheadOnly() {
+		for _, ev := range evs {
+			if endsLine(ev) {
+				return ErrTypeahead
+			}
+		}
 	}
 	for _, ev := range evs {
 		t.sendKey(ev)
@@ -1508,7 +1531,7 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 // sequence another key finishes (Escape, ctrl+x).
 func lineEditingKey(ev uv.KeyPressEvent) bool {
 	if ev.Text != "" {
-		return true
+		return printable(ev.Text)
 	}
 	if ev.Mod == 0 {
 		switch ev.Code {
@@ -1524,6 +1547,47 @@ func lineEditingKey(ev uv.KeyPressEvent) bool {
 		}
 	}
 	return false
+}
+
+// printable reports text with no control character in it.
+func printable(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return false
+		}
+	}
+	return true
+}
+
+// endsLine is a key that sends a line on: Enter, and the control
+// characters a terminal reads as one.
+func endsLine(ev uv.KeyPressEvent) bool {
+	if ev.Code == uv.KeyEnter {
+		return true
+	}
+	if ev.Mod&uv.ModCtrl != 0 {
+		switch ev.Code {
+		case 'j', 'm', 'o':
+			return true
+		}
+	}
+	return false
+}
+
+// typeaheadOnly reports a command running in a shell with integration,
+// with nothing on the screen waiting for input: no full-screen program,
+// and the cursor's line neither a prompt (a nested shell, a REPL) nor a
+// question. A line sent then waits in the terminal and is read by the
+// shell as its next command once this one ends. Called with mu held.
+func (t *Terminal) typeaheadOnly() bool {
+	if !t.integrated || !t.running || t.emu.IsAltScreen() {
+		return false
+	}
+	line := strings.TrimRight(t.cursorLine(), " ")
+	if line == "" {
+		return true
+	}
+	return !looksLikePrompt(line) && !askingInput.MatchString(line+" ") && !askingSecret.MatchString(line+" ")
 }
 
 // sendKey sends one key. Called with mu held.

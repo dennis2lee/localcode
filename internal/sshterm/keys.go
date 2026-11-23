@@ -86,6 +86,11 @@ func parseCombo(combo string) (uv.KeyPressEvent, error) {
 	if size != len(last) || size == 0 {
 		return uv.KeyPressEvent{}, fmt.Errorf("unknown key %q", last)
 	}
+	// A control character is a key by its name (ctrl+o, Enter), never as
+	// itself: as itself it would pass for text.
+	if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+		return uv.KeyPressEvent{}, fmt.Errorf("control character %U: name the key (ctrl+o, Enter, Escape)", r)
+	}
 	if mod == 0 || mod == uv.ModShift {
 		return uv.KeyPressEvent{Code: r, Text: last}, nil
 	}

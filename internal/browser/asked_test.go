@@ -267,6 +267,20 @@ func TestALinkOpenedInATabOfItsOwnIsTheConversations(t *testing.T) {
 			if tabs[0].ID != first.TargetID() {
 				t.Fatalf("the tabs are %+v, want the one it had first", tabs)
 			}
+			// The tab is listed as soon as it is the conversation's; its
+			// address comes when the page says it, which under load (CI,
+			// a page opened behind) can be a moment later: an empty
+			// address read too early failed this on macOS and Windows.
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if u, err := url.Parse(tabs[1].URL); err == nil && u.Path == "/second" || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+				if again := m.Tabs(ctx, conv); len(again) == 2 {
+					tabs = again
+				}
+			}
 			opened := tabs[1]
 			if u, err := url.Parse(opened.URL); err != nil || u.Path != "/second" {
 				t.Errorf("the tab opened is at %q, want the link's page", opened.URL)

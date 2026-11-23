@@ -743,7 +743,6 @@ export function initSSHPanel() {
   term.addEventListener('keydown', (e) => {
     if (e.target !== input) onKey(e);
   });
-  input.addEventListener('compositionstart', () => { composing = true; });
   // Text reaches the shell from the typing box by position: everything
   // before sentUpTo has been sent. An input method composes at the end of
   // the box (from compStart), and what it composes is sent once it

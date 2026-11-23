@@ -2912,7 +2912,9 @@ The terminal takes the size of the smallest panel showing it, so no window cuts 
 
 `run` takes one line. It refuses a line with a control character or a Tab (the shell would complete rather than type). The integration line also turns history expansion off in that shell (`set +H` in bash, `setopt nobanghist` in zsh), so a `!` or a `^` in a command is the character typed, and the line the shell runs is the line that was approved; `!!` and `^old^new` do not work in a terminal with integration. In a shell without integration, `run` refuses a `!` outside single quotes and a `^` starting the line instead.
 
-**At the prompt, commands go through `run`.** In a bash or zsh shell waiting at its prompt, `type` takes text without a line end and `key` takes only line-editing keys (arrows, Home, End, Backspace, Delete, `ctrl+a`, `ctrl+e`, `ctrl+b`, `ctrl+f`, `ctrl+k`, `ctrl+u`, `ctrl+w`, `ctrl+l`, `ctrl+c`): nothing the model types there runs except through `run`, which the rules for commands see. `run` refuses to add a command to text the model typed on the line and did not run. Inside a program or a nested shell, `type` and `key` are not limited this way.
+**At the prompt, commands go through `run`.** In a bash or zsh shell waiting at its prompt, `type` takes text without a line end and `key` takes only line-editing keys (arrows, Home, End, Backspace, Delete, `ctrl+a`, `ctrl+e`, `ctrl+b`, `ctrl+f`, `ctrl+k`, `ctrl+u`, `ctrl+w`, `ctrl+l`, `ctrl+c`): nothing the model types there runs except through `run`, which the rules for commands see. Once the model has typed on the prompt's line, `run` is refused until the model presses `ctrl+c` (which discards the whole line) or the next prompt: what the screen shows is not taken as proof the line is empty. A key is named (`ctrl+o`, `Escape`); a control character is never a key name.
+
+**While a command runs.** A line end from `type` or `key` (Enter, `ctrl+j`, `ctrl+m`, `ctrl+o`) is sent only when something on the screen waits for input: a full-screen program, or a cursor line that ends like a prompt (a nested shell, a REPL) or a question (`?`, `]`, `:`, `)`, a password prompt). Otherwise it is refused: the terminal would keep the line, and the shell would run it as its next command once the running one ends.
 
 **Permissions.** The tool asks before it acts, as `bash` does, under three keys:
 
@@ -2956,6 +2958,7 @@ What remote output can do is limited to the screen. A remote program's title is 
 * The model's grants for remote commands are not per host. Deny the hosts the model must not reach with `ssh_connect`.
 * `ssh_connect` sees the connections localcode makes. A `ssh` the model runs inside a terminal to reach another host is a command: deny it with an `ssh` rule (`{"match": "ssh *", "decision": "deny"}`).
 * In a nested shell or a program, a command the model puts together key by key (`type` without Enter, then `key Enter`) is seen only by the `ssh_input` question, not by the deny rules for `ssh`. With `skip_permissions` on, nothing asks it.
+* "Something waits for input" is read from the cursor's line. A running command whose output stops at a line ending like a prompt or a question takes a line from the model; if it does not read it, the shell runs it after the command ends.
 * The SSH panel answers a daemon reached by an address or `localhost`. Reached by another name (`http://devbox.local:4096`), the panel says it cannot reach its terminals; use the address.
 * The terminal is xterm-like. Mouse reporting is not supported.
 
