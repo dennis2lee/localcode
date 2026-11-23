@@ -52,6 +52,11 @@ start() {
 run() {
   local name="$1" browser="$2"
   shift 2
+  # ONLY, when set, names the runs to make.
+  if [ -n "${ONLY:-}" ]; then
+    case " $ONLY " in *" $name "*) ;; *) return ;; esac
+    set -- "$@" --dump
+  fi
   if [ ! -e "$browser" ]; then
     echo "SKIP $name: no $browser"
     return

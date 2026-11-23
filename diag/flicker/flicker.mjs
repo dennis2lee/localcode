@@ -24,7 +24,7 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (!a.startsWith('--')) continue;
   const k = a.slice(2);
-  if (['headful', 'enter', 'fresh', 'ime', 'noshot', 'norec', 'pin', 'guard'].includes(k)) opt[k] = true;
+  if (['headful', 'enter', 'fresh', 'ime', 'noshot', 'norec', 'pin', 'guard', 'dump'].includes(k)) opt[k] = true;
   else if (k === 'pre') opt.pre.push(argv[++i]);
   else if (k === 'extra') opt.extra.push(argv[++i]);
   else opt[k] = argv[++i];
@@ -213,7 +213,21 @@ function diff(a, b, rect) {
       }
     }
   }
-  return n ? { n, box: [x0, y0, x1 - x0 + 1, y1 - y0 + 1] } : { n: 0 };
+  if (!n) return { n: 0 };
+  // The rows that changed, as bands: [first row, last row, pixels, leftmost, rightmost].
+  const bands = [];
+  for (let y = y0; y <= y1; y++) {
+    const o = y * stride;
+    let c = 0, l = 1e9, r = -1;
+    for (let x = rx0; x < rx1; x++) {
+      const i = o + x * bpp;
+      if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] || a.data[i + 2] !== b.data[i + 2]) { c++; if (x < l) l = x; if (x > r) r = x; }
+    }
+    if (!c) continue;
+    const last = bands[bands.length - 1];
+    if (last && last[1] === y - 1) { last[1] = y; last[2] += c; last[3] = Math.min(last[3], l); last[4] = Math.max(last[4], r); } else bands.push([y, y, c, l, r]);
+  }
+  return { n, box: [x0, y0, x1 - x0 + 1, y1 - y0 + 1], bands };
 }
 
 const VK = { ' ': 32, '-': 189, '=': 187, ',': 188, '.': 190, '/': 191, ';': 186, "'": 222, '[': 219, ']': 221, '\\': 220, '`': 192 };
@@ -389,12 +403,18 @@ async function main() {
   const r = result.rect;
   const box = { x0: Math.floor(r.x * dpr), y0: Math.floor(r.y * dpr), x1: Math.ceil((r.x + r.w) * dpr), y1: Math.ceil((r.y + r.h) * dpr) };
   const pix = [];
-  let prev = null, prev2 = null;
+  let prev = null, prev2 = null, dumped = 0;
   for (let i = 0; i < shots.length; i++) {
     const img = decodePNG(Buffer.from(shots[i].data, 'base64'));
     const d1 = prev ? diff(prev, img, box) : { n: 0 };
     const d2 = prev2 ? diff(prev2, img, box) : { n: 0 };
-    pix.push({ t: Math.round(shots[i].ts - origin), n: d1.n, box: d1.box, back2: d2.n });
+    const tall = d1.box && d1.box[3] > 40 && d1.n < 2000;
+    pix.push({ t: Math.round(shots[i].ts - origin), n: d1.n, box: d1.box, back2: d2.n, bands: tall ? d1.bands : undefined });
+    if (opt.dump && tall && dumped < 6) {
+      dumped++;
+      fs.writeFileSync(path.join(OUT, `${NAME}-frame${i - 1}.png`), Buffer.from(shots[i - 1].data, 'base64'));
+      fs.writeFileSync(path.join(OUT, `${NAME}-frame${i}.png`), Buffer.from(shots[i].data, 'base64'));
+    }
     prev2 = prev; prev = img;
   }
   result.pix = pix;
