@@ -1,0 +1,50 @@
+# Diagnostic, not part of the release: types into the SSH panel in a real
+# Chrome and Edge on a Windows runner (and Chrome on Ubuntu, also against
+# a real sshd with bash), and records what every frame showed. Runs on
+# pushes to diag/* branches only.
+name: diag-ssh-flicker
+
+on:
+  push:
+    branches: ['diag/**']
+
+permissions:
+  contents: read
+
+jobs:
+  flicker:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build the daemon and the fake server
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          EXT=""
+          case "$(uname -s)" in MINGW*|MSYS*) EXT=".exe" ;; esac
+          go build -o "bin/localcode$EXT" ./cmd/localcode
+          go build -o "bin/sshfake$EXT" ./diag/sshfake
+
+      - name: Type into the panel and record every frame
+        timeout-minutes: 20
+        shell: bash
+        run: bash diag/flicker/ci.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: flicker-${{ matrix.os }}
+          path: diag/out
+          retention-days: 7
