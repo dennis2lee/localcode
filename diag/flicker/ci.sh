@@ -113,6 +113,9 @@ run n-z100 "$CHROME" $SMALL $EXTRA --fresh --pre "seq 1 80" --text "$LONG"
 run n-z100-fast "$CHROME" $SMALL $EXTRA --fresh --pre "seq 1 80" --interval 25 --text "$LONG"
 run n-z100-dsf150 "$CHROME" $SMALL $EXTRA --fresh --dsf 1.5 --pre "seq 1 80" --text "$LONG"
 run n-z125 "$CHROME" $SMALL $EXTRA --fresh --zoom 1.25 --pre "seq 1 80" --text "$LONG"
+# A window that ends inside the SSH panel.
+run n-700 "$CHROME" --size 700x700 $EXTRA --fresh --pre "seq 1 80" --text "$LONG"
+run n-700-z125 "$CHROME" --size 700x700 $EXTRA --fresh --zoom 1.25 --pre "seq 1 80" --text "$LONG"
 if [ -n "$EXT" ]; then
   run h-n-z100 "$CHROME" $HEAD --fresh --pre "seq 1 80" --text "$LONG"
   run h-n-dsf150 "$CHROME" $HEAD --fresh --dsf 1.5 --pre "seq 1 80" --text "$LONG"
