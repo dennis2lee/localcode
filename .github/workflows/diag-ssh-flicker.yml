@@ -18,9 +18,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [windows-latest, ubuntu-latest]
         # The tree the daemon is built from: before and after a change.
-        ref: [fix/ssh-typing-box]
+        ref: [main]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -46,8 +46,9 @@ jobs:
       - name: Type into the panel and record every frame
         timeout-minutes: 30
         shell: bash
+        # ONLY names the runs to make, with frames dumped: 'n-700 z125'.
         env:
-          ONLY: 'n-700 n-z125 z125'
+          ONLY: ''
         run: bash diag/flicker/ci.sh
 
       - uses: actions/upload-artifact@v4
