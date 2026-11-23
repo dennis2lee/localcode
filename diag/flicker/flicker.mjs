@@ -24,7 +24,7 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (!a.startsWith('--')) continue;
   const k = a.slice(2);
-  if (['headful', 'enter', 'fresh', 'ime', 'noshot'].includes(k)) opt[k] = true;
+  if (['headful', 'enter', 'fresh', 'ime', 'noshot', 'norec', 'pin'].includes(k)) opt[k] = true;
   else if (k === 'pre') opt.pre.push(argv[++i]);
   else if (k === 'extra') opt.extra.push(argv[++i]);
   else opt[k] = argv[++i];
@@ -103,6 +103,7 @@ const INIT = `(() => {
         err: el('ssh-error') && !el('ssh-error').hidden ? el('ssh-error').textContent : '',
         q: !!(el('ssh-question') && !el('ssh-question').hidden),
         tabs: hash(el('ssh-tab-list').innerHTML),
+        out: [r1(Math.max(0, tr.left - ir.left)), r1(Math.max(0, tr.top - ir.top)), r1(Math.max(0, ir.right - tr.right)), r1(Math.max(0, ir.bottom - tr.bottom))].join(','),
       };
     };
     L.sig = sig;
@@ -134,6 +135,8 @@ const INIT = `(() => {
   };
   L.stop = () => { L.running = false; };
   L.mark = (name) => L.marks.push({ t: now(), name });
+  const ZOOM = __ZOOM__;
+  if (ZOOM) { try { localStorage.setItem('localcode.zoom', String(ZOOM)); } catch (e) {} }
   const CLASSIC = __CLASSIC__;
   if (CLASSIC) {
     const add = () => { const st = document.createElement('style'); st.textContent = '::-webkit-scrollbar{width:' + CLASSIC + 'px;height:' + CLASSIC + 'px}::-webkit-scrollbar-thumb{background:#888}::-webkit-scrollbar-track{background:#333}'; document.documentElement.appendChild(st); };
@@ -264,7 +267,7 @@ async function main() {
     });
     await send('Page.enable');
     await send('Runtime.enable');
-    await send('Page.addScriptToEvaluateOnNewDocument', { source: INIT.replace('__CLASSIC__', String(Number(opt.classic || 0))) });
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: INIT.replace('__CLASSIC__', String(Number(opt.classic || 0))).replace('__ZOOM__', String(Number(opt.zoom || 0))) });
     await send('Page.navigate', { url: URL0 });
     // The page opens the one conversation the sandbox has.
     let sid = '';
@@ -300,7 +303,7 @@ async function main() {
       const cur = await ev(`document.getElementById('ssh-screen').textContent + '|' + document.getElementById('ssh-status').textContent`);
       same = cur === last && cur.length > 3 ? same + 1 : 0; last = cur;
     }
-    result.info = await ev(`(() => { const d = document.createElement('div'); d.style.cssText = 'width:100px;height:100px;overflow:scroll;position:absolute;top:-999px'; document.body.appendChild(d); const sb = d.offsetWidth - d.clientWidth; d.remove(); const l = document.getElementById('ssh-lines'); const cs = getComputedStyle(l); return { ua: navigator.userAgent, dpr: devicePixelRatio, inner: [innerWidth, innerHeight], scrollbar: sb, font: cs.fontFamily, fontSize: cs.fontSize, lines: [l.clientWidth, l.clientHeight, l.offsetWidth], status: document.getElementById('ssh-status').textContent }; })()`);
+    result.info = await ev(`(() => { const d = document.createElement('div'); d.style.cssText = 'width:100px;height:100px;overflow:scroll;position:absolute;top:-999px'; document.body.appendChild(d); const sb = d.offsetWidth - d.clientWidth; d.remove(); const l = document.getElementById('ssh-lines'); const cs = getComputedStyle(l); return { ua: navigator.userAgent, zoom: document.documentElement.style.zoom || '', dpr: devicePixelRatio, inner: [innerWidth, innerHeight], scrollbar: sb, font: cs.fontFamily, fontSize: cs.fontSize, lines: [l.clientWidth, l.clientHeight, l.offsetWidth], status: document.getElementById('ssh-status').textContent }; })()`);
     const rect = await ev(`(() => { const r = document.getElementById('ssh-lines').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`);
     const click = async () => {
       const x = rect.x + rect.w / 2, y = rect.y + rect.h / 2;
@@ -329,7 +332,11 @@ async function main() {
     }
     keys.length = 0;
     // Record: idle, type, idle.
-    await ev(`__lc.start()`);
+    // --pin keeps the typing box at the terminal's corner: the intervention
+    // that tells whether its place is the cause.
+    if (opt.pin) await ev(`(() => { const st = document.createElement('style'); st.textContent = '#ssh-input{left:0!important;top:0!important}'; document.head.appendChild(st); })()`);
+    // --norec leaves the page unobserved from inside: the screencast alone.
+    if (!opt.norec) await ev(`__lc.start()`);
     if (!opt.noshot) await send('Page.startScreencast', { format: 'png', everyNthFrame: 1 });
     await sleep(1500);
     await ev(`__lc.mark('type-start')`);
@@ -364,7 +371,7 @@ async function main() {
     result.log = JSON.parse(log);
     result.keys = keys;
     result.rect = rect;
-    result.final = await ev(`__lc.sig()`);
+    result.final = opt.norec ? null : await ev(`__lc.sig()`);
   } finally {
     try { await cdp.send('Browser.close'); } catch (e) {}
     await sleep(500);
@@ -391,6 +398,12 @@ async function main() {
   // A row is about this many pixels; a key changes a cell or two.
   const cell = { w: 7.8 * dpr, h: 16.9 * dpr };
   const big = pix.filter((p) => p.n > 0 && p.box && (p.box[3] > 2.5 * cell.h || p.n > 60 * cell.w * cell.h));
+  // A flash: a big change that a later frame within 150 ms mostly takes back.
+  const flashes = [];
+  for (let i = 1; i + 1 < pix.length; i++) {
+    const p = pix[i], q = pix[i + 1];
+    if (big.includes(p) && q.t - p.t < 150 && q.n > 0 && q.back2 >= 0 && q.back2 < p.n / 4) flashes.push({ t: p.t, ms: q.t - p.t, n: p.n, box: p.box, left: q.back2 });
+  }
   const frames = L.frames;
   const fields = Object.keys(frames[0]?.s || {});
   const flips = {};
@@ -424,6 +437,7 @@ async function main() {
     layoutShifts: L.shifts,
     pixFrames: pix.filter((p) => p.n > 0).length,
     pixBig: big,
+    flashes,
     marks: L.marks,
   };
   result.summary = summary;

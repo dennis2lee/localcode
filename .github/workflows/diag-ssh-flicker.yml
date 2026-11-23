@@ -19,8 +19,14 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
+        # The tree the daemon is built from: before and after a change.
+        ref: [main]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          path: src
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -34,8 +40,8 @@ jobs:
         run: |
           EXT=""
           case "$(uname -s)" in MINGW*|MSYS*) EXT=".exe" ;; esac
-          go build -o "bin/localcode$EXT" ./cmd/localcode
           go build -o "bin/sshfake$EXT" ./diag/sshfake
+          (cd src && git log --oneline -1 && go build -o "../bin/localcode$EXT" ./cmd/localcode)
 
       - name: Type into the panel and record every frame
         timeout-minutes: 20
@@ -45,6 +51,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: flicker-${{ matrix.os }}
+          name: flicker-${{ matrix.os }}-${{ strategy.job-index }}
           path: diag/out
           retention-days: 7

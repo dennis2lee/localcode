@@ -76,26 +76,39 @@ fi
 "$CHROME" --version 2> /dev/null || true
 
 LONG="echo the quick brown fox jumps over the lazy dog 0123456789"
+BIG="--size 1400x900"
 
 start plain || exit 1
-run w-control "$CHROME" $HEAD $EXTRA --fresh
-run w-inject-hide "$CHROME" $HEAD $EXTRA --fresh --inject hide
-run w-inject-cursor "$CHROME" $HEAD $EXTRA --fresh --inject cursor
-run w-scrollback "$CHROME" $HEAD $EXTRA --fresh --pre "seq 1 80"
-run w-fast "$CHROME" $HEAD $EXTRA --fresh --pre "seq 1 80" --interval 25 --text "$LONG"
-run w-slow "$CHROME" $HEAD $EXTRA --fresh --pre "seq 1 80" --interval 200 --text "$LONG"
-run w-enter "$CHROME" $HEAD $EXTRA --fresh --pre "seq 1 80" --text "ls -la" --enter
-run w-dsf125 "$CHROME" $HEAD $EXTRA --fresh --dsf 1.25 --pre "seq 1 80" --text "$LONG"
-run w-dsf150 "$CHROME" $HEAD $EXTRA --fresh --dsf 1.5 --pre "seq 1 80" --text "$LONG"
-run w-ime "$CHROME" $HEAD $EXTRA --fresh --pre "seq 1 80" --ime --text " abc"
-run w-headless "$CHROME" $EXTRA --fresh --pre "seq 1 80" --text "$LONG"
-run e-scrollback "$EDGE" $HEAD $EXTRA --fresh --pre "seq 1 80" --text "$LONG"
-run e-fast "$EDGE" $HEAD $EXTRA --fresh --pre "seq 1 80" --interval 25 --text "$LONG"
-run e-dsf125 "$EDGE" $HEAD $EXTRA --fresh --dsf 1.25 --pre "seq 1 80" --text "$LONG"
-start redraw || exit 1
-run w-redraw "$CHROME" $HEAD $EXTRA --fresh --pre "seq 1 80" --text "$LONG"
-start split 5ms || exit 1
-run w-split5 "$CHROME" $HEAD $EXTRA --fresh --pre "seq 1 80" --text "$LONG"
+# The method: a flicker made on purpose must be seen, and a quiet run must be quiet.
+run m-inject-hide "$CHROME" $BIG $EXTRA --fresh --pre "seq 1 80" --inject hide
+run m-inject-scroll "$CHROME" $BIG $EXTRA --fresh --pre "seq 1 80" --inject scroll
+# The page's own zoom, the prompt on the bottom row.
+run z100 "$CHROME" $BIG $EXTRA --fresh --pre "seq 1 80"
+run z090 "$CHROME" $BIG $EXTRA --fresh --zoom 0.9 --pre "seq 1 80"
+run z110 "$CHROME" $BIG $EXTRA --fresh --zoom 1.1 --pre "seq 1 80"
+run z125 "$CHROME" $BIG $EXTRA --fresh --zoom 1.25 --pre "seq 1 80"
+run z150 "$CHROME" $BIG $EXTRA --fresh --zoom 1.5 --pre "seq 1 80"
+# The prediction: at the top of the screen the box is still inside.
+run z125-top "$CHROME" $BIG $EXTRA --fresh --zoom 1.25
+# The intervention: the typing box kept at the corner.
+run z125-pin "$CHROME" $BIG $EXTRA --fresh --zoom 1.25 --pre "seq 1 80" --pin
+# The observer: the screencast alone.
+run z125-norec "$CHROME" $BIG $EXTRA --fresh --zoom 1.25 --pre "seq 1 80" --norec
+run z100-norec "$CHROME" $BIG $EXTRA --fresh --pre "seq 1 80" --norec
+# The right margin at 100%: a line typed past the last column.
+run z100-margin "$CHROME" $BIG $EXTRA --fresh --pre "seq 1 80" --text "$LONG $LONG"
+# Display scaling is not the page's zoom.
+run z100-dsf125 "$CHROME" $BIG $EXTRA --fresh --dsf 1.25 --pre "seq 1 80"
+run z100-dsf150 "$CHROME" $BIG $EXTRA --fresh --dsf 1.5 --pre "seq 1 80"
+run z125-dsf125 "$CHROME" $BIG $EXTRA --fresh --dsf 1.25 --zoom 1.25 --pre "seq 1 80"
+if [ -n "$EXT" ]; then
+  # A window on the runner's desktop.
+  run h-z100 "$CHROME" $HEAD --fresh --pre "seq 1 80"
+  run h-z125 "$CHROME" $HEAD --fresh --zoom 1.25 --pre "seq 1 80"
+fi
+run e-z100 "$EDGE" $BIG $EXTRA --fresh --pre "seq 1 80"
+run e-z125 "$EDGE" $BIG $EXTRA --fresh --zoom 1.25 --pre "seq 1 80"
+run e-z125-pin "$EDGE" $BIG $EXTRA --fresh --zoom 1.25 --pre "seq 1 80" --pin
 
 # A real sshd with the runner's own bash, where there is one.
 if [ -z "$EXT" ] && [ -x /usr/sbin/sshd ]; then
@@ -121,9 +134,8 @@ EOF
   sleep 1
   echo "[127.0.0.1]:22997 $(cut -d' ' -f1,2 "$D/hostkey.pub")" > "$H/.ssh/known_hosts_real"
   start plain || exit 1
-  run r-bash "$CHROME" $HEAD $EXTRA --fresh --target realbox --pre "seq 1 80" --text "$LONG"
-  run r-bash-fast "$CHROME" $HEAD $EXTRA --fresh --target realbox --pre "seq 1 80" --interval 25 --text "$LONG"
-  run r-bash-enter "$CHROME" $HEAD $EXTRA --fresh --target realbox --pre "seq 1 80" --text "ls -la /usr/bin | head -40" --enter
+  run r-bash-z100 "$CHROME" $BIG $EXTRA --fresh --target realbox --pre "seq 1 80"
+  run r-bash-z125 "$CHROME" $BIG $EXTRA --fresh --target realbox --zoom 1.25 --pre "seq 1 80"
   tail -3 "$D/sshd.log"
 fi
 stop
