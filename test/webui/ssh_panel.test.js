@@ -261,6 +261,14 @@ test('the typing box stays inside the terminal\'s box and the window', async () 
   const b = termBox(1);
   const narrow = { ...b.m, winWidth: 400, winHeight: 500 };
   assert.deepEqual(plain(inputPlace(b.at(500, 590), b.t, narrow)), { left: 400 - 100 - 1 - 16 - 2, top: 500 - 100 - 1 - 17 - 2 });
+  // Less of the terminal in the window than the box is wide: no place is
+  // inside both, and the box stays inside the terminal's.
+  const m = { ...b.m, winWidth: 400, winHeight: 500 };
+  const sliver = (c, t) => plain(inputPlace(c, { width: 535, height: 600, ...t }, m));
+  assert.deepEqual(sliver({ left: 492, top: 201 }, { left: 391, top: 100 }), { left: 0, top: 100 }, 'eight pixels of it at the window\'s right edge');
+  assert.deepEqual(sliver({ left: 201, top: 592 }, { left: 100, top: 491 }), { left: 100, top: 0 }, 'eight pixels of it at the window\'s bottom edge');
+  assert.deepEqual(sliver({ left: -429, top: 201 }, { left: -530, top: 100 }), { left: 533 - 16 - 2, top: 100 }, 'four pixels of it at the window\'s left edge');
+  assert.deepEqual(sliver({ left: -499, top: 201 }, { left: -600, top: 100 }), { left: 533 - 16 - 2, top: 100 }, 'all of it left of the window');
   // A terminal with no size yet (a hidden panel) gives numbers.
   const none = inputPlace({ left: 0, top: 0 }, { left: 0, top: 0, width: 0, height: 0 }, { ...b.m, offsetWidth: 0, offsetHeight: 0, clientWidth: 0, clientHeight: 0 });
   assert.deepEqual(plain(none), { left: 0, top: 0 });
@@ -282,6 +290,25 @@ test('a screen places the typing box in layout pixels on a zoomed page', async (
   frame(sshStream(app), 'screen', { terminal: 't1', epoch: 'e1', screen: { cols: 80, rows: 24, lines: [[{ t: 'me@devbox:~$ ' }]], cx: 12, cy: 23, cursor: true } });
   assert.deepEqual([input.style.left, input.style.top], ['94px', '560px'],
     'set from the rectangles alone, it was at 118.75px and 701.25px: under the box');
+});
+
+test('a screen keeps the typing box in the part of the terminal the window shows', async () => {
+  const app = await withTerminal();
+  const b = termBox(1);
+  const termEl = app.el('ssh-term');
+  const input = app.el('ssh-input');
+  termEl.style.width = '535px';
+  Object.assign(termEl, { offsetHeight: 600, clientLeft: 1, clientTop: 1, clientWidth: 533, clientHeight: 598 });
+  input.style.width = '16px';
+  input.offsetHeight = 17;
+  termEl.getBoundingClientRect = () => b.t;
+  app.el('ssh-cursor').getBoundingClientRect = () => b.at(500, 560);
+  // The window ends 300 pixels into the terminal: the panel is partly
+  // outside a window narrower than the panels' least widths.
+  app.document.documentElement.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 1000 });
+  frame(sshStream(app), 'screen', { terminal: 't1', epoch: 'e1', screen: { cols: 80, rows: 24, lines: [[{ t: 'me@devbox:~$ ' }]], cx: 64, cy: 23, cursor: true } });
+  assert.deepEqual([input.style.left, input.style.top], [`${400 - 100 - 1 - 16 - 2}px`, '560px'],
+    'at the cursor, 219 pixels outside the window, each key scrolled the document');
 });
 
 test('a scroll of the terminal\'s box is put back', async () => {

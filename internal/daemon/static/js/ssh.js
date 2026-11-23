@@ -533,8 +533,10 @@ function drawScreen(d) {
   placeInput();
 }
 
-// How far the typing box stays from the terminal's right and bottom
-// edges, in layout pixels.
+// How far the typing box stays from the right and bottom edges it is
+// kept inside, in layout pixels: the two kinds of pixel are converted
+// with widths the engine rounds, and a caret can be a fraction of a
+// pixel taller than its box.
 const INPUT_EDGE = 2;
 
 // inputPlace is where the typing box goes, as left and top in the page's
@@ -579,13 +581,17 @@ export function inputPlace(c, t, m) {
     x1 = Math.min(x1, x(m.winWidth));
     y1 = Math.min(y1, y(m.winHeight));
   }
-  // Two pixels short of the far edges: the caret is drawn in the box's
-  // font, and a font that stands in for it (Hangul, for one) can be
-  // taller than the box by a fraction of a pixel.
-  const hundredth = (v) => Math.round(v * 100) / 100;
+  // Inside what the window shows, where that has room for the box; inside
+  // the terminal's box whatever the window shows. A terminal with less of
+  // it in the window than the box is wide has no place that is both, and
+  // the terminal's box is the one a key would otherwise move.
+  const fit = (want, lo, hi, max) => {
+    const shown = Math.max(lo, Math.min(want, hi));
+    return Math.round(Math.max(0, Math.min(shown, max)) * 100) / 100;
+  };
   return {
-    left: hundredth(Math.max(x0, Math.min(x(c.left), x1 - m.boxWidth - INPUT_EDGE))),
-    top: hundredth(Math.max(y0, Math.min(y(c.top), y1 - m.boxHeight - INPUT_EDGE))),
+    left: fit(x(c.left), x0, x1 - m.boxWidth - INPUT_EDGE, m.clientWidth - m.boxWidth - INPUT_EDGE),
+    top: fit(y(c.top), y0, y1 - m.boxHeight - INPUT_EDGE, m.clientHeight - m.boxHeight - INPUT_EDGE),
   };
 }
 
@@ -806,7 +812,7 @@ export function initSSHPanel() {
       if (e.target === input) return; // the input event brings it
       e.preventDefault();
       send({ text: a.text });
-      input.focus();
+      input.focus({ preventScroll: true });
       return;
     }
     e.preventDefault();
