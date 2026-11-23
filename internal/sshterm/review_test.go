@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -413,6 +414,18 @@ func TestNoLineIsLeftForTheShellToRunNext(t *testing.T) {
 	if ok, _ := term.Wait(context.Background(), 5*time.Second, ""); !ok {
 		t.Fatal("never ended")
 	}
+	// What was typed ahead is on the new prompt's line: run does not add
+	// to it, until the model's Ctrl+C and the prompt after it.
+	time.Sleep(300 * time.Millisecond)
+	if _, err := term.Run(context.Background(), "echo approved", time.Second, term.PersonGen()); !errors.Is(err, ErrModelLine) {
+		t.Fatalf("run onto the typeahead: %v", err)
+	}
+	if err := term.Keys("ctrl+c", term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	if res := run(t, term, "echo approved"); res.Output != "approved" || res.Status != "0" {
+		t.Fatalf("after ctrl+c: %+v", res)
+	}
 	// A program asking takes an answer.
 	go func() { term.Run(context.Background(), "ask", 5*time.Second, term.PersonGen()) }()
 	within(t, 5*time.Second, "the question", func() bool {
@@ -421,5 +434,48 @@ func TestNoLineIsLeftForTheShellToRunNext(t *testing.T) {
 	})
 	if err := term.Type("y", true, term.PersonGen()); err != nil {
 		t.Fatalf("answering a question: %v", err)
+	}
+}
+
+// The model's Ctrl+C clears its text only when the shell takes it as an
+// interrupt, which the prompt after it says. With "stty intr undef" the
+// key is a character, and the text is still on the line.
+func TestTheModelsCtrlCCountsWhenTheShellTakesIt(t *testing.T) {
+	for _, shell := range []string{"/bin/bash", "/bin/zsh"} {
+		t.Run(filepath.Base(shell), func(t *testing.T) {
+			addr, home := startRealSSHD(t, shell)
+			me, _ := user.Current()
+			m := testManager(t, home)
+			term, _ := m.Open("c1", me.Username+"@"+addr, ByModel)
+			term.WaitConnected(context.Background())
+			within(t, 15*time.Second, "integrated", func() bool { return term.Info().Integrated })
+			settled(t, term)
+			// Right after a Ctrl+C that is an interrupt, run waits for the
+			// prompt and reports its own command.
+			if err := term.Type("junk", false, term.PersonGen()); err != nil {
+				t.Fatal(err)
+			}
+			if err := term.Keys("ctrl+c", term.PersonGen()); err != nil {
+				t.Fatal(err)
+			}
+			if res := run(t, term, "echo afterc"); res.Output != "afterc" || res.Status != "0" {
+				t.Fatalf("run right after ctrl+c: %+v", res)
+			}
+			// With the interrupt key undefined, it is not one.
+			run(t, term, "stty intr undef")
+			mark := filepath.Join(home, "PWNED")
+			if err := term.Type("touch "+mark+"; ", false, term.PersonGen()); err != nil {
+				t.Fatal(err)
+			}
+			if err := term.Keys("ctrl+c", term.PersonGen()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := term.Run(context.Background(), "echo approved", 5*time.Second, term.PersonGen()); !errors.Is(err, ErrModelLine) {
+				t.Fatalf("run onto text a ctrl+c did not clear: %v", err)
+			}
+			if _, err := os.Stat(mark); err == nil {
+				t.Fatal("the model's leftover text ran")
+			}
+		})
 	}
 }

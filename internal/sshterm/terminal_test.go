@@ -434,9 +434,13 @@ func TestANestedShellIsNoticed(t *testing.T) {
 	if err := term.Type("echo inner", true, term.PersonGen()); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := term.Wait(context.Background(), 5*time.Second, "inner"); !ok {
-		t.Fatal("the nested shell did not run it")
-	}
+	// Its output, and the nested prompt after it (the echo of the line
+	// alone holds "inner" too).
+	within(t, 5*time.Second, "the nested shell ran it", func() bool {
+		r, _ := term.Read(0, false)
+		n := len(r.Screen)
+		return n >= 2 && r.Screen[n-2] == "inner" && strings.HasPrefix(r.Screen[n-1], "root#")
+	})
 	// Leaving it brings the marks back.
 	if err := term.Type("exit", true, term.PersonGen()); err != nil {
 		t.Fatal(err)

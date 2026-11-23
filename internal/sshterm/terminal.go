@@ -57,7 +57,7 @@ var (
 	ErrLineNotEmpty = errors.New("the person has typed part of a command line in this terminal and not run it; ask them to finish or clear it")
 	ErrNotConnected = errors.New("this terminal is not connected")
 	ErrChanged      = errors.New("the person typed in this terminal while the question was open, so what was approved may no longer fit; read the screen and decide again")
-	ErrModelLine    = errors.New("the command line has text you typed and did not run; clear it first with key ctrl+c")
+	ErrModelLine    = errors.New("the command line has text you typed (at this prompt, or ahead while the last command ran) and did not run; clear it first with key ctrl+c")
 	ErrTypeahead    = errors.New("a command is running and nothing on the screen is waiting for input: a line sent now would be read by the shell as its next command once this one ends. Wait for it to end and use run, or answer it when it asks (read shows when)")
 	ErrUseRun       = errors.New("at the shell's prompt, commands go through run, which the rules for commands see: type takes text without a line end there, and key takes only line-editing keys (arrows, Home, End, Backspace, Delete, ctrl+a, ctrl+e, ctrl+b, ctrl+f, ctrl+k, ctrl+u, ctrl+w, ctrl+l, ctrl+c)")
 )
@@ -146,18 +146,25 @@ type Terminal struct {
 	// or a prompt redrawn elsewhere (Ctrl+L), reads as empty again.
 	personTyped bool
 	modelTyped  bool
-	promptLeft  string
-	promptRest  string
-	promptNext  string
-	personGen   uint64
-	integrating bool
-	lastPerson  time.Time
-	hold        bool
-	lastOutput  time.Time
-	settle      *time.Timer
-	run         *runWait
-	endedAt     time.Time
-	endedFlag   atomic.Bool
+	// typedAhead is input the model sent while a command ran and nothing
+	// on the screen waited for it: the terminal keeps it, and it is on the
+	// next prompt's line when the command ends.
+	typedAhead bool
+	// modelInterrupt is when the model last pressed Ctrl+C at the prompt:
+	// run waits a moment for the prompt that confirms the line was dropped.
+	modelInterrupt time.Time
+	promptLeft     string
+	promptRest     string
+	promptNext     string
+	personGen      uint64
+	integrating    bool
+	lastPerson     time.Time
+	hold           bool
+	lastOutput     time.Time
+	settle         *time.Timer
+	run            *runWait
+	endedAt        time.Time
+	endedFlag      atomic.Bool
 	// summary is the terminal's state for readers that must not wait on
 	// mu (the session list, the settings window): written on every change.
 	summary atomic.Pointer[Summary]
@@ -426,7 +433,9 @@ func (t *Terminal) track(p []byte) bool {
 			t.promptKnown = false
 			t.integrated = true
 			t.personTyped = false
-			t.modelTyped = false
+			// What the model typed ahead is on this prompt's line.
+			t.modelTyped = t.typedAhead
+			t.typedAhead = false
 		}
 		from = ev.end
 	}
@@ -1299,6 +1308,19 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 			}
 			continue
 		}
+		// The model's own Ctrl+C a moment ago: its prompt, which clears
+		// the line, is on the way.
+		if t.modelTyped && time.Since(t.modelInterrupt) < 2*time.Second {
+			ch := t.changed
+			t.mu.Unlock()
+			select {
+			case <-ch:
+			case <-time.After(100 * time.Millisecond):
+			case <-ctx.Done():
+				return RunResult{}, ctx.Err()
+			}
+			continue
+		}
 		if !t.integrated || t.running || t.promptKnown || t.personTyped || time.Now().After(settleBy) {
 			break
 		}
@@ -1388,16 +1410,20 @@ wait:
 			if t.run == w {
 				quiet := time.Since(t.lastOutput)
 				line := t.cursorLine()
+				// The screen says something about this command only once
+				// the command has printed: before its echo arrives, the
+				// line under the cursor is still the prompt it was typed at.
+				spoke := t.lastOutput.After(start)
 				switch {
-				case quiet > 700*time.Millisecond && time.Since(start) > 700*time.Millisecond && askingSecret.MatchString(line):
+				case spoke && quiet > 700*time.Millisecond && askingSecret.MatchString(line):
 					res.Asking = true
 					t.finishRun(w)
-				case quiet > inputAfter && t.emu.CursorPosition().X > 0 && askingInput.MatchString(strings.TrimRight(line, " ")+" ") && !looksLikePrompt(line):
+				case spoke && quiet > inputAfter && t.emu.CursorPosition().X > 0 && askingInput.MatchString(strings.TrimRight(line, " ")+" ") && !looksLikePrompt(line):
 					res.Asking = true
 					t.finishRun(w)
 				case !integrated && quiet > 2*time.Second && time.Since(start) > 2*time.Second:
 					t.finishRun(w)
-				case integrated && t.lostIntegration():
+				case integrated && spoke && t.lostIntegration():
 					res.Lost = true
 					t.finishRun(w)
 				}
@@ -1473,8 +1499,11 @@ func (t *Terminal) Type(text string, enter bool, gen uint64) error {
 			return ErrUseRun
 		}
 		t.modelTyped = true
-	} else if t.typeaheadOnly() && strings.Contains(text, "\r") {
-		return ErrTypeahead
+	} else if t.typeaheadOnly() {
+		if strings.Contains(text, "\r") {
+			return ErrTypeahead
+		}
+		t.typedAhead = true
 	}
 	t.emu.SendText(text)
 	t.notify()
@@ -1506,9 +1535,12 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 			}
 		}
 		t.modelTyped = true
+		// Ctrl+C discards the line where the shell takes it as an
+		// interrupt; the prompt that follows says so (its mark clears
+		// modelTyped). Nothing is taken for granted before it: with
+		// "stty intr undef" the key is only a character.
 		if last := evs[len(evs)-1]; last.Mod == uv.ModCtrl && last.Code == 'c' {
-			// Ctrl+C discards the whole line.
-			t.modelTyped = false
+			t.modelInterrupt = time.Now()
 		}
 	} else if t.typeaheadOnly() {
 		for _, ev := range evs {
@@ -1516,6 +1548,7 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 				return ErrTypeahead
 			}
 		}
+		t.typedAhead = true
 	}
 	for _, ev := range evs {
 		t.sendKey(ev)
