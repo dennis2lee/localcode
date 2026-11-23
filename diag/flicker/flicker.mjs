@@ -24,7 +24,7 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (!a.startsWith('--')) continue;
   const k = a.slice(2);
-  if (['headful', 'enter', 'fresh', 'ime', 'noshot', 'norec', 'pin'].includes(k)) opt[k] = true;
+  if (['headful', 'enter', 'fresh', 'ime', 'noshot', 'norec', 'pin', 'guard'].includes(k)) opt[k] = true;
   else if (k === 'pre') opt.pre.push(argv[++i]);
   else if (k === 'extra') opt.extra.push(argv[++i]);
   else opt[k] = argv[++i];
@@ -103,6 +103,7 @@ const INIT = `(() => {
         err: el('ssh-error') && !el('ssh-error').hidden ? el('ssh-error').textContent : '',
         q: !!(el('ssh-question') && !el('ssh-question').hidden),
         tabs: hash(el('ssh-tab-list').innerHTML),
+        off: [r1(ir.left - cr.left), r1(ir.top - cr.top)].join(','),
         out: [r1(Math.max(0, tr.left - ir.left)), r1(Math.max(0, tr.top - ir.top)), r1(Math.max(0, ir.right - tr.right)), r1(Math.max(0, ir.bottom - tr.bottom))].join(','),
       };
     };
@@ -335,6 +336,9 @@ async function main() {
     // --pin keeps the typing box at the terminal's corner: the intervention
     // that tells whether its place is the cause.
     if (opt.pin) await ev(`(() => { const st = document.createElement('style'); st.textContent = '#ssh-input{left:0!important;top:0!important}'; document.head.appendChild(st); })()`);
+    // --guard puts the terminal's box back whenever it scrolls: the
+    // intervention that tells whether that scroll is what is seen.
+    if (opt.guard) await ev(`(() => { const t = document.getElementById('ssh-term'); t.addEventListener('scroll', () => { if (t.scrollTop) t.scrollTop = 0; if (t.scrollLeft) t.scrollLeft = 0; }); })()`);
     // --norec leaves the page unobserved from inside: the screencast alone.
     if (!opt.norec) await ev(`__lc.start()`);
     if (!opt.noshot) await send('Page.startScreencast', { format: 'png', everyNthFrame: 1 });
@@ -411,7 +415,7 @@ async function main() {
   // A value that came back within 150 ms is a transient: A, B, A.
   const transients = [];
   for (const f of fields) {
-    if (f === 'th' || f === 'ink' || f === 'cx' || f === 'inp') continue;
+    if (f === 'th' || f === 'ink' || f === 'cx' || f === 'inp' || f === 'off' || f === 'out') continue;
     const fl = flips[f] || [];
     for (let i = 1; i < fl.length; i++) if (fl[i].t - fl[i - 1].t < 150 && JSON.stringify(fl[i].to) === JSON.stringify(fl[i - 1].from)) transients.push({ field: f, t: fl[i - 1].t, ms: Math.round(fl[i].t - fl[i - 1].t), a: fl[i - 1].from, b: fl[i - 1].to });
   }
@@ -434,6 +438,8 @@ async function main() {
     net: L.net.reduce((m, s) => { const k = `${s.method} ${s.url.replace(/\/t\d+/, '/T').replace(/\?.*/, '')} ${s.status}`; m[k] = (m[k] || 0) + 1; return m; }, {}),
     flipCounts: Object.fromEntries(Object.entries(flips).map(([k, v]) => [k, v.length])),
     transients, inkDips, sseDips,
+    boxFromCursor: frames.length ? [frames[0].s.off, frames[frames.length - 1].s.off] : [],
+    scrolled: (flips.anc || []).length,
     layoutShifts: L.shifts,
     pixFrames: pix.filter((p) => p.n > 0).length,
     pixBig: big,

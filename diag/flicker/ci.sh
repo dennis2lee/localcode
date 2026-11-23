@@ -84,7 +84,7 @@ run m-inject-hide "$CHROME" $BIG $EXTRA --fresh --pre "seq 1 80" --inject hide
 run m-inject-scroll "$CHROME" $BIG $EXTRA --fresh --pre "seq 1 80" --inject scroll
 # The page's own zoom, the prompt on the bottom row.
 run z100 "$CHROME" $BIG $EXTRA --fresh --pre "seq 1 80"
-run z090 "$CHROME" $BIG $EXTRA --fresh --zoom 0.9 --pre "seq 1 80"
+run z080 "$CHROME" $BIG $EXTRA --fresh --zoom 0.8 --pre "seq 1 80"
 run z110 "$CHROME" $BIG $EXTRA --fresh --zoom 1.1 --pre "seq 1 80"
 run z125 "$CHROME" $BIG $EXTRA --fresh --zoom 1.25 --pre "seq 1 80"
 run z150 "$CHROME" $BIG $EXTRA --fresh --zoom 1.5 --pre "seq 1 80"
@@ -106,9 +106,42 @@ if [ -n "$EXT" ]; then
   run h-z100 "$CHROME" $HEAD --fresh --pre "seq 1 80"
   run h-z125 "$CHROME" $HEAD --fresh --zoom 1.25 --pre "seq 1 80"
 fi
+# A narrow window: the terminal's forty columns are wider than its panel,
+# and at a display scale of 150% the panel is partly outside the window.
+SMALL="--size 1000x700"
+run n-z100 "$CHROME" $SMALL $EXTRA --fresh --pre "seq 1 80" --text "$LONG"
+run n-z100-fast "$CHROME" $SMALL $EXTRA --fresh --pre "seq 1 80" --interval 25 --text "$LONG"
+run n-z100-dsf150 "$CHROME" $SMALL $EXTRA --fresh --dsf 1.5 --pre "seq 1 80" --text "$LONG"
+run n-z125 "$CHROME" $SMALL $EXTRA --fresh --zoom 1.25 --pre "seq 1 80" --text "$LONG"
+if [ -n "$EXT" ]; then
+  run h-n-z100 "$CHROME" $HEAD --fresh --pre "seq 1 80" --text "$LONG"
+  run h-n-dsf150 "$CHROME" $HEAD --fresh --dsf 1.5 --pre "seq 1 80" --text "$LONG"
+fi
 run e-z100 "$EDGE" $BIG $EXTRA --fresh --pre "seq 1 80"
 run e-z125 "$EDGE" $BIG $EXTRA --fresh --zoom 1.25 --pre "seq 1 80"
 run e-z125-pin "$EDGE" $BIG $EXTRA --fresh --zoom 1.25 --pre "seq 1 80" --pin
+
+# A Chrome from before 128, where a zoomed page's rectangles are in
+# layout pixels: the other way an engine reports them.
+if [ -z "$EXT" ]; then
+  OLDURL="$(curl -s https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+v = [x for x in d['versions'] if x['version'].startswith('120.') and 'chrome' in x['downloads']]
+print([u['url'] for u in v[-1]['downloads']['chrome'] if u['platform'] == 'linux64'][0])
+")"
+  echo "old chrome: $OLDURL"
+  mkdir -p "$ROOT/work/oldchrome"
+  if curl -s -L -o "$ROOT/work/oldchrome/chrome.zip" "$OLDURL" && (cd "$ROOT/work/oldchrome" && unzip -q chrome.zip); then
+    OLD="$ROOT/work/oldchrome/chrome-linux64/chrome"
+    "$OLD" --version || true
+    run o-z100 "$OLD" $BIG $EXTRA --fresh --pre "seq 1 80"
+    run o-z125 "$OLD" $BIG $EXTRA --fresh --zoom 1.25 --pre "seq 1 80"
+    run o-z150 "$OLD" $BIG $EXTRA --fresh --zoom 1.5 --pre "seq 1 80"
+    run o-z080 "$OLD" $BIG $EXTRA --fresh --zoom 0.8 --pre "seq 1 80"
+    run o-n-z125 "$OLD" $SMALL $EXTRA --fresh --zoom 1.25 --pre "seq 1 80" --text "$LONG"
+  fi
+fi
 
 # A real sshd with the runner's own bash, where there is one.
 if [ -z "$EXT" ] && [ -x /usr/sbin/sshd ]; then

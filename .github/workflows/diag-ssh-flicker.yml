@@ -14,13 +14,13 @@ permissions:
 jobs:
   flicker:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
         # The tree the daemon is built from: before and after a change.
-        ref: [main]
+        ref: [main, fix/ssh-typing-box]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
           (cd src && git log --oneline -1 && go build -o "../bin/localcode$EXT" ./cmd/localcode)
 
       - name: Type into the panel and record every frame
-        timeout-minutes: 20
+        timeout-minutes: 30
         shell: bash
         run: bash diag/flicker/ci.sh
 
