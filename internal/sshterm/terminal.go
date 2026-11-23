@@ -161,10 +161,14 @@ type Terminal struct {
 	lastPerson     time.Time
 	hold           bool
 	lastOutput     time.Time
-	settle         *time.Timer
-	run            *runWait
-	endedAt        time.Time
-	endedFlag      atomic.Bool
+	// outputs counts the reads of the shell's output, so a run can tell
+	// output that came after it typed its command from output before,
+	// whatever the clock's resolution.
+	outputs   uint64
+	settle    *time.Timer
+	run       *runWait
+	endedAt   time.Time
+	endedFlag atomic.Bool
 	// summary is the terminal's state for readers that must not wait on
 	// mu (the session list, the settings window): written on every change.
 	summary atomic.Pointer[Summary]
@@ -195,7 +199,8 @@ type runWait struct {
 	status    string
 	ended     bool // a D mark ended it
 	alt       bool
-	held      bool // the person held the terminal: what came is theirs
+	held      bool   // the person held the terminal: what came is theirs
+	sentAt    uint64 // outputs when the command was typed
 	personGen uint64
 }
 
@@ -411,6 +416,7 @@ func (t *Terminal) track(p []byte) bool {
 	if t.state == StateEnded {
 		return false
 	}
+	t.outputs++
 	from := 0
 	for _, ev := range t.marks.feed(p) {
 		w := t.run
@@ -1365,7 +1371,7 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 			return RunResult{}, err
 		}
 	}
-	w := &runWait{out: capture{max: captureLimit}, done: make(chan struct{}), personGen: t.personGen}
+	w := &runWait{out: capture{max: captureLimit}, done: make(chan struct{}), personGen: t.personGen, sentAt: t.outputs}
 	t.run = w
 	integrated := t.integrated
 	t.modelTyped = false
@@ -1413,7 +1419,9 @@ wait:
 				// The screen says something about this command only once
 				// the command has printed: before its echo arrives, the
 				// line under the cursor is still the prompt it was typed at.
-				spoke := t.lastOutput.After(start)
+				// Counted, not timed: a fast server answers within the
+				// clock's resolution, or before the wait's clock starts.
+				spoke := t.outputs > w.sentAt
 				switch {
 				case spoke && quiet > 700*time.Millisecond && askingSecret.MatchString(line):
 					res.Asking = true
