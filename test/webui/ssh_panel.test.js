@@ -217,6 +217,82 @@ test('a terminal fits whole cells of its view', async () => {
   assert.equal(fitSize(812, 528, 0, 20), null);
 });
 
+// The typing box is where the keys go and where an input method opens
+// its candidates: invisible, at the cursor. Its place is set in the
+// page's layout pixels from rectangles in the window's pixels, which
+// differ by the page's own zoom (js/zoom.js). Measured in Chrome and Edge
+// on Windows at 125%: the box was a quarter further from the terminal's
+// corner than the cursor, 128 pixels under the terminal's box for a
+// cursor on the last row, and the engine scrolled the terminal's box to
+// show the caret on every second key: the screen jumped and came back.
+const termBox = (zoom) => ({
+  t: { left: 100, top: 100, width: 535 * zoom, height: 600 * zoom },
+  m: { offsetWidth: 535, offsetHeight: 600, clientLeft: 1, clientTop: 1, clientWidth: 533, clientHeight: 598, boxWidth: 16, boxHeight: 17, winWidth: 1400, winHeight: 1000 },
+  // Where layout point (x, y) of the terminal's inside is in the window.
+  at: (x, y) => ({ left: 100 + (1 + x) * zoom, top: 100 + (1 + y) * zoom }),
+});
+
+test('the typing box is put at the cursor whatever the page\'s zoom', async () => {
+  const app = await load({ routes: settingsWith({ ssh: true }) });
+  const { inputPlace } = app.internals;
+  for (const zoom of [0.9, 1, 1.1, 1.25, 1.5, 2]) {
+    const b = termBox(zoom);
+    assert.deepEqual(plain(inputPlace(b.at(199, 399), b.t, b.m)), { left: 199, top: 399 },
+      `at ${zoom * 100}% the box is the zoom factor away from the cursor`);
+  }
+});
+
+test('the typing box stays inside the terminal\'s box and the window', async () => {
+  const app = await load({ routes: settingsWith({ ssh: true }) });
+  const { inputPlace } = app.internals;
+  for (const zoom of [1, 1.25]) {
+    const b = termBox(zoom);
+    // The last column, and a terminal wider than its panel.
+    assert.equal(inputPlace(b.at(525, 100), b.t, b.m).left, 533 - 16 - 2);
+    assert.equal(inputPlace(b.at(900, 100), b.t, b.m).left, 533 - 16 - 2);
+    // The last row, and a cursor under the box.
+    assert.equal(inputPlace(b.at(100, 590), b.t, b.m).top, 598 - 17 - 2);
+    assert.equal(inputPlace(b.at(100, 2000), b.t, b.m).top, 598 - 17 - 2);
+    // Lines scrolled back: the cursor is above the box, or left of it.
+    assert.deepEqual(plain(inputPlace(b.at(-50, -300), b.t, b.m)), { left: 0, top: 0 });
+  }
+  // A panel partly outside a narrow window: the box stays in the part
+  // the window shows.
+  const b = termBox(1);
+  const narrow = { ...b.m, winWidth: 400, winHeight: 500 };
+  assert.deepEqual(plain(inputPlace(b.at(500, 590), b.t, narrow)), { left: 400 - 100 - 1 - 16 - 2, top: 500 - 100 - 1 - 17 - 2 });
+  // A terminal with no size yet (a hidden panel) gives numbers.
+  const none = inputPlace({ left: 0, top: 0 }, { left: 0, top: 0, width: 0, height: 0 }, { ...b.m, offsetWidth: 0, offsetHeight: 0, clientWidth: 0, clientHeight: 0 });
+  assert.deepEqual(plain(none), { left: 0, top: 0 });
+});
+
+test('a screen places the typing box in layout pixels on a zoomed page', async () => {
+  const app = await withTerminal();
+  const zoom = 1.25;
+  const b = termBox(zoom);
+  const termEl = app.el('ssh-term');
+  const input = app.el('ssh-input');
+  termEl.style.width = '535px';
+  Object.assign(termEl, { offsetHeight: 600, clientLeft: 1, clientTop: 1, clientWidth: 533, clientHeight: 598 });
+  input.style.width = '16px';
+  input.offsetHeight = 17;
+  termEl.getBoundingClientRect = () => b.t;
+  // The cursor on the last row of a screen that fills the box.
+  app.el('ssh-cursor').getBoundingClientRect = () => b.at(94, 560);
+  frame(sshStream(app), 'screen', { terminal: 't1', epoch: 'e1', screen: { cols: 80, rows: 24, lines: [[{ t: 'me@devbox:~$ ' }]], cx: 12, cy: 23, cursor: true } });
+  assert.deepEqual([input.style.left, input.style.top], ['94px', '560px'],
+    'set from the rectangles alone, it was at 118.75px and 701.25px: under the box');
+});
+
+test('a scroll of the terminal\'s box is put back', async () => {
+  const app = await withTerminal();
+  const termEl = app.el('ssh-term');
+  termEl.scrollTop = 102;
+  termEl.scrollLeft = 13;
+  termEl.fire('scroll');
+  assert.deepEqual([termEl.scrollTop, termEl.scrollLeft], [0, 0]);
+});
+
 test('in a window too narrow for both, the browser and SSH panels take turns', async () => {
   const app = await load({ routes: settingsWith({ ssh: true }) });
   const { makeRoomFor, fitsWith } = app.internals;

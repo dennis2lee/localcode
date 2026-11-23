@@ -529,13 +529,69 @@ function drawScreen(d) {
     cursor.style.left = `${Number(s.cx) || 0}ch`;
     cursor.style.top = `calc(${Number(s.cy) || 0} * 1.3em)`;
   }
-  placeInput(s);
   if (stick) lines.scrollTop = lines.scrollHeight;
+  placeInput();
+}
+
+// How far the typing box stays from the terminal's right and bottom
+// edges, in layout pixels.
+const INPUT_EDGE = 2;
+
+// inputPlace is where the typing box goes, as left and top in the page's
+// layout pixels: at the cursor, and inside what the window shows of the
+// terminal's box.
+//
+// c and t are the cursor's and the terminal's rectangles, in the window's
+// pixels. m is the terminal's layout: its border box (offsetWidth,
+// offsetHeight), its border (clientLeft, clientTop), its inside
+// (clientWidth, clientHeight), the typing box's size (boxWidth,
+// boxHeight), and the window's size (winWidth, winHeight).
+//
+// The window's pixels and the layout's differ by the zoom the page
+// applies to itself (js/zoom.js, a CSS zoom on the root) in an engine
+// that reports rectangles as drawn (Chrome and Edge from 128). Set from
+// the rectangles alone, the box was the zoom factor further from the
+// terminal's corner than the cursor is: at 125%, 128 pixels under the
+// terminal's box for a cursor on its last row. The factor is read from
+// the terminal's own two widths, so it is 1 in an engine that reports
+// rectangles in layout pixels.
+//
+// A typing box that sticks out of a box that clips it is brought into
+// view by the engine on every character typed, by scrolling that box,
+// whatever its overflow says, and the document after it. The screen
+// jumped by as much, and jumped back when the next screen moved the
+// typing box. So the place is also kept inside the terminal's box and
+// inside the window: for a cursor in the last column, a terminal wider
+// than its panel, lines scrolled back, a panel partly outside a narrow
+// window.
+export function inputPlace(c, t, m) {
+  const kx = m.offsetWidth > 0 && t.width > 0 ? t.width / m.offsetWidth : 1;
+  const ky = m.offsetHeight > 0 && t.height > 0 ? t.height / m.offsetHeight : kx;
+  const x = (px) => (px - t.left) / kx - (m.clientLeft || 0);
+  const y = (px) => (px - t.top) / ky - (m.clientTop || 0);
+  let x0 = 0;
+  let y0 = 0;
+  let x1 = m.clientWidth;
+  let y1 = m.clientHeight;
+  if (m.winWidth > 0 && m.winHeight > 0) {
+    x0 = Math.max(x0, x(0));
+    y0 = Math.max(y0, y(0));
+    x1 = Math.min(x1, x(m.winWidth));
+    y1 = Math.min(y1, y(m.winHeight));
+  }
+  // Two pixels short of the far edges: the caret is drawn in the box's
+  // font, and a font that stands in for it (Hangul, for one) can be
+  // taller than the box by a fraction of a pixel.
+  const hundredth = (v) => Math.round(v * 100) / 100;
+  return {
+    left: hundredth(Math.max(x0, Math.min(x(c.left), x1 - m.boxWidth - INPUT_EDGE))),
+    top: hundredth(Math.max(y0, Math.min(y(c.top), y1 - m.boxHeight - INPUT_EDGE))),
+  };
 }
 
 // placeInput puts the typing box at the cursor, so an input method opens
 // its candidates beside the text it composes.
-function placeInput(s) {
+function placeInput() {
   const input = el('ssh-input');
   const cursor = el('ssh-cursor');
   const term = el('ssh-term');
@@ -543,8 +599,25 @@ function placeInput(s) {
   const c = cursor.getBoundingClientRect();
   const t = term.getBoundingClientRect();
   if (!c || !t) return;
-  input.style.left = `${Math.max(0, c.left - t.left)}px`;
-  input.style.top = `${Math.max(0, c.top - t.top)}px`;
+  // The window's size as a rectangle gives it, so it is in the pixels the
+  // other two rectangles are in, whichever pixels an engine reports for a
+  // zoomed page.
+  const root = typeof document !== 'undefined' ? document.documentElement : null;
+  const win = root && typeof root.getBoundingClientRect === 'function' ? root.getBoundingClientRect() : null;
+  const at = inputPlace(c, t, {
+    offsetWidth: term.offsetWidth || 0,
+    offsetHeight: term.offsetHeight || 0,
+    clientLeft: term.clientLeft || 0,
+    clientTop: term.clientTop || 0,
+    clientWidth: term.clientWidth || 0,
+    clientHeight: term.clientHeight || 0,
+    boxWidth: input.offsetWidth || 0,
+    boxHeight: input.offsetHeight || 0,
+    winWidth: (win && win.width) || 0,
+    winHeight: (win && win.height) || 0,
+  });
+  input.style.left = `${at.left}px`;
+  input.style.top = `${at.top}px`;
 }
 
 function addScroll(d) {
@@ -794,11 +867,24 @@ export function initSSHPanel() {
   lines.addEventListener('mouseup', () => {
     if (!selected()) input.focus({ preventScroll: true });
   });
+  // Nothing in the terminal's box is larger than it: its lines scroll in a
+  // box of their own. A scroll of the terminal's box is the engine
+  // bringing something into view, and it moves the whole screen: put back
+  // before it is drawn.
+  term.addEventListener('scroll', () => {
+    if (term.scrollTop) term.scrollTop = 0;
+    if (term.scrollLeft) term.scrollLeft = 0;
+  });
+  // A view that changed size moved the cursor without a new screen.
+  const resized = () => {
+    sendSize();
+    placeInput();
+  };
   if (typeof ResizeObserver !== 'undefined') {
-    new ResizeObserver(() => sendSize()).observe(term);
+    new ResizeObserver(resized).observe(term);
   }
   if (typeof window !== 'undefined' && window.addEventListener) {
-    window.addEventListener('resize', () => sendSize());
+    window.addEventListener('resize', resized);
   }
   el('toggle-ssh')?.addEventListener('click', () => sendSize());
 }

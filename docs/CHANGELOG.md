@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+The SSH panel's screen no longer jumps while you type in a zoomed window.
+
+**Fixed**
+
+* The SSH panel's screen jumping up and back on every second key typed, with the window zoomed above 100% and the cursor on the lower rows: the typing box placed at the cursor in the page's own pixels
+* The typing box kept inside the terminal's box and the window: no jump at the last column, in a terminal wider than its panel, or in a panel partly outside a narrow window
+* The room for the SSH panel's scrollbar kept from the start where a scrollbar takes width (Windows, Linux): the last two columns no longer under the bar once lines scroll off
+
 ## v0.177.0
 
 The model can open SSH connections and work in them, in terminals shown in an SSH panel of their own that you share with it.

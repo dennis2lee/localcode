@@ -1015,6 +1015,11 @@ main:has(> #ssh-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #right-p
    cuts them. */
 .ssh-lines {
   position: absolute; inset: 0; overflow-x: hidden; overflow-y: auto; padding: 4px 6px;
+  /* Where a scrollbar takes width (Windows, Linux), the room for it is
+     kept from the start: the terminal is sized to the width beside it,
+     and the first line that scrolls off does not put the last two
+     columns under the bar. */
+  scrollbar-gutter: stable;
   font-family: var(--f-mono); font-size: var(--t-code); line-height: 1.3;
   color: var(--text); cursor: text;
 }
