@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.177.0
 
 The model can open SSH connections and work in them, in terminals shown in an SSH panel of their own that you share with it.
 
@@ -9,13 +9,18 @@ The model can open SSH connections and work in them, in terminals shown in an SS
 * The `ssh` tool: `connect`, `run`, `type`, `key`, `read`, `wait`, `list` and `close`, in terminals that stay connected between turns for as long as the conversation exists
 * The SSH panel, in the desktop window and the Web UI: a column after the browser panel with its own header toggle, one tab per terminal, the terminal's screen, typing, copy and paste, Korean input, and `+` to open a connection
 * Questions only the person answers, in the panel: host keys (accepted into `~/.localcode/ssh/known_hosts`), passwords, passphrases and one-time codes
-* Hold, which keeps the model out of a terminal, its screen included, until the person lets go
-* Exit statuses and the end of a command from bash and zsh, through a line typed into the shell once, with marks only that terminal knows
-* Permission keys `ssh_connect`, `ssh` and `ssh_input`; remote commands are decided as `bash` lines are
-* `~/.ssh/config` with `Host`, `Match`, `Include`, `ProxyJump`, `IdentityAgent`, `CertificateFile` and `HostKeyAlias`; the SSH agent; encrypted keys asked for only when the server accepts them
+* Hold, which keeps the model out of a terminal, its screen and a waiting `run` included, until the person lets go
+* Exit statuses and the end of a command from bash and zsh, through a line typed into the shell once, with marks only that terminal knows; history expansion off in that shell
+* Commands at a shell's prompt only through `run`: `type` and `key` there take text and line-editing keys
+* Permission keys `ssh_connect`, `ssh` and `ssh_input`; remote commands decided as `bash` lines are; host names matched in lower case
+* `~/.ssh/config` with `Host`, `Match`, `Include`, `ProxyJump`, `IdentityAgent`, `CertificateFile` and `HostKeyAlias`; `/etc/ssh/ssh_config`; the SSH agent; encrypted keys asked for only when the server accepts them
 * The `ssh` setting, `/ssh on|off`, and the settings window's SSH section with every open connection and a Close button for each
 * `/update` and the settings window's Install button naming the SSH connections they would close, and updating when asked again within two minutes
-* `third_party/vt`, a patched copy of the terminal emulator: wide characters at the right margin, a cursor saved past a screen made narrower, and repeat and scroll counts with no bound
+* `third_party/vt`, a patched copy of the terminal emulator: wide characters at the right margin, cursors and margins kept on the screen, and repeat and scroll counts bounded
+
+**Fixed**
+
+* A browser panel test reading a tab's address before a page opened behind had reported it
 
 ## v0.176.3
 
