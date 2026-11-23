@@ -426,16 +426,14 @@ func (d *Daemon) handleSSHLive(w http.ResponseWriter, r *http.Request) {
 	out := []row{}
 	if d.SSH != nil {
 		for _, t := range d.SSH.LiveTerminals() {
-			info := t.Info()
+			// The summary, not Info: a terminal busy drawing does not hold
+			// up the settings window.
+			sum := t.Summarize()
 			title := ""
 			if s, err := d.Loop.Store.Get(t.Conv); err == nil {
 				title = s.Title
 			}
-			target := info.Target
-			if target == "" {
-				target = info.Spec
-			}
-			out = append(out, row{Session: t.Conv, Title: title, ID: t.ID, Target: target, State: string(info.State)})
+			out = append(out, row{Session: t.Conv, Title: title, ID: t.ID, Target: sum.Target, State: string(sum.State)})
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -444,6 +442,10 @@ func (d *Daemon) handleSSHLive(w http.ResponseWriter, r *http.Request) {
 // handleSetSSH turns SSH on or off live and persists it. Off closes every
 // connection.
 func (d *Daemon) handleSetSSH(w http.ResponseWriter, r *http.Request) {
+	// Off closes every connection: not something another site may do.
+	if !d.sshGuard(w, r) {
+		return
+	}
 	var req struct {
 		Enabled bool `json:"enabled"`
 	}
@@ -498,11 +500,7 @@ func (d *Daemon) liveSSHNames() []string {
 	}
 	var out []string
 	for _, t := range d.SSH.LiveTerminals() {
-		target := t.Info().Target
-		if target == "" {
-			target = t.Spec
-		}
-		out = append(out, target+" ("+t.Conv+")")
+		out = append(out, t.Summarize().Target+" ("+t.Conv+")")
 	}
 	sort.Strings(out)
 	return out

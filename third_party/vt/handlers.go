@@ -625,14 +625,16 @@ func (e *Emulator) registerDefaultCsiHandlers() {
 	e.RegisterCsiHandler('S', func(params ansi.Params) bool {
 		// Scroll Up [ansi.SU]
 		n, _, _ := params.Param(0, 1)
-		e.scr.ScrollUp(n)
+		// localcode: no more than the screen. See LOCALCODE.md.
+		e.scr.ScrollUp(min(n, e.Height()))
 		return true
 	})
 
 	e.RegisterCsiHandler('T', func(params ansi.Params) bool {
 		// Scroll Down [ansi.SD]
 		n, _, _ := params.Param(0, 1)
-		e.scr.ScrollDown(n)
+		// localcode: no more than the screen. See LOCALCODE.md.
+		e.scr.ScrollDown(min(n, e.Height()))
 		return true
 	})
 
@@ -752,7 +754,10 @@ func (e *Emulator) registerDefaultCsiHandlers() {
 		switch value {
 		case 0:
 			x, _ := e.scr.CursorPosition()
-			e.tabstops.Reset(x)
+			// localcode: never past the table. See LOCALCODE.md.
+			if x >= 0 && x < e.Width() {
+				e.tabstops.Reset(x)
+			}
 		case 3:
 			e.tabstops.Clear()
 		default:

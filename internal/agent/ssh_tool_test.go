@@ -60,17 +60,97 @@ func execSSH(t *testing.T, loop *Loop, ctx context.Context, in map[string]any) t
 	return loop.Tools.Call(ctx, SSHToolName, b, "")
 }
 
+// allowAll answers every permission question yes, so a refusal in a
+// test is a rule's.
+func allowAll(loop *Loop) {
+	reg := tools.NewRegistry(func(context.Context, tools.Ask) (bool, error) { return true, nil })
+	// The rules in config decide, as cmd/localcode wires them.
+	reg.Resolver = tools.ComposeResolver(
+		func(ctx context.Context, toolName, subject string, static bool) tools.Decision {
+			return tools.Decision(loop.Config.ResolvePermissionFor(ctx, toolName, subject, static))
+		},
+		NewPermissionPolicy(loop.Store, loop.Config).ToolsPolicy(),
+	)
+	reg.Register(NewSSHTool(loop))
+	loop.Tools = reg
+}
+
 func TestADenyRuleKeepsTheModelOffAHostByEitherName(t *testing.T) {
 	loop := sshLoop(t)
+	allowAll(loop)
 	loop.Config.SetSSHRuntime(true)
+	ctx := WithSessionID(context.Background(), "s1")
+	// Without the rule, the same connect goes ahead (to nowhere).
+	if res := execSSH(t, loop, ctx, map[string]any{"action": "connect", "host": "127.0.0.1:1"}); res.Refused {
+		t.Fatalf("refused with no rule: %+v", res)
+	}
 	loop.Config.Permissions = map[string]config.ToolPermission{
 		config.SSHConnectToolName: {Rules: []config.PermissionRule{{Match: "*prod*", Decision: config.DecisionDeny}}},
 	}
-	ctx := WithSessionID(context.Background(), "s1")
-	for _, host := range []string{"prod-db", "deploy@prod.example.com:2222"} {
+	before := len(loop.SSH.List("s1"))
+	// The host as an alias, as a name, and in capitals: host names are not
+	// case sensitive, and a rule written in lower case covers them.
+	for _, host := range []string{"prod-db", "deploy@prod.example.com:2222", "PROD.example.com", "Prod-db"} {
 		res := execSSH(t, loop, ctx, map[string]any{"action": "connect", "host": host})
-		if !res.Refused || len(loop.SSH.List("s1")) != 0 {
+		if !res.Refused || len(loop.SSH.List("s1")) != before {
 			t.Fatalf("%s: %+v", host, res)
+		}
+	}
+}
+
+func TestADelegatedSubAgentIsNotOfferedSSH(t *testing.T) {
+	loop := sshLoop(t)
+	loop.Config.SetSSHRuntime(true)
+	if _, err := loop.Store.CreateSession("parent", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.Store.CreateSession("child", "parent", "general-purpose", false); err != nil {
+		t.Fatal(err)
+	}
+	if loop.hiddenTools(WithSessionID(context.Background(), "parent"))[SSHToolName] {
+		t.Fatal("hidden from the conversation")
+	}
+	if !loop.hiddenTools(WithSessionID(context.Background(), "child"))[SSHToolName] {
+		t.Fatal("offered to a sub-agent, whose terminals no panel shows")
+	}
+}
+
+type fakePrompt struct {
+	pending  string
+	atPrompt bool
+}
+
+func (f fakePrompt) PendingLine() (string, bool) { return f.pending, f.atPrompt }
+func (f fakePrompt) Info() sshterm.Info {
+	return sshterm.Info{Integrated: true, Shell: "bash"}
+}
+
+// A command the rules deny is not built at the prompt with type and key.
+func TestADeniedCommandCannotBeTyped(t *testing.T) {
+	loop := sshLoop(t)
+	loop.Config.Permissions = map[string]config.ToolPermission{
+		config.SSHToolName: {Rules: []config.PermissionRule{{Match: "rm *", Decision: config.DecisionDeny}}},
+	}
+	loop.Config.SetSkipPermissionsRuntime(true)
+	tool := NewSSHTool(loop)
+	ctx := context.Background()
+	for _, c := range []struct {
+		term  fakePrompt
+		text  string
+		enter bool
+		want  bool
+	}{
+		{fakePrompt{"", true}, "rm -rf x", true, true},
+		{fakePrompt{"", true}, "rm -rf x", false, true},
+		{fakePrompt{"r", true}, "m -rf x", false, true},
+		{fakePrompt{"rm -rf x", true}, "", true, true},
+		{fakePrompt{"", true}, "ls\nrm -rf x", false, true},
+		{fakePrompt{"", false}, "rm -rf x", true, false},
+		{fakePrompt{"", true}, "ls -la", true, false},
+	} {
+		got := tool.deniedAsCommand(ctx, c.term, c.text, c.enter) != ""
+		if got != c.want {
+			t.Errorf("pending %q + %q (enter %v, at prompt %v): denied %v", c.term.pending, c.text, c.enter, c.term.atPrompt, got)
 		}
 	}
 }

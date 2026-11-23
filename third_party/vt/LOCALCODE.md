@@ -1,9 +1,10 @@
 # vt, as localcode carries it
 
 A copy of `github.com/charmbracelet/x/vt` v0.1.0 (MIT, see LICENSE), used
-through a `replace` directive in localcode's go.mod, with one change.
+through a `replace` directive in localcode's go.mod, with the changes
+below. Every changed line carries a `localcode:` comment.
 
-## The change
+## Wide characters at the margin
 
 `utf8.go`, `handleGrapheme`: wrapping around a character two columns wide.
 
@@ -21,5 +22,26 @@ the end of the line; with no wrap pending, that erased the line it had
 just drawn.
 
 The test is `TestWideCharactersWrapAtTheMargin` in `utf8_localcode_test.go`.
-The upstream main branch (2026-11-22) has the same code; when a release
-fixes it, drop this copy and the replace directive.
+
+## A cursor past the edge after the screen shrank
+
+`screen.go` (`RestoreCursor`, `clampCursors`), `emulator.go` (`Resize`),
+`cc.go` (`horizontalTabSet`), `handlers.go` (TBC): a cursor saved at a
+column the screen no longer has (saved, then the terminal narrowed, then
+restored, or a full-screen program opened wide and quit narrow) was
+restored past the last column, and a tab stop set or cleared there indexed
+past the tab-stop table and panicked. In localcode the screen is fed from
+a goroutine, so remote output could end the program. Saved and current
+cursors of both screens are now kept inside the screen on a resize and a
+restore, and setting or clearing a tab stop checks the column.
+
+## Counts with no bound
+
+`csi_cursor.go` (REP), `handlers.go` (SU, SD): REP repeated the last
+character as many times as asked, so `a ESC[99999999b` held the emulator
+for seconds; it now repeats at most a screen's worth. SU and SD scroll at
+most the screen's height.
+
+The tests are in `localcode_test.go`. The upstream main branch
+(2026-11-22) has the same code for all of these; when a release fixes
+them, drop this copy and the replace directive.

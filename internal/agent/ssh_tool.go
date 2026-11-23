@@ -41,8 +41,18 @@ func (l *Loop) sshOffered(ctx context.Context) bool {
 	if l.Config == nil || !l.Config.SSHLive() || l.SSH == nil || Unattended(ctx) {
 		return false
 	}
-	_, ok := SessionIDFromContext(ctx)
-	return ok
+	id, ok := SessionIDFromContext(ctx)
+	if !ok {
+		return false
+	}
+	// A delegated sub-agent works in a session of its own, which no panel
+	// shows: its questions would go unseen and its terminals unwatched.
+	if l.Store != nil {
+		if sess, err := l.Store.Get(id); err == nil && sess.ParentID != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // SSHTool drives the conversation's SSH terminals.
@@ -270,7 +280,7 @@ func (t SSHTool) connect(ctx context.Context, sessionID string, in sshInput) too
 	if ok, why := t.loop.Tools.PermitNamed(ctx, config.SSHConnectToolName, subject, describe, false); !ok {
 		return tools.Result{Content: why, IsError: true, Refused: true}
 	}
-	term, err := t.loop.SSH.Open(sessionID, spec, sshterm.ByModel)
+	term, err := t.loop.SSH.OpenApproved(sessionID, spec, sshterm.ByModel, subject)
 	if err != nil {
 		return sshError("%v", err)
 	}
@@ -282,7 +292,7 @@ func (t SSHTool) connect(ctx context.Context, sessionID string, in sshInput) too
 		return sshError("%s: %v", spec, err)
 	}
 	// The shell's first prompt, and its integration line, before the
-	// first run.
+	// first run: the screen returned is the one the model will type into.
 	settle, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	for settle.Err() == nil {
@@ -295,6 +305,7 @@ func (t SSHTool) connect(ctx context.Context, sessionID string, in sshInput) too
 		case <-settle.Done():
 		}
 	}
+	term.WaitPrompt(settle, 3*time.Second)
 	r, err := term.Read(0, true)
 	if err != nil {
 		return tools.Result{Content: fmt.Sprintf("Connected: terminal %s, %s. %v", term.ID, term.Info().Target, err)}
@@ -361,7 +372,7 @@ func formatRun(id string, res sshterm.RunResult, timeout time.Duration) string {
 	case res.TimedOut:
 		fmt.Fprintf(&b, "Still running after %s; it keeps running. Use wait, read, or key ctrl+c.", timeout)
 	case res.Lost:
-		b.WriteString("The shell stopped reporting when commands end (a nested shell such as sudo -i, su, ssh or docker exec does not). The command may have finished; the exit status is not known.")
+		b.WriteString("No end reported yet, and the output has stopped at what looks like a prompt. The command may still be running (a progress line), or it started a nested shell (sudo -i, su, ssh, docker exec), which reports nothing. The next run waits for the end: use read and wait to see which, key ctrl+c to stop it, or type with enter to work in a nested shell.")
 	case res.Finished:
 		fmt.Fprintf(&b, "Exit status %s (%s).", res.Status, res.Took)
 	default:
@@ -388,6 +399,9 @@ func (t SSHTool) typeText(ctx context.Context, term *sshterm.Terminal, in sshInp
 		subject += "\n"
 		shown += " then Enter"
 	}
+	if refusal := t.deniedAsCommand(ctx, term, in.Text, in.Enter); refusal != "" {
+		return tools.Result{Content: refusal, IsError: true, Refused: true}
+	}
 	describe := fmt.Sprintf("ssh %s (%s): type %q", info.Target, term.ID, shown)
 	if ok, why := t.loop.Tools.PermitNamed(ctx, config.SSHInputToolName, subject, describe, true); !ok {
 		return tools.Result{Content: why, IsError: true, Refused: true}
@@ -407,6 +421,11 @@ func (t SSHTool) key(ctx context.Context, term *sshterm.Terminal, in sshInput) t
 	}
 	info := term.Info()
 	gen := term.PersonGen()
+	if pressesEnter(in.Keys) {
+		if refusal := t.deniedAsCommand(ctx, term, "", true); refusal != "" {
+			return tools.Result{Content: refusal, IsError: true, Refused: true}
+		}
+	}
 	describe := fmt.Sprintf("ssh %s (%s): press %s", info.Target, term.ID, in.Keys)
 	if ok, why := t.loop.Tools.PermitNamed(ctx, config.SSHInputToolName, "key "+in.Keys, describe, true); !ok {
 		return tools.Result{Content: why, IsError: true, Refused: true}
@@ -415,6 +434,49 @@ func (t SSHTool) key(ctx context.Context, term *sshterm.Terminal, in sshInput) t
 		return sshRefused(err)
 	}
 	return t.afterInput(ctx, term, "Pressed.")
+}
+
+// deniedAsCommand is the refusal for text that, typed at the shell's
+// prompt, makes a command the rules for "ssh" deny: the lines it
+// completes, with what the model typed on the line before, and the line
+// left unfinished. Typed into a program (no prompt), it is not a command.
+func (t SSHTool) deniedAsCommand(ctx context.Context, term promptLine, text string, enter bool) string {
+	pending, atPrompt := term.PendingLine()
+	if !atPrompt || t.loop.Config == nil {
+		return ""
+	}
+	full := strings.ReplaceAll(pending+text, "\r\n", "\n")
+	full = strings.ReplaceAll(full, "\r", "\n")
+	posix := config.WithRemoteShell(ctx, remotePOSIX(term.Info()))
+	for _, line := range strings.Split(full, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if t.loop.Config.ResolvePermissionFor(posix, config.SSHToolName, line, true) == config.DecisionDeny {
+			return fmt.Sprintf("typed at the shell's prompt, %q is a command a permission rule for %q denies", line, config.SSHToolName)
+		}
+	}
+	return ""
+}
+
+// promptLine is what deniedAsCommand reads of a terminal.
+type promptLine interface {
+	PendingLine() (string, bool)
+	Info() sshterm.Info
+}
+
+// pressesEnter reports keys that include a plain Enter.
+func pressesEnter(keys string) bool {
+	evs, err := sshterm.ParseKeys(keys)
+	if err != nil {
+		return false
+	}
+	for _, ev := range evs {
+		if ev.Code == '\r' && ev.Mod == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // afterInput waits a moment for the screen to answer what was typed, and

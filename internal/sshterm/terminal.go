@@ -1,6 +1,7 @@
 package sshterm
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -52,7 +53,7 @@ const (
 var (
 	ErrHeld         = errors.New("the person is holding this terminal (Hold in the SSH panel): its screen and input are theirs until they release it; ask them in the conversation, or wait")
 	ErrPersonActive = errors.New("the person typed in this terminal in the last few seconds; wait for them, or ask them in the conversation")
-	ErrBusy         = errors.New("a command is still running in this terminal; use wait or read, or key ctrl+c to stop it")
+	ErrBusy         = errors.New("the shell has not reported the end of the last command: it is still running, or a nested shell (sudo -i, su, ssh, docker exec) is at its own prompt, which reports nothing. Use wait or read to see which; key ctrl+c stops a command; in a nested shell, use type with enter")
 	ErrLineNotEmpty = errors.New("the person has typed part of a command line in this terminal and not run it; ask them to finish or clear it")
 	ErrNotConnected = errors.New("this terminal is not connected")
 	ErrChanged      = errors.New("the person typed in this terminal while the question was open, so what was approved may no longer fit; read the screen and decide again")
@@ -97,6 +98,9 @@ type Terminal struct {
 	Conv   string
 	Spec   string
 	Opener Opener
+	// approved is the subject a permission question approved for this
+	// connection, "" when none was asked.
+	approved string
 	// Epoch tells this terminal's scrollback numbering from another's
 	// under the same id (a reconnect, a restarted daemon).
 	Epoch string
@@ -131,8 +135,20 @@ type Terminal struct {
 	promptX     int
 	promptY     int
 	promptKnown bool
-	personTyped bool // the person typed since the last prompt
+	// personTyped is the person having typed since the prompt (or since
+	// their last Enter without integration): what they typed may still be
+	// on the line, unsent. promptRest and promptNext are the cursor's row
+	// right of the prompt and the row under it as the prompt left them,
+	// so a line the person typed and erased reads as empty again.
+	personTyped bool
+	promptRest  string
+	promptNext  string
 	personGen   uint64
+	// modelLine is what the model typed on the prompt's line and has not
+	// run yet: a command the rules would deny must not be built up with
+	// type and run with key.
+	modelLine   string
+	integrating bool
 	lastPerson  time.Time
 	hold        bool
 	lastOutput  time.Time
@@ -140,6 +156,9 @@ type Terminal struct {
 	run         *runWait
 	endedAt     time.Time
 	endedFlag   atomic.Bool
+	// summary is the terminal's state for readers that must not wait on
+	// mu (the session list, the settings window): written on every change.
+	summary atomic.Pointer[Summary]
 
 	changed chan struct{}
 	version uint64
@@ -167,6 +186,7 @@ type runWait struct {
 	status    string
 	ended     bool // a D mark ended it
 	alt       bool
+	held      bool // the person held the terminal: what came is theirs
 	personGen uint64
 }
 
@@ -190,6 +210,7 @@ func newTerminal(m *Manager, conv, id, spec string, by Opener) *Terminal {
 		resized: make(chan struct{}, 1),
 	}
 	t.marks.nonce = newNonce()
+	t.summary.Store(&Summary{Target: spec, State: StateConnecting})
 	t.emu = vt.NewEmulator(t.cols, t.rows)
 	t.emu.SetScrollbackSize(scrollbackLines)
 	t.emu.SetCallbacks(vt.Callbacks{
@@ -206,10 +227,31 @@ func newTerminal(m *Manager, conv, id, spec string, by Opener) *Terminal {
 
 // notify tells watchers the terminal changed. Called with mu held.
 func (t *Terminal) notify() {
+	target := t.Spec
+	if t.target.Host != "" {
+		target = t.target.String()
+	}
+	t.summary.Store(&Summary{Target: target, State: t.state, Asking: t.question != nil})
 	t.version++
 	close(t.changed)
 	t.changed = make(chan struct{})
 	t.m.touched(t.Conv)
+}
+
+// Summary is a terminal's state as read without its lock.
+type Summary struct {
+	Target string
+	State  State
+	Asking bool
+}
+
+// Summarize is the terminal's state as of its last change. It takes no
+// lock: a terminal busy drawing does not hold up the session list.
+func (t *Terminal) Summarize() Summary {
+	if s := t.summary.Load(); s != nil {
+		return *s
+	}
+	return Summary{Target: t.Spec, State: StateConnecting}
 }
 
 // Changed is closed the next time the terminal changes.
@@ -274,6 +316,12 @@ func (t *Terminal) writer(stdin io.Writer) {
 
 // reader feeds the shell's output to the screen and the tracker.
 func (t *Terminal) reader(r io.Reader) {
+	// A panic here would end the program, every conversation with it.
+	defer func() {
+		if rec := recover(); rec != nil {
+			go t.end(fmt.Sprintf("the terminal stopped: %v", rec))
+		}
+	}()
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := r.Read(buf)
@@ -287,10 +335,24 @@ func (t *Terminal) reader(r io.Reader) {
 }
 
 func (t *Terminal) output(p []byte) {
+	if err := t.feed(p); err != nil {
+		t.end("the remote sent output the terminal could not draw (" + err.Error() + ")")
+	}
+}
+
+// screenChunk is how much output is drawn under one hold of the lock:
+// the panel, the model and the session list wait for it between chunks.
+const screenChunk = 1024
+
+// feed takes a read of the shell's output: the marks and the waiting
+// run's capture first, then the screen, a chunk at a time. A panic in the
+// emulator is returned as an error, so a remote that finds one ends its
+// own terminal rather than the program.
+func (t *Terminal) feed(p []byte) error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.state == StateEnded {
-		return
+		t.mu.Unlock()
+		return nil
 	}
 	from := 0
 	for _, ev := range t.marks.feed(p) {
@@ -311,17 +373,40 @@ func (t *Terminal) output(p []byte) {
 				t.finishRun(w)
 			}
 			t.running = false
-			t.personTyped = false
 			t.promptKnown = false
 			t.integrated = true
+			t.personTyped = false
+			t.modelLine = ""
 		}
 		from = ev.end
 	}
 	if w := t.run; w != nil && from < len(p) {
 		w.out.write(p[from:])
 	}
-	_, _ = t.emu.Write(p)
-	t.drainScrollback()
+	t.mu.Unlock()
+
+	// Clearing the screen with its scrollback (ED 3, which clear sends)
+	// clears the terminal's own scrollback too: what was cleared is not
+	// there for the model to read afterwards.
+	clearsHistory := bytes.Contains(p, []byte("\x1b[3J"))
+	for len(p) > 0 {
+		n := min(len(p), screenChunk)
+		t.mu.Lock()
+		err := t.draw(p[:n])
+		t.drainScrollback()
+		t.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		p = p[n:]
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if clearsHistory {
+		t.scrollFirst += len(t.scroll)
+		t.scroll = nil
+	}
 	if w := t.run; w != nil && t.emu.IsAltScreen() {
 		w.alt = true
 		t.finishRun(w)
@@ -331,6 +416,18 @@ func (t *Terminal) output(p []byte) {
 		t.armSettle()
 	}
 	t.notify()
+	return nil
+}
+
+// draw writes output to the emulator. Called with mu held.
+func (t *Terminal) draw(b []byte) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v", r)
+		}
+	}()
+	_, _ = t.emu.Write(b)
+	return nil
 }
 
 // finishRun ends the model's wait. Called with mu held.
@@ -356,6 +453,7 @@ func (t *Terminal) armSettle() {
 		}
 		pos := t.emu.CursorPosition()
 		t.promptX, t.promptY, t.promptKnown = pos.X, pos.Y, true
+		t.promptRest, t.promptNext = t.rowsAfterCursor()
 		t.notify()
 	})
 }
@@ -378,6 +476,25 @@ func (t *Terminal) drainScrollback() {
 		t.scroll = append(t.scroll[:0:0], t.scroll[over:]...)
 		t.scrollFirst += over
 	}
+}
+
+// rowsAfterCursor is the cursor's row from the cursor on, and the row
+// under it, as raw cells (spaces kept). Called with mu held.
+func (t *Terminal) rowsAfterCursor() (string, string) {
+	pos := t.emu.CursorPosition()
+	row := func(y, from int) string {
+		if y >= t.emu.Height() {
+			return ""
+		}
+		var b strings.Builder
+		for x := from; x < t.emu.Width(); x++ {
+			if c := t.emu.CellAt(x, y); c != nil {
+				b.WriteString(c.Content)
+			}
+		}
+		return b.String()
+	}
+	return row(pos.Y, pos.X), row(pos.Y+1, 0)
 }
 
 // cursorLine is the text of the line the cursor is on. Called with mu
@@ -517,7 +634,7 @@ func (t *Terminal) dialAndStart(ctx context.Context) error {
 		hops = append(hops, cfg.resolve(hs, o.LocalUser, o.Home))
 	}
 	if o.CheckTarget != nil {
-		if err := o.CheckTarget(t.Conv, t.Opener, Route{Asked: spec, Target: target, Hops: hops}); err != nil {
+		if err := o.CheckTarget(t.Conv, t.Opener, Route{Asked: spec, Target: target, Hops: hops}, t.approved); err != nil {
 			return err
 		}
 	}
@@ -528,6 +645,11 @@ func (t *Terminal) dialAndStart(ctx context.Context) error {
 			return fmt.Errorf("jump host %s: %w", ht, err)
 		}
 		t.mu.Lock()
+		if t.state == StateEnded {
+			t.mu.Unlock()
+			c.Close()
+			return errors.New("closed while connecting")
+		}
 		t.closers = append(t.closers, c)
 		t.mu.Unlock()
 		via = c
@@ -921,14 +1043,64 @@ func (t *Terminal) modelMayAct() error {
 	return nil
 }
 
-// lineHasPersonText reports the person's unsent text on the prompt line.
-// Called with mu held.
+// lineHasPersonText reports text the person typed and has not sent,
+// which the model's input would be added to. Called with mu held.
+//
+// The cursor alone cannot say: after Ctrl+A it is back at the prompt
+// with the text still after it. So the line counts as having the
+// person's text from their first key until their Enter, Ctrl+C or
+// Ctrl+U, or the next prompt, unless the prompt's row and the one under
+// it are exactly as the prompt left them, the cursor at its place (text
+// typed and erased). A full-screen program has no command line.
 func (t *Terminal) lineHasPersonText() bool {
-	if !t.integrated || t.running || !t.personTyped {
+	if !t.personTyped || t.emu.IsAltScreen() || (t.integrated && t.running) {
 		return false
 	}
-	pos := t.emu.CursorPosition()
-	return !t.promptKnown || pos.X != t.promptX || pos.Y != t.promptY
+	if t.integrated && t.promptKnown {
+		pos := t.emu.CursorPosition()
+		rest, next := t.rowsAfterCursor()
+		if pos.X == t.promptX && pos.Y == t.promptY && rest == t.promptRest && next == t.promptNext {
+			return false
+		}
+	}
+	return true
+}
+
+// WaitPrompt waits up to d for the shell to be at a prompt it has
+// finished drawing, and reports whether it is. Without integration it
+// cannot tell, and waits for output to be quiet instead.
+func (t *Terminal) WaitPrompt(ctx context.Context, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		t.mu.Lock()
+		ready := t.state == StateConnected && ((t.integrated && !t.running && t.promptKnown) ||
+			(!t.integrated && !t.lastOutput.IsZero() && time.Since(t.lastOutput) > 500*time.Millisecond))
+		ended := t.state == StateEnded
+		ch := t.changed
+		t.mu.Unlock()
+		if ready {
+			return true
+		}
+		if ended {
+			return false
+		}
+		select {
+		case <-ch:
+		case <-time.After(100 * time.Millisecond):
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return false
+}
+
+// PendingLine is what the model has typed on the prompt's line and not
+// run, and whether the shell is at a prompt (integrated, no command
+// running), where text followed by Enter is a command.
+func (t *Terminal) PendingLine() (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.modelLine, t.integrated && !t.running && !t.emu.IsAltScreen()
 }
 
 // PersonGen counts the person's inputs, so a caller can tell whether the
@@ -961,9 +1133,9 @@ var (
 )
 
 // CheckCommand refuses a command run cannot type as written: more than
-// one line, control characters, or a "!" an interactive bash or zsh
-// would expand from history, so the line the shell runs would not be the
-// one that was approved.
+// one line, control characters, or history expansion an interactive bash
+// or zsh would apply ("!" outside single quotes, "^old^new" at the start),
+// so the line the shell runs would not be the one that was approved.
 func CheckCommand(command string) error {
 	if strings.TrimSpace(command) == "" {
 		return errors.New("no command")
@@ -979,26 +1151,55 @@ func CheckCommand(command string) error {
 			return fmt.Errorf("control character %U in the command; use key for keys", r)
 		}
 	}
-	inSingle := false
+	if strings.HasPrefix(strings.TrimLeft(command, " "), "^") {
+		return errors.New(`a line starting with "^" is the shell's history substitution; quote the "^" or start the line otherwise`)
+	}
+	const (
+		plain = iota
+		single
+		double
+	)
+	quote := plain
 	rs := []rune(command)
 	for i := 0; i < len(rs); i++ {
-		switch rs[i] {
-		case '\\':
-			if !inSingle {
+		switch quote {
+		case single:
+			if rs[i] == '\'' {
+				quote = plain
+			}
+			continue
+		case double:
+			switch rs[i] {
+			case '\\':
 				i++
-			}
-		case '\'':
-			inSingle = !inSingle
-		case '!':
-			if inSingle || i+1 >= len(rs) {
+				continue
+			case '"':
+				quote = plain
 				continue
 			}
-			switch rs[i+1] {
-			case ' ', '=', '(':
+		case plain:
+			switch rs[i] {
+			case '\\':
+				i++
+				continue
+			case '\'':
+				quote = single
+				continue
+			case '"':
+				quote = double
 				continue
 			}
-			return errors.New(`the shell would expand "!" from its history here; put that part in single quotes`)
 		}
+		if rs[i] != '!' || i+1 >= len(rs) {
+			continue
+		}
+		switch next := rs[i+1]; {
+		case next == ' ', next == '=', next == '(':
+			continue
+		case next == '"' && quote == double:
+			continue
+		}
+		return errors.New(`the shell would expand "!" from its history here; put that part in single quotes`)
 	}
 	return nil
 }
@@ -1010,11 +1211,24 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 	if err := CheckCommand(command); err != nil {
 		return RunResult{}, err
 	}
-	// A prompt still being drawn after the last command: typing into it
-	// would be echoed twice.
+	// The integration line being typed, or a prompt still being drawn
+	// after the last command: typing then would mix with it, or be echoed
+	// twice.
 	settleBy := time.Now().Add(3 * time.Second)
+	integrateBy := time.Now().Add(8 * time.Second)
 	for {
 		t.mu.Lock()
+		if t.integrating && time.Now().Before(integrateBy) {
+			ch := t.changed
+			t.mu.Unlock()
+			select {
+			case <-ch:
+			case <-time.After(100 * time.Millisecond):
+			case <-ctx.Done():
+				return RunResult{}, ctx.Err()
+			}
+			continue
+		}
 		if !t.integrated || t.running || t.promptKnown || t.personTyped || time.Now().After(settleBy) {
 			break
 		}
@@ -1036,13 +1250,12 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 		t.mu.Unlock()
 		return RunResult{}, ErrChanged
 	}
-	lost := false
+	// Never typed into a command that has not ended: what looks like a
+	// nested shell's prompt can be a progress line of a command that is
+	// still reading its input.
 	if t.integrated && t.running {
-		if !t.lostIntegration() {
-			t.mu.Unlock()
-			return RunResult{}, ErrBusy
-		}
-		lost = true
+		t.mu.Unlock()
+		return RunResult{}, ErrBusy
 	}
 	if t.lineHasPersonText() {
 		t.mu.Unlock()
@@ -1050,7 +1263,8 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 	}
 	w := &runWait{out: capture{max: captureLimit}, done: make(chan struct{}), personGen: t.personGen}
 	t.run = w
-	integrated := t.integrated && !lost
+	integrated := t.integrated
+	t.modelLine = ""
 	if t.integrated {
 		t.running = true
 	}
@@ -1065,7 +1279,7 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 	defer deadline.Stop()
 	poll := time.NewTicker(250 * time.Millisecond)
 	defer poll.Stop()
-	res := RunResult{Integrated: integrated, Lost: lost}
+	res := RunResult{Integrated: integrated}
 wait:
 	for {
 		select {
@@ -1113,6 +1327,10 @@ wait:
 	if t.run == w {
 		t.run = nil
 		t.applySize()
+	}
+	if w.held {
+		t.mu.Unlock()
+		return RunResult{}, ErrHeld
 	}
 	res.Output = w.out.text(!w.started)
 	res.Status = w.status
@@ -1167,9 +1385,14 @@ func (t *Terminal) Type(text string, enter bool, gen uint64) error {
 	if enter {
 		text += "\r"
 	}
-	if strings.Contains(text, "\r") && t.integrated && !t.running {
-		t.running = true
-		t.runStarted = time.Now()
+	if t.integrated && !t.running {
+		if i := strings.LastIndex(text, "\r"); i >= 0 {
+			t.running = true
+			t.runStarted = time.Now()
+			t.modelLine = text[i+1:]
+		} else {
+			t.modelLine += text
+		}
 	}
 	t.emu.SendText(text)
 	t.notify()
@@ -1198,6 +1421,9 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 		if ev.Code == uv.KeyEnter && ev.Mod == 0 && t.integrated && !t.running {
 			t.running = true
 			t.runStarted = time.Now()
+			t.modelLine = ""
+		} else if ev.Mod == uv.ModCtrl && (ev.Code == 'c' || ev.Code == 'u') {
+			t.modelLine = ""
 		}
 		t.sendKey(ev)
 	}
@@ -1238,7 +1464,9 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 	}
 	t.lastPerson = time.Now()
 	t.personGen++
+	t.modelLine = ""
 	enter := false
+	clears := false
 	switch {
 	case k != nil:
 		ev, ok := personKeyEvent(*k)
@@ -1247,6 +1475,8 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		}
 		t.sendKey(ev)
 		enter = ev.Code == uv.KeyEnter && ev.Text == ""
+		// Ctrl+C and Ctrl+U leave the line empty.
+		clears = ev.Mod == uv.ModCtrl && (ev.Code == 'c' || ev.Code == 'u')
 	case text != "":
 		text = cleanText(text)
 		text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\r"), "\n", "\r")
@@ -1257,14 +1487,17 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		paste = strings.ReplaceAll(strings.ReplaceAll(paste, "\r\n", "\r"), "\n", "\r")
 		t.emu.Paste(paste)
 	}
-	if t.integrated && !t.running {
-		if enter {
+	switch {
+	case enter:
+		t.personTyped = false
+		if t.integrated && !t.running {
 			t.running = true
 			t.runStarted = time.Now()
-			t.personTyped = false
-		} else {
-			t.personTyped = true
 		}
+	case clears:
+		t.personTyped = false
+	case !(t.integrated && t.running):
+		t.personTyped = true
 	}
 	t.notify()
 	return nil
@@ -1331,6 +1564,13 @@ func (t *Terminal) SetHold(on bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.hold = on
+	// A run waiting when the person takes the terminal gets nothing of
+	// what comes after: it ends now, refused, its capture dropped.
+	if w := t.run; on && w != nil {
+		w.held = true
+		w.out = capture{}
+		t.finishRun(w)
+	}
 	t.notify()
 }
 

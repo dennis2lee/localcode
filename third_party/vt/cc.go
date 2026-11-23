@@ -38,7 +38,10 @@ func (e *Emulator) index() {
 // horizontalTabSet sets a horizontal tab stop at the current cursor position.
 func (e *Emulator) horizontalTabSet() {
 	x, _ := e.scr.CursorPosition()
-	e.tabstops.Set(x)
+	// localcode: never past the table. See LOCALCODE.md.
+	if x >= 0 && x < e.Width() {
+		e.tabstops.Set(x)
+	}
 }
 
 // reverseIndex moves the cursor up one line, or scrolling down. This does not

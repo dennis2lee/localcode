@@ -376,12 +376,16 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		// A connection the model asked for is checked again where it
 		// resolved to, just before it is made: ~/.ssh/config can change
 		// between the question and the dial.
-		CheckTarget: func(conv string, by sshterm.Opener, r sshterm.Route) error {
+		CheckTarget: func(conv string, by sshterm.Opener, r sshterm.Route, approved string) error {
 			if by != sshterm.ByModel {
 				return nil
 			}
-			if loop.Config.DeniedAnywhere(config.SSHConnectToolName, agent.SSHConnectSubject(r)) {
+			subject := agent.SSHConnectSubject(r)
+			if loop.Config.DeniedAnywhere(config.SSHConnectToolName, subject) {
 				return fmt.Errorf("a permission rule for %q denies %s", config.SSHConnectToolName, r.Target.Host)
+			}
+			if approved != "" && subject != approved {
+				return fmt.Errorf("~/.ssh/config changed after the connection was approved: it was approved for %s and now goes to %s; connect again", approved, subject)
 			}
 			return nil
 		},

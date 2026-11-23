@@ -415,9 +415,9 @@ func TestAFullScreenProgramEndsTheWait(t *testing.T) {
 }
 
 func TestANestedShellIsNoticed(t *testing.T) {
-	old := lostAfter
-	lostAfter = 500 * time.Millisecond
-	defer func() { lostAfter = old }()
+	old, oldYield := lostAfter, personYield
+	lostAfter, personYield = 500*time.Millisecond, 100*time.Millisecond
+	defer func() { lostAfter, personYield = old, oldYield }()
 	s := startServer(t)
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
@@ -425,16 +425,24 @@ func TestANestedShellIsNoticed(t *testing.T) {
 	if !res.Lost || res.Finished {
 		t.Fatalf("entering the nested shell: %+v", res)
 	}
-	// In the nested shell run goes on, without statuses.
-	res, err := term.Run(context.Background(), "echo inner", 10*time.Second, term.PersonGen())
-	if err != nil {
+	// run does not type into it: from outside it is a command that has
+	// not ended.
+	if _, err := term.Run(context.Background(), "echo inner", time.Second, term.PersonGen()); !errors.Is(err, ErrBusy) {
+		t.Fatalf("run in a nested shell: %v", err)
+	}
+	// type does.
+	if err := term.Type("echo inner", true, term.PersonGen()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.Output, "inner") || res.Status != "" {
-		t.Fatalf("inside: %+v", res)
+	if ok, _ := term.Wait(context.Background(), 5*time.Second, "inner"); !ok {
+		t.Fatal("the nested shell did not run it")
 	}
 	// Leaving it brings the marks back.
-	run(t, term, "exit")
+	if err := term.Type("exit", true, term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	within(t, 5*time.Second, "back at the outer prompt", func() bool { return !term.Info().Running })
+	settled(t, term)
 	res = run(t, term, "false")
 	if res.Status != "1" || !res.Finished {
 		t.Fatalf("after leaving: %+v", res)

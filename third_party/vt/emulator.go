@@ -251,6 +251,10 @@ func (e *Emulator) Resize(width int, height int) {
 
 	e.scrs[0].Resize(width, height)
 	e.scrs[1].Resize(width, height)
+	// localcode: both screens' cursors, saved ones included, inside the
+	// new size. See LOCALCODE.md.
+	e.scrs[0].clampCursors()
+	e.scrs[1].clampCursors()
 	e.tabstops = uv.DefaultTabStops(width)
 
 	e.setCursor(x, y)

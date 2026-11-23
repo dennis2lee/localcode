@@ -14,7 +14,8 @@ The model can open SSH connections and work in them, in terminals shown in an SS
 * Permission keys `ssh_connect`, `ssh` and `ssh_input`; remote commands are decided as `bash` lines are
 * `~/.ssh/config` with `Host`, `Match`, `Include`, `ProxyJump`, `IdentityAgent`, `CertificateFile` and `HostKeyAlias`; the SSH agent; encrypted keys asked for only when the server accepts them
 * The `ssh` setting, `/ssh on|off`, and the settings window's SSH section with every open connection and a Close button for each
-* `/update` naming the SSH connections it would close, and updating when run again within two minutes
+* `/update` and the settings window's Install button naming the SSH connections they would close, and updating when asked again within two minutes
+* `third_party/vt`, a patched copy of the terminal emulator: wide characters at the right margin, a cursor saved past a screen made narrower, and repeat and scroll counts with no bound
 
 ## v0.176.3
 

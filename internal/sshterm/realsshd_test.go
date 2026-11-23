@@ -42,6 +42,22 @@ func startRealSSHD(t *testing.T, shell string) (addr string, home string) {
 		t.Skip(err)
 	}
 	dir := t.TempDir()
+	// The remote shell's own files (history, zsh's session files) go in a
+	// directory the test does not hold to a clean removal: a shell writes
+	// them as it exits, which can be after the test's own cleanup began.
+	// Registered before sshd's kill, so removed after it.
+	shellDir, err := os.MkdirTemp("", "lc-sshd-shell-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for i := 0; i < 20; i++ {
+			if os.RemoveAll(shellDir) == nil {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
 	hostKey := newSigner(t)
 	clientKey := newSigner(t)
 	writeKey(t, filepath.Join(dir, "host_key"), hostKey, nil)
@@ -51,13 +67,13 @@ func startRealSSHD(t *testing.T, shell string) (addr string, home string) {
 	wrapper := filepath.Join(dir, "shell.sh")
 	os.WriteFile(wrapper, []byte(`#!/bin/sh
 export SHELL=`+shell+`
-export HISTFILE=`+filepath.Join(dir, "history")+`
-export ZDOTDIR=`+dir+`
+export HISTFILE=`+filepath.Join(shellDir, "history")+`
+export ZDOTDIR=`+shellDir+`
 if [ -n "$SSH_ORIGINAL_COMMAND" ]; then exec /bin/sh -c "$SSH_ORIGINAL_COMMAND"; fi
 exec `+shell+` -i
 `), 0o700)
 	// A prompt like a person's: PS1 set by the startup file.
-	os.WriteFile(filepath.Join(dir, ".zshrc"), []byte("PS1='%n@test %~ %# '\n"), 0o600)
+	os.WriteFile(filepath.Join(shellDir, ".zshrc"), []byte("PS1='%n@test %~ %# '\n"), 0o600)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

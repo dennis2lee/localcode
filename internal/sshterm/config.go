@@ -132,7 +132,10 @@ func ParseSpec(s string) (Spec, error) {
 	if strings.ContainsAny(host, " \t\r\n/\\") {
 		return Spec{}, fmt.Errorf("%q is not a host name", host)
 	}
-	sp.Host = host
+	// Host names are not case sensitive, and OpenSSH lowers them before
+	// it looks them up: a rule or a known_hosts entry written for
+	// "prod.example.com" covers "PROD.example.com".
+	sp.Host = strings.ToLower(host)
 	return sp, nil
 }
 
@@ -394,7 +397,7 @@ func (c *sshConfig) resolve(spec Spec, localUser, home string) Target {
 			switch e.key {
 			case "hostname":
 				if first(e.key) {
-					t.Host = strings.ReplaceAll(strings.ReplaceAll(v, "%h", spec.Host), "%%", "%")
+					t.Host = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(v, "%h", spec.Host), "%%", "%"))
 				}
 			case "user":
 				if first(e.key) && t.User == "" {
@@ -447,7 +450,7 @@ func (c *sshConfig) resolve(spec Spec, localUser, home string) Target {
 				}
 			case "hostkeyalias":
 				if first(e.key) {
-					t.HostKeyAlias = v
+					t.HostKeyAlias = strings.ToLower(v)
 				}
 			case "identityagent":
 				if first(e.key) {
@@ -536,7 +539,9 @@ func expandTokens(s string, t Target, home, localUser string) string {
 	if !filepath.IsAbs(s) {
 		s = filepath.Join(home, s)
 	}
-	return s
+	// One separator throughout: "%d/.ssh/key" on Windows is the home's
+	// backslashes and the config's slash.
+	return filepath.Clean(s)
 }
 
 func expandHome(s, home string) string {

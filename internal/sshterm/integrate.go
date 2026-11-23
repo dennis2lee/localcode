@@ -88,9 +88,16 @@ func (t *Terminal) integrate() {
 	}
 	t.running = true
 	t.runStarted = time.Now()
+	t.integrating = true
 	t.emu.SendText(integrationLine(t.marks.nonce) + "\r")
 	t.notify()
 	t.mu.Unlock()
+	defer func() {
+		t.mu.Lock()
+		t.integrating = false
+		t.notify()
+		t.mu.Unlock()
+	}()
 	// The first mark turns integration on (see output). Without one the
 	// state goes back to "not known".
 	deadline := time.Now().Add(3 * time.Second)

@@ -104,6 +104,9 @@ func (e *Emulator) repeatPreviousCharacter(n int) {
 	if e.lastChar == 0 {
 		return
 	}
+	// localcode: no more than fills the screen. Thirteen bytes asking for
+	// a hundred million held the screen for seconds. See LOCALCODE.md.
+	n = min(n, e.Width()*e.Height())
 	for range n {
 		e.handlePrint(e.lastChar)
 	}

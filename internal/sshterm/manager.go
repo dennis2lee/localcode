@@ -52,9 +52,10 @@ type Options struct {
 	// to make room.
 	MaxPerConversation int
 	MaxTotal           int
-	// CheckTarget, when set, is asked before a connection is made, with
-	// where it resolved to. An error refuses the connection.
-	CheckTarget func(conv string, by Opener, r Route) error
+	// CheckTarget, when set, is asked just before a connection is made,
+	// with where it resolved to then, and what was approved for it (see
+	// OpenApproved; "" when nothing was). An error refuses the connection.
+	CheckTarget func(conv string, by Opener, r Route, approved string) error
 	// OnAsking, when set, is told a conversation whose terminals started
 	// or stopped asking the person something, so a session list can mark
 	// it. Called with no lock held.
@@ -158,6 +159,14 @@ var ErrLimit = errors.New("too many SSH terminals")
 // Open starts a connection to spec for conversation conv and returns its
 // terminal at once, connecting. WaitConnected waits for the outcome.
 func (m *Manager) Open(conv, spec string, by Opener) (*Terminal, error) {
+	return m.OpenApproved(conv, spec, by, "")
+}
+
+// OpenApproved is Open for a connection a permission question approved:
+// approved is the subject the question named, which CheckTarget compares
+// with where the connection resolves when it is made, so a change to
+// ~/.ssh/config in between cannot send it somewhere else.
+func (m *Manager) OpenApproved(conv, spec string, by Opener, approved string) (*Terminal, error) {
 	if _, err := ParseSpec(spec); err != nil {
 		return nil, err
 	}
@@ -188,6 +197,7 @@ func (m *Manager) Open(conv, spec string, by Opener) (*Terminal, error) {
 	}
 	c.next++
 	t := newTerminal(m, conv, fmt.Sprintf("t%d", c.next), spec, by)
+	t.approved = approved
 	c.terms = append(c.terms, t)
 	c.lastUsed = t
 	m.touchLocked(conv)
@@ -490,7 +500,9 @@ func (m *Manager) Asking() map[string]bool {
 	m.mu.Unlock()
 	out := map[string]bool{}
 	for _, t := range all {
-		if t.Info().Question != nil {
+		// Without the terminal's lock: the session list asks this, and a
+		// terminal busy drawing must not hold it up.
+		if t.Summarize().Asking {
 			out[t.Conv] = true
 		}
 	}

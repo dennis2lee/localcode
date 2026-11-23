@@ -151,7 +151,7 @@ re-reads this endpoint on load.
 | `POST /api/settings/auto-delegate` | `{"enabled"?, "agent"?, "match"?}`; pointers, so one field can move alone | `204` | `400` unknown agent or fewer than two agents configured; `400` bad body (text error); `500` applied for this run but not persisted (text error) |
 | `POST /api/settings/smart-agent` | `{"enabled"}` | `200 {"smart_agent", "applied": true, "persisted", "error"?}`; `applied` is always true, `persisted` is the part that can fail | `400` bad body (text error) |
 | `POST /api/settings/browser` | `{"enabled"}`; off also quits the browser | `200 {"browser", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
-| `POST /api/settings/ssh` | `{"enabled"}`; off also closes every SSH connection | `200 {"ssh", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
+| `POST /api/settings/ssh` | `{"enabled"}`; off also closes every SSH connection | `200 {"ssh", "applied": true, "persisted", "error"?}` | `400` bad body (text error); `403` refused by the SSH request guard (see SSH below) |
 | `GET /api/ssh` | nothing | `200 [{"session", "title", "id", "target", "state"}]`: every SSH connection open now, in any conversation | `403` refused by the SSH request guard (see SSH below) |
 | `POST /api/browser/import` | nothing | `200 {"from", "profile", "skipped"}`: copies the person's Chrome or Edge profile in again and restarts the browser, closing every tab | `404` no browser in this daemon; `409` the browser setting is off; `400` no profile to copy |
 | `POST /api/settings/orchestrate` | `{"enabled"}` | `200 {"orchestrate", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
@@ -274,7 +274,7 @@ manager or the session is unknown, and `404` for an unknown terminal.
 Connect, input and reconnect answer `409` while the ssh setting is off
 and `403` for an archived conversation.
 
-Every SSH route, and `GET /api/ssh`, passes a request guard first and
+Every SSH route, `GET /api/ssh` and `POST /api/settings/ssh` pass a request guard first and
 answers `403` when it refuses: a `POST` or `DELETE` whose
 `Content-Type` is not `application/json`; a `Sec-Fetch-Site` other than
 `same-origin` or `none`; an `Origin` whose host is not the request's

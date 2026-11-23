@@ -114,6 +114,16 @@ func TestTheSSHRoutesRefuseWhatAnotherSiteCouldSend(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("the page's own connect: %d", resp.StatusCode)
 	}
+	// Turning SSH off closes every connection: another site may not.
+	resp = sshRequest(t, "POST", srv.URL+"/api/settings/ssh", map[string]bool{"enabled": false},
+		map[string]string{"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("another site's /api/settings/ssh: %d", resp.StatusCode)
+	}
+	resp = sshRequest(t, "POST", srv.URL+"/api/settings/ssh", nil, map[string]string{"Content-Type": "text/plain"})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a form post to /api/settings/ssh: %d", resp.StatusCode)
+	}
 	// A stream from another site is refused too.
 	resp = sshRequest(t, "GET", srv.URL+"/api/sessions/"+id+"/ssh/stream", nil, map[string]string{"Sec-Fetch-Site": "cross-site"})
 	if resp.StatusCode != http.StatusForbidden {

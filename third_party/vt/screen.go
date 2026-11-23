@@ -227,6 +227,11 @@ func (s *Screen) SaveCursor() {
 func (s *Screen) RestoreCursor() {
 	old := s.cur.Position
 	s.cur = s.saved
+	// localcode: a cursor saved before the screen was made smaller is
+	// restored inside it. Restored where it was, the cursor stood past the
+	// last column, and a tab stop set there indexed past the table and
+	// panicked. (See LOCALCODE.md.)
+	s.clampCursors()
 
 	if s.cb.CursorPosition != nil && (old.X != s.cur.X || old.Y != s.cur.Y) {
 		s.cb.CursorPosition(old, s.cur.Position)
@@ -409,4 +414,16 @@ func (s *Screen) SetScrollbackSize(maxLines int) {
 	} else {
 		s.scrollback.SetMaxLines(maxLines)
 	}
+}
+
+// clampCursors keeps the cursor and the saved cursor inside the screen.
+// localcode: see LOCALCODE.md.
+func (s *Screen) clampCursors() {
+	w, h := s.Width(), s.Height()
+	clamp := func(p *uv.Position) {
+		p.X = max(0, min(p.X, w-1))
+		p.Y = max(0, min(p.Y, h-1))
+	}
+	clamp(&s.cur.Position)
+	clamp(&s.saved.Position)
 }

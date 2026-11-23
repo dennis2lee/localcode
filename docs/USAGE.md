@@ -2873,8 +2873,8 @@ The model can open SSH connections and work in them, and you can work in the sam
 | Item | Behavior |
 |---|---|
 | Turning it on | The settings window's SSH section, `/ssh on`, or `"ssh": true` in config.json. Off unless set. Turning it off closes every connection. |
-| Where it works | The panel is in the desktop window and in the Web UI. The model is offered the `ssh` tool while the setting is on, in any turn but a scheduled run: a scheduled run has nobody to answer a host key or a password. A turn started from the TUI has the tool; its questions are answered in the panel of a desktop window or Web UI. |
-| Lifetime | A connection ends when you close it, when the model closes one it opened, when the remote shell exits, when the server misses 3 keepalives (30 seconds apart, or `ServerAliveInterval` and `ServerAliveCountMax` from `~/.ssh/config`), when the conversation is archived or deleted, when the setting is turned off, or when localcode stops. Closing the desktop window stops localcode. `/update` with connections open names them and updates only when run again within two minutes. Nothing else ends one: there is no idle timeout. Work that must outlive localcode belongs in `tmux` or `screen` on the remote. |
+| Where it works | The panel is in the desktop window and in the Web UI. The model is offered the `ssh` tool while the setting is on, in any turn but a scheduled run (nobody would answer a host key or a password) and a delegated sub-agent's (its terminals would be in a session no panel shows). A turn started from the TUI has the tool; its questions are answered in the panel of a desktop window or Web UI. |
+| Lifetime | A connection ends when you close it, when the model closes one it opened, when the remote shell exits, when the server misses 3 keepalives (30 seconds apart, or `ServerAliveInterval` and `ServerAliveCountMax` from `~/.ssh/config`), when the conversation is archived or deleted, when the setting is turned off, or when localcode stops. Closing the desktop window stops localcode. `/update` and the settings window's Install button, with connections open, name them and update only when asked again within two minutes. A remote that sends output the terminal cannot draw ends that terminal, with the reason, and nothing else. Nothing else ends one: there is no idle timeout. Work that must outlive localcode belongs in `tmux` or `screen` on the remote. |
 | Limits | 8 open connections per conversation and 32 in all. An ended terminal stays in the panel with its last screen until it is closed; a conversation keeps at most 8, the oldest going first. |
 | `~/.ssh/config` | Read on every connect. Used: `Host`, `Match` with `all`, `host`, `originalhost`, `user` and `localuser`, `Include`, `HostName`, `User`, `Port`, `IdentityFile`, `IdentitiesOnly`, `IdentityAgent`, `CertificateFile`, `ProxyJump`, `UserKnownHostsFile`, `GlobalKnownHostsFile`, `HostKeyAlias`, `ServerAliveInterval`, `ServerAliveCountMax`, `ConnectTimeout`. A `Match` with any other criterion never matches; `Match exec` is never run. `/etc/ssh/ssh_config` is read after it. |
 | Not supported | `ProxyCommand` (it runs a local command; use `ProxyJump`), agent forwarding, X11, port forwarding, and keys held by a security key unless your SSH agent holds them. |
@@ -2884,7 +2884,7 @@ The model can open SSH connections and work in them, and you can work in the sam
 
 **Questions only you answer.** A host key, a password, a passphrase and a server's own prompts (a one-time code) are asked in the panel, in a box localcode draws above the terminal, and never in the conversation. The model cannot answer them: no action of the `ssh` tool does. An answer goes from the panel to the connection and nowhere else: not into the conversation, an event, a log or a file. A question shows a hidden panel, marks the conversation as asking in the session list, and waits 5 minutes. A server gives up sooner if its own login time runs out (OpenSSH's `LoginGraceTime` is 2 minutes); connect again.
 
-**Taking over.** The terminal is shared. What you type goes to the shell at once. The model's `run`, `type` and `key` are refused for 10 seconds after you type, and while you have typed part of a command line and not run it. **Hold**, beside the status line, keeps the model out of a terminal until you let go: its input, and its `read` and `wait` too, so what is on the screen while you hold it is yours. The model cannot close a terminal you opened or one you hold. A `run` result says when you typed during the command.
+**Taking over.** The terminal is shared. What you type goes to the shell at once. The model's `run`, `type` and `key` are refused for 10 seconds after you type, and while a command line you typed is unsent: from your first key until your Enter, Ctrl+C or Ctrl+U, or until the line is as the prompt left it again. Where the cursor is does not matter: text before it after Ctrl+A still counts. **Hold**, beside the status line, keeps the model out of a terminal until you let go: its input, its `read` and `wait`, and a `run` already waiting, which ends refused with nothing of what came after. Letting go gives the model the screen and the scrollback again, what you did included; run `clear` before letting go to keep it (`clear` clears the scrollback too, and so does any program that sends the same sequence). The model cannot close a terminal you opened or one you hold. A `run` result says when you typed during the command.
 
 **The panel.** The tab strip has one tab per terminal, `×` to close it, and `+` to open one: type `user@host:port` or a `Host` from `~/.ssh/config`. The status line says where the terminal is connected, the shell, and whether a command is running. Reconnect opens a new connection in an ended terminal's tab. Click the terminal to type in it. Drag to select text.
 
@@ -2904,23 +2904,23 @@ The terminal takes the size of the smallest panel showing it, so no window cuts 
 |---|---|
 | bash or zsh | Returns when the command ends, with its output and exit status. |
 | Another shell (fish, csh, a Windows server's shell) | Returns when output has been quiet for 2 seconds, with no exit status. |
-| A nested shell (`sudo -i`, `su`, `ssh`, `docker exec`) | The nested shell prints no marks. When the terminal has been quiet for 3 seconds at a line that ends like a prompt, `run` says the end is not known, and the next `run` can type. The marks come back when the nested shell exits. |
+| A nested shell (`sudo -i`, `su`, `ssh`, `docker exec`) | The nested shell prints no marks, so from outside the command that started it has not ended. When the terminal has been quiet for 3 seconds at a line that ends like a prompt, `run` returns and says so: the command may still be running (a progress line), or a nested shell is waiting. The next `run` is refused until the end is reported; in a nested shell the model works with `type` (with `enter`), `read` and `wait`. The marks come back when the nested shell exits. |
 | A full-screen program (an editor, `top`) | Returns at once and says so: the model works it with `read`, `key` and `wait`. |
 | A command that stops at a question | Output stopped at a line that looks like a password prompt, or for 3 seconds at a line ending in `?`, `]`, `:` or `)`. `run` returns and says the command may be waiting for input. A password is for you, in the panel. |
 | The timeout (120 seconds, at most 600) | Returns what came so far. The command goes on running. |
 | The turn stopped | Ctrl+C goes to the command `run` started, unless you typed in the terminal since. |
 
-`run` takes one line. It refuses a line with a control character, a Tab (the shell would complete rather than type), or a `!` that bash or zsh would expand from history (put that part in single quotes), so the line the shell runs is the line that was approved.
+`run` takes one line. It refuses a line with a control character, a Tab (the shell would complete rather than type), a `!` that bash or zsh would expand from history (outside single quotes; put that part in single quotes), or a `^` starting the line (history substitution), so the line the shell runs is the line that was approved.
 
 **Permissions.** The tool asks before it acts, as `bash` does, under three keys:
 
 | Key | Asked for | Matched against |
 |---|---|---|
-| `ssh_connect` | `connect` | The alias as written when it is not the host itself, the target as `user@host:port`, and each jump host: `prod-db deploy@10.0.0.5:22 via me@bastion:22`. "For this session" and "always" cover that subject exactly. |
+| `ssh_connect` | `connect` | The alias as written when it is not the host itself, the target as `user@host:port`, and each jump host: `prod-db deploy@10.0.0.5:22 via me@bastion:22`. Host names are in lower case, as OpenSSH lowers them: write these rules in lower case. "For this session" and "always" cover that subject exactly. The connection is made only to the route approved: when `~/.ssh/config` changes between the question and the dial, it is refused. |
 | `ssh` | `run` | The command, decided as a `bash` line is: each command of the line on its own, with "for this session" generalising to the program (`systemctl *`). The question names the host; a grant covers every host. An allow decided by splitting the line holds only when the terminal's shell is bash or zsh; otherwise it asks. |
-| `ssh_input` | `type` and `key` | `type <text>` or `key <keys>`. Asked every time: no "for this session". A rule still answers it. |
+| `ssh_input` | `type` and `key` | `type <text>` or `key <keys>`. Asked every time: no "for this session". A rule still answers it. At the shell's prompt, text the model types is also a command: with what it typed on the line before, it is checked against the deny rules for `ssh`, and `key Enter` checks the line it would run. |
 
-A deny rule for `ssh_connect` also keeps the model off a terminal you opened to that host: every action on it is refused. `read`, `wait`, `list` and `close` ask nothing. `skip_permissions` turns these questions into allows, as it does for `bash`; a deny still denies.
+A deny rule for `ssh_connect` also keeps the model off a terminal you opened to that host: every action on it is refused. `read`, `wait`, `list` and `close` ask nothing. `skip_permissions` and `/permission-skip-tools` turn these questions into allows, as they do for `bash`: a remote host is not a path, so the workspace boundary does not apply. A deny still denies.
 
 ```json
 "permission": {
@@ -2952,6 +2952,8 @@ What remote output can do is limited to the screen. A remote program's title is 
 * Connections do not survive localcode stopping, an update, the computer sleeping long enough for the server to drop it, or a network change. Use `tmux` or `screen` on the remote for work that must.
 * A key held only by a security key (FIDO) works only through your SSH agent.
 * The model's grants for remote commands are not per host. Deny the hosts the model must not reach with `ssh_connect`.
+* `ssh_connect` sees the connections localcode makes. A `ssh` the model runs inside a terminal to reach another host is a command: deny it with an `ssh` rule (`{"match": "ssh *", "decision": "deny"}`).
+* The SSH panel answers a daemon reached by an address or `localhost`. Reached by another name (`http://devbox.local:4096`), the panel says it cannot reach its terminals; use the address.
 * The terminal is xterm-like. Mouse reporting is not supported.
 
 ### Leaving the project

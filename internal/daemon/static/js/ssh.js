@@ -53,6 +53,7 @@ let epoch = '';           // the shown terminal's scrollback numbering
 let scrollNext = 0;       // the number of the next scrollback line expected
 let rowKeys = [];         // the screen's rows as last drawn
 let questionShown = 0;    // the id of the question whose form is drawn
+const questionsSeen = new Set(); // questions that have shown the panel once
 let composing = false;
 const queue = [];
 let sending = false;
@@ -228,6 +229,21 @@ function openStream() {
   }
   const source = new EventSource(url);
   es = source;
+  // The daemon forgets a viewer's size when its stream ends; a stream
+  // that opens again says it again.
+  source.onopen = () => {
+    if (es !== source) return;
+    lastSize = '';
+    sendSize();
+  };
+  // A stream the daemon refused says nothing of why: ask the state route,
+  // whose answer does.
+  source.onerror = () => {
+    if (es !== source || source.readyState !== 2) return;
+    api('GET', `/api/sessions/${encodeURIComponent(id)}/ssh`).catch((err) => {
+      if (es === source) showError(`The SSH panel cannot reach its terminals: ${err.message || err}`);
+    });
+  };
   source.onmessage = (e) => {
     if (es !== source) return;
     let m;
@@ -250,6 +266,7 @@ function show(term) {
   streamTerm = term;
   resetView();
   openStream();
+  sendSize();
 }
 
 function current() {
@@ -265,11 +282,13 @@ function onState(st) {
   const wants = Number(st.wants) || 0;
   const seen = wantsSeen.has(id) ? wantsSeen.get(id) : null;
   wantsSeen.set(id, wants);
+  // Once per question, and once per time a command wanted the person: a
+  // panel the person hid while a question stays open stays hidden.
   const asking = terms.find((t) => t.question);
-  if ((seen !== null && wants > seen) || asking) {
-    if (asking && asking.id !== streamTerm && (seen === null || wants > seen || !current())) {
-      show(asking.id);
-    }
+  const newQuestion = asking && !questionsSeen.has(`${id}/${asking.id}/${asking.epoch}/${asking.question.id}`);
+  if (newQuestion) questionsSeen.add(`${id}/${asking.id}/${asking.epoch}/${asking.question.id}`);
+  if ((seen !== null && wants > seen) || newQuestion) {
+    if (asking && asking.id !== streamTerm) show(asking.id);
     reveal();
   }
   if (!current()) {
@@ -375,7 +394,9 @@ function drawBar() {
   if (again) again.hidden = t.state !== 'ended';
 }
 
-async function answer(t, q, body) {
+async function answer(t, q, body, fields = []) {
+  // A secret does not stay in the page, whatever the answer was.
+  for (const f of fields) f.value = '';
   try {
     await api('POST', `${base(streamFor, t.id)}/answer`, { question: q.id, ...body });
     showError('');
@@ -457,14 +478,13 @@ function drawQuestion() {
   }
   const submit = () => {
     const values = fields.map((f) => f.value);
-    for (const f of fields) f.value = '';
-    answer(t, q, { accept: true, values });
+    answer(t, q, { accept: true, values }, fields);
   };
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     submit();
   });
-  actions.append(button('Cancel', () => answer(t, q, { accept: false })), button('OK', submit));
+  actions.append(button('Cancel', () => answer(t, q, { accept: false }, fields)), button('OK', submit));
   form.appendChild(actions);
   box.appendChild(form);
   box.hidden = false;
@@ -536,17 +556,18 @@ function addScroll(d) {
   const from = Number(d.from) || 0;
   let add = Array.isArray(d.lines) ? d.lines : [];
   if (d.epoch !== epoch || from > scrollNext) {
-    // Another terminal under this id, or lines the daemon no longer has:
-    // start again from what came.
+    // Another terminal under this id (a reconnect, made here or in
+    // another window), or lines the daemon no longer has: start again
+    // from what came, numbered from it.
     clear(scroll);
     epoch = d.epoch;
+    scrollNext = from;
   } else if (from < scrollNext) {
     add = add.slice(scrollNext - from);
   }
   for (const line of add) scroll.appendChild(rowEl(line));
   while (scroll.children.length > SCROLL_KEEP) scroll.firstChild.remove();
   scrollNext = Math.max(scrollNext, from + (Array.isArray(d.lines) ? d.lines.length : 0));
-  if (d.epoch === epoch && from > scrollNext) scrollNext = from + add.length;
   if (stick && lines) lines.scrollTop = lines.scrollHeight;
 }
 
@@ -683,6 +704,7 @@ export function initSSHPanel() {
       // The same id, a new epoch: the stream starts the screen again.
       resetView();
       openStream();
+      sendSize();
     } catch (err) {
       showError(`Not reconnected: ${err.message || err}`);
     }
@@ -694,7 +716,14 @@ export function initSSHPanel() {
   };
   const onKey = (e) => {
     const a = keyAction(e, isMac(), selected());
-    if (a.kind === 'pass' || a.kind === 'ime') return;
+    if (a.kind === 'pass') return;
+    // A key an input method is composing with is the input method's: not
+    // sent, not prevented, and not the page's either (Escape there would
+    // stop the turn).
+    if (a.kind === 'ime') {
+      e.stopPropagation();
+      return;
+    }
     // Everything else is the terminal's: Escape is not "stop the turn",
     // Tab not "next agent", Ctrl+F not "find" while the terminal has the
     // keys.
@@ -715,17 +744,25 @@ export function initSSHPanel() {
     if (e.target !== input) onKey(e);
   });
   input.addEventListener('compositionstart', () => { composing = true; });
+  // The composed text is taken once the browser has finished with the
+  // composition: emptied inside compositionend, the box can lose the start
+  // of the next syllable in some browsers. Until then, an input event
+  // leaves it alone.
+  let flushing = false;
+  const flush = () => {
+    flushing = false;
+    const text = input.value;
+    input.value = '';
+    if (text) send({ text });
+  };
   input.addEventListener('compositionend', () => {
     composing = false;
-    const text = input.value;
-    input.value = '';
-    if (text) send({ text });
+    flushing = true;
+    setTimeout(flush, 0);
   });
   input.addEventListener('input', (e) => {
-    if (composing || e.isComposing) return;
-    const text = input.value;
-    input.value = '';
-    if (text) send({ text });
+    if (composing || e.isComposing || flushing) return;
+    flush();
   });
   term.addEventListener('paste', (e) => {
     const text = e.clipboardData && e.clipboardData.getData('text');

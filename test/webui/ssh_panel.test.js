@@ -230,3 +230,61 @@ test('in a window too narrow for both, the browser and SSH panels take turns', a
   assert.equal(browser.classList.contains('collapsed'), true, 'without, showing SSH hides the browser');
   assert.equal(app.el('toggle-browser').getAttribute('aria-expanded'), 'false');
 });
+
+test('the size this panel fits is sent for the terminal it shows, after a switch too', async () => {
+  const app = await load({ routes: settingsWith({ ssh: true }) });
+  const first = sshStream(app);
+  frame(first, 'state', { enabled: true, terminals: [term(), term({ id: 't2', epoch: 'e2', spec: 'other' })], wants: 0 });
+  await settle();
+  const tabs = app.el('ssh-tab-list').children;
+  const t1 = tabs.find((tab) => tab.textContent.includes('devbox'));
+  t1.children[0].click();
+  await app.wait(200);
+  await settle();
+  const posted = app.callsTo('POST', /\/ssh\/t1\/size$/);
+  assert.ok(posted.length >= 1, 'the switch sends this panel\'s size for the terminal now shown');
+  assert.equal(posted[posted.length - 1].body.viewer.startsWith('v'), true);
+});
+
+test('a reconnect made in another window starts the scrollback over from its own numbers', async () => {
+  const app = await withTerminal();
+  const s = sshStream(app);
+  const lines = (n, at) => Array.from({ length: n }, (_, i) => [{ t: `line ${at + i}` }]);
+  frame(s, 'scroll', { terminal: 't1', epoch: 'e1', from: 0, lines: lines(100, 0) });
+  frame(s, 'scroll', { terminal: 't1', epoch: 'e2', from: 0, lines: lines(3, 0) });
+  frame(s, 'scroll', { terminal: 't1', epoch: 'e2', from: 3, lines: lines(2, 3) });
+  const rows = app.el('ssh-scroll').children.map((r) => r.textContent);
+  assert.deepEqual(rows, ['line 0', 'line 1', 'line 2', 'line 3', 'line 4']);
+});
+
+test('the hide button holds while a question stays open', async () => {
+  const q = { id: 5, kind: 'password', for: 'me@10.0.0.5:22' };
+  const app = await withTerminal({ state: 'connecting', question: q });
+  assert.equal(app.el('ssh-panel').classList.contains('collapsed'), false);
+  app.el('ssh-panel').classList.add('collapsed');
+  frame(sshStream(app), 'state', { enabled: true, terminals: [term({ state: 'connecting', question: q })], wants: 0 });
+  assert.equal(app.el('ssh-panel').classList.contains('collapsed'), true, 'the same question does not show it again');
+  frame(sshStream(app), 'state', { enabled: true, terminals: [term({ state: 'connecting', question: { ...q, id: 6 } })], wants: 0 });
+  assert.equal(app.el('ssh-panel').classList.contains('collapsed'), false, 'a new question does');
+});
+
+test('a password typed and then cancelled does not stay in the page', async () => {
+  const app = await withTerminal({ state: 'connecting', question: { id: 7, kind: 'password', for: 'me@10.0.0.5:22' } });
+  const box = app.el('ssh-question');
+  const field = box.querySelectorAll('input')[0];
+  field.value = 'hunter2';
+  Array.from(box.querySelectorAll('button')).find((b) => b.textContent === 'Cancel').click();
+  await settle();
+  assert.equal(field.value, '');
+  assert.deepEqual(plain(app.callsTo('POST', /\/ssh\/t1\/answer$/).map((c) => c.body)), [{ question: 7, accept: false }]);
+});
+
+test('a key an input method is composing with stays off the page\'s own shortcuts', async () => {
+  const app = await withTerminal();
+  let stopped = 0;
+  const ev = app.el('ssh-input').fire('keydown', { key: 'Escape', isComposing: true, keyCode: 229, stopPropagation() { stopped += 1; } });
+  await settle();
+  assert.equal(ev.defaultPrevented, false, 'the input method still gets it');
+  assert.equal(stopped, 1, 'Escape while composing does not stop the turn');
+  assert.equal(app.callsTo('POST', /\/ssh\/t1\/input$/).length, 0);
+});
