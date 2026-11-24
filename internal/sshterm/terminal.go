@@ -59,6 +59,7 @@ var (
 	ErrChanged      = errors.New("the person typed in this terminal while the question was open, so what was approved may no longer fit; read the screen and decide again")
 	ErrModelLine    = errors.New("the command line has text you typed (at this prompt, or ahead while the last command ran) and did not run; clear it first with key ctrl+c")
 	ErrTypeahead    = errors.New("a command is running and nothing on the screen is waiting for input: a line sent now would be read by the shell as its next command once this one ends. Wait for it to end and use run, or answer it when it asks (read shows when)")
+	ErrFullScreen   = errors.New("a full-screen program has the screen, or left the terminal on its alternate screen: run types nothing there. Use read to see what is on it, and key or type to work it or leave it")
 	ErrUseRun       = errors.New("at the shell's prompt, commands go through run, which the rules for commands see: type takes text without a line end there, and key takes only line-editing keys (arrows, Home, End, Backspace, Delete, ctrl+a, ctrl+e, ctrl+b, ctrl+f, ctrl+k, ctrl+u, ctrl+w, ctrl+l, ctrl+c)")
 )
 
@@ -78,8 +79,8 @@ var (
 	// ended is waited on for its prompt before the cursor is taken as where
 	// an empty prompt leaves it.
 	promptWait = 2 * time.Second
-	// interruptWait is how long after the model's Ctrl+C at the prompt a
-	// run waits for the prompt that says the shell took it.
+	// interruptWait is how long after a Ctrl+C at the prompt, the model's
+	// or the person's, a prompt that answers it is waited for.
 	interruptWait = 10 * time.Second
 )
 
@@ -231,8 +232,12 @@ type interrupts struct {
 	last time.Time
 }
 
-// press notes one.
+// press notes one. Those before it that no prompt answered in time were
+// not interrupts, or will not be waited for: the wait is for this one.
 func (i *interrupts) press() {
+	if i.pending() == 0 {
+		i.n = 0
+	}
 	i.n++
 	i.last = time.Now()
 }
@@ -1497,6 +1502,14 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 		t.mu.Unlock()
 		return RunResult{}, ErrBusy
 	}
+	// Nor onto a full-screen program's screen. With no command running
+	// that is a program that quit without giving the screen back (killed),
+	// or one the terminal did not see start. What is typed there the
+	// terminal does not follow as a command line.
+	if t.integrated && t.emu.IsAltScreen() {
+		t.mu.Unlock()
+		return RunResult{}, ErrFullScreen
+	}
 	if t.lineHasPersonText() {
 		t.mu.Unlock()
 		return RunResult{}, ErrLineNotEmpty
@@ -1840,11 +1853,11 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 	}
 	t.lastPerson = time.Now()
 	t.personGen++
-	enter := false
-	clears := false
-	// rest is text after the last line end of the same input: the line end
-	// sends the line, and this is typed after it.
-	rest := false
+	// What the input does to the command line, where the shell is at its
+	// prompt: enter sends it, clears is Ctrl+C. after is something on the
+	// line that comes after the line end of the same input.
+	enter, clears, after := false, false, false
+	atPrompt := !(t.integrated && t.running)
 	switch {
 	case k != nil:
 		ev, ok := personKeyEvent(*k)
@@ -1852,7 +1865,11 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 			return nil
 		}
 		t.sendKey(ev)
-		enter = ev.Code == uv.KeyEnter && ev.Text == ""
+		// Enter, and the keys a shell reads as one. Ctrl+O sends the line
+		// too, and bash then puts the next line of its history on the
+		// prompt: nobody typed it, and it is there.
+		enter = endsLine(ev)
+		after = enter && ev.Mod&uv.ModCtrl != 0 && ev.Code == 'o'
 		// Ctrl+C drops the line, where the shell takes it. Ctrl+U does
 		// not, at the start of the line: whether it is empty is lineEmpty's
 		// to say.
@@ -1862,22 +1879,30 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\r"), "\n", "\r")
 		t.emu.SendText(text)
 		enter = strings.Contains(text, "\r")
-		rest = enter && !strings.HasSuffix(text, "\r")
+		after = enter && !strings.HasSuffix(text, "\r")
 	case paste != "":
 		paste = cleanText(paste)
 		paste = strings.ReplaceAll(strings.ReplaceAll(paste, "\r\n", "\r"), "\n", "\r")
 		// A shell that has not turned bracketed paste on reads a paste as
-		// typed, and a line end in it sends the line.
-		enter = !t.emu.BracketedPaste() && strings.Contains(paste, "\r")
-		rest = enter && !strings.HasSuffix(paste, "\r")
+		// typed, and a line end in it sends the line. One that has keeps
+		// the paste on the line, line ends and all: over several rows,
+		// which the row the cursor is on says nothing about.
+		lines := strings.Contains(paste, "\r")
+		enter = lines && !t.emu.BracketedPaste()
+		after = enter && !strings.HasSuffix(paste, "\r")
+		if lines && !enter {
+			t.promptKnown = false
+		}
 		t.emu.Paste(paste)
 	}
 	switch {
 	case enter:
-		// The line is sent, with whatever either typed on it.
+		// The line is sent, with whatever either typed on it. What came
+		// after the line end is on the next line, at a prompt: into a
+		// command that is running it is that command's to read.
 		t.personTyped = false
 		t.sent()
-		t.personAfter = rest
+		t.personAfter = after && atPrompt
 		if t.integrated && !t.running {
 			t.running = true
 			t.runStarted = time.Now()
@@ -1886,14 +1911,16 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		// At the prompt the key is the line's: it drops what either typed
 		// before it, where the shell takes it as an interrupt. The prompt it
 		// brings says so, and until then the key counts as typed ("stty intr
-		// undef" makes it a character on the line).
-		if t.atPrompt() {
+		// undef" makes it a character on the line). On the alternate screen
+		// too, where a prompt is when a program left the screen that way:
+		// what they type there counts, so the key that drops it does.
+		if t.integrated && !t.running {
 			t.interrupt()
 			t.personTyped = true
 		} else {
 			t.personTyped = false
 		}
-	case !(t.integrated && t.running):
+	case atPrompt:
 		t.personTyped, t.personAfter = true, true
 	}
 	t.notify()

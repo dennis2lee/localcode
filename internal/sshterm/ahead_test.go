@@ -278,8 +278,8 @@ func TestARunDoesNotWaitForAPromptThatCannotClearTheLine(t *testing.T) {
 }
 
 // A paste is typed text to a shell that has not turned bracketed paste on,
-// and a line end in it sends the line: what was pasted went with it. With
-// bracketed paste on, the line end is part of what is on the line.
+// and a line end in it sends the line: what was pasted went with it. (With
+// bracketed paste on it stays on the line: line_test.go.)
 func TestAPastedLineEndSendsTheLineWhereTheShellReadsItAsTyped(t *testing.T) {
 	old := personYield
 	personYield = 50 * time.Millisecond
@@ -303,16 +303,5 @@ func TestAPastedLineEndSendsTheLineWhereTheShellReadsItAsTyped(t *testing.T) {
 	term.PersonInput(&PersonKey{Key: "Enter"}, "", "")
 	if res := runWhenFree(t, term, "echo after"); res.Output != "after" {
 		t.Fatalf("after the person sent the rest: %+v", res)
-	}
-	// The shell says it takes pastes whole.
-	run(t, term, "bracketed")
-	settled(t, term)
-	term.PersonInput(nil, "", "echo held\n")
-	time.Sleep(2 * personYield)
-	term.mu.Lock()
-	typed, running := term.personTyped, term.running
-	term.mu.Unlock()
-	if !typed || running {
-		t.Fatalf("a bracketed paste with a line end: personTyped=%v running=%v", typed, running)
 	}
 }

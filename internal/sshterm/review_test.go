@@ -92,14 +92,18 @@ func TestALongRepeatHoldsNothingUp(t *testing.T) {
 		m.LiveTerminals()
 		close(asked)
 	}()
+	// Uncapped, the drawing takes minutes with the lock held. Capped it is
+	// a moment's work, and how long a moment is on a machine short of
+	// processor is not what this is about: under the race detector, starved,
+	// it took fifteen seconds once.
 	select {
 	case <-asked:
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the session list waited on a terminal drawing")
 	}
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the repeats were not capped")
 	}
 }
