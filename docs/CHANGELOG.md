@@ -11,6 +11,8 @@ A setting the daemon applied and could not save is shown as applied, with a warn
 * The auto-delegation panel showing the switch, agent and patterns the daemon is running after a save that failed, with one warning for the switch and one for the agent and patterns
 * The rules in the permissions window listing a rule that was added, and not one that was removed, after a save that failed, with each such rule named in a warning until it is saved
 * A control in the auto-delegation panel put back to what the daemon has when the daemon refuses the change
+* Changes made one after the other in the auto-delegation panel and the rules list sent one at a time: the older value no longer left on screen, a rule no longer missing or listed out of order, and the second of two patterns added quickly no longer dropping the first
+* The repeat guard's number held while a change to it is being sent
 * An auto-delegation switch sent with an agent or patterns that could not be saved now applied, and announced to every window
 
 **Changed**

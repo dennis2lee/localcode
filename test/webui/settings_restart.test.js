@@ -591,6 +591,42 @@ for (const c of LAST_TWO) {
   });
 }
 
+test('the repeat guard stays held while a change is out, through the daemon\'s announcement of it', async () => {
+  // The daemon announces a change before it answers it. The draw that
+  // brought used to open the number again with the request still out, a
+  // second number could be sent, and the answer to the first put the
+  // first number back over it. Found by review.
+  let reply;
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      'POST /api/settings/repeat-limit': (body) => new Promise((resolve) => {
+        reply = () => resolve({ repeat_limit: body.limit, applied: true, persisted: true });
+      }),
+    },
+  });
+  await open(app);
+  const box = app.el('repeat-limit-checkbox');
+  const number = app.el('repeat-limit-input');
+  box.checked = true;
+  number.value = '6';
+  box.fire('change');
+  await app.settle();
+  assert.equal(number.disabled, true);
+
+  announce(app, { repeat_limit: 6 });
+  await app.settle();
+  assert.equal(String(number.value), '6', 'the announcement did not reach the settings window');
+  assert.equal(number.disabled, true, 'the number was opened again while the change was still out');
+  assert.equal(box.disabled, true);
+
+  reply();
+  await app.settle();
+  assert.equal(number.disabled, false, 'the number was left held after the answer');
+  assert.equal(box.disabled, false);
+  assert.equal(app.callsTo('POST', '/api/settings/repeat-limit').length, 1);
+});
+
 test('every control in the settings window is one of the above', () => {
   // A control added to a tab and to neither list is a control nobody
   // opened the window against.

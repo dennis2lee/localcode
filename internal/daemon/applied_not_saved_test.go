@@ -339,3 +339,42 @@ func TestPermissionRulesSayAppliedWhenTheSaveFails(t *testing.T) {
 		t.Errorf("the running daemon still holds %v after reporting the removal as applied", rules["bash"])
 	}
 }
+
+// A rule is a pattern or an exact command with the same text, and the two
+// are kept apart: "always allow" at a prompt writes an exact one, the
+// rule routes add patterns. The page's list follows what these routes do
+// to the rules, so what they do is held here. A pattern is added beside
+// an exact rule of the same text, not taken for it, and never twice. A
+// removal carries no kind, and takes both.
+func TestARulePatternIsAddedBesideAnExactRuleAndRemovedWithIt(t *testing.T) {
+	d, srv := unwritableDaemon(t)
+	d.Loop.Config.AddPermissionRuleRuntime("bash", config.PermissionRule{Match: "echo *", Decision: config.DecisionAllow, Literal: true})
+
+	rule := `{"tool":"bash","match":"echo *","decision":"allow"}`
+	for i := 0; i < 2; i++ {
+		status, answered := postSetting(t, srv.URL+"/api/permissions/rules", rule)
+		wantNotSaved(t, status, answered)
+		held, _ := answered["permission_rules"].(map[string]any)
+		list, _ := held["bash"].([]any)
+		if len(list) != 2 {
+			t.Fatalf("after adding the pattern %d time(s) the answer lists %v, want the exact rule and one pattern", i+1, list)
+		}
+		exact, _ := list[0].(map[string]any)
+		pattern, _ := list[1].(map[string]any)
+		if exact["literal"] != true || pattern["literal"] != nil {
+			t.Errorf("the answer lists %v, want the exact rule marked literal and the pattern not", list)
+		}
+	}
+	if _, rules := d.Loop.Config.PermissionsSnapshot(); len(rules["bash"]) != 2 {
+		t.Errorf("the running daemon holds %v, want both kinds", rules["bash"])
+	}
+
+	status, answered := postSetting(t, srv.URL+"/api/permissions/rules/remove", rule)
+	wantNotSaved(t, status, answered)
+	if got := rulesIn(t, answered); len(got) != 0 {
+		t.Errorf("the answer still lists %v after the text was removed", got)
+	}
+	if _, rules := d.Loop.Config.PermissionsSnapshot(); len(rules["bash"]) != 0 {
+		t.Errorf("the running daemon still holds %v: a removal takes the exact rule and the pattern", rules["bash"])
+	}
+}

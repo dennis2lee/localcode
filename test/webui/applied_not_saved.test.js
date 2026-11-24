@@ -119,9 +119,8 @@ test('an agent and a pattern the daemon could not write are shown as chosen, wit
 });
 
 // later holds each request to the route until the test lets its answer
-// go, so two can be out at once and answered in either order. The answer
-// is made when the request arrives, as the daemon makes it: the answer to
-// the first does not know about the second.
+// go. The answer is made when the request arrives, as the daemon makes
+// it. count is how many requests have arrived, answered or not.
 function later(route) {
   const held = [];
   return {
@@ -134,26 +133,100 @@ function later(route) {
   };
 }
 
-test('two delegation changes answered out of order leave the panel showing both', async () => {
-  // The controls are not held while a request is out. The answer to the
-  // first carries the whole setting as it was before the second.
+// The panel does not hold its controls while a request is out. A second
+// change used to be sent at once, the daemon applied the two in order,
+// and the answers could arrive in the other one: the older value was
+// then drawn last. Found by review, with the three below.
+test('a delegation change made while another is out is sent after that one is answered', async () => {
   const daemon = fakeDelegation();
   const pending = later((body) => daemon.route(body));
   const app = await openDelegation(daemon, { 'POST /api/settings/auto-delegate': pending.route });
 
-  await turnDelegation(app, true);
+  await chooseAgent(app, 'general-purpose');
   await chooseAgent(app, 'plan');
-  assert.equal(pending.count, 2, 'the second change waited for the first');
-  pending.answer(1);
-  await app.settle();
+  await turnDelegation(app, true);
+  assert.equal(pending.count, 1, 'a second change was sent while the first was out, so their answers can cross');
+  for (let i = 0; i < 3; i++) {
+    assert.equal(pending.count, i + 1, 'a change was sent before the one ahead of it was answered');
+    pending.answer(i);
+    await app.settle();
+  }
+
+  assert.deepEqual(app.callsTo('POST', '/api/settings/auto-delegate').map((c) => c.body), [{ agent: 'general-purpose' }, { agent: 'plan' }, { enabled: true }]);
+  assert.deepEqual(daemon.held, { auto_delegate: true, auto_delegate_agent: 'plan', auto_delegate_match: [] });
+  assert.equal(app.el('delegate-agent-select').value, 'plan', 'the panel shows the agent that was chosen first');
+  assert.equal(app.el('delegate-enabled-checkbox').checked, true);
+  assert.equal(app.el('auto-delegate-btn').textContent, 'auto-delegate: on');
+});
+
+test('the answer to an earlier delegation save does not decide the warning about a later one', async () => {
+  // The agent is saved. The pattern after it is not. Both are the target,
+  // and share one warning: with the answers crossed, the save that
+  // worked took the warning the one that failed had just earned.
+  const daemon = fakeDelegation();
+  const pending = later((body) => daemon.route(body));
+  const app = await openDelegation(daemon, { 'POST /api/settings/auto-delegate': pending.route });
+  const warn = app.el('delegate-warn');
+
+  await chooseAgent(app, 'plan');
+  await addPattern(app, 'what is *');
+  // The agent has reached the file. The pattern is sent when the agent
+  // is answered, to a daemon that can no longer write.
+  daemon.writable = false;
   pending.answer(0);
   await app.settle();
+  assert.equal(pending.count, 2);
+  pending.answer(1);
+  await app.settle();
 
-  assert.deepEqual(daemon.held, { auto_delegate: true, auto_delegate_agent: 'plan', auto_delegate_match: [] });
-  assert.equal(app.el('delegate-enabled-checkbox').checked, true);
-  assert.equal(app.el('delegate-agent-select').value, 'plan', 'the earlier answer put the agent back');
-  assert.equal(app.state.autoDelegateAgent, 'plan');
-  assert.equal(app.el('auto-delegate-btn').textContent, 'auto-delegate: on');
+  assert.deepEqual(patternsShown(app), ['what is *']);
+  assert.match(warn.textContent, UNSAVED, 'the pattern is not in config.json and nothing says so');
+  assert.ok(warn.textContent.includes('The agent and patterns'));
+});
+
+test('two patterns added one after the other are both kept', async () => {
+  // The patterns are sent as a whole list. Built when the button was
+  // pressed, the second list did not have the first pattern in it, and
+  // the daemon dropped the first.
+  const daemon = fakeDelegation();
+  const pending = later((body) => daemon.route(body));
+  const app = await openDelegation(daemon, { 'POST /api/settings/auto-delegate': pending.route });
+
+  await addPattern(app, 'what is *');
+  await addPattern(app, 'where is *');
+  // The second is typed and added before the first is answered, and is
+  // still in the field: the answer to the first must not clear it.
+  pending.answer(0);
+  await app.settle();
+  assert.equal(pending.count, 2);
+  pending.answer(1);
+  await app.settle();
+
+  assert.deepEqual(daemon.held.auto_delegate_match, ['what is *', 'where is *'], 'the daemon lost a pattern');
+  assert.deepEqual(patternsShown(app), ['what is *', 'where is *']);
+  assert.equal(app.el('delegate-match-input').value, '');
+
+  // The same pattern asked for twice is sent once.
+  await addPattern(app, 'how do *');
+  app.el('delegate-match-input').value = 'how do *';
+  app.el('delegate-match-add').click();
+  await app.settle();
+  pending.answer(2);
+  await app.settle();
+  assert.equal(pending.count, 3, 'a pattern the list already has was sent again');
+  assert.deepEqual(patternsShown(app), ['what is *', 'where is *', 'how do *']);
+});
+
+test('a pattern typed while another is being added is not cleared by the answer', async () => {
+  const daemon = fakeDelegation();
+  const pending = later((body) => daemon.route(body));
+  const app = await openDelegation(daemon, { 'POST /api/settings/auto-delegate': pending.route });
+
+  await addPattern(app, 'what is *');
+  app.el('delegate-match-input').value = 'where is';
+  pending.answer(0);
+  await app.settle();
+  assert.equal(app.el('delegate-match-input').value, 'where is', 'the answer cleared what was being typed');
 });
 
 test('saving one half of the delegation setting leaves the warning about the other', async () => {
@@ -288,10 +361,13 @@ function fakeRules(start = {}) {
       if (!d.writable) reply.error = NOT_WRITTEN;
       return reply;
     },
+    // A rule added here is a pattern, and is added beside an exact rule
+    // of the same text. A rule removed takes both. See addRule and
+    // removeRule in internal/config/rules.go.
     add(body) {
       if (d.refusal) return d.refusal;
       held[body.tool] = held[body.tool] || [];
-      if (!held[body.tool].some(same(body))) held[body.tool].push({ match: body.match, decision: body.decision });
+      if (!held[body.tool].some((r) => same(body)(r) && !r.literal)) held[body.tool].push({ match: body.match, decision: body.decision });
       return d.reply();
     },
     remove(body) {
@@ -457,10 +533,7 @@ test('a rule the daemon refuses is not listed, and is said to have failed', asyn
   assert.equal(app.el('permission-rules-warn').hidden, true);
 });
 
-test('two rule changes answered out of order leave the list showing both', async () => {
-  // One rule removed and another added while the first is still out. The
-  // answer to the first lists the rules as they were before the second.
-  const daemon = fakeRules({ bash: [{ match: 'rm *', decision: 'deny' }, { match: 'ls *', decision: 'allow' }] });
+async function openRulesLater(daemon) {
   const removes = later((body) => daemon.remove(body));
   const adds = later((body) => daemon.add(body));
   const app = await load({
@@ -472,15 +545,140 @@ test('two rule changes answered out of order leave the list showing both', async
   });
   app.el('permission-status-btn').click();
   await app.settle();
+  return { app, adds, removes };
+}
 
-  await removeRule(app, 'bash: "rm *" -> deny');
-  await addRule(app, 'bash', 'npm *', 'allow');
-  assert.equal(removes.count + adds.count, 2, 'the second change waited for the first');
-  adds.answer(0);
-  await app.settle();
+// The list does not hold its buttons while a request is out. Two changes
+// used to be out at once, and each was applied to the list when its
+// answer came, in whichever order that was. Found by review.
+test('a rule removed and added again while the removal is out is listed, and warned about when not saved', async () => {
+  // With the answers crossed, the addition found the rule still listed
+  // and did nothing, and the removal then took it: the daemon ran a rule
+  // the list did not show, and nothing said it was not in the file.
+  const daemon = fakeRules({ bash: [{ match: 'ls *', decision: 'allow' }] });
+  const { app, adds, removes } = await openRulesLater(daemon);
+
+  await removeRule(app, 'bash: "ls *" -> allow');
+  await addRule(app, 'bash', 'ls *', 'allow');
+  assert.equal(adds.count, 0, 'the addition was sent while the removal was out, so their answers can cross');
+  // The removal has reached the file. The addition is sent when the
+  // removal is answered, to a daemon that can no longer write.
+  daemon.writable = false;
   removes.answer(0);
   await app.settle();
+  assert.equal(adds.count, 1);
+  adds.answer(0);
+  await app.settle();
 
-  assert.deepEqual(daemon.held, { bash: [{ match: 'ls *', decision: 'allow' }, { match: 'npm *', decision: 'allow' }] });
-  assert.deepEqual(rulesShown(app), ['bash: "ls *" -> allow', 'bash: "npm *" -> allow'], 'the earlier answer took the rule the later one added');
+  assert.deepEqual(daemon.held, { bash: [{ match: 'ls *', decision: 'allow' }] });
+  assert.deepEqual(rulesShown(app), ['bash: "ls *" -> allow'], 'the list does not show a rule the daemon runs');
+  assert.match(app.el('permission-rules-warn').textContent, UNSAVED);
+  assert.ok(app.el('permission-rules-warn').textContent.includes('added bash: "ls *" -> allow'));
+});
+
+test('two rules added one after the other are listed in the order the daemon holds them', async () => {
+  // The last rule that matches decides, so the order is what the rules
+  // mean: allow then deny refuses, deny then allow permits.
+  const daemon = fakeRules();
+  const { app, adds } = await openRulesLater(daemon);
+
+  await addRule(app, 'bash', 'npm *', 'allow');
+  await addRule(app, 'bash', 'npm *', 'deny');
+  assert.equal(adds.count, 1, 'the second rule was sent while the first was out');
+  // The second rule is still in the fields: the answer to the first
+  // leaves it there.
+  adds.answer(0);
+  await app.settle();
+  assert.equal(app.el('rule-match-input').value, 'npm *', 'the answer cleared a rule that was not the one it answered');
+  adds.answer(1);
+  await app.settle();
+
+  assert.deepEqual(daemon.held, { bash: [{ match: 'npm *', decision: 'allow' }, { match: 'npm *', decision: 'deny' }] });
+  assert.deepEqual(rulesShown(app), ['bash: "npm *" -> allow', 'bash: "npm *" -> deny']);
+  assert.equal(app.el('rule-match-input').value, '');
+});
+
+// A rule is a pattern or an exact command, and the daemon keeps the two
+// apart: "always allow" at a prompt writes an exact one, this window
+// adds patterns. Found by review: the page compared only the text.
+test('a pattern added beside an exact rule of the same text is listed, and warned about when not saved', async () => {
+  const daemon = fakeRules({ bash: [{ match: 'echo *', decision: 'allow', literal: true }] });
+  daemon.writable = false;
+  const app = await openRules(daemon);
+  assert.deepEqual(rulesShown(app), ['bash: "echo *" (exact) -> allow']);
+
+  await addRule(app, 'bash', 'echo *', 'allow');
+  assert.equal(daemon.held.bash.length, 2, 'the fake daemon is not adding the pattern beside the exact rule');
+  assert.deepEqual(rulesShown(app), ['bash: "echo *" (exact) -> allow', 'bash: "echo *" -> allow'], 'the pattern the daemon now runs is not listed');
+  const warn = app.el('permission-rules-warn');
+  assert.match(warn.textContent, UNSAVED);
+  assert.ok(warn.textContent.includes('added bash: "echo *" -> allow'), warn.textContent);
+  assert.equal(warn.textContent.includes('(exact)'), false, `the exact rule, which the file has, is named: ${warn.textContent}`);
+
+  // Added a second time, it is still one pattern.
+  await addRule(app, 'bash', 'echo *', 'allow');
+  assert.equal(rulesShown(app).length, 2);
+});
+
+test('an exact rule in the file replaced by a pattern in force keeps its warning', async () => {
+  // Removed and not saved: the file still has the exact rule. A pattern
+  // of the same text added after it is in force and not in the file. The
+  // two hold different rules, which read as "the same text is in both".
+  const daemon = fakeRules({ bash: [{ match: 'echo *', decision: 'allow', literal: true }] });
+  daemon.writable = false;
+  const app = await openRules(daemon);
+  const warn = app.el('permission-rules-warn');
+
+  await removeRule(app, 'bash: "echo *" (exact) -> allow');
+  assert.ok(warn.textContent.includes('removed bash: "echo *" (exact) -> allow'), warn.textContent);
+  await addRule(app, 'bash', 'echo *', 'allow');
+  assert.deepEqual(rulesShown(app), ['bash: "echo *" -> allow']);
+  assert.match(warn.textContent, UNSAVED, 'the daemon runs a pattern, the file holds an exact rule, and nothing says so');
+  assert.ok(warn.textContent.includes('added bash: "echo *" -> allow'), warn.textContent);
+  assert.ok(warn.textContent.includes('removed bash: "echo *" (exact) -> allow'), warn.textContent);
+
+  // Saved, the pattern is in the file. The exact rule is still there too,
+  // and still not in force.
+  daemon.writable = true;
+  await addRule(app, 'bash', 'echo *', 'allow');
+  assert.equal(warn.textContent.includes('added bash'), false, `a pattern that was saved is named: ${warn.textContent}`);
+  assert.ok(warn.textContent.includes('removed bash: "echo *" (exact) -> allow'), 'saving the pattern took the warning about the exact rule');
+
+  // Removing the text again, saved, takes both from the file.
+  await removeRule(app, 'bash: "echo *" -> allow');
+  assert.equal(warn.textContent, '');
+  assert.equal(warn.hidden, true);
+});
+
+test('removing a rule takes the exact rule and the pattern of the same text together', async () => {
+  const daemon = fakeRules({ bash: [{ match: 'echo *', decision: 'allow', literal: true }, { match: 'echo *', decision: 'allow' }, { match: 'echo *', decision: 'deny' }] });
+  const app = await openRules(daemon);
+  await removeRule(app, 'bash: "echo *" -> allow');
+  assert.deepEqual(daemon.held, { bash: [{ match: 'echo *', decision: 'deny' }] });
+  assert.deepEqual(rulesShown(app), ['bash: "echo *" -> deny']);
+});
+
+test('a rule change that is applied takes away what a refused one left under the list', async () => {
+  const daemon = fakeRules();
+  const app = await openRules(daemon);
+  const note = app.el('permission-settings-note');
+  daemon.refusal = { status: 400, body: 'unknown decision "permit"' };
+  await addRule(app, 'bash', 'npm *', 'allow');
+  assert.match(note.textContent, /Failed to add rule/);
+
+  daemon.refusal = null;
+  await addRule(app, 'bash', 'npm *', 'allow');
+  assert.doesNotMatch(note.textContent, /Failed to add rule/, 'the refusal is still said under a rule that was added');
+  assert.ok(note.textContent.includes('written to config.json'), note.textContent);
+
+  // And beside a warning that a rule was not written, the line does not
+  // say rules are written.
+  daemon.writable = false;
+  await addRule(app, 'bash', 'go *', 'allow');
+  assert.match(app.el('permission-rules-warn').textContent, UNSAVED);
+  assert.equal(note.textContent.includes('written to config.json'), false, note.textContent);
+  app.el('permission-settings-close').click();
+  app.el('permission-status-btn').click();
+  await app.settle();
+  assert.equal(note.textContent.includes('written to config.json'), false, 'opened again, the line says rules are written');
 });

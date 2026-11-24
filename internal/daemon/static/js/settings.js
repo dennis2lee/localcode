@@ -250,11 +250,19 @@ async function toggleKeepGoing() {
 // A checkbox and a number, because "off" and "give it room" are different
 // sizes of the same request. The number is only editable while the box
 // is checked; unchecking sends zero, checking sends the number.
+//
+// Both are held while a change is out, and a draw in that time leaves
+// them held. The daemon announces a change before it answers it, and the
+// draw that announcement brings used to open the number again with the
+// request still out: a second number could be sent, and the answer to
+// the first then put the first number back over it.
+let repeatLimitOut = false;
+
 function renderRepeatLimit(outcome, refused) {
   const warning = underSwitch('repeat_limit', outcome, refused);
   const on = app.repeatLimit > 0;
   repeatLimitCheckbox.checked = on;
-  repeatLimitInput.disabled = !on;
+  repeatLimitInput.disabled = repeatLimitOut || !on;
   if (on) repeatLimitInput.value = String(app.repeatLimit);
   repeatLimitWarnEl.textContent = warning;
   repeatLimitWarnEl.hidden = !warning;
@@ -269,6 +277,7 @@ export function refreshRepeatLimitIfOpen() {
 // nothing.
 async function applyRepeatLimit() {
   const wanted = repeatLimitCheckbox.checked ? Math.max(1, parseInt(repeatLimitInput.value, 10) || 3) : 0;
+  repeatLimitOut = true;
   repeatLimitCheckbox.disabled = true;
   repeatLimitInput.disabled = true;
   try {
@@ -282,6 +291,7 @@ async function applyRepeatLimit() {
     // daemon has.
     renderRepeatLimit(undefined, `Not changed: ${err}`);
   } finally {
+    repeatLimitOut = false;
     repeatLimitCheckbox.disabled = false;
     repeatLimitInput.disabled = app.repeatLimit === 0;
   }
