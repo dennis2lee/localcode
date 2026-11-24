@@ -3552,10 +3552,12 @@ Click a task in the right panel to view its complete session:
 
 | What | Shown as |
 |---|---|
-| Tool calls | A line when the call starts and the same line completed with its result, `✓` or `✗`, and the output; click it for the full arguments. |
+| Its replies | Rendered as markdown (headings, lists, code blocks, tables), each in a block of its own in the reading face, apart from the instructions, tool calls and status lines around it. The last reply of a task that completed is marked **Result**. |
+| Its instructions | The prompt it was given, muted, at the top. A long one scrolls in its own box. |
+| Tool calls | One line per call, folded: `✓` or `✗` and the size of the result when it ends. Click the line for the arguments and the output, and again to fold it. |
 | A permission it is blocked on | `⏸ waiting for permission`, naming the tool and what it wants to do. Answer it in the session that spawned the task, which is where the prompt appears. The answer belongs to the task that asked: "allow for this session" there covers the task, not your conversation. |
 | Work it delegates itself | A line per sub-task it spawns and per status that comes back. |
-| The end | Finished or cancelled marker. Incomplete tool calls are marked as unfinished. |
+| The end | The status under the window. A log that records the end of a turn also gets a finished or cancelled line, with tool calls that did not finish marked. |
 | Errors and compaction | A line each. |
 
 Running tasks provide **Stop this task**. Finished tasks provide **Delete this task**, which removes the child session and its row. The parent log records deletion so the row stays removed after reload. The rows themselves can be deleted without opening them: see [Deleting background tasks](#deleting-background-tasks).

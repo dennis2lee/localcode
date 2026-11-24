@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.180.1
+
+A background task's window shows its replies as markdown, set apart from the workings around them, with its result marked.
+
+**Changed**
+
+* A task's replies in its window rendered as markdown, as in the conversation: headings, lists, code blocks and tables
+* Each reply a block of its own in the reading face, and the instructions, tool calls and status lines in a smaller, muted voice
+* The last reply of a completed task marked **Result**
+* Tool calls in the task window folded to one line until clicked, as in the conversation: they showed their whole input and output
+
 ## v0.180.0
 
 PowerShell terminals on Windows that the model works in and you share, and the settings window's switches regrouped into four tabs.

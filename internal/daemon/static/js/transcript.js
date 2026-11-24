@@ -589,7 +589,7 @@ function resultSize(text) {
   return `${lines.length} line${lines.length === 1 ? '' : 's'}`;
 }
 
-function prettyJSON(s) {
+export function prettyJSON(s) {
   try { return JSON.stringify(JSON.parse(s || '{}'), null, 2); } catch { return String(s || ''); }
 }
 

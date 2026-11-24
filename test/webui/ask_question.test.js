@@ -219,7 +219,9 @@ test('only the question\'s own rule sizes the question, and a plain tool line ke
   await app.settle();
   const cls = askClass(app);
 
-  const sizing = rules().filter(([sel, body]) => sizeOf(body) && sel.split(',').some((s) => /\.msg-tool\b/.test(s) || s.includes(`.${cls}`)));
+  // The transcript's rules: the task window sets its own status lines
+  // (#task-modal-body .msg-tool), which never reach the transcript.
+  const sizing = rules().filter(([sel, body]) => sizeOf(body) && sel.split(',').some((s) => s.trim().startsWith('#transcript') && (/\.msg-tool\b/.test(s) || s.includes(`.${cls}`))));
   assert.deepEqual(sizing.map(([sel]) => sel), [`#transcript .${cls}`],
     'another rule gives a tool line or the question a size, which would change it or undo the question\'s');
 });
