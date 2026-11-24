@@ -129,6 +129,12 @@ const NOT_SAVED = 'Applied, but not saved to config.json, so it lasts only until
 // was written. A request that fails is one it refused before applying
 // anything: an agent it does not know, or fewer than two to choose from.
 //
+// Only the fields this request moved are taken from the answer. The
+// answer carries the whole setting, but the controls are not held while
+// a request is out, so two can be out at once, and the answer to the
+// first was made before the second was applied. Taking all of it from
+// whichever answer arrived last put back what the other had just set.
+//
 // The switch and the target (the agent and the patterns) are written to
 // the file separately, so each has its own warning: saving one says
 // nothing about the other, and a warning goes when its own half is saved.
@@ -145,12 +151,15 @@ export async function saveAutoDelegate(patch) {
     return false;
   }
   const held = res || {};
-  if (typeof held.auto_delegate === 'boolean') app.autoDelegate = held.auto_delegate;
-  else if (typeof patch.enabled === 'boolean') app.autoDelegate = patch.enabled;
-  if (typeof held.auto_delegate_agent === 'string') app.autoDelegateAgent = held.auto_delegate_agent;
-  else if (typeof patch.agent === 'string') app.autoDelegateAgent = patch.agent;
-  if (Array.isArray(held.auto_delegate_match)) app.autoDelegateMatch = held.auto_delegate_match.slice();
-  else if (Array.isArray(patch.match)) app.autoDelegateMatch = patch.match.slice();
+  if (typeof patch.enabled === 'boolean') {
+    app.autoDelegate = typeof held.auto_delegate === 'boolean' ? held.auto_delegate : patch.enabled;
+  }
+  if (typeof patch.agent === 'string') {
+    app.autoDelegateAgent = typeof held.auto_delegate_agent === 'string' ? held.auto_delegate_agent : patch.agent;
+  }
+  if (Array.isArray(patch.match)) {
+    app.autoDelegateMatch = (Array.isArray(held.auto_delegate_match) ? held.auto_delegate_match : patch.match).slice();
+  }
 
   // '' for a save that reached the file, which takes the warning away.
   const reason = held.persisted === false ? held.error || 'unknown error' : '';
@@ -260,16 +269,26 @@ export function closeDelegateModal() {
 // Rules are written to config.json one at a time, so a rule the daemon
 // applied and could not write is remembered by name. A later rule that
 // is saved says nothing about an earlier one that was not, which is why
-// this is a list and not the one warning a switch keeps. An entry goes
-// when the same rule is next added or removed and that change is saved:
-// the daemon and the file then agree about it again.
+// this is a list and not the one warning a switch keeps.
+//
+// An entry is a rule the daemon and the file disagree about: in force
+// and not in the file, or in the file and no longer in force. It goes
+// when they agree again, which is two ways. The same rule is added or
+// removed and that is saved. Or the change is taken back: a rule added
+// and not saved, then removed, is in neither, whether or not the removal
+// was saved. What the file holds is what was listed before the first
+// change that was not saved, since a rule with no entry here is one the
+// two agree about.
 const unsavedRules = new Map();
 
-function noteRuleOutcome(change, tool, match, decision, res) {
+function noteRuleOutcome(change, tool, match, decision, res, wasListed) {
   const key = JSON.stringify([tool, match, decision]);
+  const before = unsavedRules.get(key);
+  const inFile = before ? before.inFile : wasListed;
+  const inForce = change === 'added';
   unsavedRules.delete(key);
-  if (res && res.persisted === false) {
-    unsavedRules.set(key, { text: `${change} ${tool}: "${match}" -> ${decision}`, reason: res.error || 'unknown error' });
+  if (res && res.persisted === false && inForce !== inFile) {
+    unsavedRules.set(key, { inFile, text: `${change} ${tool}: "${match}" -> ${decision}`, reason: res.error || 'unknown error' });
   }
 }
 
@@ -448,16 +467,19 @@ export async function addPermissionRule() {
   if (!tool || !match) return;
   try {
     // Answered in two parts: the rule is in force either way, and
-    // "persisted" says whether config.json has it. The list is drawn from
-    // the rules the daemon says it now holds.
+    // "persisted" says whether config.json has it.
+    //
+    // The rule is put in the list here, and the list in the answer is
+    // not used: two changes can be out at once, the answer to the first
+    // was made before the second was applied, and a list replaced by
+    // whichever answer arrived last lost the other's rule. One rule
+    // added and another removed come to the same list in either order.
     const res = await apiClient.addPermissionRule(tool, match, decision);
-    if (res && 'permission_rules' in res) {
-      app.permissionRules = res.permission_rules || {};
-    } else {
-      app.permissionRules[tool] = app.permissionRules[tool] || [];
-      app.permissionRules[tool].push({ match, decision });
-    }
-    noteRuleOutcome('added', tool, match, decision, res);
+    const rules = app.permissionRules[tool] = app.permissionRules[tool] || [];
+    // Once: adding a rule again is how one that was not saved is saved.
+    const wasListed = rules.some(r => r.match === match && r.decision === decision);
+    if (!wasListed) rules.push({ match, decision });
+    noteRuleOutcome('added', tool, match, decision, res, wasListed);
     ruleToolInput.value = '';
     ruleMatchInput.value = '';
     renderPermissionRulesList();
@@ -470,13 +492,11 @@ export async function addPermissionRule() {
 async function removePermissionRule(tool, rule) {
   try {
     const res = await apiClient.removePermissionRule(tool, rule.match, rule.decision);
-    if (res && 'permission_rules' in res) {
-      app.permissionRules = res.permission_rules || {};
-    } else {
-      app.permissionRules[tool] = (app.permissionRules[tool] || []).filter(r => !(r.match === rule.match && r.decision === rule.decision));
-      if (app.permissionRules[tool].length === 0) delete app.permissionRules[tool];
-    }
-    noteRuleOutcome('removed', tool, rule.match, rule.decision, res);
+    const same = r => r.match === rule.match && r.decision === rule.decision;
+    const wasListed = (app.permissionRules[tool] || []).some(same);
+    app.permissionRules[tool] = (app.permissionRules[tool] || []).filter(r => !same(r));
+    if (app.permissionRules[tool].length === 0) delete app.permissionRules[tool];
+    noteRuleOutcome('removed', tool, rule.match, rule.decision, res, wasListed);
     renderPermissionRulesList();
     renderPermissionStatus();
   } catch (err) {

@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,10 +8,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
-	"localcode/internal/client"
 	"localcode/internal/config"
+	"localcode/internal/events"
 )
 
 // The four routes that were the last to answer a failed save with a 500:
@@ -77,20 +75,10 @@ func wantNotSaved(t *testing.T, status int, answered map[string]any) {
 // same body was never applied, and no window was told the target moved.
 func TestAutoDelegateSaysAppliedWhenTheSaveFails(t *testing.T) {
 	d, srv := unwritableDaemon(t)
-
-	c := client.New(srv.URL)
-	ctx := context.Background()
-	sess, err := c.CreateSession(ctx, "general-purpose")
-	if err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	evCtx, cancelEvents := context.WithCancel(ctx)
-	defer cancelEvents()
-	evCh, err := c.SubscribeEvents(evCtx, sess.ID, 0)
-	if err != nil {
-		t.Fatalf("SubscribeEvents: %v", err)
-	}
-	time.Sleep(100 * time.Millisecond)
+	// Listening before the request is made, on the daemon's own
+	// broadcast: nothing here waits for a client to have connected.
+	announced, stopListening := d.daemonEvents.subscribe()
+	defer stopListening()
 
 	status, answered := postSetting(t, srv.URL+"/api/settings/auto-delegate",
 		`{"enabled":true,"agent":"plan","match":["what is *"]}`)
@@ -114,8 +102,24 @@ func TestAutoDelegateSaysAppliedWhenTheSaveFails(t *testing.T) {
 	if block := d.Loop.Config.AutoDelegateSnapshot(); block == nil || block.Agent != "plan" || len(block.Match) != 1 {
 		t.Errorf("live block = %+v, want the target that was reported as applied", block)
 	}
-	if data := waitForSettings(t, evCh); data["auto_delegate"] != true {
-		t.Errorf("announced auto_delegate = %v, want every window told it is on", data["auto_delegate"])
+	// The handler announces before it answers, so the event is already
+	// in the channel: read what is there, and wait for nothing.
+	told := false
+	for drained := false; !drained; {
+		select {
+		case ev := <-announced:
+			if ev.Type == events.TypeSettingsChanged {
+				told = true
+				if ev.Data["auto_delegate"] != true {
+					t.Errorf("announced auto_delegate = %v, want every window told it is on", ev.Data["auto_delegate"])
+				}
+			}
+		default:
+			drained = true
+		}
+	}
+	if !told {
+		t.Error("nothing was announced, so no other window learns the setting moved")
 	}
 	got := readSettings(t, srv.URL)
 	if got["auto_delegate"] != true || got["auto_delegate_agent"] != "plan" {

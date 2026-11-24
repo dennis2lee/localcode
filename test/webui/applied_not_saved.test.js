@@ -118,16 +118,41 @@ test('an agent and a pattern the daemon could not write are shown as chosen, wit
   assert.match(warn.textContent, UNSAVED);
 });
 
-test('the panel shows what the daemon answers with, not what the page believes it sent', async () => {
-  // The answer carries the whole setting. Another window has moved the
-  // agent since this page read it, and that is never announced.
-  const daemon = fakeDelegation({ auto_delegate_agent: 'plan', auto_delegate_match: ['where is *'] });
-  const app = await openDelegation(daemon);
-  assert.equal(app.el('delegate-agent-select').value, '');
+// later holds each request to the route until the test lets its answer
+// go, so two can be out at once and answered in either order. The answer
+// is made when the request arrives, as the daemon makes it: the answer to
+// the first does not know about the second.
+function later(route) {
+  const held = [];
+  return {
+    route: (body) => new Promise((resolve) => {
+      const answer = route(body);
+      held.push(() => resolve(answer));
+    }),
+    answer: (i) => held[i](),
+    get count() { return held.length; },
+  };
+}
+
+test('two delegation changes answered out of order leave the panel showing both', async () => {
+  // The controls are not held while a request is out. The answer to the
+  // first carries the whole setting as it was before the second.
+  const daemon = fakeDelegation();
+  const pending = later((body) => daemon.route(body));
+  const app = await openDelegation(daemon, { 'POST /api/settings/auto-delegate': pending.route });
 
   await turnDelegation(app, true);
-  assert.equal(app.el('delegate-agent-select').value, 'plan');
-  assert.deepEqual(patternsShown(app), ['where is *']);
+  await chooseAgent(app, 'plan');
+  assert.equal(pending.count, 2, 'the second change waited for the first');
+  pending.answer(1);
+  await app.settle();
+  pending.answer(0);
+  await app.settle();
+
+  assert.deepEqual(daemon.held, { auto_delegate: true, auto_delegate_agent: 'plan', auto_delegate_match: [] });
+  assert.equal(app.el('delegate-enabled-checkbox').checked, true);
+  assert.equal(app.el('delegate-agent-select').value, 'plan', 'the earlier answer put the agent back');
+  assert.equal(app.state.autoDelegateAgent, 'plan');
   assert.equal(app.el('auto-delegate-btn').textContent, 'auto-delegate: on');
 });
 
@@ -237,10 +262,11 @@ test('a delegation change the daemon refuses is not made, and the control goes b
   assert.match(warn.textContent, UNSAVED, 'the refusal took the warning about the switch');
   assert.equal(app.el('delegate-enabled-checkbox').checked, true);
 
-  // The next change that is applied takes the refusal away.
+  // The next change that is applied takes the refusal away. The switch,
+  // not a pattern: adding a pattern clears the note itself before it asks.
   daemon.refusal = null;
   daemon.writable = true;
-  await addPattern(app, 'what is *');
+  await turnDelegation(app, false);
   assert.equal(note.classList.contains('err'), false, 'a refusal stayed after a change that was applied');
   assert.equal(note.textContent.includes('unknown agent'), false);
 });
@@ -387,6 +413,34 @@ test('each rule change that was not saved is named, and one taken back is not', 
   assert.ok(warn.textContent.includes('removed bash: "rm *" -> deny'), 'the other change lost its warning');
 });
 
+test('a rule change taken back while config.json cannot be written leaves no warning', async () => {
+  // The warning is for a rule the daemon and the file disagree about.
+  // Added and removed again with neither written, the rule is in neither.
+  const daemon = fakeRules({ bash: [{ match: 'ls *', decision: 'allow' }] });
+  daemon.writable = false;
+  const app = await openRules(daemon);
+  const warn = app.el('permission-rules-warn');
+
+  await addRule(app, 'bash', 'npm *', 'allow');
+  assert.match(warn.textContent, UNSAVED);
+  await removeRule(app, 'bash: "npm *" -> allow');
+  assert.deepEqual(rulesShown(app), ['bash: "ls *" -> allow']);
+  assert.equal(warn.textContent, '', 'a rule that is in neither the daemon nor the file is called not saved');
+  assert.equal(warn.hidden, true);
+
+  // And the other way: a rule the file has, removed and put back.
+  await removeRule(app, 'bash: "ls *" -> allow');
+  assert.ok(warn.textContent.includes('removed bash: "ls *" -> allow'), warn.textContent);
+  await addRule(app, 'bash', 'ls *', 'allow');
+  assert.deepEqual(rulesShown(app), ['bash: "ls *" -> allow']);
+  assert.equal(warn.textContent, '', 'a rule that is in both the daemon and the file is called not saved');
+  assert.equal(warn.hidden, true);
+
+  // A rule the file has, added again and not written, is not a change.
+  await addRule(app, 'bash', 'ls *', 'allow');
+  assert.equal(warn.hidden, true, 'adding a rule the file already has is called not saved');
+});
+
 test('a rule the daemon refuses is not listed, and is said to have failed', async () => {
   const daemon = fakeRules({ bash: [{ match: 'ls *', decision: 'allow' }] });
   const app = await openRules(daemon);
@@ -403,13 +457,30 @@ test('a rule the daemon refuses is not listed, and is said to have failed', asyn
   assert.equal(app.el('permission-rules-warn').hidden, true);
 });
 
-test('the list is the rules the daemon answers with', async () => {
-  // A rule allowed "always" at a prompt since this page read the rules is
-  // one the daemon holds and the page was never told about.
-  const daemon = fakeRules({ bash: [{ match: 'git status', decision: 'allow', literal: true }] });
-  const app = await openRules(daemon, {});
-  assert.deepEqual(rulesShown(app), []);
+test('two rule changes answered out of order leave the list showing both', async () => {
+  // One rule removed and another added while the first is still out. The
+  // answer to the first lists the rules as they were before the second.
+  const daemon = fakeRules({ bash: [{ match: 'rm *', decision: 'deny' }, { match: 'ls *', decision: 'allow' }] });
+  const removes = later((body) => daemon.remove(body));
+  const adds = later((body) => daemon.add(body));
+  const app = await load({
+    routes: {
+      'GET /api/settings': { ...defaultRoutes()['GET /api/settings'], permission_rules: JSON.parse(JSON.stringify(daemon.held)) },
+      'POST /api/permissions/rules': adds.route,
+      'POST /api/permissions/rules/remove': removes.route,
+    },
+  });
+  app.el('permission-status-btn').click();
+  await app.settle();
 
+  await removeRule(app, 'bash: "rm *" -> deny');
   await addRule(app, 'bash', 'npm *', 'allow');
-  assert.deepEqual(rulesShown(app), ['bash: "git status" (exact) -> allow', 'bash: "npm *" -> allow']);
+  assert.equal(removes.count + adds.count, 2, 'the second change waited for the first');
+  adds.answer(0);
+  await app.settle();
+  removes.answer(0);
+  await app.settle();
+
+  assert.deepEqual(daemon.held, { bash: [{ match: 'ls *', decision: 'allow' }, { match: 'npm *', decision: 'allow' }] });
+  assert.deepEqual(rulesShown(app), ['bash: "ls *" -> allow', 'bash: "npm *" -> allow'], 'the earlier answer took the rule the later one added');
 });
