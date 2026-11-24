@@ -1,0 +1,59 @@
+# Diagnostic, not part of the release: changes settings in the real desktop
+# window on a Windows runner, ends the window several ways, starts it again
+# and reads the settings back. See diag/prefs/run.ps1.
+# Runs on pushes to diag/* branches only.
+name: diag-gui-prefs
+
+on:
+  push:
+    branches: ['diag/**']
+
+permissions:
+  contents: read
+
+jobs:
+  prefs:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [main]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          path: src
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: src/go.sum
+
+      - name: Build the window
+        timeout-minutes: 15
+        shell: bash
+        working-directory: src
+        env:
+          CGO_ENABLED: '1'
+        run: go build -tags gui -ldflags "-s -w -H windowsgui -X main.version=0.0.1" -o localcode-gui.exe ./cmd/localcode
+
+      - name: A screen the whole window fits on
+        shell: pwsh
+        continue-on-error: true
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
+
+      - name: Settings across a restart
+        timeout-minutes: 22
+        shell: pwsh
+        run: ./harness/diag/prefs/run.ps1 -Exe src/localcode-gui.exe -Ref "${{ matrix.ref }}" -Only "${{ vars.DIAG_PREFS_ONLY }}"
+
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-prefs-shots-${{ strategy.job-index }}
+          path: shots
+          if-no-files-found: warn
