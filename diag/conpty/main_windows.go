@@ -199,6 +199,20 @@ func main() {
 	windows.ResizePseudoConsole(p.hpc, windows.Coord{X: 80, Y: 20})
 	quiet(700*time.Millisecond, 10*time.Second)
 	send("$Host.UI.RawUI.WindowSize.Width\r")
+	// Ctrl+C: while a cmdlet runs, while a native program runs, and at
+	// the prompt with text typed.
+	p.in.Write([]byte("Start-Sleep -Seconds 30\r"))
+	time.Sleep(1500 * time.Millisecond)
+	send("\x03")
+	time.Sleep(2 * time.Second)
+	p.in.Write([]byte("ping -n 30 127.0.0.1\r"))
+	time.Sleep(2500 * time.Millisecond)
+	send("\x03")
+	time.Sleep(2 * time.Second)
+	p.in.Write([]byte("some text"))
+	time.Sleep(500 * time.Millisecond)
+	send("\x03")
+	send("echo after\r")
 	send("exit\r")
 	ev, _ := windows.WaitForSingleObject(p.proc, 15000)
 	var code uint32
