@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.178.0
 
 Each conversation keeps which panels are shown beside it.
 
