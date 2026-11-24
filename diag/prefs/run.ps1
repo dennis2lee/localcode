@@ -168,19 +168,29 @@ function Click-El($app, $el) {
 }
 
 function Toggle-State($el) {
+  if (-not $el) { return 'missing' }
   try { return [string]$el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState } catch { return '?' }
 }
 
-# Turns a checkbox on with a click, and falls back to the accessibility
-# toggle if the click did not land.
-function Check($app, $id) {
+# Brings an element into the part of the settings window that is drawn,
+# so a click lands on it and not on what is over it.
+function Into-View($el) {
+  try { $el.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView() } catch {}
+  Start-Sleep -Milliseconds 250
+}
+
+# Puts a checkbox On or Off with a click, and falls back to the
+# accessibility toggle if the click did not land.
+function Set-Box($app, $id, $want) {
   $el = El $app $id
   if (-not $el) { return "missing" }
-  if ((Toggle-State $el) -eq 'On') { return 'On' }
+  if ((Toggle-State $el) -eq $want) { return $want }
+  Into-View $el
+  $el = El $app $id
   Click-El $app $el | Out-Null
   Start-Sleep -Milliseconds 700
   $el = El $app $id
-  if ((Toggle-State $el) -ne 'On') {
+  if ((Toggle-State $el) -ne $want) {
     try { $el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle() } catch {}
     Start-Sleep -Milliseconds 700
     $el = El $app $id
@@ -188,8 +198,44 @@ function Check($app, $id) {
   return (Toggle-State $el)
 }
 
+# Moves a list one choice down with the keyboard, and says what it shows.
+function Step-List($app, $id) {
+  $sel = El $app $id
+  if (-not $sel) { return 'missing' }
+  $before = Select-Value $sel
+  Into-View $sel
+  Front $app
+  try { $sel.SetFocus() } catch {}
+  Start-Sleep -Milliseconds 350
+  [System.Windows.Forms.SendKeys]::SendWait('{DOWN}')
+  Start-Sleep -Milliseconds 600
+  $sel = El $app $id
+  $now = Select-Value $sel
+  if ($now -eq $before) {
+    # The list did not move: open it with a click and choose from it.
+    Click-El $app $sel | Out-Null
+    [System.Windows.Forms.SendKeys]::SendWait('{DOWN}{ENTER}')
+    Start-Sleep -Milliseconds 600
+    $now = Select-Value (El $app $id)
+  }
+  return $now
+}
+
+function Tab-To($app, $tab, $shows) {
+  if (El $app $shows 1) { return $true }
+  $t = El $app $tab
+  if (-not $t) { return $false }
+  Click-El $app $t | Out-Null
+  if (El $app $shows 10) { return $true }
+  try { $t.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() } catch {}
+  try { $t.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
+  return [bool](El $app $shows 10)
+}
+
 function Select-Value($el) {
+  if (-not $el) { return 'missing' }
   try { return [string]$el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch {}
+  try { return [string]$el.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value } catch {}
   try {
     $sel = $el.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection()
     if ($sel.Length -gt 0) { return [string]$sel[0].Current.Name }
@@ -220,13 +266,7 @@ function Open-Settings($app) {
 
 function Open-Typography($app) {
   if (-not (Open-Settings $app)) { return $false }
-  $tab = El $app 'settings-tab-typography'
-  if (-not $tab) { return $false }
-  Click-El $app $tab | Out-Null
-  if (El $app 'typo-size-select' 10) { return $true }
-  try { $tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select() } catch {}
-  try { $tab.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
-  return [bool](El $app 'typo-size-select' 10)
+  return (Tab-To $app 'settings-tab-typography' 'typo-size-select')
 }
 
 function Close-Settings($app) {
@@ -234,68 +274,111 @@ function Close-Settings($app) {
   if ($c) { Click-El $app $c | Out-Null }
 }
 
-# Changes the three settings and says what the window shows afterwards.
-function Set-All($app) {
-  if (-not (Open-Settings $app)) { return 'settings did not open' }
-  $smart = Check $app 'smart-agent-checkbox'
-  $ssh = Check $app 'ssh-checkbox'
-  Start-Sleep -Milliseconds 1200
-  $warn = ((Text-Of $app 'smart-agent-warn') + ' ' + (Text-Of $app 'ssh-warn')).Trim()
-  if ($script:ShotAgents) { Shot $script:ShotAgents }
-  $text = '?'
-  if (Open-Typography $app) {
-    $sel = El $app 'typo-size-select'
-    $before = Select-Value $sel
-    Front $app
-    try { $sel.SetFocus() } catch {}
-    Start-Sleep -Milliseconds 400
-    [System.Windows.Forms.SendKeys]::SendWait('{DOWN}')
-    Start-Sleep -Milliseconds 700
-    $sel = El $app 'typo-size-select'
-    $text = Select-Value $sel
-    if ($text -eq $before) {
-      # The list did not move: open it with a click and choose from it.
-      Click-El $app $sel | Out-Null
-      [System.Windows.Forms.SendKeys]::SendWait('{DOWN}{ENTER}')
-      Start-Sleep -Milliseconds 700
-      $sel = El $app 'typo-size-select'
-      $text = Select-Value $sel
-    }
-  }
-  $out = "text=$text smart=$smart ssh=$ssh"
-  if ($warn) { $out += " warn=[$warn]" }
-  return $out
+# The lists on the Typography tab, and the name each is reported under.
+$Lists = [ordered]@{
+  doc = 'typo-doc-select'; ui = 'typo-ui-select'; mono = 'typo-mono-select'
+  size = 'typo-size-select'; sizeRead = 'typo-size-read-select'; sizeUi = 'typo-size-ui-select'; sizeCode = 'typo-size-code-select'
 }
 
-# Reads the three back: what the window shows, and what the daemon says.
-function Read-All($app) {
-  $api = '?'
+# What the settings window shows, every control in it but the browser
+# switch (which copies a Chrome profile when it is turned on): the
+# switches the daemon keeps in config.json, and the faces and sizes the
+# page keeps for itself. An ordered table of name to what is shown.
+function Window-Shows($app) {
+  $v = [ordered]@{}
+  if (-not (Open-Settings $app)) { $v['settings'] = 'did not open'; return $v }
+  if (Tab-To $app 'settings-tab-agents' 'smart-agent-checkbox') {
+    $v['smart'] = Toggle-State (El $app 'smart-agent-checkbox')
+    $v['ssh'] = Toggle-State (El $app 'ssh-checkbox')
+    $v['orchestrate'] = Toggle-State (El $app 'orchestrate-checkbox')
+    $v['commands'] = Toggle-State (El $app 'model-invocable-checkbox')
+  }
+  if (Tab-To $app 'settings-tab-turns' 'repeat-limit-checkbox') {
+    $v['repeat'] = "$(Toggle-State (El $app 'repeat-limit-checkbox'))/$(Select-Value (El $app 'repeat-limit-input'))"
+  }
+  if (Tab-To $app 'settings-tab-muse' 'fold-thinking-checkbox') {
+    $v['fold'] = Toggle-State (El $app 'fold-thinking-checkbox')
+    $v['keepGoing'] = Toggle-State (El $app 'keep-going-checkbox')
+  }
+  if (Open-Typography $app) {
+    foreach ($n in $Lists.Keys) { $v[$n] = Select-Value (El $app $Lists[$n]) }
+  }
+  return $v
+}
+
+function Flat($v) { return (($v.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ') }
+
+# Changes every one of them away from what a new install shows, and
+# answers with what the window shows afterwards.
+function Set-All($app) {
+  if (-not (Open-Settings $app)) { return [ordered]@{ settings = 'did not open' } }
+  if (Tab-To $app 'settings-tab-agents' 'smart-agent-checkbox') {
+    Set-Box $app 'smart-agent-checkbox' 'On' | Out-Null
+    Set-Box $app 'ssh-checkbox' 'On' | Out-Null
+    Set-Box $app 'orchestrate-checkbox' 'On' | Out-Null
+    Set-Box $app 'model-invocable-checkbox' 'On' | Out-Null
+    Start-Sleep -Milliseconds 1000
+    $script:Warned = ((Text-Of $app 'smart-agent-warn') + ' ' + (Text-Of $app 'ssh-warn') + ' ' + (Text-Of $app 'orchestrate-warn')).Trim()
+    if ($script:ShotAgents) { Shot $script:ShotAgents }
+  }
+  if (Tab-To $app 'settings-tab-turns' 'repeat-limit-checkbox') {
+    Set-Box $app 'repeat-limit-checkbox' 'On' | Out-Null
+    Start-Sleep -Milliseconds 600
+    $n = El $app 'repeat-limit-input'
+    if ($n) {
+      Front $app
+      try { $n.SetFocus() } catch {}
+      Start-Sleep -Milliseconds 300
+      [System.Windows.Forms.SendKeys]::SendWait('^a7{TAB}')
+      Start-Sleep -Milliseconds 900
+    }
+  }
+  if (Tab-To $app 'settings-tab-muse' 'fold-thinking-checkbox') {
+    Set-Box $app 'fold-thinking-checkbox' 'Off' | Out-Null
+    Set-Box $app 'keep-going-checkbox' 'Off' | Out-Null
+  }
+  if (Open-Typography $app) {
+    foreach ($n in $Lists.Keys) { Step-List $app $Lists[$n] | Out-Null }
+  }
+  return (Window-Shows $app)
+}
+
+# What the daemon says it holds, under the same names.
+function Daemon-Holds($app) {
+  $v = [ordered]@{}
   try {
     $s = Invoke-RestMethod "$($app.Base)/api/settings" -TimeoutSec 5
-    $api = "smart=$($s.smart_agent) ssh=$($s.ssh)"
-  } catch { $api = "unreachable" }
-  $smart = '?'; $ssh = '?'; $text = '?'; $note = ''
-  if (Open-Settings $app) {
-    $smart = Toggle-State (El $app 'smart-agent-checkbox')
-    $ssh = Toggle-State (El $app 'ssh-checkbox')
-    # The window is read a second or so after its page appears. If it
-    # does not show what the daemon says, that is written down, and the
-    # window is read again a few seconds later: a page still loading and
-    # a page that is wrong are different findings.
-    $want = "smart=$(if ($s.smart_agent) { 'On' } else { 'Off' }) ssh=$(if ($s.ssh) { 'On' } else { 'Off' })"
-    if ($api -ne 'unreachable' -and "smart=$smart ssh=$ssh" -ne $want) {
-      $note = " [first read: smart=$smart ssh=$ssh, note '$(Text-Of $app 'smart-agent-note')']"
-      if ($script:ShotMismatch) { Shot $script:ShotMismatch }
-      Close-Settings $app
-      Start-Sleep 5
-      if (Open-Settings $app) {
-        $smart = Toggle-State (El $app 'smart-agent-checkbox')
-        $ssh = Toggle-State (El $app 'ssh-checkbox')
-      }
-    }
-    if (Open-Typography $app) { $text = Select-Value (El $app 'typo-size-select') }
+    $v['smart'] = if ($s.smart_agent) { 'On' } else { 'Off' }
+    $v['ssh'] = if ($s.ssh) { 'On' } else { 'Off' }
+    $v['orchestrate'] = if ($s.orchestrate) { 'On' } else { 'Off' }
+    $v['commands'] = if ($s.model_invocable) { 'On' } else { 'Off' }
+    $v['repeat'] = if ($s.repeat_limit -gt 0) { "On/$($s.repeat_limit)" } else { 'Off' }
+    $v['fold'] = if ($s.fold_thinking) { 'On' } else { 'Off' }
+    $v['keepGoing'] = if ($s.keep_going) { 'On' } else { 'Off' }
+  } catch { $v['daemon'] = 'unreachable' }
+  return $v
+}
+
+# Reads everything back after a restart and says which of them are not
+# what was set. The window is read a second or so after its page appears;
+# when a switch there disagrees with the daemon the window is read once
+# more a few seconds later, and both readings are reported: a page still
+# loading and a page that is wrong are different findings.
+function Read-All($app, $set) {
+  $daemon = Daemon-Holds $app
+  $shows = Window-Shows $app
+  $first = ''
+  $differs = @($daemon.Keys | Where-Object { $_ -ne 'repeat' -and $shows.Contains($_) -and $shows[$_] -ne $daemon[$_] })
+  if ($differs.Count -gt 0) {
+    $first = " [first reading of the window disagreed with the daemon on: $($differs -join ', ')]"
+    if ($script:ShotMismatch) { Shot $script:ShotMismatch }
+    Close-Settings $app
+    Start-Sleep 5
+    $shows = Window-Shows $app
   }
-  return "text=$text smart=$smart ssh=$ssh (daemon: $api)$note"
+  $lost = @($set.Keys | Where-Object { -not $shows.Contains($_) -or $shows[$_] -ne $set[$_] })
+  $verdict = if ($lost.Count -eq 0) { 'ALL KEPT' } else { "LOST: $(($lost | ForEach-Object { "$_ (set $($set[$_]), shows $($shows[$_]))" }) -join '; ')" }
+  return "$verdict :: window [$(Flat $shows)] :: daemon [$(Flat $daemon)]$first"
 }
 
 function Close-App($app, $how = 'close') {
@@ -326,9 +409,11 @@ function Port-File {
 function Config-Keys {
   try {
     $raw = Get-Content (Join-Path $LC 'config.json') -Raw
-    $smart = if ($raw -match '"smart_agent"\s*:\s*(true|false)') { $Matches[1] } else { 'absent' }
-    $ssh = if ($raw -match '"ssh"\s*:\s*(true|false)') { $Matches[1] } else { 'absent' }
-    return "smart_agent=$smart ssh=$ssh"
+    $out = @()
+    foreach ($k in 'smart_agent', 'ssh', 'orchestrate', 'model_invocable', 'repeat_limit', 'fold_thinking', 'keep_going') {
+      $out += if ($raw -match ('"' + $k + '"\s*:\s*([a-z0-9]+)')) { "$k=$($Matches[1])" } else { "$k=absent" }
+    }
+    return ($out -join ' ')
   } catch { return 'unreadable' }
 }
 
@@ -372,6 +457,7 @@ function Result($name, $line) { "RESULT $name ($Ref) :: $line" }
 
 $script:ShotAgents = $null
 $script:ShotMismatch = 'mismatch'
+$script:Warned = ''
 
 # ---- what this machine is
 
@@ -399,10 +485,10 @@ function Scenario-Close($name, $waitMs, $how) {
   Close-App $a $how
   $stored = Storage
   $b = Start-App
-  $got = Read-All $b
+  $got = Read-All $b $set
   Shot "$name-after"
   Close-App $b
-  Result $name "ended by $how after ${waitMs}ms :: port $($a.Port) -> $($b.Port) :: set $set :: after restart $got :: config $(Config-Keys) :: storage before restart [$stored] :: $(Prefs-File)"
+  Result $name "ended by $how after ${waitMs}ms :: port $($a.Port) -> $($b.Port) :: set [$(Flat $set)] :: after restart $got :: config $(Config-Keys) :: storage before restart [$stored] :: $(Prefs-File)"
 }
 
 # The control: a setting is given time, and the window is closed normally.
@@ -426,14 +512,14 @@ if (Wanted 'port-taken') {
   $taken = $true
   try { $l.Start() } catch { $taken = $false; Write-Host "could not take port $($a.Port): $_" }
   $b = Start-App
-  $got = Read-All $b
+  $got = Read-All $b $set
   Shot 'port-taken-after'
   Close-App $b
   if ($taken) { $l.Stop() }
   $c = Start-App
-  $again = Read-All $c
+  $again = Read-All $c $set
   Close-App $c
-  Result 'port-taken' "another program on port $($a.Port) :: port $($a.Port) -> $($b.Port) -> $($c.Port) (window-port $(Port-File)) :: set $set :: after restart $got :: once the port is free again $again :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
+  Result 'port-taken' "another program on port $($a.Port) :: port $($a.Port) -> $($b.Port) -> $($c.Port) (window-port $(Port-File)) :: set [$(Flat $set)] :: after restart $got :: once the port is free again $again :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
 }
 
 # The same, the way Windows itself does it. Hyper-V, WSL and Docker take
@@ -454,11 +540,11 @@ if (Wanted 'port-reserved') {
   $bind = 'bound'
   try { $t = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, [int]$a.Port); $t.Start(); $t.Stop() } catch { $bind = "refused: $($_.Exception.InnerException.Message)" }
   $b = Start-App
-  $got = Read-All $b
+  $got = Read-All $b $set
   Shot 'port-reserved-after'
   Close-App $b
   $gone = [W]::DeletePersistentTcpPortReservation([W]::Net([int]$a.Port), 1)
-  Result 'port-reserved' "port $($a.Port) reserved by the system (create=$made, delete=$gone; another program binding it: $bind) :: port $($a.Port) -> $($b.Port) (window-port $(Port-File)) :: set $set :: after restart $got :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
+  Result 'port-reserved' "port $($a.Port) reserved by the system (create=$made, delete=$gone; another program binding it: $bind) :: port $($a.Port) -> $($b.Port) (window-port $(Port-File)) :: set [$(Flat $set)] :: after restart $got :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
 }
 
 # Opened again while the last one is still going away.
@@ -484,9 +570,9 @@ if (Wanted 'reopen-while-closing') {
   $bindMs = $sw.ElapsedMilliseconds
   $b = [pscustomobject]@{ Proc = $p2; Port = $port; Base = "http://127.0.0.1:$port"; Exe = $Exe }
   [void](El $b 'settings-btn' 80)
-  $got = Read-All $b
+  $got = Read-All $b $set
   Close-App $b
-  Result 'reopen-while-closing' "started again as the first was asked to close (first still running then: $aliveAtStart; it was gone after ${exitMs}ms; the second was serving within ${bindMs}ms) :: port $($a.Port) -> $($b.Port) (window-port $(Port-File)) :: set $set :: after restart $got :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
+  Result 'reopen-while-closing' "started again as the first was asked to close (first still running then: $aliveAtStart; it was gone after ${exitMs}ms; the second was serving within ${bindMs}ms) :: port $($a.Port) -> $($b.Port) (window-port $(Port-File)) :: set [$(Flat $set)] :: after restart $got :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
 }
 
 # Two windows at once, then one.
@@ -497,14 +583,14 @@ if (Wanted 'second-window') {
   $set = Set-All $a
   Start-Sleep 8
   $b = Start-App
-  $inB = Read-All $b
+  $inB = Read-All $b $set
   Close-App $b
   Close-App $a
   $c = Start-App
-  $got = Read-All $c
+  $got = Read-All $c $set
   Shot 'second-window-after'
   Close-App $c
-  Result 'second-window' "port first $($a.Port), second $($b.Port), then alone $($c.Port) (window-port $(Port-File)) :: set in the first $set :: the second shows $inB :: after both closed $got :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
+  Result 'second-window' "port first $($a.Port), second $($b.Port), then alone $($c.Port) (window-port $(Port-File)) :: set in the first [$(Flat $set)] :: the second shows $inB :: after both closed $got :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
 }
 
 # A config with a note in it.
@@ -515,14 +601,15 @@ if (Wanted 'config-with-comment') {
   $script:ShotAgents = 'config-with-comment-agents'
   $set = Set-All $a
   $script:ShotAgents = $null
+  $warned = $script:Warned
   Shot 'config-with-comment-set'
   Start-Sleep 15
   Close-App $a
   $b = Start-App
-  $got = Read-All $b
+  $got = Read-All $b $set
   Close-App $b
   $kept = if ((Get-Content (Join-Path $LC 'config.json') -Raw) -match 'my notes about this machine') { 'still there' } else { 'GONE' }
-  Result 'config-with-comment' "port $($a.Port) -> $($b.Port) :: set $set :: after restart $got :: config $(Config-Keys), the note in it is $kept :: $(Prefs-File)"
+  Result 'config-with-comment' "port $($a.Port) -> $($b.Port) :: set [$(Flat $set)] :: warning shown as they were set: [$warned] :: after restart $got :: config $(Config-Keys), the note in it is $kept :: $(Prefs-File)"
 }
 
 # The program under another file name, as a copy kept beside an older one.
@@ -536,9 +623,9 @@ if (Wanted 'renamed-exe') {
   $other = Join-Path (Split-Path $Exe) 'lc-renamed.exe'
   Copy-Item $Exe $other -Force
   $b = Start-App $other
-  $got = Read-All $b
+  $got = Read-All $b $set
   Close-App $b
-  Result 'renamed-exe' "port $($a.Port) -> $($b.Port) :: set $set :: after restart under another name $got :: config $(Config-Keys) :: storage of the first name [$(Storage)] :: $(Prefs-File)"
+  Result 'renamed-exe' "port $($a.Port) -> $($b.Port) :: set [$(Flat $set)] :: after restart under another name $got :: config $(Config-Keys) :: storage of the first name [$(Storage)] :: $(Prefs-File)"
 }
 
 Stop-All

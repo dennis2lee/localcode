@@ -14,23 +14,17 @@ permissions:
 jobs:
   prefs:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
         include:
-          - ref: diag/gui-prefs-fix
-            only: 'config-with-comment'
+          - ref: main
+            only: ''
             n: 1
           - ref: diag/gui-prefs-fix
-            only: 'config-with-comment'
+            only: ''
             n: 2
-          - ref: diag/gui-prefs-fix
-            only: 'config-with-comment'
-            n: 3
-          - ref: diag/gui-prefs-fix
-            only: 'close-after-15s close-at-once'
-            n: 4
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,7 +52,7 @@ jobs:
         run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
 
       - name: Settings across a restart
-        timeout-minutes: 22
+        timeout-minutes: 32
         shell: pwsh
         run: ./harness/diag/prefs/run.ps1 -Exe src/localcode-gui.exe -Ref "${{ matrix.ref }}" -Only "${{ matrix.only }}"
 
