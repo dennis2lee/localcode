@@ -69,3 +69,19 @@ func TestMarginsPastTheScreenKeepTheCursorOnIt(t *testing.T) {
 		}()
 	}
 }
+
+func TestBracketedPasteSaysWhatPasteGoesBy(t *testing.T) {
+	e := NewEmulator(80, 24)
+	go io.Copy(io.Discard, e)
+	if e.BracketedPaste() {
+		t.Fatal("on before the application asked")
+	}
+	e.Write([]byte("\x1b[?2004h"))
+	if !e.BracketedPaste() {
+		t.Fatal("off after the application turned it on")
+	}
+	e.Write([]byte("\x1b[?2004l"))
+	if e.BracketedPaste() {
+		t.Fatal("on after the application turned it off")
+	}
+}

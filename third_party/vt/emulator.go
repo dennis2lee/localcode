@@ -329,6 +329,16 @@ func (e *Emulator) Paste(text string) {
 	_, _ = io.WriteString(e.pw, text)
 }
 
+// BracketedPaste reports whether the application has turned bracketed
+// paste on, which is what Paste goes by.
+//
+// localcode: added. A paste is typed text to a shell without it, line ends
+// included, and localcode has to know whether a pasted line was sent. See
+// LOCALCODE.md.
+func (e *Emulator) BracketedPaste() bool {
+	return e.isModeSet(ansi.ModeBracketedPaste)
+}
+
 // SendText sends arbitrary text to the terminal.
 func (e *Emulator) SendText(text string) {
 	_, _ = io.WriteString(e.pw, text)

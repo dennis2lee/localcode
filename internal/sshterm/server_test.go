@@ -519,6 +519,12 @@ func (f *fakeShell) exec(line string) (int, bool) {
 	case "noprompt":
 		// PS1="": a prompt that draws nothing.
 		f.ps1 = ""
+	case "bracketed":
+		// Bracketed paste on, as a newer bash or zsh turns it on.
+		f.write("\x1b[?2004h")
+	case "slowprompt":
+		// From the next prompt on, each takes this long.
+		f.s.promptDelay, _ = time.ParseDuration(fields[1])
 	case "lines":
 		n, _ := strconv.Atoi(fields[1])
 		for i := 1; i <= n; i++ {

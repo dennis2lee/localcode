@@ -51,6 +51,15 @@ character as many times as asked, so `a ESC[99999999b` held the emulator
 for seconds; it now repeats at most a screen's worth. SU and SD scroll at
 most the screen's height.
 
+## Whether a paste is bracketed
+
+`emulator.go` (`BracketedPaste`): an accessor for the mode `Paste` already
+goes by. To a shell that has not turned bracketed paste on (bash 3.2), a
+pasted line end sends the line, and localcode keeps track of whether the
+command line was sent. v0.1.0 has no way to ask. This one is an addition,
+not a fix: dropping this copy needs the same question answered another
+way.
+
 The tests are in `localcode_test.go`. The upstream main branch
 (2026-11-22) has the same code for all of these; when a release fixes
 them, drop this copy and the replace directive.

@@ -7,11 +7,11 @@ An SSH terminal no longer takes text typed after Ctrl+C as gone, nor a slow prom
 **Fixed**
 
 * Keys the model presses after its own `ctrl+c` counted as on the command line: `key` with `ctrl+c r m` no longer leaves `rm` for the next `run` to be typed onto
-* The same for text typed before the prompt that answers a Ctrl+C has arrived, the model's text and yours, whoever pressed the key
-* Your Ctrl+C taken as clearing your line when the prompt it brings arrives, as the model's is: no longer at the key, which a shell with `stty intr undef` reads as a character
+* The same for anything typed after a Ctrl+C, the model's text and yours, whoever pressed the key and however late the prompt it brings arrives
+* Your Ctrl+C taken as clearing the line when the prompt it brings arrives, as the model's is: no longer at the key, which a shell with `stty intr undef` reads as a character
 * The model's `run` waiting for a prompt that takes a while to draw (a prompt command, a status line from git), up to 2 seconds of nothing drawn: on bash without `PS0` the output no longer carries the prompt and the command's own echo
 * A line you typed on and erased after such a prompt no longer read as yours until your Enter or Ctrl+C
-* `run` after the model's `ctrl+c` waiting up to 10 seconds for the prompt that answers it, up from 2: no longer refused on a slow remote for text the shell had dropped
+* `run` after a Ctrl+C waiting up to 10 seconds for the prompt that answers it, up from 2: no longer refused on a slow remote for text the shell had dropped
 * The refusal saying so when no prompt followed the model's `ctrl+c`
 
 ## v0.179.0

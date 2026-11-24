@@ -335,8 +335,13 @@ func TestAtThePromptCommandsGoThroughRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(300 * time.Millisecond)
+	start := time.Now()
 	if res := run(t, term, "echo clean"); res.Output != "clean" {
 		t.Fatalf("after clearing it: %+v", res)
+	}
+	// The prompt had answered the key: nothing was left to wait for.
+	if took := time.Since(start); took > interruptWait/2 {
+		t.Fatalf("the run waited %s after a ctrl+c that was answered", took)
 	}
 	// Text typed at the prompt the Ctrl+C brought is new text: refused as
 	// any is, with nothing said of a key that was answered.
@@ -418,6 +423,12 @@ func TestNoLineIsLeftForTheShellToRunNext(t *testing.T) {
 	s := startServer(t)
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
+	// A Ctrl+C of the model's, answered, before any of it: nothing of it
+	// is to be said of the refusal further down.
+	if err := term.Keys("ctrl+c", term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	run(t, term, "echo first")
 	if res, _ := term.Run(context.Background(), "sleep 2s", 300*time.Millisecond, term.PersonGen()); !res.TimedOut {
 		t.Fatalf("%+v", res)
 	}
@@ -438,7 +449,7 @@ func TestNoLineIsLeftForTheShellToRunNext(t *testing.T) {
 	// What was typed ahead is on the new prompt's line: run does not add
 	// to it, until the model's Ctrl+C and the prompt after it.
 	time.Sleep(300 * time.Millisecond)
-	if _, err := term.Run(context.Background(), "echo approved", time.Second, term.PersonGen()); !errors.Is(err, ErrModelLine) {
+	if _, err := term.Run(context.Background(), "echo approved", time.Second, term.PersonGen()); !errors.Is(err, ErrModelLine) || strings.Contains(err.Error(), "ctrl+c you pressed") {
 		t.Fatalf("run onto the typeahead: %v", err)
 	}
 	if err := term.Keys("ctrl+c", term.PersonGen()); err != nil {

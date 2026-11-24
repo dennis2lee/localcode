@@ -16,6 +16,9 @@ import (
 // the key (in the same call, or before the prompt had arrived from a slow
 // remote) was taken as gone, and the next run was typed onto it: the shell
 // ran one line made of both.
+//
+// line_test.go goes through every order of keys with the test playing the
+// shell. These are a few of them against a server, end to end.
 
 // "ctrl+c r m" in one key call left "rm" on the line, with nothing slow
 // about the remote.
@@ -156,8 +159,7 @@ func TestTextAfterThePersonsCtrlCIsTheirs(t *testing.T) {
 
 // The key is the line's, whoever pressed it: what the person types after
 // the model's Ctrl+C, before the prompt it brings has arrived, is theirs
-// on that prompt's line, and what the model types after the person's is
-// the model's.
+// on that prompt's line.
 func TestTextAfterTheOthersCtrlCIsOnTheNextLine(t *testing.T) {
 	old := personYield
 	personYield = 50 * time.Millisecond
@@ -176,27 +178,14 @@ func TestTextAfterTheOthersCtrlCIsOnTheNextLine(t *testing.T) {
 		t.Fatalf("run onto text the person typed after the model's ctrl+c: %v", err)
 	}
 
-	// Until the prompt that answers their Ctrl+C is here, the line is
-	// still the person's, and the model types nothing onto it.
+	// Their Ctrl+C drops it, and once the prompt it brings is here the
+	// line is free.
 	term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
-	time.Sleep(2 * personYield)
-	if err := term.Type("left; ", false, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
-		t.Fatalf("type before the person's ctrl+c was answered: %v", err)
-	}
 	typedLine(t, term, "$")
-	// On an empty line their Ctrl+C leaves nothing of theirs, and what
-	// the model types before its prompt is here is the model's, on the
-	// line of that prompt.
-	term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
-	time.Sleep(2 * personYield)
-	if err := term.Type("left; ", false, term.PersonGen()); err != nil {
-		t.Fatal(err)
+	if res := runWhenFree(t, term, "echo free"); res.Output != "free" {
+		t.Fatalf("after the person's ctrl+c: %+v", res)
 	}
-	typedLine(t, term, "$ left;")
-	if _, err := term.Run(context.Background(), "echo ok", 5*time.Second, term.PersonGen()); !errors.Is(err, ErrModelLine) {
-		t.Fatalf("run onto text the model typed after the person's ctrl+c: %v", err)
-	}
-	if got := s.got(); strings.Contains(got, "mine; echo") || strings.Contains(got, "left; echo") {
+	if got := s.got(); strings.Contains(got, "mine; echo") {
 		t.Fatalf("a run was typed onto text: %q", got)
 	}
 }
@@ -228,9 +217,9 @@ func TestTextAfterACtrlCTheShellDidNotTakeGoesWithItsLine(t *testing.T) {
 }
 
 // The person's Ctrl+C is taken for an interrupt when a prompt answers it,
-// as the model's is. Where the shell reads the key as a character, their
-// line is still theirs: the key is on it. Once they have erased it all,
-// what they typed after the key is not carried to a later prompt.
+// as the model's is. Where the shell reads the key as a character, it is
+// one more character of theirs on the line: on an empty line too, and
+// after they have erased what shows, until they send the line.
 func TestThePersonsCtrlCCountsWhenTheShellTakesIt(t *testing.T) {
 	oldWait, oldYield := interruptWait, personYield
 	interruptWait, personYield = 2*promptSettle, 50*time.Millisecond
@@ -238,25 +227,92 @@ func TestThePersonsCtrlCCountsWhenTheShellTakesIt(t *testing.T) {
 	s := startServer(t, func(s *testServer) { s.noInterrupt = true })
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
-	term.PersonInput(nil, "x", "")
+	refused := func(when string) {
+		t.Helper()
+		// Long enough that the key was no interrupt. Longer does no harm.
+		time.Sleep(interruptWait + 2*personYield)
+		if _, err := term.Run(context.Background(), "echo ok", time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
+			t.Fatalf("run %s: %v", when, err)
+		}
+	}
 	term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
-	term.PersonInput(nil, "y", "")
-	typedLine(t, term, "$ x^Cy")
-	// Long enough that the key was no interrupt. Longer does no harm.
-	time.Sleep(interruptWait + 2*personYield)
-	if _, err := term.Run(context.Background(), "echo ok", time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
-		t.Fatalf("run onto a line the person's ctrl+c did not clear: %v", err)
-	}
-	for i := 0; i < 3; i++ {
-		term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
-	}
+	typedLine(t, term, "$ ^C")
+	refused("onto the key the shell read as a character, on an empty line")
+	term.PersonInput(nil, "x", "")
+	typedLine(t, term, "$ ^Cx")
+	refused("onto what the person typed after it")
+	term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+	term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+	typedLine(t, term, "$")
+	refused("after they erased what shows: no prompt has said where the line starts")
+	// Sent, the line is gone, whatever it was.
+	term.PersonInput(&PersonKey{Key: "Enter"}, "", "")
 	if res := runWhenFree(t, term, "echo one"); res.Output != "one" {
-		t.Fatalf("after the person erased the line: %+v", res)
+		t.Fatalf("after the person sent the line: %+v", res)
 	}
 	if res := run(t, term, "echo two"); res.Output != "two" {
 		t.Fatalf("the run after that: %+v", res)
 	}
 	if strings.Contains(s.got(), "\x03echo") {
 		t.Fatal("a run was typed onto the person's line")
+	}
+}
+
+// With text typed after the key, no prompt can clear the line, and a run
+// does not wait for one before it is refused.
+func TestARunDoesNotWaitForAPromptThatCannotClearTheLine(t *testing.T) {
+	s := startServer(t, func(s *testServer) { s.noInterrupt = true })
+	m := testManager(t, testHome(t, s, true))
+	term := connected(t, m, s)
+	if err := term.Keys("ctrl+c x", term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, err := term.Run(context.Background(), "echo ok", time.Second, term.PersonGen())
+	if !errors.Is(err, ErrModelLine) || strings.Contains(err.Error(), "No prompt has followed") {
+		t.Fatalf("run onto a key pressed after ctrl+c: %v", err)
+	}
+	if took := time.Since(start); took > interruptWait/2 {
+		t.Fatalf("the run waited %s to be refused", took)
+	}
+}
+
+// A paste is typed text to a shell that has not turned bracketed paste on,
+// and a line end in it sends the line: what was pasted went with it. With
+// bracketed paste on, the line end is part of what is on the line.
+func TestAPastedLineEndSendsTheLineWhereTheShellReadsItAsTyped(t *testing.T) {
+	old := personYield
+	personYield = 50 * time.Millisecond
+	defer func() { personYield = old }()
+	s := startServer(t)
+	m := testManager(t, testHome(t, s, true))
+	term := connected(t, m, s)
+	term.PersonInput(nil, "", "echo pasted\n")
+	if res := runWhenFree(t, term, "echo after"); res.Output != "after" {
+		t.Fatalf("after a pasted line that ran: %+v", res)
+	}
+	// What follows the line end in the same paste is typed after it: on
+	// the line of the prompt that comes when the pasted line has run.
+	settled(t, term)
+	term.PersonInput(nil, "", "echo pasted\necho left")
+	typedLine(t, term, "$ echo left")
+	time.Sleep(2 * personYield)
+	if _, err := term.Run(context.Background(), "echo x", time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
+		t.Fatalf("run onto what was pasted after a line end: %v", err)
+	}
+	term.PersonInput(&PersonKey{Key: "Enter"}, "", "")
+	if res := runWhenFree(t, term, "echo after"); res.Output != "after" {
+		t.Fatalf("after the person sent the rest: %+v", res)
+	}
+	// The shell says it takes pastes whole.
+	run(t, term, "bracketed")
+	settled(t, term)
+	term.PersonInput(nil, "", "echo held\n")
+	time.Sleep(2 * personYield)
+	term.mu.Lock()
+	typed, running := term.personTyped, term.running
+	term.mu.Unlock()
+	if !typed || running {
+		t.Fatalf("a bracketed paste with a line end: personTyped=%v running=%v", typed, running)
 	}
 }

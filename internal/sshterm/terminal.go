@@ -152,15 +152,10 @@ type Terminal struct {
 	// The mark comes before the prompt, which a shell can take a while to
 	// work out (a status line from git, a prompt command of the person's):
 	// while the cursor is where the mark left it, no prompt has been drawn.
-	// markLeft, markRest and markNext are the line as the mark left it,
-	// which is the line an empty prompt leaves.
 	markAt      time.Time
 	markX       int
 	markY       int
 	markPending bool
-	markLeft    string
-	markRest    string
-	markNext    string
 	// personTyped and modelTyped are the person, or the model, having
 	// typed on the prompt's line since the prompt: what they typed may
 	// still be there, unsent. promptLeft, promptRest and promptNext are the
@@ -173,16 +168,18 @@ type Terminal struct {
 	// on the screen waited for it: the terminal keeps it, and it is on the
 	// next prompt's line when the command ends.
 	typedAhead bool
-	// interrupts are the Ctrl+C presses at the prompt, the model's and the
-	// person's, that no prompt has answered yet. The key drops the line as
-	// it is when the shell reads it: what either typed before it. What
-	// either types after it, while it is unanswered (typedAfter, the model;
-	// personAfter, the person), is on the line of the prompt it brings.
-	// modelInterrupt is when the model last pressed one, until that
-	// prompt: run waits for it, and says when it has not come.
+	// typedAfter and personAfter are the model, or the person, having
+	// typed since the last key that drops the line or sends it: a Ctrl+C at
+	// the prompt (either's), the person's Enter, a run's own line. A mark
+	// says the shell is at a new prompt, and clears what was typed before
+	// that key. What was typed after it is on the new prompt's line, however
+	// late the mark arrives: the mark is not what clears it.
+	typedAfter  bool
+	personAfter bool
+	// interrupts are the Ctrl+C presses at the prompt that no prompt has
+	// answered yet, and modelInterrupt when the model last pressed one,
+	// until a prompt: a run waits for the answer, and says when none came.
 	interrupts     interrupts
-	typedAfter     bool
-	personAfter    bool
 	modelInterrupt time.Time
 	promptLeft     string
 	promptRest     string
@@ -223,9 +220,12 @@ type Terminal struct {
 }
 
 // interrupts counts Ctrl+C presses at the prompt that no prompt has
-// answered yet. Each press that the shell takes brings one prompt, so a
-// second press while the first prompt is still on its way is answered by
-// the second prompt, not the first.
+// answered yet. Each press the shell takes brings one prompt, so with two
+// on their way the first prompt is not the last word: a run waits for the
+// rest, and no prompt is recorded as where the line starts. What is on
+// the line is not decided by the count (a shell can answer two presses
+// with one prompt, or none), and a press is waited on for interruptWait at
+// most.
 type interrupts struct {
 	n    int
 	last time.Time
@@ -233,29 +233,24 @@ type interrupts struct {
 
 // press notes one.
 func (i *interrupts) press() {
-	if !i.pending() {
-		i.n = 0
-	}
 	i.n++
 	i.last = time.Now()
 }
 
-// pending reports a press still to be answered. One that has gone
-// interruptWait with no prompt was not taken as an interrupt.
-func (i *interrupts) pending() bool {
-	if i.n > 0 && time.Since(i.last) >= interruptWait {
-		i.n = 0
+// pending is how long a prompt may still be on its way for a press: zero
+// when none is.
+func (i *interrupts) pending() time.Duration {
+	if i.n == 0 {
+		return 0
 	}
-	return i.n > 0
+	return max(0, interruptWait-time.Since(i.last))
 }
 
-// answered takes a prompt as the answer to one press, and reports whether
-// none is left to be answered.
-func (i *interrupts) answered() bool {
-	if i.pending() {
+// answered takes a prompt as the answer to one press.
+func (i *interrupts) answered() {
+	if i.n > 0 {
 		i.n--
 	}
-	return i.n == 0
 }
 
 // runWait is the model's run, waiting for its command to finish.
@@ -462,12 +457,11 @@ func (t *Terminal) feed(p []byte) error {
 	return nil
 }
 
-// markHere records the cursor, and the line around it, as the end of a
-// command leaves them. Called with mu held.
+// markHere records the cursor as the end of a command leaves it. Called
+// with mu held.
 func (t *Terminal) markHere() {
 	pos := t.emu.CursorPosition()
 	t.markX, t.markY, t.markPending = pos.X, pos.Y, false
-	t.markLeft, t.markRest, t.markNext = t.aroundCursor()
 }
 
 // atMark reports the cursor where the end of the last command left it:
@@ -545,23 +539,15 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 			t.markAt, t.markPending = time.Now(), true
 			mark = ev.end
 			t.integrated = true
-			// What was typed ahead of this prompt is on its line: by the
-			// model while the command ran, by either after a Ctrl+C that
-			// this prompt answers. A Ctrl+C of the person's that went
-			// unanswered was no interrupt: what they typed after it was on
-			// the old line, and this prompt comes after a command run from
-			// a line found empty. (The model's text after such a key keeps
-			// it from running anything, so the prompt that finds it still
-			// set is the late answer to the key.)
-			t.personTyped = t.interrupts.pending() && t.personAfter
-			if t.interrupts.answered() {
-				t.modelTyped = t.typedAhead || t.typedAfter
-				t.typedAhead, t.typedAfter, t.personAfter = false, false, false
-				t.modelInterrupt = time.Time{}
-			}
-			// Otherwise another Ctrl+C is still to be answered, and the
-			// prompt that answers it is the one to judge by: what the model
-			// typed stays typed, and a run goes on waiting.
+			// The shell is at a new prompt. What was typed before the key
+			// that brought it went with the old line. What was typed since
+			// that key is on this one, and so is what the model typed ahead
+			// while the command ran.
+			t.personTyped = t.personAfter
+			t.modelTyped = t.typedAhead || t.typedAfter
+			t.typedAhead = false
+			t.interrupts.answered()
+			t.modelInterrupt = time.Time{}
 		}
 		from = ev.end
 	}
@@ -617,6 +603,12 @@ func (t *Terminal) settled() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.state == StateEnded || t.running || t.personTyped || t.modelTyped || !t.integrated || time.Since(t.lastOutput) < promptSettle {
+		return
+	}
+	// With a Ctrl+C still to be answered, this prompt is not the one the
+	// line will be on: what is typed now shows up after the next.
+	if left := t.interrupts.pending(); left > 0 {
+		t.armSettle(left)
 		return
 	}
 	// Quiet after the end of a command is not a prompt yet. The mark comes
@@ -1236,15 +1228,10 @@ func (t *Terminal) modelMayAct() error {
 // right of it or under it. Where the prompt is on the screen does not
 // matter (Ctrl+L draws it at the top). Called with mu held.
 func (t *Terminal) lineEmpty() bool {
-	left, rest, next := t.aroundCursor()
 	if !t.promptKnown {
-		// Typed on before any prompt was recorded, so none will be. One
-		// case can still be told: a prompt that draws nothing leaves the
-		// line as the end of the command did, and once promptWait has
-		// passed with the line like that again, it is empty.
-		return t.integrated && time.Since(t.markAt) >= promptWait && t.atMark() &&
-			left == t.markLeft && rest == t.markRest && next == t.markNext
+		return false
 	}
+	left, rest, next := t.aroundCursor()
 	return t.emu.CursorPosition().X == t.promptX && left == t.promptLeft && rest == t.promptRest && next == t.promptNext
 }
 
@@ -1455,13 +1442,15 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 			}
 			continue
 		}
-		// The model's own Ctrl+C: the prompt that answers it, which says
+		// A Ctrl+C at the prompt: the prompt that answers it, which says
 		// the line was dropped, is on its way. A slow remote takes a while
 		// over it, and a run that gave up after two seconds was refused for
 		// text that was no longer on the line. Not waited for once the
-		// answer cannot matter: the terminal ended or is held, or the person
-		// typed.
-		if t.state == StateConnected && !t.hold && t.personGen == gen && t.modelTyped && t.interrupts.pending() {
+		// answer cannot matter: the terminal ended or is held, the person
+		// typed since the run was approved, or either typed after the key,
+		// which no prompt clears.
+		if t.state == StateConnected && !t.hold && t.personGen == gen &&
+			t.interrupts.pending() > 0 && !t.typedAfter && !t.personAfter {
 			ch := t.changed
 			t.mu.Unlock()
 			select {
@@ -1514,9 +1503,10 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 	}
 	if t.lineHasModelText() {
 		err := ErrModelLine
-		if !t.modelInterrupt.IsZero() {
+		if !t.modelInterrupt.IsZero() && !t.typedAfter {
 			// Pressing the key again is what the refusal says to do, and
-			// the model just did.
+			// the model just did. (With text typed after the key, pressing
+			// it again is the thing to do.)
 			err = fmt.Errorf("%w. No prompt has followed the ctrl+c you pressed %s ago: the remote may be slow (wait, then run again), or the shell did not take the key (press it again; if no prompt follows that either, ask the person to clear the line)",
 				ErrModelLine, time.Since(t.modelInterrupt).Round(time.Second))
 		}
@@ -1535,6 +1525,7 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 	t.run = w
 	integrated := t.integrated
 	t.modelTyped = false
+	t.sent()
 	if t.integrated {
 		t.running = true
 	}
@@ -1666,12 +1657,7 @@ func (t *Terminal) Type(text string, enter bool, gen uint64) error {
 		if strings.ContainsAny(text, "\r\t") {
 			return ErrUseRun
 		}
-		t.modelTyped = true
-		// After a Ctrl+C that no prompt has answered yet: the key drops
-		// what came before it, and this comes after.
-		if t.interrupts.pending() {
-			t.typedAfter = true
-		}
+		t.modelTyped, t.typedAfter = true, true
 	} else if t.typeaheadOnly() {
 		if strings.Contains(text, "\r") {
 			return ErrTypeahead
@@ -1709,18 +1695,17 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 		}
 		t.modelTyped = true
 		// Ctrl+C discards the line where the shell takes it as an
-		// interrupt; the prompt that follows says so (its mark clears
-		// modelInterrupt, and modelTyped unless something was typed after
-		// the key). Nothing is taken for granted before it: with "stty
-		// intr undef" the key is only a character. The key drops what was
-		// typed before it and nothing after: a key pressed after it, in
-		// this call or a later one, is on the line of the prompt it brings,
-		// where "ctrl+c r m" used to leave "rm" for the next run to finish.
+		// interrupt; the prompt that follows says so. Nothing is taken for
+		// granted before it: with "stty intr undef" the key is only a
+		// character. The key drops what was typed before it and nothing
+		// after: a key pressed after it, in this call or a later one, is on
+		// the line of the prompt it brings, where "ctrl+c r m" used to
+		// leave "rm" for the next run to finish.
 		for _, ev := range evs {
 			if ev.Mod == uv.ModCtrl && ev.Code == 'c' {
 				t.interrupt()
 				t.modelInterrupt = time.Now()
-			} else if t.interrupts.pending() {
+			} else {
 				t.typedAfter = true
 			}
 		}
@@ -1740,12 +1725,22 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 	return nil
 }
 
-// interrupt notes a Ctrl+C sent to the shell at its prompt. Whatever was
-// typed after the Ctrl+C before it goes with the line this one drops.
-// Called with mu held.
+// interrupt notes a Ctrl+C sent to the shell at its prompt. Where the
+// shell takes it, the line as it is goes, and a new prompt comes: what
+// either typed before the key is dropped with it, and where the prompt was
+// is no longer where it is. Called with mu held.
 func (t *Terminal) interrupt() {
 	t.interrupts.press()
 	t.typedAfter, t.personAfter = false, false
+	t.promptKnown = false
+}
+
+// sent notes the line going to the shell to be run: the person's Enter, or
+// a run's own line. Whatever was on it went with it, and no Ctrl+C before
+// it is still to be answered at this prompt. Called with mu held.
+func (t *Terminal) sent() {
+	t.typedAfter, t.personAfter = false, false
+	t.interrupts = interrupts{}
 }
 
 // lineEditingKey is a key the model may press at the shell's prompt:
@@ -1847,6 +1842,9 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 	t.personGen++
 	enter := false
 	clears := false
+	// rest is text after the last line end of the same input: the line end
+	// sends the line, and this is typed after it.
+	rest := false
 	switch {
 	case k != nil:
 		ev, ok := personKeyEvent(*k)
@@ -1855,43 +1853,48 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		}
 		t.sendKey(ev)
 		enter = ev.Code == uv.KeyEnter && ev.Text == ""
-		// Ctrl+C leaves the line empty. Ctrl+U does not, at the start of
-		// the line: whether it is empty is lineEmpty's to say.
+		// Ctrl+C drops the line, where the shell takes it. Ctrl+U does
+		// not, at the start of the line: whether it is empty is lineEmpty's
+		// to say.
 		clears = ev.Mod == uv.ModCtrl && ev.Code == 'c'
 	case text != "":
 		text = cleanText(text)
 		text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\r"), "\n", "\r")
 		t.emu.SendText(text)
 		enter = strings.Contains(text, "\r")
+		rest = enter && !strings.HasSuffix(text, "\r")
 	case paste != "":
 		paste = cleanText(paste)
 		paste = strings.ReplaceAll(strings.ReplaceAll(paste, "\r\n", "\r"), "\n", "\r")
+		// A shell that has not turned bracketed paste on reads a paste as
+		// typed, and a line end in it sends the line.
+		enter = !t.emu.BracketedPaste() && strings.Contains(paste, "\r")
+		rest = enter && !strings.HasSuffix(paste, "\r")
 		t.emu.Paste(paste)
 	}
 	switch {
 	case enter:
 		// The line is sent, with whatever either typed on it.
-		t.personTyped, t.personAfter, t.typedAfter = false, false, false
+		t.personTyped = false
+		t.sent()
+		t.personAfter = rest
 		if t.integrated && !t.running {
 			t.running = true
 			t.runStarted = time.Now()
 		}
 	case clears:
-		// At the prompt the key drops what they typed before it, where the
-		// shell takes it as an interrupt: the prompt it brings says so, and
-		// until then their text counts ("stty intr undef" makes the key a
-		// character on the line). What they type after it, before that
-		// prompt has arrived, is on that prompt's line.
+		// At the prompt the key is the line's: it drops what either typed
+		// before it, where the shell takes it as an interrupt. The prompt it
+		// brings says so, and until then the key counts as typed ("stty intr
+		// undef" makes it a character on the line).
 		if t.atPrompt() {
 			t.interrupt()
+			t.personTyped = true
 		} else {
 			t.personTyped = false
 		}
 	case !(t.integrated && t.running):
-		t.personTyped = true
-		if t.interrupts.pending() {
-			t.personAfter = true
-		}
+		t.personTyped, t.personAfter = true, true
 	}
 	t.notify()
 	return nil

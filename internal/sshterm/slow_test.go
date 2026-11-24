@@ -113,55 +113,34 @@ func TestAnEmptyPromptIsTakenAfterAWait(t *testing.T) {
 	}
 }
 
-// A line the person typed on and erased at such a prompt, before the wait
-// was over: no prompt is recorded once they have typed, and the line read
-// as theirs until their Enter or Ctrl+C. It is empty when it is as the end
-// of the command left it. With their text still on it, it is theirs.
-func TestAnErasedLineIsEmptyAtAnEmptyPrompt(t *testing.T) {
-	oldWait, oldYield := promptWait, personYield
-	promptWait, personYield = 4*promptSettle, 50*time.Millisecond
-	defer func() { promptWait, personYield = oldWait, oldYield }()
-	s := startServer(t)
-	m := testManager(t, testHome(t, s, true))
-	term := connected(t, m, s)
-	run(t, term, "noprompt")
-	term.PersonInput(nil, "x", "")
-	term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
-	if res := runWhenFree(t, term, "echo after"); res.Output != "after" {
-		t.Fatalf("after typing and erasing: %+v", res)
-	}
-	term.PersonInput(nil, "theirs", "")
-	typedLine(t, term, "theirs")
-	time.Sleep(promptWait + 2*personYield)
-	if _, err := term.Run(context.Background(), "echo x", time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
-		t.Fatalf("with the person's text at an empty prompt: %v", err)
-	}
-	// And with the cursor back at the start of it, as Ctrl+A leaves it
-	// (the test server's shell has no such key: the move is drawn here).
-	term.output([]byte(strings.Repeat("\b", len("theirs"))))
-	if _, err := term.Run(context.Background(), "echo x", time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
-		t.Fatalf("with the cursor at the start of the person's text: %v", err)
-	}
-}
-
-// What the person types before a slow prompt is drawn cannot be told from
-// the prompt when it comes, and is not taken as gone because nothing shows
+// What the person types before a prompt is drawn cannot be told from the
+// prompt when it comes, and is not taken as gone because nothing shows
 // yet: the line is theirs, and no run is typed into the shell's work on
 // its prompt.
 func TestALineTypedOnBeforeASlowPromptIsTheirs(t *testing.T) {
-	noEmptyPrompt(t)
 	old := personYield
 	personYield = 50 * time.Millisecond
 	defer func() { personYield = old }()
-	s := startServer(t, func(s *testServer) { s.promptDelay = 2 * time.Second })
+	s := startServer(t)
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
-	run(t, term, "echo one")
+	// From here every prompt takes a minute: this test is over long before
+	// one is drawn, however slow the machine.
+	run(t, term, "slowprompt 1m")
 	term.PersonInput(nil, "x", "")
 	term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
 	time.Sleep(2 * personYield)
 	if _, err := term.Run(context.Background(), "echo early", time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
 		t.Fatalf("run before the prompt, after the person typed: %v", err)
+	}
+	// And still theirs once a prompt that draws nothing would have been
+	// taken as drawn.
+	oldWait := promptWait
+	promptWait = 2 * promptSettle
+	defer func() { promptWait = oldWait }()
+	time.Sleep(promptWait + 2*personYield)
+	if _, err := term.Run(context.Background(), "echo early", time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
+		t.Fatalf("run after the wait for an empty prompt, after the person typed: %v", err)
 	}
 	if early := s.gotEarly(); strings.Contains(early, "echo") {
 		t.Fatalf("typed while the shell was working out its prompt: %q", early)
@@ -175,8 +154,15 @@ func TestAResizeBeforeThePromptIsNotThePrompt(t *testing.T) {
 	s := startServer(t, func(s *testServer) { s.promptDelay = slowPrompt })
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
-	// Far enough down the screen that a shorter one moves the cursor.
+	// Far enough down the screen that a shorter one moves the cursor. A
+	// run is over when the mark is read, which is before its output is
+	// drawn: the lines on the screen and the mark's place taken, first.
 	run(t, term, "lines 20")
+	within(t, 10*time.Second, "the command's output drawn", func() bool {
+		term.mu.Lock()
+		defer term.mu.Unlock()
+		return !term.markPending && term.emu.CursorPosition().Y >= MinRows
+	})
 	before := term.Snapshot()
 	term.ViewerSize("v", DefaultCols, MinRows)
 	if after := term.Snapshot(); after.CursorY == before.CursorY {
