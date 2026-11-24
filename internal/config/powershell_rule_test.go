@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/base64"
 	"testing"
 	"unicode/utf16"
@@ -159,6 +160,59 @@ func TestAWildcardDenyDoesNotDenyThePiecesOfALine(t *testing.T) {
 	for _, line := range []string{`Get-ChildItem`, `git status; Get-ChildItem`} {
 		if got := c.ResolvePermission(PowerShellToolName, line, true); got != DecisionDeny {
 			t.Errorf("%q: %s, want deny", line, got)
+		}
+	}
+}
+
+// The rules for a piece are read as for any tool: the last that matches
+// decides, an agent's own rules first, and a literal rule matches its
+// text exactly.
+func TestAPowerShellPieceFollowsTheRulesOrder(t *testing.T) {
+	deny := PermissionRule{Match: "New-Item *", Decision: DecisionDeny}
+	// A later rule that asks wins over an earlier deny.
+	c := &Config{Permissions: map[string]ToolPermission{
+		PowerShellToolName: {Rules: []PermissionRule{deny, {Match: "*", Decision: DecisionAsk}}},
+	}}
+	if got := c.ResolvePermission(PowerShellToolName, "New-Item marker", true); got == DecisionDeny {
+		t.Errorf("a later ask rule: %s", got)
+	}
+	// An agent that allows the tool decides for itself.
+	c = &Config{
+		Permissions: map[string]ToolPermission{PowerShellToolName: {Rules: []PermissionRule{deny}}},
+		Agents:      map[string]AgentConfig{"builder": {Permission: map[string]ToolPermission{PowerShellToolName: {Flat: DecisionAllow}}}},
+	}
+	if got := c.ResolvePermissionFor(WithAgent(context.Background(), "builder"), PowerShellToolName, "New-Item marker", true); got == DecisionDeny {
+		t.Errorf("an agent that allows powershell: %s", got)
+	}
+	// A literal deny rule is found in a piece.
+	c = &Config{Permissions: map[string]ToolPermission{
+		PowerShellToolName: {Rules: []PermissionRule{{Match: "New-Item marker", Decision: DecisionDeny, Literal: true}}},
+	}}
+	if got := c.ResolvePermission(PowerShellToolName, `Write-Output a\; New-Item marker`, true); got != DecisionDeny {
+		t.Errorf("a literal deny rule: %s", got)
+	}
+}
+
+func TestAPlainPowerShellCommand(t *testing.T) {
+	for line, want := range map[string]bool{
+		"Get-Date":                        true,
+		"Get-ChildItem C:\\work -Recurse": true,
+		`git commit -m "a b"`:             true,
+		"Write-Output a; Get-Date":        false,
+		"iex 'Get-Date'":                  false,
+		"powershell -c Get-Date":          false,
+		`.\build.ps1`:                     false,
+		". .\\x.ps1":                      false,
+		`'Get-Date'`:                      false,
+		"Set-Alias d Get-Date":            false,
+		"New-Item function:x -Value y":    false,
+		"$x":                              false,
+		"Get-Date | Out-File x":           false,
+		"Get-Date `n":                     false,
+		"":                                false,
+	} {
+		if got := powershellSimple(line); got != want {
+			t.Errorf("powershellSimple(%q) = %v, want %v", line, got, want)
 		}
 	}
 }

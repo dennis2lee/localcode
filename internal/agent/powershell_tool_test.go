@@ -333,3 +333,45 @@ func TestThePowerShellToolSaysItIsPowerShell(t *testing.T) {
 		}
 	}
 }
+
+// With skip_permissions on and a deny rule set for powershell, a line
+// that is more than one plain command is asked about: the deny rules are
+// matched against the line as PowerShell might run it, which a reading
+// cannot promise to get right for every line, and a person can. A plain
+// command, and any line without a deny rule set, runs unasked.
+func TestSkippedPromptsStillAskForAPowerShellLineTheRulesCannotHold(t *testing.T) {
+	asked := 0
+	loop, _ := psLoop(t, func(tools.Ask) bool { asked++; return true })
+	loop.Config.SetPowerShellRuntime(true)
+	loop.Config.SetSkipPermissionsRuntime(true)
+	if res := execPS(t, loop, map[string]any{"action": "open"}); res.IsError {
+		t.Fatalf("open: %+v", res)
+	}
+	run := func(cmd string) {
+		t.Helper()
+		if res := execPS(t, loop, map[string]any{"action": "run", "command": cmd}); res.Refused {
+			t.Fatalf("%q refused: %+v", cmd, res)
+		}
+	}
+	for _, cmd := range []string{"Get-Date", "Write-Output a; Get-Date", "iex 'Get-Date'"} {
+		run(cmd)
+	}
+	if asked != 0 {
+		t.Fatalf("with no deny rule, skip_permissions asked %d times", asked)
+	}
+	loop.Config.Permissions = map[string]config.ToolPermission{
+		config.PowerShellToolName: {Rules: []config.PermissionRule{{Match: "Remove-Item *", Decision: config.DecisionDeny}}},
+	}
+	for _, cmd := range []string{"Get-Date", "Get-ChildItem C:\\work -Recurse", "git status"} {
+		run(cmd)
+	}
+	if asked != 0 {
+		t.Fatalf("a plain command was asked about: %d", asked)
+	}
+	for i, cmd := range []string{"Write-Output a; Get-Date", "iex 'Get-Date'", ".\\build.ps1", "Get-Date | Out-File x", "Set-Alias d Get-Date", "$x = Get-Date"} {
+		run(cmd)
+		if asked != i+1 {
+			t.Fatalf("%q was not asked about (asked %d)", cmd, asked)
+		}
+	}
+}

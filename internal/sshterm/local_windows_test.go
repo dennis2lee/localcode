@@ -206,3 +206,24 @@ func TestAShellThatIsNotThereSaysWhy(t *testing.T) {
 		t.Errorf("reason %q", r)
 	}
 }
+
+// Clear-Host under a real pseudo console: the clear is found in what the
+// console sends, the run ends when the prompt after it is drawn, and its
+// output is what came after the clear.
+func TestARealClearKeepsWhatCameAfter(t *testing.T) {
+	for _, shell := range realShells(t) {
+		t.Run(shell, func(t *testing.T) {
+			_, term := realTerminal(t, shell, t.TempDir())
+			realRun(t, term, "1..5 | ForEach-Object { \"before $_\" }")
+			start := time.Now()
+			res := realRun(t, term, "Clear-Host; Write-Output after-clear; Write-Output second")
+			if !res.Finished || res.Status != "0" || res.Output != "after-clear\nsecond" {
+				r, _ := term.Read(0, false)
+				t.Errorf("%+v; screen:\n%s", res, strings.Join(r.Screen, "\n"))
+			}
+			if took := time.Since(start); took >= promptWait {
+				t.Errorf("the run after a clear took %s, the wait for a prompt not seen", took)
+			}
+		})
+	}
+}

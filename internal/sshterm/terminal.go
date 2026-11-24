@@ -157,6 +157,14 @@ type Terminal struct {
 	markX       int
 	markY       int
 	markPending bool
+	// A local terminal's screen clears (see clearEnds): how many there
+	// have been, the row the screen started at after the last, the tail of
+	// the output before, in which a clear's sequence may have begun, and
+	// the prompt the last D mark carried.
+	clears     int
+	clearTop   int
+	clearTail  []byte
+	lastPrompt string
 	// personTyped and modelTyped are the person, or the model, having
 	// typed on the prompt's line since the prompt: what they typed may
 	// still be there, unsent. promptLeft, promptRest and promptNext are the
@@ -279,7 +287,7 @@ type runWait struct {
 	startX   int
 	cols     int
 	line     string // the command, as typed
-	startRow string // the row it was typed on, as it was then
+	clears   int    // the terminal's clears when it was typed
 	// prompt is the prompt the D mark said follows the command, "" when
 	// it said none.
 	prompt string
@@ -568,6 +576,7 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 			t.running = false
 			t.promptKnown = false
 			t.markAt, t.markPending = time.Now(), true
+			t.lastPrompt = ev.prompt
 			mark = ev.end
 			t.integrated = true
 			// The shell is at a new prompt. What was typed before the key
@@ -599,6 +608,22 @@ func (t *Terminal) draw(b []byte) (err error) {
 			err = fmt.Errorf("%v", r)
 		}
 	}()
+	if t.isLocal() {
+		// Each clear is written on its own, and where the screen starts
+		// after it is kept: what a run prints after a clear starts there
+		// (localOutput), and the prompt after it is drawn there.
+		ends := clearEnds(t.clearTail, b)
+		t.clearTail = clearTailOf(t.clearTail, b)
+		done := 0
+		for _, end := range ends {
+			_, _ = t.emu.Write(b[done:end])
+			t.drainScrollback()
+			t.clears++
+			t.clearTop = t.absRow(0)
+			done = end
+		}
+		b = b[done:]
+	}
 	_, _ = t.emu.Write(b)
 	t.drainScrollback()
 	return nil
@@ -1614,15 +1639,14 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 		pos := t.emu.CursorPosition()
 		w.local = true
 		w.startAbs, w.startX = t.absRow(pos.Y), pos.X
+		w.cols, w.line, w.clears = t.emu.Width(), command, t.clears
 		// A prompt as wide as the screen leaves the cursor on its last
-		// cell, written (or the second half of a wide character), and the
-		// next character goes to the next row.
-		if c := t.emu.CellAt(pos.X, pos.Y); pos.X == t.emu.Width()-1 && c != nil &&
-			((c.Content != "" && c.Content != " ") || (c.Content == "" && c.Width == 0)) {
+		// cell, and the next character goes to the next row. A space or a
+		// wide character's second half there is not told from an empty
+		// cell by the screen; the prompt's width tells it.
+		if pos.X == w.cols-1 && t.pendingWrap(pos) {
 			w.startAbs, w.startX = w.startAbs+1, 0
 		}
-		w.startRow, _ = t.rowText(w.startAbs)
-		w.cols, w.line = t.emu.Width(), command
 	}
 	t.run = w
 	integrated := t.integrated

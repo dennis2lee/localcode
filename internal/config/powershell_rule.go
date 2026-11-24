@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf16"
 )
 
@@ -255,11 +256,12 @@ func isInvokeExpression(word string) bool {
 	return false
 }
 
-// powershellNamedDeny reports a deny rule for the powershell tool that
-// names a command (any pattern but wildcards alone) and matches text, in
-// any case, as the last matching such rule decides. The running agent's
-// rules first, as resolveOneStrict reads them: one of its that matches
-// decides.
+// powershellNamedDeny reports text denied by a rule for the powershell
+// tool that names a command, in any case: the last rule that matches it
+// decides, as for any tool, and denies it here only when it is a deny
+// that names something (not a wildcard alone, and not a flat decision
+// for the whole tool). The running agent's rules first, as
+// resolveOneStrict reads them: one of its that matches decides.
 func (c *Config) powershellNamedDeny(ctx context.Context, text string) bool {
 	c.permMu.RLock()
 	defer c.permMu.RUnlock()
@@ -275,18 +277,114 @@ func (c *Config) powershellNamedDeny(ctx context.Context, text string) bool {
 }
 
 func namedRules(tp ToolPermission, text string) (Decision, bool) {
+	if tp.Flat != "" {
+		// A decision for the whole tool names nothing: an allow decides,
+		// a deny or an ask is left to the line as split for bash.
+		return tp.Flat, tp.Flat == DecisionAllow
+	}
 	folded := strings.ToLower(text)
-	var last Decision
-	matched := false
-	for _, r := range tp.Rules {
-		if r.Literal || strings.Trim(r.Match, "*? ") == "" {
-			continue
-		}
-		if globMatch(strings.ToLower(r.Match), folded) {
-			last, matched = r.Decision, true
+	var last *PermissionRule
+	for i, r := range tp.Rules {
+		if (r.Literal && r.Match == text) || (!r.Literal && globMatch(strings.ToLower(r.Match), folded)) {
+			last = &tp.Rules[i]
 		}
 	}
-	return last, matched
+	if last == nil {
+		return "", false
+	}
+	if last.Decision == DecisionDeny && !last.Literal && strings.Trim(last.Match, "*? ") == "" {
+		return DecisionAsk, true
+	}
+	return last.Decision, true
+}
+
+// PowerShellNeedsAPerson reports a powershell line that skip_permissions
+// and skip_tools do not answer: one that is more than one plain command,
+// while a deny rule for the tool is set. The deny rules are matched
+// against a PowerShell line as PowerShell might run it (powershellDenied),
+// and PowerShell is a language: a command can be reached through a
+// variable, an alias, an escape or a string handed to another
+// interpreter, and a reading of the line cannot promise to find every
+// one. A person reading the line can. Without a deny rule there is
+// nothing to hold, and skip_permissions answers as it does for bash.
+func (c *Config) PowerShellNeedsAPerson(ctx context.Context, line string) bool {
+	return c.powershellHasDeny(ctx) && !powershellSimple(line)
+}
+
+// powershellHasDeny reports a deny rule that applies to the powershell
+// tool: its own, the running agent's, or one for every tool ("*").
+func (c *Config) powershellHasDeny(ctx context.Context) bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	has := func(perms map[string]ToolPermission) bool {
+		for _, key := range []string{PowerShellToolName, "*"} {
+			tp, ok := perms[key]
+			if !ok {
+				continue
+			}
+			if tp.Flat == DecisionDeny {
+				return true
+			}
+			for _, r := range tp.Rules {
+				if r.Decision == DecisionDeny {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if name := c.AgentFor(ctx); name != "" && c.Agents != nil {
+		if agent, ok := c.Agents[name]; ok && has(agent.Permission) {
+			return true
+		}
+	}
+	return has(c.Permissions)
+}
+
+// powershellRunsOthers are programs that run or define other commands:
+// interpreters, what runs a string or a file as code, and what names a
+// command anew. A line that starts with one is not a plain command.
+var powershellRunsOthers = map[string]bool{
+	"iex": true, "invoke-expression": true, "icm": true, "invoke-command": true,
+	"powershell": true, "pwsh": true, "cmd": true, "start-process": true, "saps": true,
+	"start": true, "start-job": true, "sajb": true, "invoke-item": true, "ii": true,
+	"source": true, "import-module": true, "ipmo": true,
+	"set-alias": true, "sal": true, "new-alias": true, "nal": true,
+	"sh": true, "bash": true, "zsh": true, "wsl": true, "python": true, "python3": true,
+	"py": true, "node": true, "perl": true, "ruby": true, "wscript": true, "cscript": true,
+	"mshta": true, "rundll32": true, "regsvr32": true, "schtasks": true, "forfiles": true,
+	"wmic": true, "msiexec": true, "runas": true,
+}
+
+// powershellSimple reports a line that is one plain command: letters,
+// digits, spaces and the characters no shell reads as an operator, an
+// escape, a substitution or a grouping (plainShellRunes); a program that
+// is a name, not a path, a script or a call operator, and is not one of
+// powershellRunsOthers; and no function: or alias: path, through which
+// a plain command defines another.
+func powershellSimple(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+	for _, r := range line {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune(plainShellRunes, r) {
+			return false
+		}
+	}
+	lower := strings.ToLower(line)
+	if strings.Contains(lower, "function:") || strings.Contains(lower, "alias:") {
+		return false
+	}
+	words := powershellWords(line)
+	if len(words) == 0 {
+		return false
+	}
+	first := words[0]
+	if strings.ContainsAny(first, `/\.'"`) || first != strings.Fields(line)[0] {
+		return false
+	}
+	return !powershellRunsOthers[normalizeProgram(first)]
 }
 
 // powershellWords is a piece cut at whitespace outside quotes, its quote

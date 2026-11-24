@@ -1,12 +1,15 @@
 package sshterm
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -323,11 +326,10 @@ func promptRows(prompt string, cols int) int {
 // named, ending at the cursor, below the command's echo. Called with mu
 // held.
 //
-//   - Below the echo: at or above it is the prompt the command was typed
-//     at, still there when the marks come ahead of the text (Windows
-//     Server 2022), which ended runs before their output was drawn. A
-//     command that clears the screen leaves the new prompt above; the run
-//     then ends by the wait after the mark (promptWait).
+//   - Below the echo, or on the screen after a clear the command made: at
+//     or above the echo is the prompt the command was typed at, still
+//     there when the marks come ahead of the text (Windows Server 2022),
+//     which ended runs before their output was drawn.
 //   - Every row of it, each whole: a multi-line prompt's last line can be
 //     a line of output too ("> "), and output can end in text the prompt
 //     ends in ("<html>" and "> "). A prompt function that writes part of
@@ -339,12 +341,12 @@ func (t *Terminal) promptDrawn(w *runWait) bool {
 	pos := t.emu.CursorPosition()
 	cur := t.absRow(pos.Y)
 	if w.prompt == "" {
-		return cur > w.echoEnd()
+		return cur > w.echoEnd() || (t.clears != w.clears && cur >= t.clearTop)
 	}
 	cols := t.emu.Width()
 	rows := promptScreenRows(w.prompt, cols)
 	first := cur - (len(rows) - 1)
-	if first <= w.echoEnd() {
+	if first <= w.echoEnd() && (t.clears == w.clears || first < t.clearTop) {
 		return false
 	}
 	matches := func(i int, got string) bool { return got == strings.TrimRight(rows[i], " ") }
@@ -364,20 +366,6 @@ func (t *Terminal) promptDrawn(w *runWait) bool {
 		}
 	}
 	return false
-}
-
-// echoGone reports the row the command was typed on showing neither the
-// start of the command nor what it showed when the run began: something
-// cleared the screen. A row as it was is a command not drawn yet (the
-// marks came first, and the run timed out), whose output is nothing, not
-// the rows above it. A row the scrollback has dropped is not gone.
-// Called with mu held.
-func (t *Terminal) echoGone(w *runWait) bool {
-	got, ok := t.rowText(w.startAbs)
-	if !ok || got == w.startRow {
-		return false
-	}
-	return !strings.Contains(got, strings.TrimSpace(wrapRows(w.line, w.startX, w.cols)[0]))
 }
 
 // rowText is the text of row abs, and false for a row the terminal no
@@ -403,14 +391,11 @@ func (t *Terminal) rowText(abs int) (string, bool) {
 func (t *Terminal) localOutput(w *runWait) string {
 	from := w.echoEnd() + 1
 	cur := t.absRow(t.emu.CursorPosition().Y)
-	if t.echoGone(w) {
-		// The row the command was typed on shows neither the command nor
-		// what it showed before: the screen
-		// was cleared (Clear-Host) without moving it into the scrollback
-		// (home and erase), and what is on the screen came after. A clear
-		// that moves the screen into the scrollback (ESC[2J here) leaves
-		// the command line where it was, and needs nothing.
-		from = t.absRow(0)
+	if t.clears != w.clears {
+		// The screen was cleared (Clear-Host) while it ran: what it
+		// printed after is from where the screen started then, the
+		// lines that have scrolled since included.
+		from = t.clearTop
 	}
 	last := cur
 	if w.ended {
@@ -449,4 +434,65 @@ func (t *Terminal) localOutput(w *runWait) string {
 		out = "[... " + itoa(dropped) + " earlier lines left the scrollback ...]\n" + out
 	}
 	return out
+}
+
+// clearSequences are what clears a screen: erase it all, home and erase
+// to its end, and reset.
+var clearSequences = [][]byte{
+	[]byte("\x1b[2J"),
+	[]byte("\x1b[H\x1b[J"), []byte("\x1b[H\x1b[0J"),
+	[]byte("\x1b[1;1H\x1b[J"), []byte("\x1b[1;1H\x1b[0J"),
+	[]byte("\x1b[;H\x1b[J"), []byte("\x1b[;H\x1b[0J"),
+	[]byte("\x1bc"),
+}
+
+// clearTailLen is how much of the output is kept to find a clear whose
+// sequence began in an earlier read.
+const clearTailLen = 16
+
+// clearEnds are the offsets in b just after each clear sequence that ends
+// in b, tail being the output before it.
+func clearEnds(tail, b []byte) []int {
+	joined := append(append([]byte{}, tail...), b...)
+	var ends []int
+	for _, seq := range clearSequences {
+		for i := 0; ; {
+			j := bytes.Index(joined[i:], seq)
+			if j < 0 {
+				break
+			}
+			end := i + j + len(seq) - len(tail)
+			if end > 0 {
+				ends = append(ends, end)
+			}
+			i += j + 1
+		}
+	}
+	sort.Ints(ends)
+	return slices.Compact(ends)
+}
+
+// clearTailOf is the tail to keep after b.
+func clearTailOf(tail, b []byte) []byte {
+	joined := append(append([]byte{}, tail...), b...)
+	if len(joined) > clearTailLen {
+		joined = joined[len(joined)-clearTailLen:]
+	}
+	return joined
+}
+
+// pendingWrap reports the cursor, at pos in the last column, past the
+// end of the row: the last prompt's last line ends exactly at the
+// screen's edge, or the cell under the cursor is written. Called with mu
+// held.
+func (t *Terminal) pendingWrap(pos uv.Position) bool {
+	cols := t.emu.Width()
+	if t.lastPrompt != "" {
+		lines := strings.Split(t.lastPrompt, "\n")
+		if w := ansi.StringWidth(lines[len(lines)-1]); w > 0 && w%cols == 0 {
+			return true
+		}
+	}
+	c := t.emu.CellAt(pos.X, pos.Y)
+	return c != nil && ((c.Content != "" && c.Content != " ") || (c.Content == "" && c.Width == 0))
 }

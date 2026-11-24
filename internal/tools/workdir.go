@@ -272,6 +272,22 @@ type Policy struct {
 	OutsideAllowed func(ctx context.Context, class OutsideClass) bool
 }
 
+// firmAskKey marks a question the skip switches do not answer.
+type firmAskKey struct{}
+
+// WithFirmAsk marks ctx's question as one a person answers even with
+// skip_permissions or skip_tools on: a tool whose deny rules cannot be
+// held to what it will run asks instead (the powershell tool, for a line
+// that is more than one plain command). A deny still denies.
+func WithFirmAsk(ctx context.Context) context.Context {
+	return context.WithValue(ctx, firmAskKey{}, true)
+}
+
+func firmAsk(ctx context.Context) bool {
+	v, _ := ctx.Value(firmAskKey{}).(bool)
+	return v
+}
+
 // Query is one permission question as the registry asks it.
 type Query struct {
 	Tool    string
@@ -381,7 +397,7 @@ func ComposeResolver(
 			d = DecisionAsk
 		}
 
-		if d == DecisionAsk && (p.SkipAll(ctx) || p.SkipTools(ctx)) {
+		if d == DecisionAsk && (p.SkipAll(ctx) || p.SkipTools(ctx)) && !firmAsk(ctx) {
 			return Outcome{Decision: DecisionAllow}
 		}
 		return Outcome{Decision: d, GitDir: gitWrite, Reason: reason}

@@ -10,6 +10,7 @@ PowerShell terminals on Windows that the model works in and you share, and the s
 * Each PowerShell command's output and exit status, read off the screen, on Windows PowerShell 5.1 and PowerShell 7
 * `powershell` and `powershell_path` in config.json, `/powershell`, and a PowerShell switch on the settings window's Tools tab, shown only on Windows
 * `powershell` and `powershell_input` permission keys
+* Deny rules for `powershell` matched against a line as PowerShell reads it, and a line that is more than one plain command asked about under `skip_permissions` while a deny rule is set
 
 **Changed**
 
