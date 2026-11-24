@@ -156,9 +156,9 @@ re-reads this endpoint on load.
 | `POST /api/browser/import` | nothing | `200 {"from", "profile", "skipped"}`: copies the person's Chrome or Edge profile in again and restarts the browser, closing every tab | `404` no browser in this daemon; `409` the browser setting is off; `400` no profile to copy |
 | `POST /api/settings/orchestrate` | `{"enabled"}` | `200 {"orchestrate", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/model-invocable` | `{"enabled"}` | `200 {"model_invocable", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
-| `POST /api/settings/keep-going` | `{"enabled"}` | `204` | `400` bad body (text error); `500` applied but not persisted (text error) |
+| `POST /api/settings/keep-going` | `{"enabled"}` | `200 {"keep_going", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/fold-thinking` | `{"enabled"}` | `200 {"fold_thinking", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
-| `POST /api/settings/repeat-limit` | `{"limit"}`; 0 turns the guard off | `204` | `400` outside 0..max (text error); `500` applied but not persisted (text error) |
+| `POST /api/settings/repeat-limit` | `{"limit"}`; 0 turns the guard off | `200 {"repeat_limit", "applied": true, "persisted", "error"?}` | `400` bad body, or a limit outside 0..max (text error) |
 
 ### The desktop window's own settings
 

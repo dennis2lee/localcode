@@ -217,12 +217,12 @@ test('a warning that a switch was not saved stays through other redraws, until i
   assert.equal(warn.hidden, true);
 });
 
-test('each of the five switches that answer with whether they were saved keeps its own warning', async () => {
+test('each of the seven switches that answer with whether they were saved keeps its own warning', async () => {
   // Each with its own reason, and one of them saved, so a warning kept
   // under the wrong switch shows.
-  const reply = (key, error) => (body) => (error
-    ? { [key]: body.enabled, applied: true, persisted: false, error }
-    : { [key]: body.enabled, applied: true, persisted: true });
+  const reply = (key, error, field = 'enabled') => (body) => (error
+    ? { [key]: body[field], applied: true, persisted: false, error }
+    : { [key]: body[field], applied: true, persisted: true });
   const app = await load({
     globals: { lcGUI: true },
     routes: {
@@ -231,6 +231,8 @@ test('each of the five switches that answer with whether they were saved keeps i
       'POST /api/settings/ssh': reply('ssh', 'reason three'),
       'POST /api/settings/orchestrate': reply('orchestrate', ''),
       'POST /api/settings/model-invocable': reply('model_invocable', 'reason five'),
+      'POST /api/settings/keep-going': reply('keep_going', 'reason six'),
+      'POST /api/settings/repeat-limit': reply('repeat_limit', 'reason seven', 'limit'),
     },
   });
   await open(app);
@@ -240,19 +242,27 @@ test('each of the five switches that answer with whether they were saved keeps i
     ['ssh-checkbox', 'ssh-warn', 'reason three'],
     ['orchestrate-checkbox', 'orchestrate-warn', ''],
     ['model-invocable-checkbox', 'model-invocable-warn', 'reason five'],
+    ['keep-going-checkbox', 'keep-going-warn', 'reason six'],
+    ['repeat-limit-checkbox', 'repeat-limit-warn', 'reason seven'],
   ];
   for (const [boxId] of switches) {
+    // Each moved off the value it opens with: keep going opens ticked,
+    // the rest do not. The repeat guard, ticked with no number typed,
+    // asks for 3.
     const box = app.el(boxId);
-    box.checked = true;
+    box.checked = !box.checked;
     box.fire('change');
     await app.settle();
   }
+  assert.equal(app.el('keep-going-checkbox').checked, false);
+  assert.equal(String(app.el('repeat-limit-input').value), '3');
   // Every one drawn again, as a change anywhere does.
-  // The same values, and the repeat guard moved, which shows the
+  // The same values, and the reasoning switch moved, which shows the
   // announcement was read and the window drawn from it.
-  announce(app, { smart_agent: true, ssh: true, browser: true, orchestrate: true, model_invocable: true, repeat_limit: 9 });
+  assert.equal(app.el('fold-thinking-checkbox').checked, true);
+  announce(app, { smart_agent: true, ssh: true, browser: true, orchestrate: true, model_invocable: true, keep_going: false, repeat_limit: 3, fold_thinking: false });
   await app.settle();
-  assert.equal(String(app.el('repeat-limit-input').value), '9', 'the announcement did not reach the settings window');
+  assert.equal(app.el('fold-thinking-checkbox').checked, false, 'the announcement did not reach the settings window');
   for (const [, warnId, reason] of switches) {
     const warn = app.el(warnId);
     if (!reason) {
@@ -351,6 +361,235 @@ test('the redraw when the settings arrive leaves a warning that was shown before
   assert.match(app.el('smart-agent-warn').textContent, UNSAVED, 'the page\'s own startup redraw took the warning');
   assert.equal(box.checked, true);
 });
+
+// Keep going and the repeat guard were the last two to answer in two
+// parts. Until then a save that failed was a 500, and the page read any
+// failure as a change that had not been made: it put the box back and
+// said "Not changed" while the daemon ran the new value.
+//
+// Each is moved the way a person moves it. The values are ones the page
+// does not start with, and a second one for a change made after that.
+const NOT_CHANGED = /Not changed/;
+const LAST_TWO = [
+  {
+    title: 'keep going',
+    path: '/api/settings/keep-going',
+    key: 'keep_going',
+    field: 'enabled',
+    warn: 'keep-going-warn',
+    state: 'keepGoing',
+    starts: true,
+    first: false,
+    second: true,
+    // The one thing the daemon refuses here: a body it cannot read.
+    refusal: 'invalid request body',
+    change(app, value) {
+      const box = app.el('keep-going-checkbox');
+      box.checked = value;
+      box.fire('change');
+    },
+    shown: (app) => app.el('keep-going-checkbox').checked,
+    usable: (app) => !app.el('keep-going-checkbox').disabled,
+  },
+  {
+    title: 'the repeat guard',
+    path: '/api/settings/repeat-limit',
+    key: 'repeat_limit',
+    field: 'limit',
+    warn: 'repeat-limit-warn',
+    state: 'repeatLimit',
+    starts: 0,
+    first: 6,
+    second: 9,
+    // And here, also a number past its ceiling.
+    refusal: 'limit must be between 0 (off) and 50',
+    change(app, value) {
+      const box = app.el('repeat-limit-checkbox');
+      box.checked = value > 0;
+      if (value > 0) app.el('repeat-limit-input').value = String(value);
+      box.fire('change');
+    },
+    // The number on screen, or zero for an unticked box.
+    shown: (app) => (app.el('repeat-limit-checkbox').checked ? Number(app.el('repeat-limit-input').value) : 0),
+    // The number can be typed in exactly when the box is ticked.
+    usable: (app) => !app.el('repeat-limit-checkbox').disabled &&
+      app.el('repeat-limit-input').disabled === !app.el('repeat-limit-checkbox').checked,
+  },
+];
+
+// What the daemon answers when config.json cannot be written: a
+// directory where the file should be, as the Go tests beside the
+// handlers set up.
+const NOT_WRITTEN = 'applied for this run, but failed to persist to config.json: read config /home/u/.localcode/config.json: is a directory';
+const unsavedReply = (c) => (body) => ({ [c.key]: body[c.field], applied: true, persisted: false, error: NOT_WRITTEN });
+const savedReply = (c) => (body) => ({ [c.key]: body[c.field], applied: true, persisted: true });
+
+for (const c of LAST_TWO) {
+  test(`${c.title}: a change the daemon could not write to config.json is shown as applied, with the warning`, async () => {
+    const app = await load({ globals: { lcGUI: true }, routes: { [`POST ${c.path}`]: unsavedReply(c) } });
+    await open(app);
+    assert.equal(c.shown(app), c.starts);
+
+    c.change(app, c.first);
+    await app.settle();
+    assert.deepEqual(app.callsTo('POST', c.path).map((call) => call.body), [{ [c.field]: c.first }]);
+    assert.equal(c.shown(app), c.first, 'the control went back to the value the daemon no longer has');
+    assert.equal(app.state[c.state], c.first, 'the page holds a value the daemon no longer has');
+    const warn = app.el(c.warn);
+    assert.match(warn.textContent, UNSAVED);
+    assert.ok(warn.textContent.includes('is a directory'), `the reason is missing: ${warn.textContent}`);
+    assert.doesNotMatch(warn.textContent, NOT_CHANGED, 'a change that was applied is called not changed');
+    assert.equal(warn.hidden, false);
+    assert.ok(c.usable(app), 'the control was left disabled');
+  });
+
+  test(`${c.title}: the warning stays through other redraws, until it is saved`, async () => {
+    let persisted = false;
+    const app = await load({
+      globals: { lcGUI: true },
+      routes: { [`POST ${c.path}`]: (body) => (persisted ? savedReply(c) : unsavedReply(c))(body) },
+    });
+    await open(app);
+    const warn = app.el(c.warn);
+    c.change(app, c.first);
+    await app.settle();
+    assert.match(warn.textContent, UNSAVED);
+
+    // The daemon announces the change, as it does to every window. With
+    // another switch moved in the same announcement, which shows the
+    // announcement was read and the window drawn from it.
+    announce(app, { [c.key]: c.first, orchestrate: true });
+    await app.settle();
+    assert.equal(app.el('orchestrate-checkbox').checked, true, 'the announcement did not reach the settings window');
+    assert.match(warn.textContent, UNSAVED, 'the warning went with a redraw that saved nothing');
+    assert.equal(warn.hidden, false);
+    assert.equal(c.shown(app), c.first);
+
+    // The window closed and opened again: still not saved, still said.
+    app.el('settings-close').click();
+    await open(app);
+    assert.match(warn.textContent, UNSAVED, 'the warning went when the window was opened again');
+
+    // Saved: gone.
+    persisted = true;
+    c.change(app, c.second);
+    await app.settle();
+    assert.equal(c.shown(app), c.second);
+    assert.equal(warn.textContent, '');
+    assert.equal(warn.hidden, true);
+  });
+
+  test(`${c.title}: moved from somewhere else, it loses the warning this window put under it`, async () => {
+    const app = await load({ globals: { lcGUI: true }, routes: { [`POST ${c.path}`]: unsavedReply(c) } });
+    await open(app);
+    const warn = app.el(c.warn);
+    c.change(app, c.first);
+    await app.settle();
+    assert.match(warn.textContent, UNSAVED);
+
+    // "/keep-going" or "/repeat-limit" typed at a prompt, or another
+    // window: the warning was about a value the switch no longer has.
+    announce(app, { [c.key]: c.second });
+    await app.settle();
+    assert.equal(c.shown(app), c.second);
+    assert.equal(warn.textContent, '', 'a warning stayed under a switch somebody else has since moved');
+    assert.equal(warn.hidden, true);
+  });
+
+  test(`${c.title}: the announcement of this window's own change does not take the warning its save earned`, async () => {
+    // The daemon announces before it writes the file, so the
+    // announcement can arrive before the reply to the save.
+    let reply;
+    const app = await load({
+      globals: { lcGUI: true },
+      routes: {
+        [`POST ${c.path}`]: (body) => new Promise((resolve) => {
+          reply = () => resolve(unsavedReply(c)(body));
+        }),
+      },
+    });
+    await open(app);
+    const warn = app.el(c.warn);
+    c.change(app, c.first);
+    await app.settle();
+    announce(app, { [c.key]: c.first });
+    await app.settle();
+    reply();
+    await app.settle();
+    assert.match(warn.textContent, UNSAVED, 'announcement first, reply second: the warning is missing');
+    assert.equal(c.shown(app), c.first);
+    assert.ok(c.usable(app), 'the control was left disabled');
+
+    // And the other way round: the reply, then the announcement.
+    announce(app, { [c.key]: c.first });
+    await app.settle();
+    assert.match(warn.textContent, UNSAVED, 'reply first, announcement second: the warning went');
+  });
+
+  // A request that fails is still a change that was not made: a body the
+  // daemon refuses, or a daemon that cannot be reached.
+  const refusals = [
+    ['refused by the daemon', { status: 400, body: c.refusal }],
+    ['never answered', { networkError: 'connection refused' }],
+  ];
+  for (const [how, refusal] of refusals) {
+    test(`${c.title}: a change ${how} is not changed, and the control goes back`, async () => {
+      const app = await load({ globals: { lcGUI: true }, routes: { [`POST ${c.path}`]: refusal } });
+      await open(app);
+      const warn = app.el(c.warn);
+      c.change(app, c.first);
+      await app.settle();
+      assert.equal(app.callsTo('POST', c.path).length, 1);
+      assert.equal(c.shown(app), c.starts, 'the control shows a value the daemon does not have');
+      assert.equal(app.state[c.state], c.starts);
+      assert.match(warn.textContent, NOT_CHANGED);
+      assert.doesNotMatch(warn.textContent, UNSAVED, 'a change that was not made is called applied');
+      assert.equal(warn.hidden, false);
+      assert.ok(c.usable(app), 'the control was left disabled');
+
+      // It was about one request, and is not kept as the warning is.
+      // The announcement carries every setting, this one at the value
+      // the daemon still has.
+      announce(app, { [c.key]: c.starts, orchestrate: true });
+      await app.settle();
+      assert.equal(app.el('orchestrate-checkbox').checked, true, 'the announcement did not reach the settings window');
+      assert.equal(warn.textContent, '', 'a refusal was kept under the switch as if it were an unsaved change');
+      assert.equal(warn.hidden, true);
+    });
+  }
+
+  test(`${c.title}: a change refused after one that was not saved leaves the unsaved one said`, async () => {
+    // The first change is applied and not saved. The second is refused,
+    // so the daemon still runs the first, and it is still not saved.
+    let refuse = false;
+    const app = await load({
+      globals: { lcGUI: true },
+      routes: {
+        [`POST ${c.path}`]: (body) => (refuse ? { status: 400, body: c.refusal } : unsavedReply(c)(body)),
+      },
+    });
+    await open(app);
+    const warn = app.el(c.warn);
+    c.change(app, c.first);
+    await app.settle();
+    assert.match(warn.textContent, UNSAVED);
+
+    refuse = true;
+    c.change(app, c.second);
+    await app.settle();
+    assert.equal(c.shown(app), c.first, 'the control shows the change the daemon refused');
+    assert.match(warn.textContent, NOT_CHANGED, 'the refusal is not said');
+    assert.match(warn.textContent, UNSAVED, 'the refusal took the warning about the value still running');
+
+    // Drawn again: the refusal is gone and the warning is not.
+    announce(app, { [c.key]: c.first, orchestrate: true });
+    await app.settle();
+    assert.equal(app.el('orchestrate-checkbox').checked, true, 'the announcement did not reach the settings window');
+    assert.doesNotMatch(warn.textContent, NOT_CHANGED);
+    assert.match(warn.textContent, UNSAVED);
+    assert.equal(warn.hidden, false);
+  });
+}
 
 test('every control in the settings window is one of the above', () => {
   // A control added to a tab and to neither list is a control nobody

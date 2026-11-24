@@ -521,6 +521,7 @@ const handlers = {
       refreshSSHIfOpen();
     }
     if (typeof d.keep_going === 'boolean') {
+      if (d.keep_going !== app.keepGoing) movedElsewhere('keep_going');
       app.keepGoing = d.keep_going;
       refreshKeepGoingIfOpen();
     }
@@ -534,6 +535,7 @@ const handlers = {
     // hiding the reasoning this switch would label.
     if (typeof d.fold_thinking === 'boolean' || typeof d.show_thinking === 'boolean') refreshFoldThinkingIfOpen();
     if (typeof d.repeat_limit === 'number') {
+      if (d.repeat_limit !== app.repeatLimit) movedElsewhere('repeat_limit');
       app.repeatLimit = d.repeat_limit;
       refreshRepeatLimitIfOpen();
     }

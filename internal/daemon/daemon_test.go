@@ -2128,12 +2128,11 @@ func TestKeepGoingSyncsBetweenTheCommandAndTheCheckbox(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// The checkbox's endpoint moves the switch and every client hears.
-	resp, err := http.Post(httpSrv.URL+"/api/settings/keep-going", "application/json",
-		strings.NewReader(`{"enabled":false}`))
-	if err != nil {
-		t.Fatalf("POST keep-going: %v", err)
+	status, answered := postSetting(t, httpSrv.URL+"/api/settings/keep-going", `{"enabled":false}`)
+	// No config.json in this daemon, so there was nothing to fail to save.
+	if status != http.StatusOK || answered["keep_going"] != false || answered["applied"] != true || answered["persisted"] != true {
+		t.Errorf("POST keep-going answered %d %v, want 200 with the switch off and applied", status, answered)
 	}
-	resp.Body.Close()
 	if data := waitForSettings(t, evCh); data["keep_going"] != false {
 		t.Errorf("keep_going = %v after the checkbox turned it off", data["keep_going"])
 	}

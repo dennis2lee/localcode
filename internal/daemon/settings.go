@@ -255,6 +255,11 @@ func (d *Daemon) handleSetOrchestrate(w http.ResponseWriter, r *http.Request) {
 // that is not this endpoint's question: the switch is daemon state, and
 // whether it reaches a given turn is decided per profile at turn time.
 // The panel says the scope beside the checkbox instead.
+//
+// It answers in two parts, as handleSetSmartAgent does and for the same
+// reason. A save that failed used to be a 500, which the settings window
+// read as a change that had not happened: it put the box back and said
+// "Not changed" while the daemon went on running the new value.
 func (d *Daemon) handleSetKeepGoing(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled bool `json:"enabled"`
@@ -265,13 +270,18 @@ func (d *Daemon) handleSetKeepGoing(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Loop.SetKeepGoingEnabled(req.Enabled)
 	d.announceSettings()
+	resp := map[string]any{
+		"keep_going": req.Enabled,
+		"applied":    true,
+		"persisted":  true,
+	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetKeepGoingInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
-			http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
-			return
+			resp["persisted"] = false
+			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
 		}
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleSetFoldThinking turns the muse reasoning block on or off live
@@ -309,7 +319,11 @@ func (d *Daemon) handleSetFoldThinking(w http.ResponseWriter, r *http.Request) {
 
 // handleSetRepeatLimit moves the repeat guard's ceiling; zero turns it
 // off. Same shape as keep_going: applied live, then persisted where a
-// config path is known.
+// config path is known, and answered in two parts.
+//
+// A limit out of range and a body that does not parse are still a 400,
+// the one answer here that means nothing changed: both are refused
+// before anything is applied.
 func (d *Daemon) handleSetRepeatLimit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Limit int `json:"limit"`
@@ -324,13 +338,18 @@ func (d *Daemon) handleSetRepeatLimit(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Loop.SetRepeatLimit(req.Limit)
 	d.announceSettings()
+	resp := map[string]any{
+		"repeat_limit": req.Limit,
+		"applied":      true,
+		"persisted":    true,
+	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetRepeatLimitInFile(d.Broker.ConfigPath, req.Limit); err != nil {
-			http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
-			return
+			resp["persisted"] = false
+			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
 		}
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleSetSkipPermissions toggles skip_permissions at runtime and, when a

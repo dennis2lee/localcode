@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.179.1
+
+Keep going and the repeat guard show the value the daemon is running when it could not be saved.
+
+**Fixed**
+
+* The keep-going box and the repeat guard in the settings window no longer put back and marked "Not changed" when the daemon applied the change and could not write `config.json`: the applied value shown, with the warning that it lasts only until the daemon restarts
+* That warning kept under each of the two until it is saved, or until the setting is moved from another window or with `/keep-going` or `/repeat-limit`
+
+**Changed**
+
+* `POST /api/settings/keep-going` and `POST /api/settings/repeat-limit` answer `200 {"keep_going" or "repeat_limit", "applied": true, "persisted", "error"?}`, where they answered `204`, and `500` for a save that failed
+
 ## v0.179.0
 
 Settings made in the desktop window are still there after it is closed and opened again.

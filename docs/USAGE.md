@@ -2253,7 +2253,7 @@ Limits of the desktop window's file:
 * A change is written as it is made, one request at a time. A second change made while the first is still being written, with the window ended in that same moment, is not written.
 * The window asks for the file three times when its page starts. With no answer, or with a file that is there and cannot be read, the page writes nothing to the file while it stays open, and the settings changed in it are not there the next time. A file that cannot be read is never replaced.
 
-A switch on the Agents tab that the daemon applied and could not write to `config.json` says so under the switch, and the setting lasts only until the daemon restarts. The warning stays until that switch is saved from this window, or moved from another window or a prompt.
+A switch on the Agents tab, the repeat guard on the Turns tab, or keep going on the Muse tab that the daemon applied and could not write to `config.json` says so under the switch, and the setting lasts only until the daemon restarts. The switch shows the applied value. The warning stays until that switch is saved from this window, or moved from another window or a prompt.
 
 Typography is per person, not per daemon. The faces and the size apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
 
