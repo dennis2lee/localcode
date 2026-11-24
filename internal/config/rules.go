@@ -655,7 +655,7 @@ func (c *Config) ResolvePermissionFor(ctx context.Context, toolName, subject str
 		// and its quoting is its own. A deny is also looked for where
 		// PowerShell starts a command and bash does not (powershellPieces).
 		pctx := context.WithValue(ctx, shellToolKey{}, PowerShellToolName)
-		if c.powershellDenied(pctx, subject, staticRequiresPermission) {
+		if c.powershellDenied(pctx, subject) {
 			return DecisionDeny
 		}
 		return c.resolveShellCommandUnder(pctx, subject, staticRequiresPermission, false)
@@ -1005,6 +1005,7 @@ var wideProgramNames = map[string]bool{
 	// Dot-sourcing runs what follows it: ". .\helper.ps1" granted as
 	// ". *" covered ". New-Item marker".
 	".": true, "source": true, "start-job": true, "sajb": true,
+	"import-module": true, "ipmo": true,
 	"wsl": true, "mshta": true, "rundll32": true, "regsvr32": true,
 	"forfiles": true, "wmic": true, "schtasks": true, "msiexec": true,
 	"invoke-item": true, "ii": true,

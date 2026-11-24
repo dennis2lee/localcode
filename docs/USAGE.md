@@ -718,7 +718,7 @@ Answering "always allow" writes a rule to `config.json`. For most programs the r
 
 | Family | Examples | Rule written |
 |---|---|---|
-| Interpreters and shells | `sh`, `bash`, `python3`, `node`, `perl`, `ruby`, `powershell`, `cmd`, `env`, `xargs`, `Start-Process`, `Invoke-Expression`, `schtasks`, `wmic`, `forfiles`, `msiexec`, `Invoke-Item` | The exact command. `python3 *` is not permission to run a command, it is permission to run any code written later. |
+| Interpreters and shells | `sh`, `bash`, `python3`, `node`, `perl`, `ruby`, `powershell`, `cmd`, `env`, `xargs`, `Start-Process`, `Invoke-Expression`, `Start-Job`, `Import-Module`, `.` (dot-sourcing), `schtasks`, `wmic`, `forfiles`, `msiexec`, `Invoke-Item` | The exact command. `python3 *` is not permission to run a command, it is permission to run any code written later. |
 | Privilege and destructive commands | `sudo`, `su`, `doas`, `rm`, `dd`, `shred`, `chmod`, `chown`, `kill`, `del`, `erase`, `rd`, `format`, `Remove-Item`, `icacls`, `taskkill`, `Stop-Process`, `reg`, `sc`, `net`, `shutdown`, `robocopy`, `vssadmin`, `cipher` | The exact command. `rm -rf build` and `rm -rf ~` are one rule apart under `rm *`. |
 
 The lists are not exhaustive: a program on neither generalizes to `<program> *`, so answer "once" for a command whose argument is the whole question. On Windows the privilege list also has registry, service, firewall, boot and Defender commands, among them `Set-ItemProperty`, `Set-Item`, `New-Service`, `Stop-Service`, `netsh`, `Set-NetFirewallProfile`, `bcdedit` and `Set-MpPreference`.
@@ -3053,7 +3053,7 @@ On Windows the model can open PowerShell terminals on this computer and work in 
 
 | Case | What `run` returns |
 |---|---|
-| A command that ends | Its output and its exit status: the program's own exit code when it set one (`$LASTEXITCODE` changed), 1 for a cmdlet or script that failed (`$?` false, a new entry in `$Error`), the program's exit code again for a program that exits as the one before it did, and 0 otherwise. |
+| A command that ends | Its output and its exit status: the program's own exit code when it set one (`$LASTEXITCODE` changed), 1 for a cmdlet or script that failed (`$?` false, a new entry in `$Error`), the program's exit code again for a program that exits as the one before it did, and 0 otherwise. A line of several commands is reported by its last; when that is a program exiting as the one before it did and an earlier command in the line failed, the status is 1. A cmdlet failing with `-ErrorAction Ignore` adds nothing to `$Error`, and after a program that failed is reported with that program's code. |
 | A shell that drew no mark within 20 seconds of starting (a profile that replaces `prompt` later, a program in `powershell_path` that is not PowerShell) | Returns when output has been quiet for 2 seconds, with no exit status, as for a shell other than bash or zsh over SSH. |
 | The timeout (120 seconds, at most 600) | What came so far. The command goes on running. Ctrl+C from `key` or the panel stops it. |
 
@@ -3063,13 +3063,13 @@ The output is read off the screen: the rows after the command line, up to the pr
 |---|---|
 | Up to about 2,250 bytes of UTF-8 (3,000 characters of base64) | Carried in the mark, and looked for on the screen. Colours are ignored. |
 | Longer | Not carried. Only the cursor's row is taken for the prompt: its earlier rows come back at the end of the output. |
-| Written in part with `Write-Host` by your `prompt` function | The mark carries only what the function returns, and the row may have the written part before it. A line the function writes before its last one comes back at the end of the output. |
+| Written in part with `Write-Host` by your `prompt` function | The mark carries only what the function returns, so the prompt on the screen is not the one the mark named. Each `run` ends 2 seconds after the command does, and what the function writes comes back at the end of the output. A prompt module that returns its prompt as text (oh-my-posh, Starship, posh-git 1.x) has neither. |
 
 **Permissions.** Two keys:
 
 | Key | Asked for | Matched against |
 |---|---|---|
-| `powershell` | `run` | The command, in any case (`new-item` is `New-Item`). A deny rule denies the line when it matches a command anywhere in it, as PowerShell reads it: the line is cut at every `;`, `\|`, `&`, `(`, `)`, `{`, `}`, `=` and line end, inside quotes too, each piece with a leading keyword (`return`, `throw`, `-not`), cast (`[void]`) or `.` taken off and its backticks removed, and the text given to `Invoke-Expression`, `powershell` or `pwsh` (`-Command`, `-EncodedCommand`) and `cmd /c` is read the same way. An allow rule does not run a command unasked: PowerShell does not split a line as bash does, as [under a shell that is not POSIX](#naming-the-shell). "For this session" runs the answered line again unasked, and another line only when it is made of letters, digits, spaces and ``-_./\:=,+~"'*?@`` and its program was granted; a dot-sourced script (`. .\helper.ps1`) is granted as written. |
+| `powershell` | `run` | The command, in any case (`new-item` is `New-Item`). The line is decided as a `bash` line is, and a deny rule that names a command (not `*` alone) also denies it when it matches a command anywhere in the line as PowerShell reads it: the line is cut at every `;`, `\|`, `&`, `(`, `)`, `{`, `}` and line end not escaped with a backtick, inside quotes too; each piece is taken without an assignment (`$x =`), a leading keyword (`return`, `throw`, `-not`), a cast (`[void]`), a `.` or a redirection, as written, without its quote marks, without backticks, with its escapes (`` `n ``) read, and with its program named without a module or directory; and the text given to `Invoke-Expression` (also piped to it), `powershell` or `pwsh` (`-Command`, `-EncodedCommand`, with `-` or `/`, a space or a `:`) and `cmd /c` is read the same way. An allow rule does not run a command unasked: PowerShell does not split a line as bash does, as [under a shell that is not POSIX](#naming-the-shell). "For this session" runs the answered line again unasked, and another line only when it is made of letters, digits, spaces and ``-_./\:=,+~"'*?@`` and its program was granted; a dot-sourced script (`. .\helper.ps1`) is granted as written. |
 | `powershell_input` | `type` and `key` | `type <text>` or `key <keys>`. Asked every time, as `ssh_input` is. Each line `type` sends with Enter is also checked against the deny rules for `powershell`. |
 
 `read`, `wait`, `list`, `open` and `close` ask nothing. A deny rule for `powershell` with the match `*` keeps the model out of every PowerShell terminal. `skip_permissions` and `/permission-skip-tools` turn these questions into allows, as they do for `ssh`. A deny still denies.
@@ -3088,9 +3088,11 @@ The `powershell` tool's actions are the `ssh` tool's, with `open` (no input) in 
 * The shell has your rights on this computer. A command the model runs there is not limited to the workspace: the workspace boundary applies to the file tools, not to commands. Deny what the model must not run.
 * Terminals do not survive localcode stopping or an update.
 * A line exactly as wide as the terminal is joined with the line after it in `run` output.
+* The console redraws its screen when the terminal is resized. On Windows Server 2022 (measured, not on 2025) a line that was exactly as wide as the old size is redrawn joined with the line after it, the prompt included. What `run` returned before the resize is not changed.
 * Ctrl+C reaches the command in the terminal and drops what was typed ahead of it. Ctrl+\\ and Ctrl+Z are keys there, not signals (measured), and text typed ahead stays for the next prompt. A program that ignores Ctrl+C keeps running; close the terminal to end it.
 * Cutting a line inside quotes too means a deny rule can match a quoted argument that would not have run (`git commit -m "a; Remove-Item b"` under a rule `Remove-Item *`). The line is denied. That is the direction a deny rule is for.
 * A command passed to another program some other way (`Start-Process` with `-ArgumentList`, a script file, a variable) is not seen by the deny rules. Deny the program.
+* A deny rule names a command as written. An alias is another name: deny `ni *` beside `New-Item *`, and `ri *`, `del *`, `rm *` and `erase *` beside `Remove-Item *`.
 * In a nested shell or a program, a command the model puts together key by key (`type` without Enter, then `key Enter`) is seen only by the `powershell_input` question, not by the deny rules for `powershell`, as for SSH. With `skip_permissions` on, nothing asks it.
 * A program started in a window of its own (`Start-Process`) outlives the terminal.
 

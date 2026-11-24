@@ -279,6 +279,7 @@ type runWait struct {
 	startX   int
 	cols     int
 	line     string // the command, as typed
+	startRow string // the row it was typed on, as it was then
 	// prompt is the prompt the D mark said follows the command, "" when
 	// it said none.
 	prompt string
@@ -1613,6 +1614,14 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 		pos := t.emu.CursorPosition()
 		w.local = true
 		w.startAbs, w.startX = t.absRow(pos.Y), pos.X
+		// A prompt as wide as the screen leaves the cursor on its last
+		// cell, written (or the second half of a wide character), and the
+		// next character goes to the next row.
+		if c := t.emu.CellAt(pos.X, pos.Y); pos.X == t.emu.Width()-1 && c != nil &&
+			((c.Content != "" && c.Content != " ") || (c.Content == "" && c.Width == 0)) {
+			w.startAbs, w.startX = w.startAbs+1, 0
+		}
+		w.startRow, _ = t.rowText(w.startAbs)
 		w.cols, w.line = t.emu.Width(), command
 	}
 	t.run = w

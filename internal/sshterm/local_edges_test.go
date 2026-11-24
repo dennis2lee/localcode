@@ -157,6 +157,21 @@ func TestALocalRunAfterAClearKeepsWhatCameAfter(t *testing.T) {
 	}
 }
 
+// The same when the output after the clear puts the prompt below where
+// the command was typed: what came after the clear is the output.
+func TestALocalRunAfterAClearWithMoreLinesKeepsAllOfThem(t *testing.T) {
+	term := scriptedLocal(t, "old1\r\nold2\r\nold3\r\n", "", func(f *fakePS, line string) {
+		// Home and erase to the end: a clear that moves nothing into
+		// the scrollback, as ESC[2J does in this emulator.
+		f.write(line + "\r\n" + f.mark("C", 0) + "\x1b[H\x1b[Ja1\r\na2\r\na3\r\na4\r\na5\r\na6\r\n")
+		f.prompt(0)
+	})
+	res, err := term.Run(context.Background(), "Clear-Host; 1..6 | % { \"a$_\" }", 5*time.Second, term.PersonGen())
+	if err != nil || res.Output != "a1\na2\na3\na4\na5\na6" {
+		t.Fatalf("output %q, %v", res.Output, err)
+	}
+}
+
 // A multi-line prompt is drawn only when all of it is: output that pauses
 // at a line like its last ("> ") is not the end of the command.
 func TestALocalRunWaitsForEveryRowOfAMultiLinePrompt(t *testing.T) {
@@ -189,18 +204,33 @@ func TestALocalPromptAsWideAsTheScreenIsSeen(t *testing.T) {
 	}
 }
 
-// A prompt that writes part of itself with Write-Host and returns the
-// rest: the mark carries only the rest, and the row has the written part
-// before it. It is seen at once, and nothing of it is output.
-func TestALocalPromptWithTextWrittenBeforeItIsSeen(t *testing.T) {
+// Output that ends in what the prompt ends in, and stops there for a
+// while after the marks came first, is not the prompt: the row is not
+// the prompt's whole.
+func TestALocalRunIsNotEndedByOutputEndingLikeThePrompt(t *testing.T) {
 	term := scriptedLocal(t, "", "> ", func(f *fakePS, line string) {
-		f.write(line + "\r\n" + f.mark("C", 0) + "ok\r\nPS C:\\work")
-		f.prompt(0)
+		f.write(line + "\r\n" + f.mark("C", 0) + f.mark("D", 0) + "<html>")
+		time.Sleep(4 * promptSettle)
+		f.write("<body>hello</body></html>\r\n> ")
 	})
-	start := time.Now()
-	res, err := term.Run(context.Background(), "Write-Output ok", 5*time.Second, term.PersonGen())
-	if err != nil || res.Output != "ok" || time.Since(start) >= promptWait {
-		t.Fatalf("output %q after %s, %v", res.Output, time.Since(start), err)
+	res, err := term.Run(context.Background(), "Get-Page", 5*time.Second, term.PersonGen())
+	if err != nil || res.Output != "<html><body>hello</body></html>" {
+		t.Fatalf("output %q, %v", res.Output, err)
+	}
+}
+
+// A run that times out before anything after its line is drawn returns
+// nothing, not the rows above the prompt it was typed at.
+func TestALocalRunThatTimesOutReturnsNothingFromBeforeIt(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	term := scriptedLocal(t, "earlier-line\r\n", "", func(f *fakePS, line string) {
+		f.write(f.mark("C", 0) + f.mark("D", 0))
+		<-release
+	})
+	res, err := term.Run(context.Background(), "Write-Output hello", 700*time.Millisecond, term.PersonGen())
+	if err != nil || !res.TimedOut || res.Output != "" {
+		t.Fatalf("%+v %v", res, err)
 	}
 }
 
@@ -216,6 +246,21 @@ func TestALocalEchoWrappedAtAWideCharacterIsNotOutput(t *testing.T) {
 	})
 	res, err := term.Run(context.Background(), cmd, 5*time.Second, term.PersonGen())
 	if err != nil || res.Output != "RESULT" {
+		t.Fatalf("output %q, %v", res.Output, err)
+	}
+}
+
+// A prompt as wide as the screen that ends in a wide character leaves
+// the cursor on that character's second half, and a one-character
+// command's echo is on the next row.
+func TestALocalPromptAsWideAsTheScreenEndingInAWideCharacter(t *testing.T) {
+	prompt := strings.Repeat("P", DefaultCols-2) + "한"
+	term := scriptedLocal(t, "", prompt, func(f *fakePS, line string) {
+		f.write(line + "\r\n" + f.mark("C", 0) + "ok\r\n")
+		f.prompt(0)
+	})
+	res, err := term.Run(context.Background(), "x", 5*time.Second, term.PersonGen())
+	if err != nil || res.Output != "ok" {
 		t.Fatalf("output %q, %v", res.Output, err)
 	}
 }

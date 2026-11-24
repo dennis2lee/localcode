@@ -328,11 +328,11 @@ func promptRows(prompt string, cols int) int {
 //     Server 2022), which ended runs before their output was drawn. A
 //     command that clears the screen leaves the new prompt above; the run
 //     then ends by the wait after the mark (promptWait).
-//   - Every row of it: a multi-line prompt's last line can be a line of
-//     output too ("> ").
-//   - Its first row may have text before it: a prompt function that writes
-//     with Write-Host and returns the rest, whose written part the mark
-//     does not carry.
+//   - Every row of it, each whole: a multi-line prompt's last line can be
+//     a line of output too ("> "), and output can end in text the prompt
+//     ends in ("<html>" and "> "). A prompt function that writes part of
+//     itself with Write-Host and returns the rest is therefore not seen:
+//     the mark carries only the rest, and the run ends by promptWait.
 //   - A row exactly the screen's width leaves the cursor on its last
 //     cell, where the part left of the cursor is one cell short.
 func (t *Terminal) promptDrawn(w *runWait) bool {
@@ -347,13 +347,7 @@ func (t *Terminal) promptDrawn(w *runWait) bool {
 	if first <= w.echoEnd() {
 		return false
 	}
-	matches := func(i int, got string) bool {
-		want := strings.TrimRight(rows[i], " ")
-		if i == 0 {
-			return strings.HasSuffix(got, want)
-		}
-		return got == want
-	}
+	matches := func(i int, got string) bool { return got == strings.TrimRight(rows[i], " ") }
 	for i := range rows[:len(rows)-1] {
 		got, ok := t.rowText(first + i)
 		if !ok || !matches(i, got) {
@@ -370,6 +364,20 @@ func (t *Terminal) promptDrawn(w *runWait) bool {
 		}
 	}
 	return false
+}
+
+// echoGone reports the row the command was typed on showing neither the
+// start of the command nor what it showed when the run began: something
+// cleared the screen. A row as it was is a command not drawn yet (the
+// marks came first, and the run timed out), whose output is nothing, not
+// the rows above it. A row the scrollback has dropped is not gone.
+// Called with mu held.
+func (t *Terminal) echoGone(w *runWait) bool {
+	got, ok := t.rowText(w.startAbs)
+	if !ok || got == w.startRow {
+		return false
+	}
+	return !strings.Contains(got, strings.TrimSpace(wrapRows(w.line, w.startX, w.cols)[0]))
 }
 
 // rowText is the text of row abs, and false for a row the terminal no
@@ -395,9 +403,13 @@ func (t *Terminal) rowText(abs int) (string, bool) {
 func (t *Terminal) localOutput(w *runWait) string {
 	from := w.echoEnd() + 1
 	cur := t.absRow(t.emu.CursorPosition().Y)
-	if cur <= w.echoEnd() {
-		// The cursor is above where the command was typed: the screen
-		// was cleared (Clear-Host), and what is on it came after.
+	if t.echoGone(w) {
+		// The row the command was typed on shows neither the command nor
+		// what it showed before: the screen
+		// was cleared (Clear-Host) without moving it into the scrollback
+		// (home and erase), and what is on the screen came after. A clear
+		// that moves the screen into the scrollback (ESC[2J here) leaves
+		// the command line where it was, and needs nothing.
 		from = t.absRow(0)
 	}
 	last := cur
