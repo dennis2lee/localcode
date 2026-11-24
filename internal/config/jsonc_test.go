@@ -341,6 +341,40 @@ func TestAValueOverSeveralLinesKeepsTheFilesLineEnds(t *testing.T) {
 	}
 }
 
+// Two numbers are the same value when they are written the same, not when
+// they round to one float: past 2^53 neighbouring whole numbers do, and a
+// change from one to the other compared equal and was not written.
+func TestAChangeBetweenTwoLargeWholeNumbersIsWritten(t *testing.T) {
+	const src = "{\n  // note\n  \"big\": 9007199254740992\n}\n"
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	err := updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		raw["big"] = json.RawMessage(`9007199254740993`)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("updateRawConfig: %v", err)
+	}
+	raw, _ := os.ReadFile(path)
+	if want := "{\n  // note\n  \"big\": 9007199254740993\n}\n"; string(raw) != want {
+		t.Errorf("file =\n%q\nwant\n%q", raw, want)
+	}
+	// And the same number spelled another way is still no change.
+	before := string(raw)
+	err = updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		raw["big"] = json.RawMessage(` 9007199254740993 `)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("updateRawConfig: %v", err)
+	}
+	if again, _ := os.ReadFile(path); string(again) != before {
+		t.Errorf("writing the value it has changed the file:\n%q", again)
+	}
+}
+
 // Two keys added by one write go in a fixed order, so the same change
 // always writes the same file.
 func TestTwoKeysAddedAtOnceGoInOneOrder(t *testing.T) {

@@ -256,8 +256,10 @@ test('a daemon that never takes a write is given up on, and the next change trie
   const before = writes(app).length;
   app.writePref('localcode.textScale', '1.4');
   await app.settle();
+  // Seven: the first asked to outlive the page and was not sent at all,
+  // which is not counted, and then six plain ones.
   const tried = writes(app).length - before;
-  assert.equal(tried, 6, `tried ${tried} times, want six and then a stop`);
+  assert.equal(tried, 7, `tried ${tried} times, want one uncounted and six more, and then a stop`);
 
   // What was not taken is still waiting, and goes with the next change.
   down = false;
@@ -365,6 +367,70 @@ test('a write the browser would not send as one that outlives the page is sent p
   assert.equal(calls.length, 2);
   assert.equal(calls[1].keepalive, undefined);
   assert.deepEqual(calls[1].body, { 'localcode.zoom': '1.5' });
+});
+
+test('a change made during the last try of another is still sent', async () => {
+  // The first change is on its sixth and last try when the second is
+  // made. Stopping there left the second never tried once, though the
+  // daemon had begun to answer.
+  let active = false;
+  let attempts = 0;
+  let failSixth;
+  const app = await inWindow('read', {
+    globals: instantTimers(),
+    routes: {
+      [`PUT ${ROUTE}`]: () => {
+        if (!active) return { status: 204 };
+        attempts += 1;
+        // 500s, so each is a request that was sent and counts.
+        if (attempts <= 5) return { status: 500, body: { error: 'busy' } };
+        if (attempts === 6) return new Promise((resolve) => { failSixth = () => resolve({ status: 500, body: { error: 'busy' } }); });
+        return { status: 204 };
+      },
+    },
+  });
+  const before = writes(app).length;
+  active = true;
+  app.writePref('localcode.zoom', '1.1');
+  await app.settle();
+  assert.equal(attempts, 6, 'the sixth try is not the one on its way');
+
+  app.writePref('localcode.textScale', '1.25');
+  failSixth();
+  await app.settle();
+  const last = writes(app)[writes(app).length - 1];
+  assert.ok(writes(app).length - before > 6, 'nothing was sent after the last try failed');
+  assert.deepEqual(last.body, { 'localcode.textScale': '1.25', 'localcode.zoom': '1.1' });
+});
+
+test('a last try the browser would not send is still sent plainly', async () => {
+  // Five tries the daemon failed, then one the browser refused to send
+  // as a request that outlives the page. That one never left, so it is
+  // not the sixth failure.
+  let active = false;
+  let attempts = 0;
+  const app = await inWindow('read', {
+    globals: instantTimers(),
+    routes: {
+      [`PUT ${ROUTE}`]: () => {
+        if (!active) return { status: 204 };
+        attempts += 1;
+        if (attempts <= 5) return { status: 500, body: { error: 'busy' } };
+        const call = app.calls[app.calls.length - 1];
+        if (call.keepalive) return { networkError: 'TypeError: Failed to fetch' };
+        return { status: 204 };
+      },
+    },
+  });
+  const before = writes(app).length;
+  active = true;
+  app.writePref('localcode.zoom', '1.5');
+  await app.settle();
+  const mine = writes(app).slice(before);
+  const last = mine[mine.length - 1];
+  assert.equal(last.keepalive, undefined, 'never sent plainly');
+  assert.deepEqual(last.body, { 'localcode.zoom': '1.5' });
+  assert.equal(mine.length, 7);
 });
 
 test('a name that is not the page\'s own is kept in the page and not sent', async () => {
@@ -521,6 +587,28 @@ test('kept.js asks again when the daemon does not answer the first time', () => 
   assert.equal(never.asked.length, 3);
   assert.equal(never.kept, undefined);
   assert.deepEqual(never.stored, { 'localcode.textScale': '1.4' });
+});
+
+test('kept.js reads only an object of names, or null, as what was kept', () => {
+  // An array has no names: read as "kept, and empty" it cleared every
+  // setting this address holds. Anything else that is not null read as
+  // "nothing yet", and the page then handed its own storage over.
+  const initial = { 'localcode.textScale': '1.25', 'localcode.zoom': '1.5' };
+  for (const kept of [[], ['localcode.zoom'], 'oops', 42, true, false]) {
+    const r = runKept({ initial, answer: { available: true, kept } });
+    assert.deepEqual(r.stored, initial, `kept=${JSON.stringify(kept)} changed the page's storage`);
+    assert.equal(r.kept, undefined, `kept=${JSON.stringify(kept)} was read as an answer`);
+  }
+});
+
+test('kept.js leaves what the address had when storage refuses a write part way', () => {
+  // What was kept is written before what is gone is removed, so a write
+  // that is refused has removed nothing.
+  const st = storage({ 'localcode.textScale': '1.25', 'localcode.face.doc': 'Georgia, serif' });
+  st.api.setItem = () => { throw new Error('QuotaExceededError'); };
+  const r = runKept({ store: st, answer: { available: true, kept: { 'localcode.zoom': '1.5' } } });
+  assert.deepEqual(r.stored, { 'localcode.textScale': '1.25', 'localcode.face.doc': 'Georgia, serif' });
+  assert.equal(r.kept, undefined);
 });
 
 test('kept.js takes only strings under the page\'s own names from the answer', () => {

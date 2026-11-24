@@ -175,8 +175,8 @@ when it refuses.
 
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
-| `GET /api/window/state` | nothing | `200 {"available", "kept"}`. `kept` is an object of name to string, or `null` when nothing has been written yet. `available` is false for a daemon started without a path | `403` refused by the request guard |
-| `PUT /api/window/state` | an object of name to string or `null`: a string keeps the name, `null` forgets it, names not in the body are left alone. Names are `archiveOpen` or `localcode.` followed by 1 to 64 letters, digits, `.`, `_` or `-`, starting with a letter or digit. At most 64 names, 256 KiB a value, 1 MiB in all | `204`, with the file on disk | `400` a name outside the rule, a value that is not a string or `null`, or more than 64 names; `403` refused by the request guard; `404` a daemon started without a path; `413` a value or the whole file too large; `500` the file could not be written |
+| `GET /api/window/state` | nothing | `200 {"available", "kept"}`. `kept` is an object of name to string, or `null` when nothing has been written yet (no file, or a file that is not an object of settings). `available` is false for a daemon started without a path | `403` refused by the request guard; `500` the file is there and could not be read |
+| `PUT /api/window/state` | an object of name to string or `null`: a string keeps the name, `null` forgets it, names not in the body are left alone. Names are `archiveOpen` or `localcode.` followed by 1 to 64 letters, digits, `.`, `_` or `-`, starting with a letter or digit. At most 64 names, 256 KiB a value, 1 MiB in all | `204`, with the file on disk | `400` a body that is not one object (`null`, or anything after the object), a name outside the rule, a value that is not a string or `null`, or more than 64 names; `403` refused by the request guard; `404` a daemon started without a path; `413` a body, a value or the resulting file too large; `500` the file could not be written, or is there and could not be read (nothing is written then) |
 
 ### Daemon-wide permission defaults
 

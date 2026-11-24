@@ -66,10 +66,13 @@ export function writePref(key, value) {
 // replaces an earlier one that was still waiting.
 const waiting = new Map();
 let sending = false;
+// Whether a change was made while a request was on its way.
+let arrived = false;
 
 function keep(key, value) {
   if (!keeping() || !OWN.test(key)) return;
   waiting.set(key, value);
+  arrived = true;
   send();
 }
 
@@ -88,11 +91,13 @@ async function send() {
     // the limit is shared with every other such request of the page.
     let outlive = true;
     while (waiting.size > 0) {
+      arrived = false;
       const batch = new Map(waiting);
       waiting.clear();
       const body = JSON.stringify(Object.fromEntries(batch));
       const keepalive = outlive && body.length * BYTES_PER_CHAR <= KEEPALIVE_MAX;
       let done = false;
+      let refusedUnsent = false;
       try {
         const res = await fetch('/api/window/state', {
           method: 'PUT',
@@ -103,17 +108,28 @@ async function send() {
         done = res.ok || (res.status >= 400 && res.status < 500);
       } catch {
         // The daemon is not answering, or the browser would not send
-        // it: tried again below, and plainly the next time.
-        if (keepalive) outlive = false;
+        // it as one that outlives the page.
+        if (keepalive) {
+          outlive = false;
+          refusedUnsent = true;
+        }
       }
       if (done) {
         failed = 0;
         continue;
       }
       for (const [k, v] of batch) if (!waiting.has(k)) waiting.set(k, v);
+      // Sent plainly at once, and not counted: it may never have left.
+      if (refusedUnsent) continue;
       failed += 1;
-      if (failed >= RETRIES) return;
-      await new Promise((resolve) => setTimeout(resolve, Math.min(5000, 300 * 2 ** (failed - 1))));
+      if (failed >= RETRIES) {
+        // Stopped here, unless something was changed while this last
+        // request was on its way: that change has not been tried once,
+        // and the daemon may be answering again.
+        if (!arrived) return;
+        failed = 0;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(5000, 300 * 2 ** Math.max(0, failed - 1))));
     }
   } finally {
     sending = false;

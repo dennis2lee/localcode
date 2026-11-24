@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -226,6 +227,139 @@ func TestTheWindowStateFileHasACeiling(t *testing.T) {
 	}
 }
 
+// The ceiling counts the line end the file is written with: a write that
+// would land exactly on the limit before it is one byte over on disk.
+func TestTheWindowStateCeilingCountsTheWholeFile(t *testing.T) {
+	_, srv, path := windowStateDaemon(t)
+	chunk := strings.Repeat("x", 250*1024)
+	for _, k := range []string{"localcode.a", "localcode.b", "localcode.c", "localcode.d"} {
+		b, _ := json.Marshal(map[string]string{k: chunk})
+		if status, out := windowStateRequest(t, "PUT", srv.URL+"/api/window/state", string(b), nil); status != http.StatusNoContent {
+			t.Fatalf("PUT %s: %d %s", k, status, out)
+		}
+	}
+	cur, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var held map[string]string
+	if err := json.Unmarshal(cur, &held); err != nil {
+		t.Fatal(err)
+	}
+	// One more value, sized so the object is exactly the limit before
+	// its line end.
+	held["localcode.e"] = ""
+	base, _ := json.MarshalIndent(held, "", "  ")
+	need := maxWindowStateFile - len(base)
+	if need < 0 || need > maxWindowStateValue {
+		t.Fatalf("the last value would have to be %d bytes; this test no longer fills the file the way it means to", need)
+	}
+	b, _ := json.Marshal(map[string]string{"localcode.e": strings.Repeat("y", need)})
+	status, out := windowStateRequest(t, "PUT", srv.URL+"/api/window/state", string(b), nil)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Errorf("a write that makes the file one byte over: %d %s, want 413", status, out)
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() > maxWindowStateFile {
+		t.Errorf("the file is over the %d bytes it is held to (stat: %v, %v)", maxWindowStateFile, info, err)
+	}
+	// One byte less fits, and lands exactly on the limit.
+	b, _ = json.Marshal(map[string]string{"localcode.e": strings.Repeat("y", need-1)})
+	if status, out := windowStateRequest(t, "PUT", srv.URL+"/api/window/state", string(b), nil); status != http.StatusNoContent {
+		t.Errorf("a write that makes the file exactly the limit: %d %s, want 204", status, out)
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() != maxWindowStateFile {
+		t.Errorf("the file is %v bytes, want exactly %d (stat error: %v)", info.Size(), maxWindowStateFile, err)
+	}
+}
+
+// The body is one object and nothing else. A null decodes without an
+// error and names nothing; taken, it wrote an empty file, and a file that
+// exists is the record, so the next page cleared its own settings to
+// match it instead of handing them over.
+func TestTheWindowStateBodyIsOneObject(t *testing.T) {
+	_, srv, path := windowStateDaemon(t)
+	over := `{"localcode.a":"` + strings.Repeat("x", maxWindowStateFile) + `"}`
+	for name, c := range map[string]struct {
+		body string
+		want int
+	}{
+		"null":                        {`null`, http.StatusBadRequest},
+		"an object and more after it": {`{"localcode.zoom":"1.5"} and more`, http.StatusBadRequest},
+		"two objects":                 {`{"localcode.zoom":"1.5"}{"localcode.zoom":"2"}`, http.StatusBadRequest},
+		"a body over the limit":       {over, http.StatusRequestEntityTooLarge},
+	} {
+		status, out := windowStateRequest(t, "PUT", srv.URL+"/api/window/state", c.body, nil)
+		if status != c.want {
+			t.Errorf("%s: %d %s, want %d", name, status, out, c.want)
+		}
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("a refused body left a file behind (stat: %v)", err)
+	}
+	if a := getWindowState(t, srv); a.Kept != nil {
+		t.Errorf("after only refused bodies something is kept: %v", *a.Kept)
+	}
+	// Space after the object is not "more".
+	if status, out := windowStateRequest(t, "PUT", srv.URL+"/api/window/state", "{\"localcode.zoom\":\"1.5\"}\n  \n", nil); status != http.StatusNoContent {
+		t.Errorf("an object followed by blank lines: %d %s, want 204", status, out)
+	}
+}
+
+// A file that is there and cannot be read is still the record. Read as
+// "nothing kept", the next write put the one setting it carried into an
+// empty file and answered that it was done, and every other setting was
+// gone. On Windows that takes no more than another process holding the
+// file open for a moment.
+func TestAWindowStateFileThatCannotBeReadIsNotReplaced(t *testing.T) {
+	t.Run("a directory where the file should be", func(t *testing.T) {
+		// Refuses a read on every platform, and not as "no such file".
+		_, srv, path := windowStateDaemon(t)
+		if err := os.MkdirAll(filepath.Join(path, "inside"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if status, out := windowStateRequest(t, "GET", srv.URL+"/api/window/state", "", nil); status != http.StatusInternalServerError {
+			t.Errorf("GET: %d %s, want 500: a page told \"nothing kept\" hands over its own storage in place of the file", status, out)
+		}
+		if status, out := windowStateRequest(t, "PUT", srv.URL+"/api/window/state", `{"localcode.zoom":"1.5"}`, nil); status != http.StatusInternalServerError {
+			t.Errorf("PUT: %d %s, want 500", status, out)
+		}
+		if _, err := os.Stat(filepath.Join(path, "inside")); err != nil {
+			t.Errorf("what was at the path was replaced: %v", err)
+		}
+	})
+	t.Run("a file that may not be read", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("a mode does not make a file unreadable on Windows; the directory case above runs there")
+		}
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a file of any mode")
+		}
+		_, srv, path := windowStateDaemon(t)
+		const settings = `{"localcode.textScale":"1.25","localcode.face.doc":"Georgia, serif"}`
+		if status, out := windowStateRequest(t, "PUT", srv.URL+"/api/window/state", settings, nil); status != http.StatusNoContent {
+			t.Fatalf("PUT: %d %s", status, out)
+		}
+		if err := os.Chmod(path, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+		status, out := windowStateRequest(t, "PUT", srv.URL+"/api/window/state", `{"localcode.zoom":"1.5"}`, nil)
+		if status != http.StatusInternalServerError {
+			t.Errorf("PUT over a file that could not be read: %d %s, want 500", status, out)
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		a := getWindowState(t, srv)
+		if a.Kept == nil || (*a.Kept)["localcode.textScale"] != "1.25" || (*a.Kept)["localcode.face.doc"] != "Georgia, serif" {
+			t.Errorf("the settings that were in the file are gone: %v", a.Kept)
+		}
+		if a.Kept != nil && (*a.Kept)["localcode.zoom"] != "" {
+			t.Errorf("a write answered 500 was made: %v", *a.Kept)
+		}
+	})
+}
+
 // The answer is never one a browser may keep and show again: the file
 // changes under it.
 func TestTheWindowStateIsNotCached(t *testing.T) {
@@ -317,7 +451,15 @@ func TestAWindowStateFileThatIsNotOursIsReadForWhatIs(t *testing.T) {
 		t.Fatalf("PUT over a file that does not parse: %d %s", status, out)
 	}
 
-	edited := `{"localcode.zoom":"1.5","other":"x","localcode.textScale":1.25,"__proto__":"y","localcode.face.ui":"Verdana, sans-serif"}`
+	// A file that is null is not an object of settings either.
+	if err := os.WriteFile(path, []byte("null"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if a := getWindowState(t, srv); !a.Available || a.Kept != nil {
+		t.Errorf("a file that is null: available=%v kept=%v, want available and null", a.Available, a.Kept)
+	}
+
+	edited := `{"localcode.zoom":"1.5","other":"x","localcode.textScale":1.25,"__proto__":"y","localcode.face.ui":"Verdana, sans-serif","localcode.face.doc":null}`
 	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
 		t.Fatal(err)
 	}

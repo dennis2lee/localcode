@@ -194,17 +194,12 @@ test('a warning that a switch was not saved stays through other redraws, until i
   ssh.fire('change');
   await app.settle();
   // And the daemon announces the change, as it does to every window.
-  announce(app, { smart_agent: true, ssh: true });
+  // With another switch moved in the same announcement, which shows the
+  // announcement was read and the window drawn from it.
+  announce(app, { smart_agent: true, ssh: true, orchestrate: true });
   await app.settle();
+  assert.equal(app.el('orchestrate-checkbox').checked, true, 'the announcement did not reach the settings window');
   assert.match(warn.textContent, UNSAVED, 'the warning went with a redraw that saved nothing');
-  // That announcement did redraw the switch: one that turns it off is
-  // shown, with the warning still under it.
-  announce(app, { smart_agent: false });
-  await app.settle();
-  assert.equal(box.checked, false, 'the announcement did not reach the settings window');
-  assert.match(warn.textContent, UNSAVED);
-  announce(app, { smart_agent: true });
-  await app.settle();
   assert.equal(warn.hidden, false);
   assert.equal(app.el('ssh-warn').hidden, true, 'a switch that was saved shows a warning');
 
@@ -253,11 +248,11 @@ test('each of the five switches that answer with whether they were saved keeps i
     await app.settle();
   }
   // Every one drawn again, as a change anywhere does.
-  announce(app, { smart_agent: false, orchestrate: false, model_invocable: false });
+  // The same values, and the repeat guard moved, which shows the
+  // announcement was read and the window drawn from it.
+  announce(app, { smart_agent: true, ssh: true, browser: true, orchestrate: true, model_invocable: true, repeat_limit: 9 });
   await app.settle();
-  assert.equal(app.el('smart-agent-checkbox').checked, false, 'the announcement did not reach the settings window');
-  announce(app, { smart_agent: true, ssh: true, browser: true, orchestrate: true, model_invocable: true });
-  await app.settle();
+  assert.equal(String(app.el('repeat-limit-input').value), '9', 'the announcement did not reach the settings window');
   for (const [, warnId, reason] of switches) {
     const warn = app.el(warnId);
     if (!reason) {
@@ -268,6 +263,65 @@ test('each of the five switches that answer with whether they were saved keeps i
     assert.match(warn.textContent, UNSAVED, `${warnId} lost its warning`);
     assert.ok(warn.textContent.includes(reason), `${warnId} shows another switch's reason: ${warn.textContent}`);
   }
+});
+
+test('a switch moved from somewhere else loses the warning this window put under it', async () => {
+  // The warning was about this window's own save of the value it had
+  // then. Another window, or a command typed at a prompt, has since
+  // moved the switch, and the warning says nothing true about it now.
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      'POST /api/settings/smart-agent': (body) => ({ smart_agent: body.enabled, applied: true, persisted: false, error: 'config.json is read-only' }),
+      'POST /api/settings/orchestrate': (body) => ({ orchestrate: body.enabled, applied: true, persisted: false, error: 'config.json is read-only' }),
+    },
+  });
+  await open(app);
+  for (const id of ['smart-agent-checkbox', 'orchestrate-checkbox']) {
+    const box = app.el(id);
+    box.checked = true;
+    box.fire('change');
+    await app.settle();
+  }
+  assert.match(app.el('smart-agent-warn').textContent, UNSAVED);
+  assert.match(app.el('orchestrate-warn').textContent, UNSAVED);
+
+  announce(app, { smart_agent: false, orchestrate: true });
+  await app.settle();
+  assert.equal(app.el('smart-agent-checkbox').checked, false);
+  assert.equal(app.el('smart-agent-warn').textContent, '', 'a warning stayed under a switch somebody else has since moved');
+  assert.equal(app.el('smart-agent-warn').hidden, true);
+  // The switch nobody moved keeps its own.
+  assert.match(app.el('orchestrate-warn').textContent, UNSAVED);
+});
+
+test('the announcement of this window\'s own change does not take the warning its save earned', async () => {
+  // The daemon announces a change to every window, this one included,
+  // and the announcement can arrive before the reply to the save.
+  let reply;
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      'POST /api/settings/smart-agent': () => new Promise((resolve) => {
+        reply = () => resolve({ smart_agent: true, applied: true, persisted: false, error: 'config.json is read-only' });
+      }),
+    },
+  });
+  await open(app);
+  const box = app.el('smart-agent-checkbox');
+  box.checked = true;
+  box.fire('change');
+  await app.settle();
+  announce(app, { smart_agent: true });
+  await app.settle();
+  reply();
+  await app.settle();
+  assert.match(app.el('smart-agent-warn').textContent, UNSAVED, 'announcement first, reply second: the warning is missing');
+
+  // And the other way round: the reply, then the announcement.
+  announce(app, { smart_agent: true });
+  await app.settle();
+  assert.match(app.el('smart-agent-warn').textContent, UNSAVED, 'reply first, announcement second: the warning went');
 });
 
 test('the redraw when the settings arrive leaves a warning that was shown before they did', async () => {

@@ -43,23 +43,29 @@
     var answer = JSON.parse(text);
     if (!answer || answer.available !== true) return;
     var kept = answer.kept;
-    if (!kept || typeof kept !== 'object') {
+    if (kept === null) {
       // Nothing has been written yet. What this address already holds is
       // handed over by js/prefs.js rather than replaced by nothing.
       window.localcodeKept = 'nothing yet';
       return;
     }
+    // Anything else that is not a plain object is not an answer this
+    // reads: an array has no names, and would have read as "kept, and
+    // empty" and cleared every setting this address holds.
+    if (typeof kept !== 'object' || Array.isArray(kept)) return;
     var has = function (name) { return Object.prototype.hasOwnProperty.call(kept, name); };
+    // What was kept first, and only then what is gone: storage that
+    // refuses a write part way leaves what this address had.
+    for (var key in kept) {
+      if (!has(key) || !own.test(key) || typeof kept[key] !== 'string') continue;
+      if (localStorage.getItem(key) !== kept[key]) localStorage.setItem(key, kept[key]);
+    }
     var gone = [];
     for (var i = 0; i < localStorage.length; i++) {
       var name = localStorage.key(i);
       if (typeof name === 'string' && own.test(name) && !has(name)) gone.push(name);
     }
     for (var j = 0; j < gone.length; j++) localStorage.removeItem(gone[j]);
-    for (var key in kept) {
-      if (!has(key) || !own.test(key) || typeof kept[key] !== 'string') continue;
-      if (localStorage.getItem(key) !== kept[key]) localStorage.setItem(key, kept[key]);
-    }
     window.localcodeKept = 'read';
   } catch (e) {
     // The daemon did not answer, or storage refused. The page starts from

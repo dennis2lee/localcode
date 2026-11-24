@@ -16,7 +16,7 @@ import {
   applyEffort,
 } from './modals.js';
 import { applyScheduleEvent, applyRunActivity } from './schedules.js';
-import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen, refreshModelInvocableIfOpen, refreshBrowserIfOpen, refreshSSHIfOpen } from './settings.js';
+import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen, refreshModelInvocableIfOpen, refreshBrowserIfOpen, refreshSSHIfOpen, movedElsewhere } from './settings.js';
 import { renderBrowserPanel } from './browser.js';
 import { renderSSHPanel } from './ssh.js';
 import { refreshTaskViewStatus, taskDeleted } from './taskview.js';
@@ -445,20 +445,31 @@ const handlers = {
     // panel is only redrawn if it happens to be open — there is no status
     // bar pill for this one, deliberately: it is a way of working that is
     // chosen once, not a thing to flip between messages.
+    //
+    // A switch that arrives with another value than this page has was
+    // moved by somebody else, and a "not saved" warning this page put
+    // under it no longer says anything about it (movedElsewhere). This
+    // page's own change arrives here too, and either way round it is
+    // right: before the reply to the save it reads as moved, and the
+    // reply then sets the warning; after it the values are equal.
     if (typeof d.orchestrate === 'boolean') {
+      if (d.orchestrate !== app.orchestrate) movedElsewhere('orchestrate');
       app.orchestrate = d.orchestrate;
       refreshOrchestrateIfOpen();
     }
     if (typeof d.smart_agent === 'boolean') {
+      if (d.smart_agent !== app.smartAgent) movedElsewhere('smart_agent');
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
     }
     if (typeof d.browser === 'boolean' && d.browser !== app.browser) {
+      movedElsewhere('browser');
       app.browser = d.browser;
       renderBrowserPanel();
       refreshBrowserIfOpen();
     }
     if (typeof d.ssh === 'boolean' && d.ssh !== app.ssh) {
+      movedElsewhere('ssh');
       app.ssh = d.ssh;
       renderSSHPanel();
       refreshSSHIfOpen();
@@ -488,19 +499,23 @@ const handlers = {
       refreshDelegatePanelIfOpen();
     }
     if (typeof d.orchestrate === 'boolean') {
+      if (d.orchestrate !== app.orchestrate) movedElsewhere('orchestrate');
       app.orchestrate = d.orchestrate;
       refreshOrchestrateIfOpen();
     }
     if (typeof d.smart_agent === 'boolean') {
+      if (d.smart_agent !== app.smartAgent) movedElsewhere('smart_agent');
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
     }
     if (typeof d.browser === 'boolean' && d.browser !== app.browser) {
+      movedElsewhere('browser');
       app.browser = d.browser;
       renderBrowserPanel();
       refreshBrowserIfOpen();
     }
     if (typeof d.ssh === 'boolean' && d.ssh !== app.ssh) {
+      movedElsewhere('ssh');
       app.ssh = d.ssh;
       renderSSHPanel();
       refreshSSHIfOpen();
@@ -510,6 +525,7 @@ const handlers = {
       refreshKeepGoingIfOpen();
     }
     if (typeof d.model_invocable === 'boolean') {
+      if (d.model_invocable !== app.modelInvocable) movedElsewhere('model_invocable');
       app.modelInvocable = d.model_invocable;
       refreshModelInvocableIfOpen();
     }

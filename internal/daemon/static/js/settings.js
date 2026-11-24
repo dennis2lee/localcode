@@ -258,6 +258,15 @@ function unsavedWarning(name, outcome) {
   return unsaved[name] || '';
 }
 
+// movedElsewhere forgets the warning under a switch that somebody else
+// has since moved: another window, or a command typed at a prompt. The
+// warning was about this page's own save of the value it had then, and
+// says nothing about the value the switch has now. The names are the
+// daemon's own for each setting, as the announcement carries them.
+export function movedElsewhere(name) {
+  unsaved[name] = '';
+}
+
 function renderSmartAgent(outcome) {
   const warning = unsavedWarning('smart_agent', outcome);
   smartAgentCheckbox.checked = !!app.smartAgent;

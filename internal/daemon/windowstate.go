@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -59,26 +61,48 @@ const (
 var windowStateKey = regexp.MustCompile(`^(?:localcode\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}|archiveOpen)$`)
 
 // readWindowState reads the file. kept is false when there is nothing to
-// read yet: no file, or one that is not what this writes, which is treated
-// the same way so the page fills it in again from what it has.
-func readWindowState(path string) (state map[string]string, kept bool) {
-	data, err := os.ReadFile(path)
+// read yet: no file, or one that is not what this writes (it does not
+// parse, or it is not an object), which is treated the same way so the
+// page fills it in again from what it has.
+//
+// A file that is there and cannot be read is neither, and is an error:
+// the settings in it are still the record. Read as nothing, the next
+// write would have put the one setting it carried into an empty file
+// and every other setting would have been gone, with the write answered
+// as done. On Windows that takes no more than another process having
+// the file open for a moment, a virus scanner looking at what was just
+// written or a second window replacing it, so the read is tried a few
+// times before it is given up on.
+func readWindowState(path string) (state map[string]string, kept bool, err error) {
+	var data []byte
+	for attempt := 0; ; attempt++ {
+		data, err = os.ReadFile(path)
+		if err == nil || errors.Is(err, fs.ErrNotExist) || attempt == 4 {
+			break
+		}
+		time.Sleep(time.Duration(20*(attempt+1)) * time.Millisecond)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]string{}, false, nil
+	}
 	if err != nil {
-		return map[string]string{}, false
+		return nil, false, err
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return map[string]string{}, false
+	if json.Unmarshal(data, &raw) != nil || raw == nil {
+		return map[string]string{}, false, nil
 	}
 	state = make(map[string]string, len(raw))
 	for k, v := range raw {
-		var s string
-		if !windowStateKey.MatchString(k) || json.Unmarshal(v, &s) != nil || len(s) > maxWindowStateValue {
+		// A pointer, so a null written into the file by hand is told
+		// from an empty string and left out.
+		var s *string
+		if !windowStateKey.MatchString(k) || json.Unmarshal(v, &s) != nil || s == nil || len(*s) > maxWindowStateValue {
 			continue
 		}
-		state[k] = s
+		state[k] = *s
 	}
-	return state, true
+	return state, true, nil
 }
 
 // handleGetWindowState answers with everything kept. "kept" is null until
@@ -95,8 +119,14 @@ func (d *Daemon) handleGetWindowState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.windowStateMu.Lock()
-	state, kept := readWindowState(d.WindowStatePath)
+	state, kept, err := readWindowState(d.WindowStatePath)
 	d.windowStateMu.Unlock()
+	if err != nil {
+		// Not "nothing kept": a page told that hands over what its own
+		// storage holds, which would replace the file it could not read.
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("could not read %s: %w", d.WindowStatePath, err))
+		return
+	}
 	if !kept {
 		writeJSON(w, http.StatusOK, map[string]any{"available": true, "kept": nil})
 		return
@@ -115,8 +145,26 @@ func (d *Daemon) handleSetWindowState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req map[string]*string
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxWindowStateFile)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errors.New("the body must be an object of names to a string or null"))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxWindowStateFile))
+	notAnObject := errors.New("the body must be one object of names to a string or null")
+	if err := dec.Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("the body is larger than %d bytes", maxWindowStateFile))
+			return
+		}
+		writeError(w, http.StatusBadRequest, notAnObject)
+		return
+	}
+	// A body of null decodes without an error and names nothing. Taken,
+	// it would write an empty file, and a file that exists is the record:
+	// the next page would clear its own settings to match it.
+	if req == nil {
+		writeError(w, http.StatusBadRequest, notAnObject)
+		return
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		writeError(w, http.StatusBadRequest, notAnObject)
 		return
 	}
 	if len(req) > maxWindowStateKeys {
@@ -136,7 +184,11 @@ func (d *Daemon) handleSetWindowState(w http.ResponseWriter, r *http.Request) {
 
 	d.windowStateMu.Lock()
 	defer d.windowStateMu.Unlock()
-	state, _ := readWindowState(d.WindowStatePath)
+	state, _, err := readWindowState(d.WindowStatePath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("could not read %s, so nothing was written to it: %w", d.WindowStatePath, err))
+		return
+	}
 	for k, v := range req {
 		if v == nil {
 			delete(state, k)
@@ -149,11 +201,12 @@ func (d *Daemon) handleSetWindowState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	out = append(out, '\n')
 	if len(out) > maxWindowStateFile {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("the window's settings would be larger than %d bytes", maxWindowStateFile))
 		return
 	}
-	if err := writeWindowState(d.WindowStatePath, append(out, '\n')); err != nil {
+	if err := writeWindowState(d.WindowStatePath, out); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("could not write %s: %w", d.WindowStatePath, err))
 		return
 	}

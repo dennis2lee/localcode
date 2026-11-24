@@ -285,8 +285,13 @@ func spliceKeys(data []byte, before, after map[string]json.RawMessage) ([]byte, 
 // equal, which is what stops a splice rewriting a key nothing changed
 // just because the marshaller spaces it differently.
 func canonical(v json.RawMessage) []byte {
+	// Numbers as written, not as floats: two whole numbers past 2^53
+	// that differ are one float, and a change from one to the other
+	// would compare equal here and not be written.
+	dec := json.NewDecoder(bytes.NewReader(v))
+	dec.UseNumber()
 	var any1 any
-	if err := json.Unmarshal(v, &any1); err != nil {
+	if err := dec.Decode(&any1); err != nil {
 		return v
 	}
 	out, err := json.Marshal(any1)
