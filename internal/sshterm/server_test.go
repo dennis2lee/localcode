@@ -399,9 +399,14 @@ func (f *fakeShell) readLine(echo bool) (string, bool) {
 			return "\x03", true
 		case b == 0x7f:
 			if len(line) > 0 {
+				last := line[len(line)-1]
 				line = line[:len(line)-1]
 				if echo {
 					f.write("\b \b")
+					if last == 0x03 {
+						// Shown as two characters, "^C".
+						f.write("\b \b")
+					}
 				}
 			}
 		case b == 0x1b:

@@ -154,6 +154,53 @@ func TestTextAfterThePersonsCtrlCIsTheirs(t *testing.T) {
 	}
 }
 
+// The key is the line's, whoever pressed it: what the person types after
+// the model's Ctrl+C, before the prompt it brings has arrived, is theirs
+// on that prompt's line, and what the model types after the person's is
+// the model's.
+func TestTextAfterTheOthersCtrlCIsOnTheNextLine(t *testing.T) {
+	old := personYield
+	personYield = 50 * time.Millisecond
+	defer func() { personYield = old }()
+	s := startServer(t, func(s *testServer) { s.interruptDelay = 4 * promptSettle })
+	m := testManager(t, testHome(t, s, true))
+	term := connected(t, m, s)
+
+	if err := term.Keys("ctrl+c", term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	term.PersonInput(nil, "mine; ", "")
+	typedLine(t, term, "$ mine;")
+	time.Sleep(2 * personYield)
+	if _, err := term.Run(context.Background(), "echo ok", 5*time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
+		t.Fatalf("run onto text the person typed after the model's ctrl+c: %v", err)
+	}
+
+	// Until the prompt that answers their Ctrl+C is here, the line is
+	// still the person's, and the model types nothing onto it.
+	term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+	time.Sleep(2 * personYield)
+	if err := term.Type("left; ", false, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
+		t.Fatalf("type before the person's ctrl+c was answered: %v", err)
+	}
+	typedLine(t, term, "$")
+	// On an empty line their Ctrl+C leaves nothing of theirs, and what
+	// the model types before its prompt is here is the model's, on the
+	// line of that prompt.
+	term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+	time.Sleep(2 * personYield)
+	if err := term.Type("left; ", false, term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	typedLine(t, term, "$ left;")
+	if _, err := term.Run(context.Background(), "echo ok", 5*time.Second, term.PersonGen()); !errors.Is(err, ErrModelLine) {
+		t.Fatalf("run onto text the model typed after the person's ctrl+c: %v", err)
+	}
+	if got := s.got(); strings.Contains(got, "mine; echo") || strings.Contains(got, "left; echo") {
+		t.Fatalf("a run was typed onto text: %q", got)
+	}
+}
+
 // A Ctrl+C that no prompt answered was not an interrupt: what was typed
 // after it is on the line it was typed on, and goes when that line is run.
 // It is not carried to the prompt after.
@@ -177,5 +224,39 @@ func TestTextAfterACtrlCTheShellDidNotTakeGoesWithItsLine(t *testing.T) {
 	typedLine(t, term, "$")
 	if res := runWhenFree(t, term, "echo ok"); res.Output != "ok" {
 		t.Fatalf("after the line was run: %+v", res)
+	}
+}
+
+// The person's Ctrl+C is taken for an interrupt when a prompt answers it,
+// as the model's is. Where the shell reads the key as a character, their
+// line is still theirs: the key is on it. Once they have erased it all,
+// what they typed after the key is not carried to a later prompt.
+func TestThePersonsCtrlCCountsWhenTheShellTakesIt(t *testing.T) {
+	oldWait, oldYield := interruptWait, personYield
+	interruptWait, personYield = 2*promptSettle, 50*time.Millisecond
+	defer func() { interruptWait, personYield = oldWait, oldYield }()
+	s := startServer(t, func(s *testServer) { s.noInterrupt = true })
+	m := testManager(t, testHome(t, s, true))
+	term := connected(t, m, s)
+	term.PersonInput(nil, "x", "")
+	term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+	term.PersonInput(nil, "y", "")
+	typedLine(t, term, "$ x^Cy")
+	// Long enough that the key was no interrupt. Longer does no harm.
+	time.Sleep(interruptWait + 2*personYield)
+	if _, err := term.Run(context.Background(), "echo ok", time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
+		t.Fatalf("run onto a line the person's ctrl+c did not clear: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+	}
+	if res := runWhenFree(t, term, "echo one"); res.Output != "one" {
+		t.Fatalf("after the person erased the line: %+v", res)
+	}
+	if res := run(t, term, "echo two"); res.Output != "two" {
+		t.Fatalf("the run after that: %+v", res)
+	}
+	if strings.Contains(s.got(), "\x03echo") {
+		t.Fatal("a run was typed onto the person's line")
 	}
 }
