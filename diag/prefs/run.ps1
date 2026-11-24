@@ -274,13 +274,28 @@ function Read-All($app) {
     $s = Invoke-RestMethod "$($app.Base)/api/settings" -TimeoutSec 5
     $api = "smart=$($s.smart_agent) ssh=$($s.ssh)"
   } catch { $api = "unreachable" }
-  $smart = '?'; $ssh = '?'; $text = '?'
+  $smart = '?'; $ssh = '?'; $text = '?'; $note = ''
   if (Open-Settings $app) {
     $smart = Toggle-State (El $app 'smart-agent-checkbox')
     $ssh = Toggle-State (El $app 'ssh-checkbox')
+    # The window is read a second or so after its page appears. If it
+    # does not show what the daemon says, that is written down, and the
+    # window is read again a few seconds later: a page still loading and
+    # a page that is wrong are different findings.
+    $want = "smart=$(if ($s.smart_agent) { 'On' } else { 'Off' }) ssh=$(if ($s.ssh) { 'On' } else { 'Off' })"
+    if ($api -ne 'unreachable' -and "smart=$smart ssh=$ssh" -ne $want) {
+      $note = " [first read: smart=$smart ssh=$ssh, note '$(Text-Of $app 'smart-agent-note')']"
+      if ($script:ShotMismatch) { Shot $script:ShotMismatch }
+      Close-Settings $app
+      Start-Sleep 5
+      if (Open-Settings $app) {
+        $smart = Toggle-State (El $app 'smart-agent-checkbox')
+        $ssh = Toggle-State (El $app 'ssh-checkbox')
+      }
+    }
     if (Open-Typography $app) { $text = Select-Value (El $app 'typo-size-select') }
   }
-  return "text=$text smart=$smart ssh=$ssh (daemon: $api)"
+  return "text=$text smart=$smart ssh=$ssh (daemon: $api)$note"
 }
 
 function Close-App($app, $how = 'close') {
@@ -356,6 +371,7 @@ function Wanted($name) {
 function Result($name, $line) { "RESULT $name ($Ref) :: $line" }
 
 $script:ShotAgents = $null
+$script:ShotMismatch = 'mismatch'
 
 # ---- what this machine is
 

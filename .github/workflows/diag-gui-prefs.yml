@@ -19,10 +19,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - ref: main
-            only: ''
           - ref: diag/gui-prefs-fix
-            only: ''
+            only: 'config-with-comment'
+            n: 1
+          - ref: diag/gui-prefs-fix
+            only: 'config-with-comment'
+            n: 2
+          - ref: diag/gui-prefs-fix
+            only: 'config-with-comment'
+            n: 3
+          - ref: diag/gui-prefs-fix
+            only: 'close-after-15s close-at-once'
+            n: 4
     steps:
       - uses: actions/checkout@v4
         with:
