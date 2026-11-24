@@ -234,9 +234,8 @@ var lineSteps = []string{
 func TestNoRunIsTypedOntoTextInAnyOrderOfKeys(t *testing.T) {
 	// No clock: the person's last key is no reason to refuse, and a
 	// prompt that answers a Ctrl+C can be as late as the order has it.
-	oldYield, oldWait := personYield, interruptWait
-	personYield, interruptWait = 0, time.Hour
-	defer func() { personYield, interruptWait = oldYield, oldWait }()
+	setWait(t, &personYield, 0)
+	setWait(t, &interruptWait, time.Hour)
 
 	m := NewManager(Options{Home: t.TempDir(), DataDir: t.TempDir(), LocalUser: "me"})
 	// Five steps: 29,693 orders. Four under the race detector, which has
@@ -353,6 +352,102 @@ func TestTheKeysAShellReadsAsEnterSendTheLine(t *testing.T) {
 	}
 }
 
+// Enter into a command that is running is that command's to read: it
+// sends nothing of the shell's, and does not undo what Ctrl+O said of the
+// next line.
+func TestEnterIntoARunningCommandIsNotTheShellsLine(t *testing.T) {
+	for _, key := range []PersonKey{{Key: "Enter"}, {Key: "m", Ctrl: true}, {Key: "j", Ctrl: true}} {
+		s := playedFor(t, true)
+		s.term.PersonInput(nil, "read x", "")
+		s.term.PersonInput(&PersonKey{Key: "o", Ctrl: true}, "", "")
+		s.term.PersonInput(nil, "y", "")
+		s.term.PersonInput(&key, "", "")
+		s.prints("read x\r\ny\r\n" + s.promptText(0) + "make deploy")
+		if err := s.run(); !errors.Is(err, ErrLineNotEmpty) {
+			t.Fatalf("onto the line ctrl+o recalled, after %+v into the command it ran: %v", key, err)
+		}
+	}
+}
+
+// With Alt, Enter and the keys read as Enter are other keys: zsh puts a
+// line break in the line, bash does nothing. None of them sends the line,
+// so none clears what was typed on it, and none starts a command.
+func TestWithAltTheKeysReadAsEnterSendNothing(t *testing.T) {
+	keys := []PersonKey{
+		{Key: "Enter", Alt: true}, {Key: "m", Ctrl: true, Alt: true},
+		{Key: "j", Ctrl: true, Alt: true}, {Key: "o", Ctrl: true, Alt: true},
+	}
+	for _, key := range keys {
+		// On an empty line: nothing is running after it.
+		s := playedFor(t, true)
+		s.term.PersonInput(&key, "", "")
+		if err := s.run(); err != nil {
+			t.Fatalf("after %+v on an empty line: %v", key, err)
+		}
+		// After a Ctrl+C whose prompt is on its way, with text typed since:
+		// the text is on that prompt's line still.
+		s = playedFor(t, true)
+		if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
+			t.Fatal(err)
+		}
+		s.term.PersonInput(nil, "rm -rf x; ", "")
+		s.term.PersonInput(&key, "", "")
+		s.prints("^C\r\n" + s.promptText(130) + "rm -rf x; ")
+		if err := s.run(); !errors.Is(err, ErrLineNotEmpty) {
+			t.Fatalf("after %+v with text on the line: %v", key, err)
+		}
+	}
+}
+
+// A prompt that leaves nothing on its line (PS1 ending in a line break)
+// looks like any empty row. A line that fills the width leaves the cursor
+// on one, the row above holding the text: typed on at such a prompt, the
+// line is not judged by the screen.
+func TestALineAtAPromptThatDrawsNothingIsNotJudgedByTheScreen(t *testing.T) {
+	s := playedFor(t, true)
+	s.prints("\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07me@test\r\n")
+	line := "rm -rf x #" + strings.Repeat("a", DefaultCols-10)
+	s.term.PersonInput(nil, line, "")
+	s.prints(line + " \r\x1b[K")
+	if err := s.run(); !errors.Is(err, ErrLineNotEmpty) {
+		t.Fatalf("run onto a line that wrapped: %v", err)
+	}
+	// Erased, it is still theirs until they send it: the screen has
+	// nothing to say at this prompt.
+	s.prints("\x1b[A\r\x1b[K")
+	if err := s.run(); !errors.Is(err, ErrLineNotEmpty) {
+		t.Fatalf("run at a prompt that draws nothing, after the person typed: %v", err)
+	}
+	s.term.PersonInput(&PersonKey{Key: "Enter"}, "", "")
+	s.prints("\r\n\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07me@test\r\n")
+	if err := s.run(); err != nil {
+		t.Fatalf("after the person sent the line: %v", err)
+	}
+}
+
+// A narrower screen cuts rows off at its edge. Text of the person's that
+// started with a space in the last column left a row that read as the
+// prompt alone.
+func TestANarrowerScreenDoesNotHideWhatWasTyped(t *testing.T) {
+	s := playedFor(t, true)
+	prompt := strings.Repeat("p", MinCols-3) + "$ "
+	s.prints("\r\n\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07" + prompt)
+	s.term.PersonInput(nil, " rm -rf x", "")
+	s.prints(" rm -rf x")
+	s.term.ViewerSize("v", MinCols, DefaultRows)
+	if err := s.run(); !errors.Is(err, ErrLineNotEmpty) {
+		t.Fatalf("run after a narrower screen cut the person's text off: %v", err)
+	}
+	// A narrower screen that cuts nothing off leaves an erased line empty.
+	s = playedFor(t, true)
+	s.term.PersonInput(nil, "x", "")
+	s.prints("x\b \b")
+	s.term.ViewerSize("v", DefaultCols-10, DefaultRows)
+	if err := s.run(); err != nil {
+		t.Fatalf("run after a narrower screen, the line typed on and erased: %v", err)
+	}
+}
+
 // What is pasted into a command that is running is that command's to
 // read. The part after a line end is not text on the shell's next line.
 func TestAPasteIntoARunningCommandIsNotOnTheNextLine(t *testing.T) {
@@ -424,9 +519,7 @@ func TestNoRunIsTypedOnTheAlternateScreen(t *testing.T) {
 // A Ctrl+C that no prompt answered in time is not waited for again when
 // the next one is pressed: the one prompt that comes answers that one.
 func TestACtrlCThatWentUnansweredIsNotWaitedForAgain(t *testing.T) {
-	old := interruptWait
-	interruptWait = 2 * promptSettle
-	defer func() { interruptWait = old }()
+	setWait(t, &interruptWait, 2*promptSettle)
 	s := playedFor(t, true)
 	if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
 		t.Fatal(err)
@@ -436,7 +529,9 @@ func TestACtrlCThatWentUnansweredIsNotWaitedForAgain(t *testing.T) {
 	if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
 		t.Fatal(err)
 	}
-	interruptWait = time.Hour // from here, any press still counted would be waited for
+	// From here any press still counted would be waited for. (The played
+	// shell stops the terminal's timers: nothing else reads this now.)
+	interruptWait = time.Hour
 	s.prints("^C\r\n" + s.promptText(130))
 	s.term.mu.Lock()
 	left, known := s.term.interrupts.pending(), s.term.promptKnown

@@ -85,6 +85,18 @@ func run(t *testing.T, term *Terminal, cmd string) RunResult {
 	return res
 }
 
+// setWait gives one of the terminal's waits another length for a test. A
+// terminal's timers read promptWait and interruptWait on goroutines of
+// their own, so the wait is set before the test makes its first terminal
+// and put back after its last has ended: call this before testManager,
+// whose cleanup then runs first.
+func setWait(t *testing.T, wait *time.Duration, d time.Duration) {
+	t.Helper()
+	old := *wait
+	*wait = d
+	t.Cleanup(func() { *wait = old })
+}
+
 // typedLine waits until the line the cursor is on ends with text: what was
 // typed has reached the shell, and its echo has come back.
 func typedLine(t *testing.T, term *Terminal, text string) {

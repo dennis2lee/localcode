@@ -473,9 +473,9 @@ func TestNoLineIsLeftForTheShellToRunNext(t *testing.T) {
 	}
 }
 
-// The model's Ctrl+C clears its text only when the shell takes it as an
-// interrupt, which the prompt after it says. With "stty intr undef" the
-// key is a character, and the text is still on the line.
+// The model's Ctrl+C clears its text when the shell takes it as an
+// interrupt, which the prompt after it says: right after the key, run
+// waits for that prompt and reports its own command.
 func TestTheModelsCtrlCCountsWhenTheShellTakesIt(t *testing.T) {
 	for _, shell := range []string{"/bin/bash", "/bin/zsh"} {
 		t.Run(filepath.Base(shell), func(t *testing.T) {
@@ -486,11 +486,10 @@ func TestTheModelsCtrlCCountsWhenTheShellTakesIt(t *testing.T) {
 			term.WaitConnected(context.Background())
 			within(t, 15*time.Second, "integrated", func() bool { return term.Info().Integrated })
 			settled(t, term)
-			// Right after a Ctrl+C that is an interrupt, run waits for the
-			// prompt and reports its own command. The key is pressed once
-			// the shell has drawn the text and is reading again: sent in
-			// one burst with it, the key reached a zsh still busy with the
-			// first letter, which then drew no prompt.
+			// The key is pressed once the shell has drawn the text and is
+			// reading again: sent in one burst with it, the key reached a
+			// zsh still busy with the first letter, which then drew no
+			// prompt.
 			if err := term.Type("junk", false, term.PersonGen()); err != nil {
 				t.Fatal(err)
 			}
@@ -501,11 +500,23 @@ func TestTheModelsCtrlCCountsWhenTheShellTakesIt(t *testing.T) {
 			if res := run(t, term, "echo afterc"); res.Output != "afterc" || res.Status != "0" {
 				t.Fatalf("run right after ctrl+c: %+v", res)
 			}
-			// With the interrupt key undefined, it is not one, and no
-			// prompt comes however long run waits for it.
-			old := interruptWait
-			interruptWait = time.Second
-			defer func() { interruptWait = old }()
+		})
+	}
+}
+
+// With "stty intr undef" the key is a character: no prompt comes however
+// long run waits for one, and the text is still on the line.
+func TestTheModelsCtrlCIsACharacterWhereTheShellReadsItAsOne(t *testing.T) {
+	setWait(t, &interruptWait, time.Second)
+	for _, shell := range []string{"/bin/bash", "/bin/zsh"} {
+		t.Run(filepath.Base(shell), func(t *testing.T) {
+			addr, home := startRealSSHD(t, shell)
+			me, _ := user.Current()
+			m := testManager(t, home)
+			term, _ := m.Open("c1", me.Username+"@"+addr, ByModel)
+			term.WaitConnected(context.Background())
+			within(t, 15*time.Second, "integrated", func() bool { return term.Info().Integrated })
+			settled(t, term)
 			run(t, term, "stty intr undef")
 			mark := filepath.Join(home, "PWNED")
 			if err := term.Type("touch "+mark+"; ", false, term.PersonGen()); err != nil {

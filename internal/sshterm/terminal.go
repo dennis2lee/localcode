@@ -682,6 +682,21 @@ func (t *Terminal) aroundCursor() (left, rest, below string) {
 	return cells(pos.Y, 0, pos.X), strings.TrimRight(cells(pos.Y, pos.X, w), " "), strings.TrimRight(strings.Join(rows, "\n"), "\n")
 }
 
+// rowReaches reports the cursor, or something on its row, at column col
+// or past it. Called with mu held.
+func (t *Terminal) rowReaches(col int) bool {
+	pos := t.emu.CursorPosition()
+	if pos.X >= col {
+		return true
+	}
+	for x := col; x < t.emu.Width(); x++ {
+		if c := t.emu.CellAt(x, pos.Y); c != nil && c.Content != "" && c.Content != " " {
+			return true
+		}
+	}
+	return false
+}
+
 // cursorLine is the text of the line the cursor is on. Called with mu
 // held.
 func (t *Terminal) cursorLine() string {
@@ -1234,6 +1249,13 @@ func (t *Terminal) modelMayAct() error {
 // matter (Ctrl+L draws it at the top). Called with mu held.
 func (t *Terminal) lineEmpty() bool {
 	if !t.promptKnown {
+		return false
+	}
+	// A prompt that leaves nothing on its line (PS1 empty, or ending in a
+	// line break) cannot be told from an empty row further down: a line
+	// that wrapped, or one with a line break in it, leaves the cursor on
+	// one. A line typed on at such a prompt is not judged by the screen.
+	if t.promptX == 0 && t.promptLeft == "" {
 		return false
 	}
 	left, rest, next := t.aroundCursor()
@@ -1865,10 +1887,12 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 			return nil
 		}
 		t.sendKey(ev)
-		// Enter, and the keys a shell reads as one. Ctrl+O sends the line
-		// too, and bash then puts the next line of its history on the
-		// prompt: nobody typed it, and it is there.
-		enter = endsLine(ev)
+		// Enter, and the keys a shell reads as one: not with Alt, which
+		// makes each of them another key (zsh puts a line break in the
+		// line, bash does nothing). Ctrl+O sends the line too, and bash
+		// then puts the next line of its history on the prompt: nobody
+		// typed it, and it is there.
+		enter = endsLine(ev) && ev.Mod&uv.ModAlt == 0
 		after = enter && ev.Mod&uv.ModCtrl != 0 && ev.Code == 'o'
 		// Ctrl+C drops the line, where the shell takes it. Ctrl+U does
 		// not, at the start of the line: whether it is empty is lineEmpty's
@@ -1885,25 +1909,22 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		paste = strings.ReplaceAll(strings.ReplaceAll(paste, "\r\n", "\r"), "\n", "\r")
 		// A shell that has not turned bracketed paste on reads a paste as
 		// typed, and a line end in it sends the line. One that has keeps
-		// the paste on the line, line ends and all: over several rows,
-		// which the row the cursor is on says nothing about.
-		lines := strings.Contains(paste, "\r")
-		enter = lines && !t.emu.BracketedPaste()
+		// the paste on the line, line ends and all.
+		enter = strings.Contains(paste, "\r") && !t.emu.BracketedPaste()
 		after = enter && !strings.HasSuffix(paste, "\r")
-		if lines && !enter {
-			t.promptKnown = false
-		}
 		t.emu.Paste(paste)
 	}
 	switch {
+	case enter && !atPrompt:
+		// Into a command that is running: that command's to read, and
+		// nothing to do with the line the shell will be at when it ends.
 	case enter:
 		// The line is sent, with whatever either typed on it. What came
-		// after the line end is on the next line, at a prompt: into a
-		// command that is running it is that command's to read.
+		// after the line end is on the next line.
 		t.personTyped = false
 		t.sent()
-		t.personAfter = after && atPrompt
-		if t.integrated && !t.running {
+		t.personAfter = after
+		if t.integrated {
 			t.running = true
 			t.runStarted = time.Now()
 		}
@@ -1961,6 +1982,12 @@ func (t *Terminal) applySize() {
 	// cursor was still as the end of the last command left it, that is no
 	// prompt drawn: the mark moves with it.
 	atMark := t.atMark()
+	// A narrower screen cuts rows off at its edge. With the person's text
+	// on the cursor's row past that edge, what is left can look like the
+	// prompt alone: the row says nothing about the line after that.
+	if t.personTyped && t.rowReaches(cols) {
+		t.promptKnown = false
+	}
 	t.emu.Resize(cols, rows)
 	if atMark {
 		t.markHere()

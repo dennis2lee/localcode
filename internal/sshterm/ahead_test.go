@@ -194,9 +194,8 @@ func TestTextAfterTheOthersCtrlCIsOnTheNextLine(t *testing.T) {
 // after it is on the line it was typed on, and goes when that line is run.
 // It is not carried to the prompt after.
 func TestTextAfterACtrlCTheShellDidNotTakeGoesWithItsLine(t *testing.T) {
-	oldWait, oldYield := interruptWait, personYield
-	interruptWait, personYield = 2*promptSettle, 50*time.Millisecond
-	defer func() { interruptWait, personYield = oldWait, oldYield }()
+	setWait(t, &interruptWait, 2*promptSettle)
+	setWait(t, &personYield, 50*time.Millisecond)
 	s := startServer(t, func(s *testServer) { s.noInterrupt = true })
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
@@ -221,9 +220,8 @@ func TestTextAfterACtrlCTheShellDidNotTakeGoesWithItsLine(t *testing.T) {
 // one more character of theirs on the line: on an empty line too, and
 // after they have erased what shows, until they send the line.
 func TestThePersonsCtrlCCountsWhenTheShellTakesIt(t *testing.T) {
-	oldWait, oldYield := interruptWait, personYield
-	interruptWait, personYield = 2*promptSettle, 50*time.Millisecond
-	defer func() { interruptWait, personYield = oldWait, oldYield }()
+	setWait(t, &interruptWait, 2*promptSettle)
+	setWait(t, &personYield, 50*time.Millisecond)
 	s := startServer(t, func(s *testServer) { s.noInterrupt = true })
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)

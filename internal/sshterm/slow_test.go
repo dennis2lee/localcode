@@ -29,9 +29,7 @@ const slowPrompt = 4 * promptSettle
 // test that can stall is not the place for a short one.
 func noEmptyPrompt(t *testing.T) {
 	t.Helper()
-	old := promptWait
-	promptWait = time.Minute
-	t.Cleanup(func() { promptWait = old })
+	setWait(t, &promptWait, time.Minute)
 }
 
 // The mark for the end of a command comes before the prompt, and a shell
@@ -89,9 +87,7 @@ func TestAnErasedLineIsEmptyAfterASlowPrompt(t *testing.T) {
 // did. It is taken as drawn once promptWait has passed with nothing drawn,
 // and not before.
 func TestAnEmptyPromptIsTakenAfterAWait(t *testing.T) {
-	old := promptWait
-	promptWait = 4 * promptSettle
-	defer func() { promptWait = old }()
+	setWait(t, &promptWait, 4*promptSettle)
 	s := startServer(t)
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
@@ -118,9 +114,10 @@ func TestAnEmptyPromptIsTakenAfterAWait(t *testing.T) {
 // yet: the line is theirs, and no run is typed into the shell's work on
 // its prompt.
 func TestALineTypedOnBeforeASlowPromptIsTheirs(t *testing.T) {
-	old := personYield
-	personYield = 50 * time.Millisecond
-	defer func() { personYield = old }()
+	// A prompt that draws nothing is taken as drawn after this long. The
+	// line has to be theirs past that too.
+	setWait(t, &promptWait, 2*promptSettle)
+	setWait(t, &personYield, 50*time.Millisecond)
 	s := startServer(t)
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
@@ -135,9 +132,6 @@ func TestALineTypedOnBeforeASlowPromptIsTheirs(t *testing.T) {
 	}
 	// And still theirs once a prompt that draws nothing would have been
 	// taken as drawn.
-	oldWait := promptWait
-	promptWait = 2 * promptSettle
-	defer func() { promptWait = oldWait }()
 	time.Sleep(promptWait + 2*personYield)
 	if _, err := term.Run(context.Background(), "echo early", time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
 		t.Fatalf("run after the wait for an empty prompt, after the person typed: %v", err)
@@ -248,9 +242,7 @@ func TestRunWaitsForASlowAnswerToCtrlC(t *testing.T) {
 // again is what the model is told for text it never tried to clear, and
 // it has just done that.
 func TestACtrlCThatBringsNoPromptIsSaidSo(t *testing.T) {
-	old := interruptWait
-	interruptWait = 2 * promptSettle
-	defer func() { interruptWait = old }()
+	setWait(t, &interruptWait, 2*promptSettle)
 	s := startServer(t, func(s *testServer) { s.noInterrupt = true })
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
