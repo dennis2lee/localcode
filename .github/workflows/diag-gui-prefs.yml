@@ -20,7 +20,9 @@ jobs:
       matrix:
         include:
           - ref: main
-            only: 'port-reserved reopen-while-closing config-with-comment'
+            only: ''
+          - ref: diag/gui-prefs-fix
+            only: ''
     steps:
       - uses: actions/checkout@v4
         with:
