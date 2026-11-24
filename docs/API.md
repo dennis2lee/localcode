@@ -170,6 +170,14 @@ and reads the set back before it draws, because the window's
 The file is `~/.localcode/window-state.json`. A browser tab calls neither
 route.
 
+Three names hold several items each: `localcode.panelWidths`,
+`localcode.panelViews` and `localcode.collapsedGroups`. The page writes
+each whole. It calls `GET` again before it changes one item, and starts
+from the value the file has then, so the items a second open window wrote
+are sent back unchanged. The read and the write are two requests, and
+each window has its own daemon: two windows that change the same name
+within those two requests keep the value written last.
+
 Both routes pass the SSH request guard (see SSH below) and answer `403`
 when it refuses.
 

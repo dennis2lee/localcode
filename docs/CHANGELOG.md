@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+Two desktop windows open at once no longer undo each other's panel and group changes.
+
+**Fixed**
+
+* One conversation's panels changed in a desktop window no longer putting back the panels a second open window saved for another conversation
+* The same for one panel's width or hidden state against another panel's, and for one group's fold against another group's
+* A conversation opened in a second window shown with the panels the first window left it, and no longer written down as opened for the first time
+* The conversation forgotten at the limit of 200 now the oldest in the file, not the oldest the window had read
+* The fold of a group deleted or renamed in one window dropped or carried when another window made it
+* A click on a group's header folding or opening it as that window shows it
+
 ## v0.179.0
 
 Settings made in the desktop window are still there after it is closed and opened again.

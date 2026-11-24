@@ -2104,7 +2104,7 @@ Sessions can be put into named groups. Which groups exist, what order they are d
 | Rename a group | **rename** on the group's header | `POST /api/sessions/groups` with the new list *and* `{"rename": {"from", "to"}}` |
 | Reorder the groups | Drag a group's header onto another group's header. It lands above that group when it came from below and below it, after its last card, when it came from above. A line shows which. | `GET /api/sessions/groups` to compare, then `POST /api/sessions/groups` with the whole list in the new order. Cards keep the order they had. |
 | Delete a group | **delete** on the group's header | `POST /api/sessions/groups` with the list minus that name |
-| Fold one shut | Click the group's header | Browser-local; nothing is sent |
+| Fold one shut | Click the group's header | None. Kept by the browser, and by the desktop window through `PUT /api/window/state`: see [Settings](#settings). |
 
 While a filter is on, neither cards nor groups can be dragged: the panel shows only part of the list, and a move among some of the rows would have no clear meaning for the rest. Like a card, a group is not redrawn while it is carried.
 
@@ -2249,7 +2249,10 @@ Deleting `window-state.json` while the window is closed does not reset these set
 
 Limits of the desktop window's file:
 
-* Two windows open at once share it. Each setting is kept under its own name, so two windows changing different settings do not undo each other. The panel widths, the panels each conversation shows, and the folded groups are one value each: when both windows change the same one, the value written last is kept.
+* Two windows open at once share it. A setting changed in one window is not undone by a different setting changed in the other. The same holds inside the three settings that hold several items: one panel's width, one conversation's panels, one group's fold. A window reads the file again before it changes one of those items. When both windows change the same setting or the same item, the change written last is kept.
+* A change to one of those items is made from the window's own copy in two cases: the daemon does not answer that read, or an earlier change to the same setting from that window is not written yet. Items another window changed after that copy was read are then put back.
+* A window that changes one of those items takes what the other window wrote for the rest. It shows them the next time it draws them: a group the other window folded is folded here after the next fold made here, and a conversation opens with the panels the other window left it.
+* Each window has its own daemon. A group made in one window is not listed in another until that one is started again. That window leaves the fold of such a group alone while its page stays open. A reload of its page drops the fold.
 * A change is written as it is made, one request at a time. A second change made while the first is still being written, with the window ended in that same moment, is not written.
 * The window asks for the file three times when its page starts. With no answer, or with a file that is there and cannot be read, the page writes nothing to the file while it stays open, and the settings changed in it are not there the next time. A file that cannot be read is never replaced.
 

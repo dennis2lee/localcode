@@ -636,9 +636,12 @@ test('kept.js survives storage that refuses', () => {
 
 // A daemon's file, and windows on it. Each window is its own address, so
 // its own localStorage; open() is a page load there: kept.js first, then
-// the page.
-function sharedFile() {
-  const file = { kept: null };
+// the page. An open page asks for the file again before it changes a
+// value that holds several items (readShared in js/prefs.js), with the
+// same synchronous request: asked lists those, and answer is what the
+// daemon says to them, in the forms runKept takes.
+function sharedFile(initial = null) {
+  const file = { kept: initial };
   const answer = () => ({ available: true, kept: file.kept === null ? null : { ...file.kept } });
   const put = (body) => {
     if (file.kept === null) file.kept = {};
@@ -648,16 +651,30 @@ function sharedFile() {
     }
     return { status: 204 };
   };
-  const window_ = () => {
+  const window_ = (opts = {}) => {
     const st = storage();
-    return {
+    const win = {
       stored: st.map,
+      asked: [],
+      answer,
       async open() {
         const r = runKept({ store: st, answer: answer() });
+        class Ask {
+          open(method, url, isAsync) { this.asking = { method, url, isAsync }; }
+          send() {
+            win.asked.push(this.asking);
+            const a = win.answer();
+            if (typeof a === 'function') return a(this);
+            if (typeof a === 'number') { this.status = a; this.responseText = ''; return undefined; }
+            this.status = 200;
+            this.responseText = typeof a === 'string' ? a : JSON.stringify(a);
+            return undefined;
+          }
+        }
         return load({
           localStorage: Object.fromEntries(st.map),
-          globals: { lcGUI: true, localcodeKept: r.kept },
-          routes: { [`PUT ${ROUTE}`]: put },
+          globals: { lcGUI: true, localcodeKept: r.kept, XMLHttpRequest: Ask },
+          routes: { [`PUT ${ROUTE}`]: put, ...(opts.routes || {}) },
         }).then((app) => {
           // The page's storage is the harness's own Map from here on:
           // carry what it writes back to this window's, as a real
@@ -667,8 +684,9 @@ function sharedFile() {
         });
       },
     };
+    return win;
   };
-  return { file, window: window_ };
+  return { file, put, window: window_ };
 }
 
 test('a setting made in one window is there in a window on another address', async () => {
@@ -742,6 +760,529 @@ test('the first start after the upgrade keeps what the window already had, and t
   await b.settle();
   assert.equal(b.storage.get('localcode.textScale'), '1.25');
   assert.match(b.storage.get('localcode.face.doc'), /Georgia/);
+});
+
+// ---- a value that holds several items, changed in two windows
+//
+// The panel widths, the panels each conversation shows and the folded
+// groups are one value each, written whole. A window that changed one
+// item starting from the copy it read when its page loaded put every
+// other item back to what it was then.
+
+const open = (app, id) => app.selectSession(id, 'general-purpose', '/tmp/workspace');
+const kept = (daemon, name) => JSON.parse(daemon.file.kept[name]);
+const viewsOf = (daemon) => Object.fromEntries(kept(daemon, 'localcode.panelViews'));
+
+test('hiding a panel for one conversation does not undo what another window hid for another', async () => {
+  // As it was found: two pages on one file, each on its own conversation.
+  const daemon = sharedFile();
+  const a = await daemon.window().open();
+  const b = await daemon.window().open();
+  open(a, 'sess-1');
+  open(b, 'sess-2');
+  await a.settle();
+  await b.settle();
+
+  a.el('toggle-right').click();
+  await a.settle();
+  b.el('toggle-right').click();
+  await b.settle();
+  assert.deepEqual(viewsOf(daemon), { 'sess-1': ['right'], 'sess-2': ['right'] });
+
+  // And a page that starts now shows the first conversation without it.
+  const fresh = await daemon.window().open();
+  await fresh.settle();
+  assert.deepEqual(Object.fromEntries(JSON.parse(fresh.storage.get('localcode.panelViews')))['sess-1'], ['right']);
+  assert.equal(fresh.el('right-panel').classList.contains('collapsed'), true, 'a fresh page shows the panel the first window hid');
+});
+
+test('a conversation opened in a second window shows the panels the first window left it with', async () => {
+  // Read from the copy the second page started with, the conversation
+  // looked like one opened for the first time, and was written down with
+  // the panels as they stood: the first window's choice was gone.
+  const daemon = sharedFile();
+  const a = await daemon.window().open();
+  const b = await daemon.window().open();
+  open(a, 'sess-2');
+  a.el('toggle-right').click();
+  await a.settle();
+
+  open(b, 'sess-2');
+  await b.settle();
+  assert.equal(b.el('right-panel').classList.contains('collapsed'), true);
+  assert.deepEqual(viewsOf(daemon)['sess-2'], ['right']);
+});
+
+test('a conversation deleted in one window does not come back with another window\'s change', async () => {
+  const daemon = sharedFile();
+  const a = await daemon.window().open();
+  open(a, 'sess-2');
+  await a.settle();
+  const b = await daemon.window().open();
+  await b.settle();
+
+  a.forgetPanels('sess-2');
+  await a.settle();
+  assert.deepEqual(Object.keys(viewsOf(daemon)), ['sess-1']);
+  b.el('toggle-right').click();
+  await b.settle();
+  assert.deepEqual(viewsOf(daemon), { 'sess-1': ['right'] });
+});
+
+test('at the limit the conversation forgotten is the oldest in the file, not the oldest a page knew', async () => {
+  // The limit full, the conversation on screen among them so a page load
+  // forgets nothing.
+  const full = [['sess-1', []]];
+  for (let i = 1; i < 200; i++) full.push([`old-${i}`, ['ssh']]);
+  const daemon = sharedFile({ 'localcode.panelViews': JSON.stringify(full) });
+  const a = await daemon.window().open();
+  const b = await daemon.window().open();
+  await a.settle();
+  await b.settle();
+  assert.equal(kept(daemon, 'localcode.panelViews').length, 200);
+  assert.equal(kept(daemon, 'localcode.panelViews')[0][0], 'old-1');
+
+  // The first window opens the one opened longest ago, which makes it
+  // the newest. The second, which read the file before that, opens a
+  // conversation nobody has opened.
+  open(a, 'old-1');
+  await a.settle();
+  open(b, 'sess-2');
+  await b.settle();
+  const now = viewsOf(daemon);
+  assert.equal(Object.keys(now).length, 200);
+  assert.deepEqual(now['old-1'], ['ssh'], 'the conversation one window had just opened was forgotten by the other');
+  assert.equal('old-2' in now, false, 'the oldest in the file was not the one forgotten');
+  assert.deepEqual(now['sess-2'], []);
+});
+
+// A drag of the session panel's handle to 400 pixels.
+function dragLeftTo400(app) {
+  app.el('center').style.width = '4000px';
+  app.el('left-panel').style.width = '260px';
+  app.el('resize-left').fire('pointerdown', { button: 0, clientX: 260 });
+  app.doc.fire('pointermove', { clientX: 400 });
+  app.doc.fire('pointerup', { clientX: 400 });
+}
+
+test('a panel dragged in one window keeps its width when another window changes a different panel', async () => {
+  const daemon = sharedFile();
+  const a = await daemon.window().open();
+  const b = await daemon.window().open();
+  await a.settle();
+  await b.settle();
+
+  dragLeftTo400(a);
+  await a.settle();
+  b.el('toggle-left').click();
+  await b.settle();
+  let widths = kept(daemon, 'localcode.panelWidths');
+  assert.equal(widths.left, 400, 'the width dragged in the first window was put back by the second');
+  assert.equal(widths.leftCollapsed, true);
+
+  // And a width put back to the stylesheet's in one window is not
+  // brought back by the copy another window still holds.
+  a.el('resize-left').fire('dblclick');
+  await a.settle();
+  b.el('toggle-left').click();
+  await b.settle();
+  widths = kept(daemon, 'localcode.panelWidths');
+  assert.equal(widths.left, null, 'a width that was reset came back from the other window\'s copy');
+  assert.equal(widths.leftCollapsed, false);
+});
+
+const GROUPED = [
+  { id: 'sess-1', title: 'ungrouped', agent: 'general-purpose', workspace: '/tmp/workspace' },
+  { id: 'g-work', title: 'work task', agent: 'general-purpose', workspace: '/tmp/workspace', group: 'work' },
+  { id: 'g-home', title: 'home notes', agent: 'general-purpose', workspace: '/tmp/workspace', group: 'home' },
+];
+const withGroups = (names = ['work', 'home'], sessions = GROUPED) => ({
+  routes: {
+    'GET /api/sessions': sessions,
+    'GET /api/sessions/groups': { names },
+    'POST /api/sessions/groups': { status: 204 },
+  },
+});
+const folds = (daemon) => kept(daemon, 'localcode.collapsedGroups');
+const header = (app, name) => Array.from(app.el('session-list').querySelectorAll('.session-group-header'))
+  .find((h) => h.querySelector('.group-name').textContent === name);
+const shut = (app, name) => header(app, name).querySelector('.group-toggle').textContent === '▸';
+
+test('a group folded in one window stays folded when another window folds a different group', async () => {
+  const daemon = sharedFile();
+  const a = await daemon.window(withGroups()).open();
+  const b = await daemon.window(withGroups()).open();
+  await a.settle();
+  await b.settle();
+
+  header(a, 'work').fire('click');
+  await a.settle();
+  header(b, 'home').fire('click');
+  await b.settle();
+  assert.deepEqual(folds(daemon).sort(), ['home', 'work']);
+
+  // And one opened again in the first window is not folded again by the
+  // copy the second holds, which has it folded by now.
+  header(a, 'work').fire('click');
+  await a.settle();
+  assert.deepEqual(folds(daemon), ['home'], 'the first window starts from the file too, and keeps the second\'s fold');
+  header(b, 'home').fire('click');
+  await b.settle();
+  assert.deepEqual(folds(daemon), [], 'a group opened in the first window was folded again by the second');
+});
+
+test('a click folds or opens the group as this window shows it, whatever another window did to it', async () => {
+  const daemon = sharedFile();
+  const a = await daemon.window(withGroups()).open();
+  const b = await daemon.window(withGroups()).open();
+  await a.settle();
+  await b.settle();
+
+  // Folded in the first. The second still shows it open, and a click on
+  // it there is a click to fold it.
+  header(a, 'work').fire('click');
+  await a.settle();
+  assert.equal(shut(b, 'work'), false);
+  header(b, 'work').fire('click');
+  await b.settle();
+  assert.equal(shut(b, 'work'), true, 'the click changed nothing in the window it was made in');
+  assert.deepEqual(folds(daemon), ['work']);
+});
+
+test('a fold another window made for a group this window lists is dropped when the group goes', async () => {
+  // The fold reaches this page from the file, not from a click here. The
+  // group is one it has been given, so the group gone from its list is a
+  // group that was deleted, and the fold is not left behind.
+  const daemon = sharedFile();
+  const a = await daemon.window(withGroups()).open();
+  const b = await daemon.window(withGroups()).open();
+  await a.settle();
+  await b.settle();
+  header(a, 'work').fire('click');
+  await a.settle();
+  header(b, 'home').fire('click');
+  await b.settle();
+  assert.deepEqual(folds(daemon), ['work', 'home']);
+
+  b.routes['GET /api/sessions/groups'] = { names: ['home'] };
+  await b.loadSessions();
+  await b.settle();
+  assert.deepEqual(folds(daemon), ['home']);
+});
+
+test('a fold made in another window for a group this window was never given is left alone', async () => {
+  // Each window has its own daemon, and a group made through one is not
+  // known to the other until it starts again. The fold is in the file
+  // they share.
+  const daemon = sharedFile();
+  const a = await daemon.window(withGroups(['work', 'home', 'later'], [
+    ...GROUPED, { id: 'g-later', title: 'made later', agent: 'general-purpose', workspace: '/tmp/workspace', group: 'later' },
+  ])).open();
+  const b = await daemon.window(withGroups()).open();
+  await a.settle();
+  await b.settle();
+
+  header(a, 'later').fire('click');
+  await a.settle();
+  header(b, 'home').fire('click');
+  await b.settle();
+  assert.deepEqual(folds(daemon).sort(), ['home', 'later'], 'the second window\'s click dropped a fold for a group it cannot see');
+  // The second window's list is read again, still without the group.
+  await b.loadSessions();
+  await b.settle();
+  assert.deepEqual(folds(daemon).sort(), ['home', 'later'], 'the second window\'s list dropped a fold for a group it cannot see');
+
+  // Once it has been given the group, the fold is one it can judge: the
+  // group gone from its list after that is a group that was deleted.
+  b.routes['GET /api/sessions/groups'] = { names: ['work', 'home', 'later'] };
+  await b.loadSessions();
+  await b.settle();
+  assert.deepEqual(folds(daemon).sort(), ['home', 'later']);
+  b.routes['GET /api/sessions/groups'] = { names: ['work', 'home'] };
+  await b.loadSessions();
+  await b.settle();
+  assert.deepEqual(folds(daemon), ['home']);
+});
+
+test('dropping the fold of a group that is gone leaves the folds another window made', async () => {
+  // The second window holds a fold for a group deleted since, and drops
+  // it when its list is read. Written from its own copy, that took the
+  // first window's fold with it.
+  const daemon = sharedFile({ 'localcode.collapsedGroups': JSON.stringify(['deleted since']) });
+  const b = await daemon.window(withGroups(['work', 'home', 'deleted since'])).open();
+  await b.settle();
+  const a = await daemon.window(withGroups(['work', 'home', 'deleted since'])).open();
+  await a.settle();
+
+  header(a, 'work').fire('click');
+  await a.settle();
+  assert.deepEqual(folds(daemon), ['deleted since', 'work']);
+  b.routes['GET /api/sessions/groups'] = { names: ['work', 'home'] };
+  await b.loadSessions();
+  await b.settle();
+  assert.deepEqual(folds(daemon), ['work']);
+
+  // With nothing to drop, a list read again does not ask for the file:
+  // the list is read on every change to any conversation.
+  const third = daemon.window(withGroups());
+  const c = await third.open();
+  await c.settle();
+  const n = third.asked.length;
+  await c.loadSessions();
+  await c.settle();
+  assert.equal(third.asked.length, n, 'every refresh of the session list asked for the file');
+});
+
+test('a group deleted or renamed in one window takes the fold another window made', async () => {
+  const daemon = sharedFile();
+  const a = await daemon.window(withGroups()).open();
+  const b = await daemon.window(withGroups()).open();
+  const c = await daemon.window(withGroups()).open();
+  await a.settle();
+  await b.settle();
+  await c.settle();
+  header(a, 'work').fire('click');
+  header(a, 'home').fire('click');
+  await a.settle();
+  assert.deepEqual(folds(daemon).sort(), ['home', 'work']);
+
+  // Deleted in the second, whose own copy has neither folded: nothing in
+  // it says there is a fold to drop.
+  b.routes['GET /api/sessions/groups'] = { names: ['work'] };
+  const deleted = b.internals.promptDeleteGroup('home');
+  await b.settle();
+  b.el('prompt-ok').click();
+  await deleted;
+  await b.settle();
+  assert.deepEqual(folds(daemon), ['work'], 'the fold of a deleted group stayed in the file');
+
+  // And renamed in a third, whose own copy has nothing folded either.
+  c.routes['GET /api/sessions/groups'] = { names: ['job'] };
+  const renamed = c.internals.promptRenameGroup('work');
+  await c.settle();
+  c.el('prompt-input').value = 'job';
+  c.el('prompt-ok').click();
+  await renamed;
+  await c.settle();
+  assert.deepEqual(folds(daemon), ['job'], 'the fold did not go to the new name');
+});
+
+// ---- the read that starts such a change (readShared in js/prefs.js)
+
+test('a browser tab asks the daemon for nothing before a change', async () => {
+  // Tabs share one localStorage, which is already the newest copy.
+  const asked = [];
+  class Ask {
+    open(...args) { asked.push(args); }
+    send() { throw new Error('a browser tab made the request'); }
+  }
+  const app = await load({ globals: { XMLHttpRequest: Ask }, localStorage: { 'localcode.panelWidths': JSON.stringify({ left: 300 }) } });
+  app.el('toggle-right').click();
+  open(app, 'sess-2');
+  await app.settle();
+  assert.deepEqual(asked, []);
+  assert.equal(app.readShared('localcode.panelWidths'), app.storage.get('localcode.panelWidths'));
+  assert.deepEqual(JSON.parse(app.storage.get('localcode.panelWidths')), { left: 300, rightCollapsed: true });
+  assert.deepEqual(writes(app), []);
+});
+
+test('a window that was not given the file at the start asks for nothing before a change', async () => {
+  // js/kept.js got no answer, so this page writes nothing to the file,
+  // and has no use for what the file holds.
+  const asked = [];
+  class Ask {
+    open(...args) { asked.push(args); }
+    send() { throw new Error('a page that writes nothing made the request'); }
+  }
+  const app = await load({ globals: { lcGUI: true, XMLHttpRequest: Ask }, routes: { [`PUT ${ROUTE}`]: { status: 204 } } });
+  app.el('toggle-right').click();
+  await app.settle();
+  assert.deepEqual(asked, []);
+  assert.deepEqual(writes(app), []);
+  assert.equal(JSON.parse(app.storage.get('localcode.panelWidths')).rightCollapsed, true);
+});
+
+test('a change asks for the file once, however many values it changes', async () => {
+  // A toggle writes the window's own record and the conversation's.
+  const daemon = sharedFile();
+  const win = daemon.window();
+  const app = await win.open();
+  await app.settle();
+  const n = win.asked.length;
+  app.el('toggle-right').click();
+  assert.equal(win.asked.length - n, 1);
+  assert.deepEqual(win.asked[n], { method: 'GET', url: ROUTE, isAsync: false }, 'the answer has to be in hand before the change is made');
+  await app.settle();
+  // The next change is another turn, and asks again.
+  app.el('toggle-right').click();
+  assert.equal(win.asked.length - n, 2);
+});
+
+test('a change still on its way to the daemon is not undone by the file it has not reached', async () => {
+  // The first change is with the daemon, and the file does not have it.
+  // A second change to another item of the same value starts from this
+  // page's copy: started from the file's, it would drop the first.
+  const daemon = sharedFile({ 'localcode.panelWidths': JSON.stringify({ left: 300 }) });
+  let hold = false;
+  const held = [];
+  const win = daemon.window({
+    routes: {
+      [`PUT ${ROUTE}`]: (body) => (hold
+        ? new Promise((resolve) => { held.push(() => resolve(daemon.put(body))); })
+        : daemon.put(body)),
+    },
+  });
+  const app = await win.open();
+  await app.settle();
+
+  hold = true;
+  app.el('toggle-right').click();
+  await app.settle();
+  assert.equal(held.length, 1);
+  assert.equal(kept(daemon, 'localcode.panelWidths').rightCollapsed, undefined, 'the first change is not held back; this test reads the wrong thing');
+  dragLeftTo400(app);
+  await app.settle();
+  // The first is taken and the second, made meanwhile, goes out and is
+  // held in its turn. The file has the first only, so a third change
+  // still starts from this page's copy.
+  held.shift()();
+  await app.settle();
+  assert.equal(held.length, 1);
+  assert.equal(kept(daemon, 'localcode.panelWidths').left, 300, 'the second change is not held back; this test reads the wrong thing');
+  app.el('toggle-left').click();
+  await app.settle();
+  hold = false;
+  while (held.length) held.shift()();
+  await app.settle();
+  const widths = kept(daemon, 'localcode.panelWidths');
+  assert.equal(widths.rightCollapsed, true, 'the change that was on its way was undone by the one after it');
+  assert.equal(widths.left, 400, 'a change made while another was on its way was undone by the one after it');
+  assert.equal(widths.leftCollapsed, true);
+
+  // Taken by the daemon, the name is the file's to answer for again.
+  daemon.put({ 'localcode.panelWidths': JSON.stringify({ ...widths, ssh: 500 }) });
+  app.el('toggle-right').click();
+  await app.settle();
+  assert.equal(kept(daemon, 'localcode.panelWidths').ssh, 500);
+  assert.equal(kept(daemon, 'localcode.panelWidths').rightCollapsed, false);
+});
+
+test('a change the daemon refused stays in the page, which goes on from its own copy', async () => {
+  // Nothing the page writes is refused today. If something were, the
+  // file would never have it, and a page that went back to the file's
+  // copy before each change would forget each one as it made the next.
+  const daemon = sharedFile({ 'localcode.panelWidths': JSON.stringify({ left: 300 }) });
+  let refuse = false;
+  const win = daemon.window({
+    routes: { [`PUT ${ROUTE}`]: (body) => (refuse ? { status: 413, body: { error: 'too large' } } : daemon.put(body)) },
+  });
+  const app = await win.open();
+  await app.settle();
+  refuse = true;
+  app.el('toggle-right').click();
+  await app.settle();
+  dragLeftTo400(app);
+  await app.settle();
+  const mine = JSON.parse(app.storage.get('localcode.panelWidths'));
+  assert.equal(mine.rightCollapsed, true);
+  assert.equal(mine.left, 400);
+});
+
+test('what a page is handing over is not replaced by a file another window began meanwhile', async () => {
+  // The page found nothing kept and is sending what its address holds.
+  // Before that is taken, another window writes the first setting, and
+  // the file is there without any of this page's.
+  const daemon = sharedFile();
+  let hold = true;
+  const held = [];
+  const win = daemon.window({
+    routes: {
+      [`PUT ${ROUTE}`]: (body) => (hold
+        ? new Promise((resolve) => { held.push(() => resolve(daemon.put(body))); })
+        : daemon.put(body)),
+    },
+  });
+  win.stored.set('localcode.panelWidths', JSON.stringify({ left: 300 }));
+  const app = await win.open();
+  await app.settle();
+  assert.equal(held.length, 1, 'nothing was handed over; this test reads the wrong thing');
+  daemon.put({ 'localcode.zoom': '1.1' });
+
+  app.el('toggle-right').click();
+  await app.settle();
+  hold = false;
+  while (held.length) held.shift()();
+  await app.settle();
+  const widths = kept(daemon, 'localcode.panelWidths');
+  assert.equal(widths.left, 300, 'a width the page was handing over was dropped for a file that did not have it yet');
+  assert.equal(widths.rightCollapsed, true);
+});
+
+test('with no answer from the daemon a change is made from what the page holds, and still written', async () => {
+  for (const [name, answer] of Object.entries({
+    'a request that throws': () => { throw new Error('NetworkError'); },
+    'a daemon that failed': 500,
+    'a refusal': 403,
+    'a body that is not JSON': '<html>',
+    'a body that is JSON and not an object': 'null',
+    'a daemon that keeps nothing': { available: false, kept: null },
+    'a daemon that keeps nothing and sends something': { available: false, kept: { 'localcode.panelWidths': '{"left":1}' } },
+    'a failure with a body that reads as an answer': (xhr) => {
+      xhr.status = 500;
+      xhr.responseText = JSON.stringify({ available: true, kept: { 'localcode.panelWidths': '{"left":1}' } });
+    },
+    'a file not written yet': { available: true, kept: null },
+    'an array': { available: true, kept: ['localcode.panelWidths'] },
+    'a value that is not a string': { available: true, kept: { 'localcode.panelWidths': { left: 1 }, 'localcode.panelViews': 7 } },
+  })) {
+    const daemon = sharedFile({ 'localcode.panelWidths': JSON.stringify({ left: 300 }) });
+    const win = daemon.window();
+    const app = await win.open();
+    await app.settle();
+    const n = win.asked.length;
+    win.answer = () => answer;
+    app.el('toggle-right').click();
+    await app.settle();
+    assert.equal(win.asked.length - n, 1, `${name}: asked again in the same turn`);
+    const widths = kept(daemon, 'localcode.panelWidths');
+    assert.equal(widths.left, 300, `${name}: the page's own copy was not what the change started from`);
+    assert.equal(widths.rightCollapsed, true, `${name}: the change was not written`);
+    assert.deepEqual(viewsOf(daemon)['sess-1'], ['right'], `${name}: the conversation's panels were not written`);
+  }
+});
+
+test('a name the file does not have is not brought back by the copy a page holds', async () => {
+  // The rule js/kept.js has at the start of a page: the file is the
+  // record, and a name it does not have is one that was forgotten.
+  const daemon = sharedFile();
+  const win = daemon.window(withGroups());
+  const app = await win.open();
+  await app.settle();
+  header(app, 'work').fire('click');
+  await app.settle();
+  assert.deepEqual(folds(daemon), ['work']);
+
+  daemon.put({ 'localcode.collapsedGroups': null });
+  assert.equal(app.readShared('localcode.collapsedGroups'), null);
+  assert.equal(app.storage.has('localcode.collapsedGroups'), false);
+  header(app, 'home').fire('click');
+  await app.settle();
+  assert.deepEqual(folds(daemon), ['home']);
+});
+
+test('the read that starts a change takes the file\'s value even when storage refuses it', async () => {
+  const daemon = sharedFile({ 'localcode.collapsedGroups': JSON.stringify(['work']) });
+  const win = daemon.window();
+  const app = await win.open();
+  await app.settle();
+  daemon.put({ 'localcode.collapsedGroups': JSON.stringify(['work', 'home']) });
+  app.storage.set = () => { throw new Error('QuotaExceededError'); };
+  assert.equal(app.readShared('localcode.collapsedGroups'), JSON.stringify(['work', 'home']));
+  // And asks for nothing under a name that is not the page's own.
+  const n = win.asked.length;
+  await app.settle();
+  assert.equal(app.readShared('smart_agent'), null);
+  assert.equal(win.asked.length, n);
 });
 
 // ---- the rules that hold it together
