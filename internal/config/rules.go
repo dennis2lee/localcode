@@ -210,6 +210,26 @@ func (t ToolPermission) resolveFor(subject, literal string) (Decision, bool) {
 	return last, matched
 }
 
+// resolveFolded is resolveFor with a glob matched in any case, for a
+// tool whose subject is read without regard to case: PowerShell finds
+// New-Item as new-item, and a rule "New-Item *" has to see both. A
+// literal rule still compares as written.
+func (t ToolPermission) resolveFolded(subject, literal string) (Decision, bool) {
+	if t.Flat != "" {
+		return t.Flat, true
+	}
+	var last Decision
+	matched := false
+	folded := strings.ToLower(subject)
+	for _, r := range t.Rules {
+		if (r.Literal && r.Match == literal) || (!r.Literal && globMatch(strings.ToLower(r.Match), folded)) {
+			last = r.Decision
+			matched = true
+		}
+	}
+	return last, matched
+}
+
 // addRule appends rule to m[tool], first promoting a legacy flat decision
 // to an explicit "*" rule, and refusing an exact duplicate so repeated
 // approvals don't grow the list forever. Shared by the runtime
@@ -632,8 +652,13 @@ func (c *Config) ResolvePermissionFor(ctx context.Context, toolName, subject str
 			return DecisionAllow
 		}
 		// Never POSIX: PowerShell's ";", "|", "&&" and "&" are not bash's,
-		// and its quoting is its own.
-		return c.resolveShellCommandUnder(context.WithValue(ctx, shellToolKey{}, PowerShellToolName), subject, staticRequiresPermission, false)
+		// and its quoting is its own. A deny is also looked for where
+		// PowerShell starts a command and bash does not (powershellPieces).
+		pctx := context.WithValue(ctx, shellToolKey{}, PowerShellToolName)
+		if c.powershellDenied(pctx, subject, staticRequiresPermission) {
+			return DecisionDeny
+		}
+		return c.resolveShellCommandUnder(pctx, subject, staticRequiresPermission, false)
 	}
 	return c.resolveOne(ctx, toolName, subject, staticRequiresPermission)
 }
@@ -691,7 +716,11 @@ func resolveRules(perms map[string]ToolPermission, toolName, subject, literal st
 	// somebody who wrote "write_file" meant write_file, whatever an
 	// opencode key covering it also says.
 	if tp, ok := perms[toolName]; ok {
-		if d, matched := tp.resolveFor(subject, literal); matched {
+		match := tp.resolveFor
+		if toolName == PowerShellToolName {
+			match = tp.resolveFolded
+		}
+		if d, matched := match(subject, literal); matched {
 			return d, true
 		}
 	}
@@ -973,6 +1002,9 @@ var wideProgramNames = map[string]bool{
 	"eval": true, "exec": true, "xargs": true, "env": true,
 	"start": true, "start-process": true, "saps": true, "call": true,
 	"invoke-expression": true, "iex": true, "invoke-command": true, "icm": true,
+	// Dot-sourcing runs what follows it: ". .\helper.ps1" granted as
+	// ". *" covered ". New-Item marker".
+	".": true, "source": true, "start-job": true, "sajb": true,
 	"wsl": true, "mshta": true, "rundll32": true, "regsvr32": true,
 	"forfiles": true, "wmic": true, "schtasks": true, "msiexec": true,
 	"invoke-item": true, "ii": true,

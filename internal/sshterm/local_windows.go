@@ -50,10 +50,13 @@ func startPseudoConsole(argv []string, dir string, cols, rows int) (LocalProcess
 	windows.CloseHandle(outW)
 	in := os.NewFile(uintptr(inW), "pseudo-console-input")
 	out := os.NewFile(uintptr(outR), "pseudo-console-output")
+	// Before the shell starts: nothing reads the output, and closing a
+	// pseudo console waits for its last frame to be read before Windows
+	// 11 24H2, or for the pipe to break. The pipe is closed first.
 	fail := func(err error) (LocalProcess, error) {
-		windows.ClosePseudoConsole(hpc)
 		in.Close()
 		out.Close()
+		windows.ClosePseudoConsole(hpc)
 		return nil, err
 	}
 
@@ -121,6 +124,10 @@ type conpty struct {
 	out  *os.File
 	proc windows.Handle
 
+	// mu keeps Resize off a pseudo console that Close has begun to
+	// close: the handle is freed by ClosePseudoConsole.
+	mu        sync.Mutex
+	closed    bool
 	closeOnce sync.Once
 	waitOnce  sync.Once
 	code      int
@@ -131,6 +138,11 @@ func (c *conpty) Read(p []byte) (int, error)  { return c.out.Read(p) }
 func (c *conpty) Write(p []byte) (int, error) { return c.in.Write(p) }
 
 func (c *conpty) Resize(cols, rows int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errors.New("the pseudo console is closed")
+	}
 	return windows.ResizePseudoConsole(c.hpc, windows.Coord{X: int16(cols), Y: int16(rows)})
 }
 
@@ -159,6 +171,9 @@ func (c *conpty) Wait() (int, error) {
 // output ends, and the call is not waited for here.
 func (c *conpty) Close() error {
 	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
 		done := make(chan struct{})
 		go func() {
 			windows.ClosePseudoConsole(c.hpc)

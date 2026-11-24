@@ -346,14 +346,24 @@ func TestCtrlCToARunningCommandIsNoTextTypedAhead(t *testing.T) {
 	}
 }
 
-func TestSignalKeysAreTheThreeATerminalTakes(t *testing.T) {
-	for keys, want := range map[string]bool{"ctrl+c": true, "ctrl+\\": true, "ctrl+z": true, "ctrl+d": false, "c": false, "Enter": false, "ctrl+x": false} {
+// A remote shell's terminal takes three keys as signals; a Windows
+// console only Ctrl+C (measured: see signalKey).
+func TestSignalKeysAreTheOnesATerminalTakes(t *testing.T) {
+	remote := &Terminal{m: &Manager{}}
+	local := &Terminal{m: &Manager{opts: Options{Local: &LocalShell{}}}}
+	for keys, want := range map[string][2]bool{
+		"ctrl+c": {true, true}, "ctrl+\\": {true, false}, "ctrl+z": {true, false},
+		"ctrl+d": {false, false}, "c": {false, false}, "Enter": {false, false}, "ctrl+x": {false, false},
+	} {
 		evs, err := ParseKeys(keys)
 		if err != nil {
 			t.Fatalf("%s: %v", keys, err)
 		}
-		if got := signalKey(evs[0]); got != want {
-			t.Errorf("signalKey(%s) = %v, want %v", keys, got, want)
+		if got := remote.signalKey(evs[0]); got != want[0] {
+			t.Errorf("remote signalKey(%s) = %v, want %v", keys, got, want[0])
+		}
+		if got := local.signalKey(evs[0]); got != want[1] {
+			t.Errorf("local signalKey(%s) = %v, want %v", keys, got, want[1])
 		}
 	}
 }

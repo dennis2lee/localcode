@@ -254,7 +254,10 @@ func TestAPowerShellLineIsDecidedAsAShellThatIsNotBash(t *testing.T) {
 	if res := execPS(t, loop, map[string]any{"action": "open"}); res.IsError {
 		t.Fatalf("open: %+v", res)
 	}
-	for _, cmd := range []string{"Remove-Item C:\\x", "echo a; Remove-Item C:\\x"} {
+	// Each of these runs Remove-Item in PowerShell; the last three are
+	// lines a bash split does not cut where PowerShell does.
+	denied := []string{"Remove-Item C:\\x", "echo a; Remove-Item C:\\x", `echo a\; Remove-Item C:\x`, "1 | % {Remove-Item C:\\x}", "echo (remove-item C:\\x)"}
+	for _, cmd := range denied {
 		res := execPS(t, loop, map[string]any{"action": "run", "command": cmd})
 		if !res.Refused || !strings.Contains(res.Content, "denied") {
 			t.Errorf("%q: %+v", cmd, res)
@@ -267,6 +270,18 @@ func TestAPowerShellLineIsDecidedAsAShellThatIsNotBash(t *testing.T) {
 	res := execPS(t, loop, map[string]any{"action": "run", "command": "echo a; Get-ChildItem"})
 	if !res.Refused || asked != 1 {
 		t.Errorf("an allow decided by splitting the line: %+v, asked %d", res, asked)
+	}
+	// skip_permissions turns questions into allows, and a deny stays a
+	// deny wherever in the line it is.
+	loop.Config.SetSkipPermissionsRuntime(true)
+	for _, cmd := range denied {
+		res := execPS(t, loop, map[string]any{"action": "run", "command": cmd})
+		if !res.Refused || !strings.Contains(res.Content, "denied") {
+			t.Errorf("with skip_permissions, %q: %+v", cmd, res)
+		}
+	}
+	if asked != 1 {
+		t.Errorf("skip_permissions asked: %d", asked)
 	}
 }
 

@@ -90,3 +90,19 @@ func TestATerminalGrantIsSplitAsTheTerminalsShellSplits(t *testing.T) {
 		}
 	})
 }
+
+// A dot-sourced script granted for the session is that line: the grant
+// was ". *", which covered ". New-Item marker".
+func TestADotSourceGrantCoversOnlyThatScript(t *testing.T) {
+	broker, _, _ := newPermissionTestBroker(t)
+	if !callAndResolve(t, broker, "s1", config.PowerShellToolName, `. .\helper.ps1`, true, ScopeSession) {
+		t.Fatal("the first call should be allowed")
+	}
+	ctx := context.Background()
+	if !askedOrAllowedIn(t, ctx, broker, "s1", config.PowerShellToolName, `. .\helper.ps1`) {
+		t.Error("the granted line was asked about again")
+	}
+	if askedOrAllowedIn(t, ctx, broker, "s1", config.PowerShellToolName, ". New-Item marker") {
+		t.Error("a grant for one dot-sourced script covered another command")
+	}
+}

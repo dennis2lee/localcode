@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -86,16 +87,22 @@ func ShellName(path string) string {
 //   - Its prompt prints the D mark, with the last command's status, ahead
 //     of whatever prompt was there (the default, or the person's profile's).
 //     A native program's own exit code when it set one, 1 for a command
-//     that failed otherwise, 0 for one that did not.
+//     that failed otherwise, 0 for one that did not. A native program
+//     that exits with the code the one before it did leaves
+//     $LASTEXITCODE as it was; what tells it from a cmdlet that failed
+//     after that program is that a cmdlet's failure adds to $Error.
 //   - PSReadLine's PSConsoleHostReadLine, where it is loaded, prints the C
 //     mark once the line is read, which is where a command's output starts.
 //     Without PSReadLine there is no C mark, and the output is what follows
 //     the command's line.
 //   - [char] rather than `e, which Windows PowerShell 5.1 does not have.
 //   - Every mark carries the nonce, as the bash and zsh marks do.
-//   - The D mark carries the prompt's text too (base64, up to 600
-//     characters of it), which is how the end of a command's output is
-//     found on the screen (localOutput).
+//   - The D mark carries the prompt's text too, as base64 of up to
+//     maxPromptPayload characters (a prompt of about 2,250 bytes of
+//     UTF-8), which is how the end of a command's output is found on the
+//     screen (localOutput). Sized by the encoding, not by the prompt's
+//     characters: a mark longer than maxMarkPayload is dropped whole,
+//     status and all.
 //
 // It prints nothing itself.
 func powershellIntegration(nonce string) string {
@@ -104,12 +111,16 @@ $global:__lc_e=[char]27
 $global:__lc_b=[char]7
 $global:__lc_prompt=$function:prompt
 $global:__lc_le=$global:LASTEXITCODE
+$global:__lc_er=if ($global:Error.Count) {$global:Error[0]} else {$null}
 function global:prompt {
   $ok=$global:?
-  $s = if ($ok) {0} elseif ($global:LASTEXITCODE -ne $global:__lc_le -and $global:LASTEXITCODE) {$global:LASTEXITCODE} else {1}
+  $er=if ($global:Error.Count) {$global:Error[0]} else {$null}
+  $s = if ($ok) {0} elseif ($global:LASTEXITCODE -ne $global:__lc_le -and $global:LASTEXITCODE) {$global:LASTEXITCODE} elseif (-not [object]::ReferenceEquals($er, $global:__lc_er)) {1} elseif ($global:LASTEXITCODE) {$global:LASTEXITCODE} else {1}
   $global:__lc_le=$global:LASTEXITCODE
+  $global:__lc_er=$er
   $p = "$(& $global:__lc_prompt)"
-  $t = if ($p.Length -le 600) {';p=' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($p))} else {''}
+  $b = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($p))
+  $t = if ($b.Length -le ` + itoa(maxPromptPayload) + `) {';p=' + $b} else {''}
   "$($global:__lc_e)]133;D;$s$t;lc=$($global:__lc_n)$($global:__lc_b)" + $p
 }
 if (Test-Path Function:\PSConsoleHostReadLine) {
@@ -118,6 +129,7 @@ if (Test-Path Function:\PSConsoleHostReadLine) {
     $l = & $global:__lc_rl
     [Console]::Write("$($global:__lc_e)]133;C;lc=$($global:__lc_n)$($global:__lc_b)")
     $global:__lc_le=$global:LASTEXITCODE
+    $global:__lc_er=if ($global:Error.Count) {$global:Error[0]} else {$null}
     $l
   }
 }
@@ -169,6 +181,10 @@ func (t *Terminal) startLocal(ctx context.Context) error {
 	t.mu.Lock()
 	if t.state == StateEnded || ctx.Err() != nil {
 		t.mu.Unlock()
+		// Read what it has written until it is gone: no reader is
+		// started for it, and closing a pseudo console waits for its
+		// output to be read on Windows before 11 24H2.
+		go func() { _, _ = io.Copy(io.Discard, p) }()
 		p.Close()
 		return errors.New("closed while starting")
 	}
@@ -261,41 +277,99 @@ func (t *Terminal) absRow(y int) int { return t.scrollFirst + len(t.scroll) + y 
 // echoEnd is the row the command's echo ends on: it starts after the
 // prompt, at startX, and wraps at the screen's width.
 func (w *runWait) echoEnd() int {
-	return w.startAbs + (w.startX+w.width-1)/max(1, w.cols)
+	return w.startAbs + len(wrapRows(w.line, w.startX, w.cols)) - 1
+}
+
+// wrapRows is the text of each row text takes on a screen cols wide,
+// written from column x0, wrapped as a terminal wraps it: a character
+// that does not fit in what is left of a row (a wide one in the last
+// column) starts the next. Text that ends in the last column leaves the
+// cursor on that row.
+func wrapRows(text string, x0, cols int) []string {
+	cols = max(1, cols)
+	var rows []string
+	var b strings.Builder
+	x := x0
+	for _, r := range text {
+		w := ansi.StringWidth(string(r))
+		if x+w > cols && x > 0 {
+			rows = append(rows, b.String())
+			b.Reset()
+			x = 0
+		}
+		b.WriteRune(r)
+		x += w
+	}
+	return append(rows, b.String())
+}
+
+// promptScreenRows is the rows prompt takes on a screen cols wide, as
+// drawn from the first column.
+func promptScreenRows(prompt string, cols int) []string {
+	var rows []string
+	for _, line := range strings.Split(prompt, "\n") {
+		rows = append(rows, wrapRows(line, 0, cols)...)
+	}
+	return rows
 }
 
 // promptRows is how many rows prompt takes on a screen cols wide, the
 // cursor on the last of them.
 func promptRows(prompt string, cols int) int {
-	cols = max(1, cols)
-	n := 0
-	for _, line := range strings.Split(prompt, "\n") {
-		w := ansi.StringWidth(line)
-		n += max(1, (w+cols-1)/cols)
-	}
-	return n
+	return len(promptScreenRows(prompt, cols))
 }
 
 // promptDrawn reports the screen showing the prompt the run's D mark
-// named, ending at the cursor. Without one named, the settled prompt is
-// all there is to go by. Called with mu held.
+// named, ending at the cursor, below the command's echo. Called with mu
+// held.
+//
+//   - Below the echo: at or above it is the prompt the command was typed
+//     at, still there when the marks come ahead of the text (Windows
+//     Server 2022), which ended runs before their output was drawn. A
+//     command that clears the screen leaves the new prompt above; the run
+//     then ends by the wait after the mark (promptWait).
+//   - Every row of it: a multi-line prompt's last line can be a line of
+//     output too ("> ").
+//   - Its first row may have text before it: a prompt function that writes
+//     with Write-Host and returns the rest, whose written part the mark
+//     does not carry.
+//   - A row exactly the screen's width leaves the cursor on its last
+//     cell, where the part left of the cursor is one cell short.
 func (t *Terminal) promptDrawn(w *runWait) bool {
+	pos := t.emu.CursorPosition()
+	cur := t.absRow(pos.Y)
 	if w.prompt == "" {
-		return true
+		return cur > w.echoEnd()
 	}
-	lines := strings.Split(w.prompt, "\n")
-	last := lines[len(lines)-1]
 	cols := t.emu.Width()
-	if n := ansi.StringWidth(last); n > cols {
-		// The part of it on the cursor's row.
-		cut := n - n%cols
-		if n%cols == 0 {
-			cut = n - cols
+	rows := promptScreenRows(w.prompt, cols)
+	first := cur - (len(rows) - 1)
+	if first <= w.echoEnd() {
+		return false
+	}
+	matches := func(i int, got string) bool {
+		want := strings.TrimRight(rows[i], " ")
+		if i == 0 {
+			return strings.HasSuffix(got, want)
 		}
-		last = ansi.TruncateLeft(last, cut, "")
+		return got == want
+	}
+	for i := range rows[:len(rows)-1] {
+		got, ok := t.rowText(first + i)
+		if !ok || !matches(i, got) {
+			return false
+		}
 	}
 	left, _, _ := t.aroundCursor()
-	return strings.TrimRight(left, " ") == strings.TrimRight(last, " ")
+	if matches(len(rows)-1, strings.TrimRight(left, " ")) {
+		return true
+	}
+	if pos.X == cols-1 {
+		if c := t.emu.CellAt(pos.X, pos.Y); c != nil && c.Content != "" {
+			return matches(len(rows)-1, strings.TrimRight(left+c.Content, " "))
+		}
+	}
+	return false
 }
 
 // rowText is the text of row abs, and false for a row the terminal no
@@ -321,6 +395,11 @@ func (t *Terminal) rowText(abs int) (string, bool) {
 func (t *Terminal) localOutput(w *runWait) string {
 	from := w.echoEnd() + 1
 	cur := t.absRow(t.emu.CursorPosition().Y)
+	if cur <= w.echoEnd() {
+		// The cursor is above where the command was typed: the screen
+		// was cleared (Clear-Host), and what is on it came after.
+		from = t.absRow(0)
+	}
 	last := cur
 	if w.ended {
 		rows := 1

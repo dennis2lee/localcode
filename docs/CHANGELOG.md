@@ -22,6 +22,10 @@ PowerShell terminals on Windows that the model works in and you share, and the s
 * The model's `ctrl+c`, `ctrl+\` or `ctrl+z` to a running command no longer counted as text typed ahead, which left the next `run` refused
 * A "for this session" grant in an SSH terminal whose shell is not bash or zsh no longer covers a line that shell runs as two commands (`echo a\;rm x`)
 * The refusal for a held terminal no longer names the SSH panel
+* A settings switch whose save failed shown as the daemon has it, when another window moved it while the request was out: Browser, SSH, Smart Agent, Orchestration and the model-run commands switch showed the opposite
+* The SSH switch held while its request is out: the daemon's announcement opened it again
+* A list of open SSH connections that arrived after the switch went off no longer drawn under it
+* The Reasoning switch's refusal told once, not kept after the switch was moved elsewhere or the window reopened
 
 ## v0.179.3
 

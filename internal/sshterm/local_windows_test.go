@@ -106,6 +106,20 @@ func TestARealPowerShellRunsCommandsAndReportsTheirStatus(t *testing.T) {
 			if res := realRun(t, term, "Get-Date | Out-Null"); res.Status != "0" {
 				t.Errorf("a cmdlet after a failed native command: %+v", res)
 			}
+			// A native program exiting as the one before it did leaves
+			// $LASTEXITCODE as it was, and was reported as 1; a cmdlet
+			// failing after it adds to $Error and is 1.
+			for _, c := range []struct{ cmd, status string }{
+				{"cmd /c exit 7", "7"},
+				{"cmd /c exit 7", "7"},
+				{`Get-Item C:\no\such\thing`, "1"},
+				{"cmd /c exit 7", "7"},
+				{"cmd /c exit 0", "0"},
+			} {
+				if res := realRun(t, term, c.cmd); res.Status != c.status {
+					t.Errorf("run %q: status %q, want %s", c.cmd, res.Status, c.status)
+				}
+			}
 		})
 	}
 }

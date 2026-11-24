@@ -545,7 +545,10 @@ const handlers = {
       app.modelInvocable = d.model_invocable;
       refreshModelInvocableIfOpen();
     }
-    if (typeof d.fold_thinking === 'boolean') app.foldThinking = d.fold_thinking;
+    if (typeof d.fold_thinking === 'boolean') {
+      if (d.fold_thinking !== app.foldThinking) movedElsewhere('fold_thinking');
+      app.foldThinking = d.fold_thinking;
+    }
     // Redrawn on either, since the note says when show_thinking is
     // hiding the reasoning this switch would label.
     if (typeof d.fold_thinking === 'boolean' || typeof d.show_thinking === 'boolean') refreshFoldThinkingIfOpen();

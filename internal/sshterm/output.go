@@ -29,9 +29,15 @@ const (
 	scanOSCEsc
 )
 
-// maxMarkPayload bounds what is kept of an OSC's text: a mark is short,
-// and an OSC carrying a long title or a clipboard payload is not one.
-const maxMarkPayload = 1024
+// maxMarkPayload bounds what is kept of an OSC's text: a mark is short
+// but for a PowerShell's D mark, which carries its prompt (see
+// maxPromptPayload), and an OSC carrying a long title or a clipboard
+// payload is not one.
+const maxMarkPayload = 4096
+
+// maxPromptPayload bounds the base64 prompt a PowerShell's D mark
+// carries, well inside maxMarkPayload with the rest of the mark.
+const maxPromptPayload = 3000
 
 // markEvent is a mark: its kind ('C' or 'D'), the index in the read just
 // after it, the status a D mark carries, and the prompt a local shell's D

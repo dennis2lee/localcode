@@ -16,7 +16,6 @@ import (
 	"time"
 
 	uv "github.com/charmbracelet/ultraviolet"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -274,15 +273,20 @@ type runWait struct {
 	// screen rather than from the stream (see localOutput), from the row
 	// after the command's echo. startAbs and startX are where the
 	// command was typed (startAbs counting every line the terminal has
-	// had), width its width in cells, cols the screen's.
+	// had), cols the screen's width then.
 	local    bool
 	startAbs int
 	startX   int
-	width    int
 	cols     int
+	line     string // the command, as typed
 	// prompt is the prompt the D mark said follows the command, "" when
 	// it said none.
 	prompt string
+	// output is a local run's output, read off the screen as the run
+	// ends, before a size held back for it is applied: a smaller screen
+	// cuts off what is wider than it.
+	output   string
+	captured bool
 }
 
 func newNonce() string {
@@ -603,8 +607,17 @@ func (t *Terminal) draw(b []byte) (err error) {
 func (t *Terminal) finishRun(w *runWait) {
 	if t.run == w {
 		t.run = nil
+		t.captureRun(w)
 		close(w.done)
 		t.applySize()
+	}
+}
+
+// captureRun reads a local run's output off the screen while it is still
+// the size the run saw. Called with mu held, before applySize.
+func (t *Terminal) captureRun(w *runWait) {
+	if w.local && !w.captured {
+		w.output, w.captured = t.localOutput(w), true
 	}
 }
 
@@ -1600,7 +1613,7 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 		pos := t.emu.CursorPosition()
 		w.local = true
 		w.startAbs, w.startX = t.absRow(pos.Y), pos.X
-		w.width, w.cols = max(1, ansi.StringWidth(command)), t.emu.Width()
+		w.cols, w.line = t.emu.Width(), command
 	}
 	t.run = w
 	integrated := t.integrated
@@ -1677,6 +1690,7 @@ wait:
 	t.mu.Lock()
 	if t.run == w {
 		t.run = nil
+		t.captureRun(w)
 		t.applySize()
 	}
 	if w.held {
@@ -1684,7 +1698,8 @@ wait:
 		return RunResult{}, ErrHeld
 	}
 	if w.local {
-		res.Output = t.localOutput(w)
+		t.captureRun(w)
+		res.Output = w.output
 	} else {
 		res.Output = w.out.text(!w.started)
 	}
@@ -1808,13 +1823,13 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 				return ErrTypeahead
 			}
 		}
-		// A key that signals the running command (Ctrl+C, Ctrl+\, Ctrl+Z)
-		// is no text typed ahead of the next prompt: the terminal takes it,
-		// and drops whatever was typed ahead before it. Counted as text, a
-		// Ctrl+C that stopped a command (what a run that timed out says to
-		// press) left the next run refused for a line nothing was on.
+		// A key that signals the running command is no text typed ahead
+		// of the next prompt: the terminal takes it, and drops whatever
+		// was typed ahead before it. Counted as text, a Ctrl+C that
+		// stopped a command (what a run that timed out says to press) left
+		// the next run refused for a line nothing was on.
 		for _, ev := range evs {
-			if signalKey(ev) {
+			if t.signalKey(ev) {
 				t.typedAhead = false
 			} else {
 				t.typedAhead = true
@@ -1896,15 +1911,24 @@ func endsLine(ev uv.KeyPressEvent) bool {
 	return false
 }
 
-// signalKey is a key a terminal turns into a signal for the command in
-// the foreground, rather than into input: interrupt, quit, suspend.
-func signalKey(ev uv.KeyPressEvent) bool {
+// signalKey is a key the terminal turns into a signal for the command in
+// the foreground, rather than into input, and that drops the input typed
+// ahead of it. On a remote shell's terminal: interrupt, quit and suspend
+// (Ctrl+C, Ctrl+\\, Ctrl+Z), which flush the terminal's input queue. On a
+// Windows console only Ctrl+C. Measured under ConPTY on Windows Server
+// 2022 and 2025, both PowerShells, with a line typed while Start-Sleep
+// ran: Ctrl+C stopped it and the line was gone; Ctrl+\\ and Ctrl+Z stopped
+// nothing, and the line was on the next prompt, with "^\\" after it or its
+// last character undone. Called with mu held.
+func (t *Terminal) signalKey(ev uv.KeyPressEvent) bool {
 	if ev.Mod != uv.ModCtrl {
 		return false
 	}
 	switch ev.Code {
-	case 'c', '\\', 'z':
+	case 'c':
 		return true
+	case '\\', 'z':
+		return !t.isLocal()
 	}
 	return false
 }

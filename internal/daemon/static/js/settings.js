@@ -132,15 +132,15 @@ function renderMuseNote() {
 // that should be read here rather than worked out from an absence.
 // Otherwise the switch says it all, and the note is empty.
 //
-// The warning is kept here rather than passed in, so the redraw that a
-// settings.changed brings (which arrives for this very change) does not
-// erase a save that failed.
-let foldThinkingWarning = '';
-
-function renderFoldThinking() {
+// The warning line is keep going's (underSwitch): a save the daemon
+// applied and could not write stays told through the redraw its own
+// settings.changed brings, until the switch is saved or moved elsewhere,
+// and a request the daemon refused is told once.
+function renderFoldThinking(outcome, refused) {
+  const warning = underSwitch('fold_thinking', outcome, refused);
   foldThinkingCheckbox.checked = !!app.foldThinking;
-  foldThinkingWarnEl.textContent = foldThinkingWarning;
-  foldThinkingWarnEl.hidden = !foldThinkingWarning;
+  foldThinkingWarnEl.textContent = warning;
+  foldThinkingWarnEl.hidden = !warning;
   foldThinkingNoteEl.textContent = app.showThinking
     ? ''
     : 'Reasoning is not drawn at all while show_thinking is off. /thinking on draws it again.';
@@ -159,15 +159,14 @@ async function toggleFoldThinking() {
   try {
     const res = await apiClient.setFoldThinking(enabled);
     app.foldThinking = res && 'fold_thinking' in res ? !!res.fold_thinking : enabled;
-    foldThinkingWarning = res && res.persisted === false
+    renderFoldThinking(res && res.persisted === false
       ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
-      : '';
+      : '');
   } catch (err) {
     // Nothing was applied. The box goes back to what the daemon has.
-    foldThinkingWarning = `Not changed: ${err}`;
+    renderFoldThinking(undefined, `Not changed: ${err}`);
   } finally {
     foldThinkingCheckbox.disabled = false;
-    renderFoldThinking();
   }
 }
 
@@ -364,7 +363,9 @@ async function toggleBrowser() {
       : '');
     renderBrowserPanel();
   } catch (err) {
-    browserCheckbox.checked = !enabled;
+    // Nothing was applied: the box shows what the daemon has, which
+    // another window may have changed while this request was out.
+    browserCheckbox.checked = !!app.browser;
     browserNoteEl.textContent = `Not changed: ${err}`;
   } finally {
     browserCheckbox.disabled = false;
@@ -395,12 +396,19 @@ async function importBrowserProfile() {
 
 const sshEl = (id) => document.getElementById(id);
 
+// sshOut and powershellOut hold a switch while its request is out: the
+// daemon announces a change before it answers it, and the redraw that
+// announcement brings opened the switch again with the request still
+// out, as it once did for the repeat guard.
+let sshOut = false;
+let powershellOut = false;
+
 function renderSSHSetting(outcome) {
   const warning = unsavedWarning('ssh', outcome);
   const box = sshEl('ssh-checkbox');
   if (!box) return;
   box.checked = !!app.ssh;
-  box.disabled = !app.sshAvailable;
+  box.disabled = sshOut || !app.sshAvailable;
   const warn = sshEl('ssh-warn');
   if (warn) {
     warn.textContent = warning || '';
@@ -414,9 +422,14 @@ function renderSSHSetting(outcome) {
 // renderLive draws the terminals open now under a switch: one row each,
 // with a Close button, or a line saying there are none. Nothing while the
 // switch is off. The SSH and PowerShell rows each have one.
+//
+// Each draw is numbered, and one whose list arrives after a later draw
+// began, or after the switch went off, draws nothing: the list it has is
+// of a moment that has passed.
 async function renderLive(live) {
   const list = sshEl(live.id);
   if (!list) return;
+  const gen = (live.gen = (live.gen || 0) + 1);
   const clearList = () => { for (const c of [...list.children]) c.remove(); };
   if (!live.on()) {
     clearList();
@@ -428,6 +441,7 @@ async function renderLive(live) {
   } catch (err) {
     rows = [];
   }
+  if (gen !== live.gen || !live.on()) return;
   clearList();
   if (!Array.isArray(rows) || rows.length === 0) {
     const p = document.createElement('p');
@@ -480,6 +494,7 @@ export function refreshSSHIfOpen() {
 async function toggleSSH() {
   const box = sshEl('ssh-checkbox');
   const enabled = box.checked;
+  sshOut = true;
   box.disabled = true;
   try {
     const res = await apiClient.setSSH(enabled);
@@ -489,11 +504,12 @@ async function toggleSSH() {
       : '');
     renderSSHPanel();
   } catch (err) {
-    box.checked = !enabled;
+    box.checked = !!app.ssh;
     const note = sshEl('ssh-note');
     if (note) note.textContent = `Not changed: ${err}`;
   } finally {
-    box.disabled = false;
+    sshOut = false;
+    box.disabled = !app.sshAvailable;
   }
 }
 
@@ -521,6 +537,7 @@ function renderPowerShellSetting(outcome) {
   const box = sshEl('powershell-checkbox');
   if (!box) return;
   box.checked = !!app.powershell;
+  box.disabled = powershellOut;
   const warn = sshEl('powershell-warn');
   if (warn) {
     warn.textContent = warning || '';
@@ -539,6 +556,7 @@ export function refreshPowerShellIfOpen() {
 async function togglePowerShell() {
   const box = sshEl('powershell-checkbox');
   const enabled = box.checked;
+  powershellOut = true;
   box.disabled = true;
   try {
     const res = await apiClient.setPowerShell(enabled);
@@ -548,10 +566,11 @@ async function togglePowerShell() {
       : '');
     renderPowerShellPanel();
   } catch (err) {
-    box.checked = !enabled;
+    box.checked = !!app.powershell;
     const note = sshEl('powershell-note');
     if (note) note.textContent = `Not changed: ${err}`;
   } finally {
+    powershellOut = false;
     box.disabled = false;
   }
 }
@@ -626,7 +645,7 @@ async function toggleModelInvocable() {
       ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
       : '');
   } catch (err) {
-    modelInvocableCheckbox.checked = !enabled;
+    modelInvocableCheckbox.checked = !!app.modelInvocable;
     modelInvocableNoteEl.textContent = `Not changed: ${err}`;
   } finally {
     modelInvocableCheckbox.disabled = false;
@@ -647,7 +666,7 @@ async function toggleOrchestrate() {
       ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
       : '');
   } catch (err) {
-    orchestrateCheckbox.checked = !enabled;
+    orchestrateCheckbox.checked = !!app.orchestrate;
     orchestrateNoteEl.textContent = `Not changed: ${err}`;
   } finally {
     orchestrateCheckbox.disabled = false;
@@ -680,7 +699,7 @@ async function toggleSmartAgent() {
       : '');
   } catch (err) {
     // Nothing was applied. Put the box back where it was.
-    smartAgentCheckbox.checked = !enabled;
+    smartAgentCheckbox.checked = !!app.smartAgent;
     smartAgentNoteEl.textContent = `Not changed: ${err}`;
   } finally {
     smartAgentCheckbox.disabled = false;
