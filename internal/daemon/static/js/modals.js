@@ -3,12 +3,12 @@ import {
   permissionTextEl, permissionAllowAlwaysBtn, permissionAllowSessionBtn,
   permissionOutsideEl, permissionAllowDirBtn, permissionAllowOutsideBtn,
   delegateModal, delegateEnabledCheckbox, delegateAgentSelect, delegateMatchListEl,
-  delegateMatchInput, delegateNote,
+  delegateMatchInput, delegateNote, delegateWarn,
   permissionSettingsModal, skipPermissionsCheckbox, skipToolsCheckbox,
   readOutsideCheckbox, writeOutsideCheckbox, permissionScopeNote,
   permissionWorkspaceNote, rememberedOutsideEl, permissionRulesListEl,
   ruleToolInput, ruleMatchInput, ruleDecisionSelect,
-  permissionSettingsNote,
+  permissionRulesWarn, permissionSettingsNote,
   workspaceModal, workspaceInput, workspaceNote, workspaceBrowseBtn, workspaceStopBusyBtn,
   effortModal, effortModelEl, effortLevelsEl, effortNoteEl, effortDefaultBtn, effortCloseBtn,
 } from './dom.js';
@@ -19,7 +19,7 @@ import { setInputLocked, renderCommDot } from './composer.js';
 import { renderPermissionStatus, renderAutoDelegate, renderWorkspace, renderEffort } from './render.js';
 import { Modal } from './modal.js';
 import { usageView } from './usage.js';
-import { settings } from './settings.js';
+import { settings, unsavedWarning } from './settings.js';
 import { taskView } from './taskview.js';
 import { anyPromptOpen } from './prompt.js';
 // Circular with sessions.js, which imports permissionRequest from here —
@@ -113,23 +113,55 @@ export function openEffort() {
 effortDefaultBtn.addEventListener('click', () => chooseEffort(''));
 effortCloseBtn.addEventListener('click', () => effort.close());
 
+// What every switch says under it for a change the daemon applied and
+// could not write to config.json.
+const NOT_SAVED = 'Applied, but not saved to config.json, so it lasts only until the daemon restarts';
+
 // ---- Auto-delegation modal ----
 
 // saveAutoDelegate posts only the fields given, so the panel's three
 // controls each change one thing without restating the others. Every
 // change applies to the running loop immediately and is written to
 // config.json — see POST /api/settings/auto-delegate.
+//
+// The daemon answers in two parts, as it does for Smart Agent: what it
+// now holds, which is what the panel has to show, and whether config.json
+// was written. A request that fails is one it refused before applying
+// anything: an agent it does not know, or fewer than two to choose from.
+//
+// The switch and the target (the agent and the patterns) are written to
+// the file separately, so each has its own warning: saving one says
+// nothing about the other, and a warning goes when its own half is saved.
 export async function saveAutoDelegate(patch) {
+  let res;
   try {
-    await apiClient.setAutoDelegate(patch);
+    res = await apiClient.setAutoDelegate(patch);
   } catch (err) {
     delegateNote.textContent = String(err);
     delegateNote.classList.add('err');
+    // Nothing was applied, so the control that was moved goes back to
+    // what the daemon has. The note stays: it is marked as an error.
+    renderDelegatePanel();
     return false;
   }
-  if (typeof patch.enabled === 'boolean') app.autoDelegate = patch.enabled;
-  if (typeof patch.agent === 'string') app.autoDelegateAgent = patch.agent;
-  if (Array.isArray(patch.match)) app.autoDelegateMatch = patch.match.slice();
+  const held = res || {};
+  if (typeof held.auto_delegate === 'boolean') app.autoDelegate = held.auto_delegate;
+  else if (typeof patch.enabled === 'boolean') app.autoDelegate = patch.enabled;
+  if (typeof held.auto_delegate_agent === 'string') app.autoDelegateAgent = held.auto_delegate_agent;
+  else if (typeof patch.agent === 'string') app.autoDelegateAgent = patch.agent;
+  if (Array.isArray(held.auto_delegate_match)) app.autoDelegateMatch = held.auto_delegate_match.slice();
+  else if (Array.isArray(patch.match)) app.autoDelegateMatch = patch.match.slice();
+
+  // '' for a save that reached the file, which takes the warning away.
+  const reason = held.persisted === false ? held.error || 'unknown error' : '';
+  if (typeof patch.enabled === 'boolean') {
+    unsavedWarning('auto_delegate', reason && `The switch: ${NOT_SAVED}: ${reason}`);
+  }
+  if (typeof patch.agent === 'string' || Array.isArray(patch.match)) {
+    unsavedWarning('auto_delegate_target', reason && `The agent and patterns: ${NOT_SAVED}: ${reason}`);
+  }
+  // A refusal was about an earlier request, and this one was applied.
+  delegateNote.classList.remove('err');
   renderAutoDelegate();
   renderDelegatePanel();
   return true;
@@ -143,6 +175,11 @@ export function openAutoDelegateSettings() {
 
 export function renderDelegatePanel() {
   delegateEnabledCheckbox.checked = app.autoDelegate;
+  // Kept through every draw: opening the panel again, another window's
+  // change, the daemon's announcement of this one.
+  const warning = [unsavedWarning('auto_delegate'), unsavedWarning('auto_delegate_target')].filter(Boolean).join(' ');
+  delegateWarn.textContent = warning;
+  delegateWarn.hidden = !warning;
 
   // Only agents other than the one answering can be delegation targets:
   // delegating to the running agent would recurse, and the daemon refuses
@@ -190,7 +227,10 @@ export function renderDelegatePanel() {
     } else if (app.autoDelegate && app.autoDelegateMatch.length === 0) {
       delegateNote.textContent = 'On, but no pattern matches anything yet, so nothing is delegated.';
     } else {
-      delegateNote.textContent = 'Changes apply to the next prompt and are written to config.json.';
+      // Not said beside a warning that one was not written.
+      delegateNote.textContent = warning
+        ? 'Changes apply to the next prompt.'
+        : 'Changes apply to the next prompt and are written to config.json.';
     }
   }
 }
@@ -217,7 +257,31 @@ export function closeDelegateModal() {
 
 // ---- Permission settings modal ----
 
+// Rules are written to config.json one at a time, so a rule the daemon
+// applied and could not write is remembered by name. A later rule that
+// is saved says nothing about an earlier one that was not, which is why
+// this is a list and not the one warning a switch keeps. An entry goes
+// when the same rule is next added or removed and that change is saved:
+// the daemon and the file then agree about it again.
+const unsavedRules = new Map();
+
+function noteRuleOutcome(change, tool, match, decision, res) {
+  const key = JSON.stringify([tool, match, decision]);
+  unsavedRules.delete(key);
+  if (res && res.persisted === false) {
+    unsavedRules.set(key, { text: `${change} ${tool}: "${match}" -> ${decision}`, reason: res.error || 'unknown error' });
+  }
+}
+
+function renderUnsavedRules() {
+  const entries = Array.from(unsavedRules.values());
+  permissionRulesWarn.hidden = entries.length === 0;
+  permissionRulesWarn.textContent = entries.length === 0 ? '' :
+    `${NOT_SAVED}: ${entries[entries.length - 1].reason} Not saved: ${entries.map((e) => e.text).join('; ')}.`;
+}
+
 export function renderPermissionRulesList() {
+  renderUnsavedRules();
   permissionRulesListEl.innerHTML = '';
   const tools = Object.keys(app.permissionRules).sort();
   if (tools.length === 0) {
@@ -383,9 +447,17 @@ export async function addPermissionRule() {
   const decision = ruleDecisionSelect.value;
   if (!tool || !match) return;
   try {
-    await apiClient.addPermissionRule(tool, match, decision);
-    app.permissionRules[tool] = app.permissionRules[tool] || [];
-    app.permissionRules[tool].push({ match, decision });
+    // Answered in two parts: the rule is in force either way, and
+    // "persisted" says whether config.json has it. The list is drawn from
+    // the rules the daemon says it now holds.
+    const res = await apiClient.addPermissionRule(tool, match, decision);
+    if (res && 'permission_rules' in res) {
+      app.permissionRules = res.permission_rules || {};
+    } else {
+      app.permissionRules[tool] = app.permissionRules[tool] || [];
+      app.permissionRules[tool].push({ match, decision });
+    }
+    noteRuleOutcome('added', tool, match, decision, res);
     ruleToolInput.value = '';
     ruleMatchInput.value = '';
     renderPermissionRulesList();
@@ -397,9 +469,14 @@ export async function addPermissionRule() {
 
 async function removePermissionRule(tool, rule) {
   try {
-    await apiClient.removePermissionRule(tool, rule.match, rule.decision);
-    app.permissionRules[tool] = (app.permissionRules[tool] || []).filter(r => !(r.match === rule.match && r.decision === rule.decision));
-    if (app.permissionRules[tool].length === 0) delete app.permissionRules[tool];
+    const res = await apiClient.removePermissionRule(tool, rule.match, rule.decision);
+    if (res && 'permission_rules' in res) {
+      app.permissionRules = res.permission_rules || {};
+    } else {
+      app.permissionRules[tool] = (app.permissionRules[tool] || []).filter(r => !(r.match === rule.match && r.decision === rule.decision));
+      if (app.permissionRules[tool].length === 0) delete app.permissionRules[tool];
+    }
+    noteRuleOutcome('removed', tool, rule.match, rule.decision, res);
     renderPermissionRulesList();
     renderPermissionStatus();
   } catch (err) {

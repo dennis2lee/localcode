@@ -437,6 +437,7 @@ const handlers = {
     if (typeof d.show_thinking === 'boolean') app.showThinking = d.show_thinking;
     if (typeof d.show_timestamps === 'boolean') app.showTimestamps = d.show_timestamps;
     if (typeof d.auto_delegate === 'boolean') {
+      if (d.auto_delegate !== app.autoDelegate) movedElsewhere('auto_delegate');
       app.autoDelegate = d.auto_delegate;
       renderAutoDelegate();
       refreshDelegatePanelIfOpen();
@@ -494,6 +495,7 @@ const handlers = {
     if (typeof d.show_thinking === 'boolean') app.showThinking = d.show_thinking;
     if (typeof d.show_timestamps === 'boolean') app.showTimestamps = d.show_timestamps;
     if (typeof d.auto_delegate === 'boolean') {
+      if (d.auto_delegate !== app.autoDelegate) movedElsewhere('auto_delegate');
       app.autoDelegate = d.auto_delegate;
       renderAutoDelegate();
       refreshDelegatePanelIfOpen();

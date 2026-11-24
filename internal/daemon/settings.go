@@ -2,8 +2,10 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"localcode/internal/config"
 	"localcode/internal/smart"
@@ -14,18 +16,7 @@ import (
 // know the current state without waiting for a config.changed event.
 func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	skip, rules := d.Loop.Config.PermissionsSnapshot()
-	// auto_delegate_agent is empty when config.json has no auto_delegate
-	// block. Turning the setting on in that state is legal but does nothing,
-	// so clients report that rather than showing an "on" that silently
-	// delegates no prompt at all.
-	delegateAgent := ""
-	delegateMatch := []string{}
-	if block := d.Loop.Config.AutoDelegateSnapshot(); block != nil {
-		delegateAgent = block.Agent
-		if block.Match != nil {
-			delegateMatch = block.Match
-		}
-	}
+	delegateAgent, delegateMatch := d.autoDelegateTarget()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
 		"auto_compact_percent": d.Loop.CompactPercent(),
@@ -55,16 +46,49 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// autoDelegateTarget is the agent that answers delegated prompts and the
+// patterns that qualify one, as a client is told them.
+//
+// The agent is empty when config.json has no auto_delegate block. Turning
+// the setting on in that state is legal but does nothing, so clients
+// report that rather than showing an "on" that silently delegates no
+// prompt at all.
+func (d *Daemon) autoDelegateTarget() (agent string, match []string) {
+	match = []string{}
+	if block := d.Loop.Config.AutoDelegateSnapshot(); block != nil {
+		agent = block.Agent
+		if block.Match != nil {
+			match = block.Match
+		}
+	}
+	return agent, match
+}
+
+// notPersisted is the "error" of a two-part answer whose save failed.
+func notPersisted(err error) string {
+	return fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
+}
+
 // handleSetAutoDelegate changes auto-delegation live — the switch itself,
 // which agent handles delegated prompts, and which prompts qualify — and,
 // when a config.json path is known, persists it so the choice survives a
 // restart. The runtime change lands first and is never rolled back by a
 // persistence failure: a caller that asked for the setting to apply "right
-// now" gets that, and the error tells them only the saving part failed.
+// now" gets that, and the answer tells them only the saving part failed.
+//
+// It answers in two parts, as handleSetSmartAgent does and for the same
+// reason. The body carries the whole setting as the daemon now holds it,
+// because a request may move one field of three.
+//
+// The target and the switch are written to config.json separately. A
+// target that could not be written used to end the request there: a 500,
+// the switch in the same body never applied, and nothing announced.
+// Both are applied now whatever happens to either save, "persisted" is
+// false when either failed, and the error names each one that did.
 //
 // Every field is a pointer, so a caller can change one thing without
-// restating the others: the status-bar pill sends only "enabled", the
-// settings panel sends all three.
+// restating the others: the panel's checkbox sends only "enabled", its
+// agent list only "agent", its patterns only "match".
 func (d *Daemon) handleSetAutoDelegate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled *bool     `json:"enabled"`
@@ -93,6 +117,8 @@ func (d *Daemon) handleSetAutoDelegate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// What could not be written to config.json, one entry for each half.
+	var unsaved []string
 	if req.Agent != nil || req.Match != nil {
 		current := d.Loop.Config.AutoDelegateSnapshot()
 		agent, match := "", []string(nil)
@@ -108,8 +134,7 @@ func (d *Daemon) handleSetAutoDelegate(w http.ResponseWriter, r *http.Request) {
 		d.Loop.Config.SetAutoDelegateRuntime(agent, match)
 		if d.Broker.ConfigPath != "" {
 			if err := config.SetAutoDelegateTargetInFile(d.Broker.ConfigPath, agent, match); err != nil {
-				http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
-				return
+				unsaved = append(unsaved, fmt.Sprintf("agent and patterns: %v", err))
 			}
 		}
 	}
@@ -118,15 +143,26 @@ func (d *Daemon) handleSetAutoDelegate(w http.ResponseWriter, r *http.Request) {
 		d.Loop.SetAutoDelegateEnabled(*req.Enabled)
 		if d.Broker.ConfigPath != "" {
 			if err := config.SetAutoDelegateEnabledInFile(d.Broker.ConfigPath, *req.Enabled); err != nil {
-				http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
-				return
+				unsaved = append(unsaved, fmt.Sprintf("enabled: %v", err))
 			}
 		}
 	}
 	// Once, after both halves: the target and the switch are one change
 	// to a reader, and two events would make a panel redraw twice.
 	d.announceSettings()
-	w.WriteHeader(http.StatusNoContent)
+	agent, match := d.autoDelegateTarget()
+	resp := map[string]any{
+		"auto_delegate":       d.Loop.AutoDelegateEnabled(),
+		"auto_delegate_agent": agent,
+		"auto_delegate_match": match,
+		"applied":             true,
+		"persisted":           true,
+	}
+	if len(unsaved) > 0 {
+		resp["persisted"] = false
+		resp["error"] = notPersisted(errors.New(strings.Join(unsaved, "; ")))
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleSetSmartAgent turns the Smart Agent bundle on or off live and,
@@ -172,7 +208,7 @@ func (d *Daemon) handleSetSmartAgent(w http.ResponseWriter, r *http.Request) {
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetSmartAgentInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false
-			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
+			resp["error"] = notPersisted(err)
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -207,7 +243,7 @@ func (d *Daemon) handleSetModelInvocable(w http.ResponseWriter, r *http.Request)
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetModelInvocableInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false
-			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
+			resp["error"] = notPersisted(err)
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -241,7 +277,7 @@ func (d *Daemon) handleSetOrchestrate(w http.ResponseWriter, r *http.Request) {
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetOrchestrateInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false
-			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
+			resp["error"] = notPersisted(err)
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -278,7 +314,7 @@ func (d *Daemon) handleSetKeepGoing(w http.ResponseWriter, r *http.Request) {
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetKeepGoingInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false
-			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
+			resp["error"] = notPersisted(err)
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -311,7 +347,7 @@ func (d *Daemon) handleSetFoldThinking(w http.ResponseWriter, r *http.Request) {
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetFoldThinkingInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false
-			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
+			resp["error"] = notPersisted(err)
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -346,7 +382,7 @@ func (d *Daemon) handleSetRepeatLimit(w http.ResponseWriter, r *http.Request) {
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetRepeatLimitInFile(d.Broker.ConfigPath, req.Limit); err != nil {
 			resp["persisted"] = false
-			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
+			resp["error"] = notPersisted(err)
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -355,6 +391,10 @@ func (d *Daemon) handleSetRepeatLimit(w http.ResponseWriter, r *http.Request) {
 // handleSetSkipPermissions toggles skip_permissions at runtime and, when a
 // config.json path is known (see Broker.ConfigPath, the same path "always
 // allow" writes to), persists it so the setting survives a restart.
+//
+// Answered in two parts, as handleSetSmartAgent is: this is the daemon's
+// default for every conversation that has not answered for itself, and a
+// 500 for a save that failed said a default that was in force was not.
 func (d *Daemon) handleSetSkipPermissions(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled bool `json:"enabled"`
@@ -365,13 +405,41 @@ func (d *Daemon) handleSetSkipPermissions(w http.ResponseWriter, r *http.Request
 	}
 	d.Loop.Config.SetSkipPermissionsRuntime(req.Enabled)
 	d.announceSettings()
+	resp := map[string]any{
+		"skip_permissions": req.Enabled,
+		"applied":          true,
+		"persisted":        true,
+	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetSkipPermissionsInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
-			http.Error(w, fmt.Sprintf("saved for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
-			return
+			resp["persisted"] = false
+			resp["error"] = notPersisted(err)
 		}
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// writeRuleChange answers a rule that was added or removed, in two parts
+// as the switches are. A rule decides what a tool call may do without
+// asking, and it is in force from the moment it is applied, so a 500 for
+// a save that failed left the permissions window listing rules the
+// daemon was no longer running, or not listing one it was.
+//
+// The body carries every rule the daemon now holds, in the shape
+// GET /api/settings reports them, so a client draws its list from that
+// and not from what it believes it changed.
+func (d *Daemon) writeRuleChange(w http.ResponseWriter, saveErr error) {
+	_, rules := d.Loop.Config.PermissionsSnapshot()
+	resp := map[string]any{
+		"permission_rules": rules,
+		"applied":          true,
+		"persisted":        true,
+	}
+	if saveErr != nil {
+		resp["persisted"] = false
+		resp["error"] = notPersisted(saveErr)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // permissionRuleRequest is the body for both add and remove: which tool,
@@ -396,13 +464,11 @@ func (d *Daemon) handleAddPermissionRule(w http.ResponseWriter, r *http.Request)
 	}
 	rule := config.PermissionRule{Match: req.Match, Decision: config.Decision(req.Decision)}
 	d.Loop.Config.AddPermissionRuleRuntime(req.Tool, rule)
+	var saveErr error
 	if d.Broker.ConfigPath != "" {
-		if err := config.AddPermissionRuleToFile(d.Broker.ConfigPath, req.Tool, rule); err != nil {
-			http.Error(w, fmt.Sprintf("saved for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
-			return
-		}
+		saveErr = config.AddPermissionRuleToFile(d.Broker.ConfigPath, req.Tool, rule)
 	}
-	w.WriteHeader(http.StatusNoContent)
+	d.writeRuleChange(w, saveErr)
 }
 
 func (d *Daemon) handleRemovePermissionRule(w http.ResponseWriter, r *http.Request) {
@@ -419,11 +485,9 @@ func (d *Daemon) handleRemovePermissionRule(w http.ResponseWriter, r *http.Reque
 	}
 	rule := config.PermissionRule{Match: req.Match, Decision: config.Decision(req.Decision)}
 	d.Loop.Config.RemovePermissionRuleRuntime(req.Tool, rule)
+	var saveErr error
 	if d.Broker.ConfigPath != "" {
-		if err := config.RemovePermissionRuleFromFile(d.Broker.ConfigPath, req.Tool, rule); err != nil {
-			http.Error(w, fmt.Sprintf("saved for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
-			return
-		}
+		saveErr = config.RemovePermissionRuleFromFile(d.Broker.ConfigPath, req.Tool, rule)
 	}
-	w.WriteHeader(http.StatusNoContent)
+	d.writeRuleChange(w, saveErr)
 }

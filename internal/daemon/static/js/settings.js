@@ -178,9 +178,12 @@ async function toggleFoldThinking() {
 // nothing, a warning used to go: turn Smart Agent on with a config that
 // could not be written, then turn SSH on, and the first warning was gone
 // while the switch it was about was still not saved.
+//
+// The delegation panel keeps its two here as well (modals.js), under
+// "auto_delegate" and "auto_delegate_target".
 const unsaved = {};
 
-function unsavedWarning(name, outcome) {
+export function unsavedWarning(name, outcome) {
   if (outcome !== undefined) unsaved[name] = outcome || '';
   return unsaved[name] || '';
 }

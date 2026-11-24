@@ -922,6 +922,12 @@
       </select>
       <button id="rule-add-btn">Add</button>
     </div>
+    <!--
+      The rules the daemon is running and could not write to config.json.
+      Its own line, because the note below is rewritten each time the
+      window opens and this has to be there until those rules are saved.
+    -->
+    <p class="note warn" id="permission-rules-warn" hidden></p>
     <p class="note" id="permission-settings-note"></p>
     <div class="close-row"><button id="permission-settings-close">Close</button></div>
   </div>
@@ -945,6 +951,8 @@
       <button id="delegate-match-add">Add</button>
     </div>
     <p class="note" id="delegate-note"></p>
+    <!-- A change that was applied and not written to config.json, kept until it is. -->
+    <p class="note warn" id="delegate-warn" hidden></p>
     <div class="close-row"><button id="delegate-close">Close</button></div>
   </div>
 </div>
