@@ -1,0 +1,44 @@
+# Diagnostic, not part of the release: the PowerShell panel end to end on
+# Windows, a daemon, a scripted model and a Chrome, with each shell.
+name: diag-pwsh-e2e
+
+on:
+  push:
+    branches: ['diag/**']
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, shell: powershell.exe, major: '5', edition: Desktop }
+          - { os: windows-2025, shell: powershell.exe, major: '5', edition: Desktop }
+          - { os: windows-2025, shell: pwsh.exe, major: '7', edition: Core }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/powershell-panel
+          path: src
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: src/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: End to end
+        timeout-minutes: 15
+        shell: bash
+        run: bash diag/pwsh-e2e/ci.sh src ${{ matrix.shell }} ${{ matrix.major }} ${{ matrix.edition }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pwsh-e2e-${{ matrix.os }}-${{ matrix.shell }}
+          path: diag/out
