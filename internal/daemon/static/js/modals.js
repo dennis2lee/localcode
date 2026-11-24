@@ -168,6 +168,14 @@ function serial() {
 // nothing about the other, and a warning goes when its own half is saved.
 const delegationChanges = serial();
 
+// What the daemon said when it refused the last change that was sent,
+// and '' once a change has been applied since. The line under the panel
+// is drawn from it (renderDelegatePanel), where it used to be read back
+// from whether the line carried the error mark. A press that sent
+// nothing then took the mark and left the words: a pattern the list
+// already had, added after a refusal. Found by review.
+let delegateRefusal = '';
+
 export function saveAutoDelegate(patch) {
   return delegationChanges(() => {
     const now = typeof patch === 'function' ? patch() : patch;
@@ -180,10 +188,9 @@ async function sendAutoDelegate(patch) {
   try {
     res = await apiClient.setAutoDelegate(patch);
   } catch (err) {
-    delegateNote.textContent = String(err);
-    delegateNote.classList.add('err');
+    delegateRefusal = String(err);
     // Nothing was applied, so the control that was moved goes back to
-    // what the daemon has. The note stays: it is marked as an error.
+    // what the daemon has.
     renderDelegatePanel();
     return false;
   }
@@ -207,14 +214,14 @@ async function sendAutoDelegate(patch) {
     unsavedWarning('auto_delegate_target', reason && `The agent and patterns: ${NOT_SAVED}: ${reason}`);
   }
   // A refusal was about an earlier request, and this one was applied.
-  delegateNote.classList.remove('err');
+  delegateRefusal = '';
   renderAutoDelegate();
   renderDelegatePanel();
   return true;
 }
 
 export function openAutoDelegateSettings() {
-  delegateNote.classList.remove('err');
+  delegateRefusal = '';
   renderDelegatePanel();
   delegate.open();
 }
@@ -270,7 +277,10 @@ export function renderDelegatePanel() {
     delegateMatchListEl.appendChild(row);
   }
 
-  if (!delegateNote.classList.contains('err')) {
+  delegateNote.classList.toggle('err', !!delegateRefusal);
+  if (delegateRefusal) {
+    delegateNote.textContent = delegateRefusal;
+  } else {
     if (app.autoDelegate && !app.autoDelegateAgent) {
       delegateNote.textContent = 'On, but no agent is chosen, so nothing is delegated.';
     } else if (app.autoDelegate && app.autoDelegateMatch.length === 0) {
@@ -298,7 +308,6 @@ export function addDelegateMatch() {
   // removal was still out was found in the list and dropped, and the
   // removal then took it. Found by review.
   if (!pattern) return;
-  delegateNote.classList.remove('err');
   saveAutoDelegate(() => (app.autoDelegateMatch.includes(pattern)
     ? null
     : { match: app.autoDelegateMatch.concat([pattern]) })).then(ok => {
@@ -392,8 +401,10 @@ function renderUnsavedRules() {
 //
 //   * one of the four switches above the rules could not be changed. Its
 //     box is left where it was put, so this is the only sign the daemon
-//     does not have that value, and it stays until the window is opened
-//     again and the boxes are drawn from what the daemon has;
+//     does not have that value. It stays until that switch is changed, or
+//     the window is opened again and the boxes are drawn from what the
+//     daemon has. Each switch has its own: a second that could not be
+//     changed used to be written over the first;
 //   * a rule the daemon refused. It is about one request, and goes with
 //     the next rule change that is applied;
 //   * with neither, how rules are kept.
@@ -402,12 +413,12 @@ function renderUnsavedRules() {
 // each other, a rule that was added took away the only sign of a switch
 // that was not changed (found by review, in a fix for the opposite: a
 // refused rule still said after a later one was applied).
-let switchFailure = '';
+const switchFailures = new Map();
 let ruleRefusal = '';
 
 function drawPermissionNote() {
-  permissionSettingsNote.classList.toggle('err', !!switchFailure);
-  const said = [switchFailure, ruleRefusal].filter(Boolean).join(' ');
+  permissionSettingsNote.classList.toggle('err', switchFailures.size > 0);
+  const said = [...switchFailures.values(), ruleRefusal].filter(Boolean).join(' ');
   if (said) {
     permissionSettingsNote.textContent = said;
   } else if (!app.canEditPermissions) {
@@ -501,8 +512,10 @@ async function setSessionSwitch(name, enabled) {
   if (!session.sessionID) return;
   try {
     applySessionPermissions(await apiClient.setSessionPermission(session.sessionID, name, enabled));
+    // The daemon has what this box shows again.
+    if (switchFailures.delete(name)) drawPermissionNote();
   } catch (err) {
-    switchFailure = `could not change ${name}: ${err.message}`;
+    switchFailures.set(name, `could not change ${name}: ${err.message}`);
     drawPermissionNote();
   }
 }
@@ -562,7 +575,7 @@ function drawPermissionSettings() {
 export function openPermissionSettings() {
   drawPermissionSettings();
   ruleToolInput.disabled = ruleMatchInput.disabled = ruleDecisionSelect.disabled = !app.canEditPermissions;
-  switchFailure = '';
+  switchFailures.clear();
   ruleRefusal = '';
   drawPermissionNote();
   renderPermissionRulesList();

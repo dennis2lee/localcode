@@ -13,6 +13,7 @@ A setting the daemon applied and could not save is shown as applied, with a warn
 * A control in the auto-delegation panel put back to what the daemon has when the daemon refuses the change
 * Changes made one after the other in the auto-delegation panel and the rules list sent one at a time: the older value no longer left on screen, a rule no longer missing or listed out of order, and the second of two patterns added quickly no longer dropping the first
 * The repeat guard's number held while a change to it is being sent
+* The permissions window naming each switch that could not be changed, where a second one replaced the first
 * An auto-delegation switch sent with an agent or patterns that could not be saved now applied, and announced to every window
 
 **Changed**

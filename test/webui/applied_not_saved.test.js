@@ -38,6 +38,8 @@ function fakeDelegation(start = {}) {
     refusal: null,
     route(body) {
       if (d.refusal) return d.refusal;
+      // The one agent this daemon does not know.
+      if (body.agent === 'ghost') return { status: 400, body: { error: 'unknown agent "ghost"' } };
       if (typeof body.enabled === 'boolean') held.auto_delegate = body.enabled;
       if (typeof body.agent === 'string') held.auto_delegate_agent = body.agent;
       if (Array.isArray(body.match)) held.auto_delegate_match = body.match.slice();
@@ -822,5 +824,177 @@ test('a rule change answered after a switch could not be changed leaves that sai
 
   assert.deepEqual(rulesShown(app), ['bash: "npm *" -> allow']);
   assert.match(note.textContent, /could not change read_outside/, 'the answer to the rule took away what says the switch was not changed');
+  assert.equal(note.classList.contains('err'), true);
+});
+
+// ---- The two lines that say something went wrong ----
+
+// Each window has one line under it that says, among other things, what
+// the daemon refused. Three rounds of review each found a sequence that
+// left one of them saying something untrue: a refusal kept after a later
+// change was applied, a switch failure taken away by a rule, the error
+// mark taken off words that stayed. Each line is now drawn from what it
+// has to say, in one place, and the tests below walk every order of the
+// things that can happen to it and hold the line to what happened, not
+// to how it is drawn.
+
+// sequences is every run of the events, from one long to `longest`.
+function sequences(events, longest) {
+  let runs = [[]];
+  const all = [];
+  for (let n = 0; n < longest; n++) {
+    runs = runs.flatMap((run) => events.map((e) => [...run, e]));
+    all.push(...runs);
+  }
+  return all;
+}
+
+test('the line under the delegation panel says a refusal exactly while the last change sent was refused', async () => {
+  const daemon = fakeDelegation({ auto_delegate_match: ['seed *'] });
+  const app = await load({
+    routes: {
+      'GET /api/settings': { ...defaultRoutes()['GET /api/settings'], auto_delegate_match: ['seed *'] },
+      'POST /api/settings/auto-delegate': (body) => daemon.route(body),
+    },
+  });
+  const note = app.el('delegate-note');
+  const events = {
+    // An agent the daemon does not know: sent, and refused.
+    refused: () => chooseAgent(app, 'ghost'),
+    // The switch: sent, and applied.
+    applied: () => turnDelegation(app, !app.el('delegate-enabled-checkbox').checked),
+    // A pattern the list has: nothing is sent.
+    nothing: () => addPattern(app, 'seed *'),
+    // A second pattern, added when the list does not have it and removed
+    // when it does: sent, and applied, either way.
+    pattern: async () => {
+      const row = Array.from(app.el('delegate-match-list').children).find((r) => r.className === 'match-row' && r.children[0].textContent === 'other *');
+      if (!row) return addPattern(app, 'other *');
+      row.children[1].click();
+      return app.settle(5);
+    },
+  };
+  for (const run of sequences(Object.keys(events), 4)) {
+    app.el('delegate-close').click();
+    app.el('auto-delegate-btn').click();
+    await app.settle(5);
+    let refused = false;
+    for (const name of run) {
+      await events[name]();
+      if (name === 'refused') refused = true;
+      if (name === 'applied' || name === 'pattern') refused = false;
+      const where = `after ${run.join(', ')} (at ${name}): ${note.textContent}`;
+      assert.equal(note.textContent.includes('unknown agent'), refused, `the refusal is ${refused ? 'not said' : 'still said'} ${where}`);
+      assert.equal(note.classList.contains('err'), refused, `the error mark is ${refused ? 'missing' : 'left on'} ${where}`);
+    }
+  }
+});
+
+test('the line under the rules says each switch that could not be changed and the last rule that was refused, and nothing else', async () => {
+  const daemon = fakeRules();
+  const failing = new Set();
+  const effective = {};
+  const app = await load({
+    routes: {
+      'POST /api/sessions/sess-1/permissions': (body) => {
+        if (failing.has(body.switch)) return { status: 500, body: { error: 'the session log could not be written' } };
+        effective[body.switch] = body.enabled;
+        return { effective: { ...effective }, source: {}, remembered: { read: [], write: [] } };
+      },
+      'POST /api/permissions/rules': (body) => daemon.add(body),
+      'POST /api/permissions/rules/remove': (body) => daemon.remove(body),
+    },
+  });
+  const note = app.el('permission-settings-note');
+  const BOXES = { skip_all: 'skip-permissions-checkbox', read_outside: 'read-outside-checkbox' };
+  const turn = async (name, fails) => {
+    if (fails) failing.add(name); else failing.delete(name);
+    const box = app.el(BOXES[name]);
+    box.checked = !box.checked;
+    box.fire('change');
+    await app.settle(5);
+  };
+  let fresh = 0;
+  const addOne = async (refused) => {
+    daemon.refusal = refused ? { status: 400, body: 'unknown decision "permit"' } : null;
+    await addRule(app, 'bash', `r${fresh++} *`, 'allow');
+    daemon.refusal = null;
+  };
+  // What each event leaves true: which switches the daemon refused and
+  // has not since taken, and whether the last rule change was refused.
+  const events = {
+    'skip_all fails': async (m) => { await turn('skip_all', true); m.failed.add('skip_all'); },
+    'skip_all taken': async (m) => { await turn('skip_all', false); m.failed.delete('skip_all'); },
+    'read_outside fails': async (m) => { await turn('read_outside', true); m.failed.add('read_outside'); },
+    'rule refused': async (m) => { await addOne(true); m.refused = true; },
+    'rule added': async (m) => { await addOne(false); m.refused = false; },
+    'rule removed': async (m) => {
+      const listed = ruleRows(app);
+      if (listed.length === 0) return;
+      listed[0].children[1].click();
+      await app.settle(5);
+      m.refused = false;
+    },
+  };
+  for (const run of sequences(Object.keys(events), 4)) {
+    // Opened again: the boxes are drawn from what the daemon has, and
+    // the line starts over.
+    app.el('permission-settings-close').click();
+    app.el('permission-status-btn').click();
+    await app.settle(5);
+    const m = { failed: new Set(), refused: false };
+    for (const name of run) {
+      await events[name](m);
+      const where = `after ${run.join(', ')} (at ${name}): ${note.textContent}`;
+      for (const sw of Object.keys(BOXES)) {
+        assert.equal(note.textContent.includes(`could not change ${sw}`), m.failed.has(sw), `${sw} ${m.failed.has(sw) ? 'is not said' : 'is still said'} ${where}`);
+      }
+      assert.equal(note.classList.contains('err'), m.failed.size > 0, `the error mark is wrong ${where}`);
+      assert.equal(/Failed to (add|remove) rule/.test(note.textContent), m.refused, `the refused rule ${m.refused ? 'is not said' : 'is still said'} ${where}`);
+      assert.equal(note.textContent.includes('Rules apply immediately'), m.failed.size === 0 && !m.refused, `the line about how rules are kept is wrong ${where}`);
+    }
+  }
+});
+
+test('a rule that was refused is said without the error mark, and goes when a rule is removed or the window is opened again', async () => {
+  const daemon = fakeRules({ bash: [{ match: 'ls *', decision: 'allow' }] });
+  const app = await openRules(daemon);
+  const note = app.el('permission-settings-note');
+
+  daemon.refusal = { status: 400, body: 'unknown decision "permit"' };
+  await removeRule(app, 'bash: "ls *" -> allow');
+  assert.match(note.textContent, /Failed to remove rule/);
+  assert.equal(note.classList.contains('err'), false, 'a refused rule is marked as the switches are');
+  daemon.refusal = null;
+  await removeRule(app, 'bash: "ls *" -> allow');
+  assert.doesNotMatch(note.textContent, /Failed to remove rule/, 'the refusal stayed after a rule was removed');
+
+  daemon.refusal = { status: 400, body: 'unknown decision "permit"' };
+  await addRule(app, 'bash', 'npm *', 'allow');
+  assert.match(note.textContent, /Failed to add rule/);
+  app.el('permission-settings-close').click();
+  app.el('permission-status-btn').click();
+  await app.settle();
+  assert.doesNotMatch(note.textContent, /Failed to add rule/, 'the refusal was still said when the window was opened again');
+});
+
+test('a switch that could not be changed is said in a run that cannot edit rules', async () => {
+  // No config.json path: the rules are read-only and the line says so.
+  // The four switches belong to the conversation and can still fail.
+  const app = await load({
+    routes: {
+      'GET /api/settings': { ...defaultRoutes()['GET /api/settings'], can_edit_permissions: false },
+      'POST /api/sessions/sess-1/permissions': { status: 500, body: { error: 'the session log could not be written' } },
+    },
+  });
+  app.el('permission-status-btn').click();
+  await app.settle();
+  const note = app.el('permission-settings-note');
+  assert.match(note.textContent, /rules are read-only/);
+  const box = app.el('write-outside-checkbox');
+  box.checked = true;
+  box.fire('change');
+  await app.settle();
+  assert.match(note.textContent, /could not change write_outside/);
   assert.equal(note.classList.contains('err'), true);
 });
