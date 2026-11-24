@@ -1,19 +1,19 @@
 # Changelog
 
-## Unreleased
+## v0.179.1
 
 Two desktop windows open at once no longer undo each other's panel and group changes.
 
 **Fixed**
 
-* One conversation's panels changed in a desktop window no longer putting back the panels a second open window saved for another conversation
-* The same for one panel's width or hidden state against another panel's, and for one group's fold against another group's
-* A conversation opened in a second window shown with the panels the first window left it, and no longer written down as opened for the first time
-* The conversation forgotten at the limit of 200 now the oldest in the file, not the oldest the window had read
-* The fold of a group deleted or renamed in one window dropped or carried when another window made it
-* The fold another window makes for a group that is not in this window's list left alone
-* A click on a group's header folding or opening it as that window shows it
-* A setting changed back to a value the window's storage still held, with storage that refuses writes, now written to the file
+* A conversation's panels changed in one desktop window no longer putting back what a second open window saved for another conversation
+* The same for one panel's width against another's, and one group's fold against another's
+* A conversation opened in a second window shown with the panels the first window left it
+* The conversation forgotten at the limit of 200 now the oldest in the file
+* A conversation deleted in one window forgotten in the file when another window had saved its panels
+* A folded group renamed in one window kept folded when another window had folded it
+* The fold another window makes for a group not in this window's list left alone
+* With browser storage that refuses writes, a change in the desktop window still written to the file whole
 
 ## v0.179.0
 

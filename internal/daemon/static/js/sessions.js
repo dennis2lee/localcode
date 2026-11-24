@@ -179,17 +179,25 @@ const foldedElsewhere = new Set();
 // which in the desktop window is as the file has them and not as this
 // page read them when it started (readShared in js/prefs.js), so the
 // folds another window has made since are written back with the change.
-// listed is the groups this page knows of as the change is made.
+//
+// A fold is another window's when its group is not in this page's list
+// as the fold arrives. The list is read here and not handed in: a group
+// header keeps the list it was drawn with, and a click on one while a
+// delete or a rename waited for the session list judged by a list that
+// still had the group. A delete and a rename read the folds before they
+// change the list, so the group they act on is still in it.
 //
 // The panel draws this page's copy, and a click on a group goes by that
 // copy. So when the read changed the copy, the panel is drawn again here,
 // before anything else can happen: a rename or a delete goes on to wait
 // for the session list, and a click made in that wait acted on folds the
 // panel was not showing.
-function collapsedGroupsNow(listed) {
+function collapsedGroupsNow() {
   const mine = readCollapsedGroups();
   const now = readCollapsedGroups(readShared);
-  const known = new Set(listed || []);
+  const known = new Set(app.sessionGroups || []);
+  // Once this page lists the group, its fold is one this page can judge.
+  for (const name of known) foldedElsewhere.delete(name);
   for (const name of now) {
     if (!mine.has(name) && !known.has(name)) foldedElsewhere.add(name);
   }
@@ -202,20 +210,18 @@ function collapsedGroupsNow(listed) {
 // would leave its name here for good — and fold a brand-new group of the
 // same name shut on the day it was made.
 //
-// deleted names a group this page has just had deleted: its fold is
-// looked for in the file whatever this page's own copy says.
+// deleted says a group has just been deleted through this page: its
+// fold is looked for in the file whatever this page's own copy says.
 export function forgetCollapsedGroups(groups, deleted) {
   const live = new Set(groups || []);
-  const listed = deleted === undefined ? [...live] : [...live, deleted];
-  // Once this page has been given the group, its fold is one this page
-  // can judge.
-  for (const name of listed) foldedElsewhere.delete(name);
+  // The same as collapsedGroupsNow does, for the times it is not reached.
+  for (const name of live) foldedElsewhere.delete(name);
   const gone = (collapsed) => [...collapsed].filter((name) => !live.has(name) && !foldedElsewhere.has(name));
   // This page's copy is asked first. This runs on every refresh of the
   // session list, and the file is only worth asking for when there is
   // something to drop.
   if (deleted === undefined && gone(readCollapsedGroups()).length === 0) return;
-  const collapsed = collapsedGroupsNow(listed);
+  const collapsed = collapsedGroupsNow();
   const dropped = gone(collapsed);
   if (dropped.length === 0) return;
   for (const name of dropped) collapsed.delete(name);
@@ -529,7 +535,7 @@ export function renderSessionList() {
       // folded since would open it there and change nothing here.
       const fold = !readCollapsedGroups().has(groupName);
       forgetCollapsedGroups(groups);
-      const cur = collapsedGroupsNow(groups);
+      const cur = collapsedGroupsNow();
       if (fold) cur.add(groupName);
       else cur.delete(groupName);
       writeCollapsedGroups(cur);
@@ -1099,7 +1105,7 @@ export async function promptCreateGroup() {
     // copy can hold a fold under the same name that another window made
     // for a group of its own and has dropped since, and the new group
     // would start folded shut.
-    collapsedGroupsNow(next);
+    collapsedGroupsNow();
     renderSessionList();
   } catch (err) {
     appendError(`could not create group: ${err}`);
@@ -1124,12 +1130,15 @@ export async function promptRenameGroup(oldName) {
     // The fold belongs to the group, not to the name it had. Carrying it
     // across means renaming a folded group leaves it folded, and the old
     // name does not stay behind to fold a future group of that name.
-    const collapsed = collapsedGroupsNow(app.sessionGroups);
+    const collapsed = collapsedGroupsNow();
     if (collapsed.has(oldName)) {
       collapsed.delete(oldName);
       collapsed.add(trimmed);
       writeCollapsedGroups(collapsed);
     }
+    // This page lists the new name from here on, so a fold under it is
+    // this page's to judge, whatever it was read as before the rename.
+    foldedElsewhere.delete(trimmed);
     app.sessionGroups = next;
     await loadSessions();
   } catch (err) {
@@ -1143,9 +1152,12 @@ export async function promptDeleteGroup(groupName) {
   const next = (app.sessionGroups || []).filter(g => g !== groupName);
   try {
     await apiClient.setGroups(next);
-    app.sessionGroups = next;
-    // The daemon has taken the deletion, so the fold goes with it.
+    // The daemon has taken the deletion, so the fold goes with it. Before
+    // the list is changed: reading the folds can draw the panel, and the
+    // sessions are in the order of the list it has been drawn with until
+    // loadSessions puts them in the order of the new one.
     forgetCollapsedGroups(next, groupName);
+    app.sessionGroups = next;
     await loadSessions();
   } catch (err) {
     appendError(`could not delete group: ${err}`);
