@@ -421,7 +421,7 @@ export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
 export { renderBrowserPanel, STALE_FALLBACK_MS, pagePoint, keyEventFor, editCommandFor, modifierBits, browserShown, inGUI } from './browser.js';
 export { renderSSHPanel, runStyle, keyAction, fitSize, inputPlace, sshShown, VIEWER, SCROLL_KEEP } from './ssh.js';
-export { fitsWith, makeRoomFor, SSH_BOUNDS } from './resize.js';
+export { fitsWith, makeRoomFor, showPanelsFor, forgetPanels, VIEWS_KEEP, SSH_BOUNDS } from './resize.js';
 export { snapshotURL } from './transcript.js';
 export { externalHref, openExternally } from './links.js';
 export { linkify, splitURL } from './markdown.js';

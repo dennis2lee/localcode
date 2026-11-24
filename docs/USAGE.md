@@ -2055,9 +2055,17 @@ The Web UI shares daemon sessions with the TUI and desktop window. The left pane
 |---|---|
 | Resize a panel | Drag the hairline on the panel's inner edge: the right edge of the session panel, the left edge of the browser panel and of the tasks/MCP panel. |
 | Back to the default width | Double-click that same handle |
-| Hide or show a panel | The toggle button in the header: at the far left for the session panel, at the far right for the tasks/MCP panel, and the globe right of the session name for the browser panel. The globe is there while the browser panel is (the desktop window, with the browser setting on). Hiding the browser panel keeps its page running: the model keeps the browser. |
+| Hide or show a panel | The toggle button in the header: at the far left for the session panel, at the far right for the tasks/MCP panel, the globe right of the session name for the browser panel, and the terminal beside it for the SSH panel. The globe is there while the browser panel is (the desktop window, with the browser setting on), the terminal while the SSH panel is (the SSH setting on). Hiding the browser panel keeps its page running: the model keeps the browser. Hiding the SSH panel keeps its connections. |
 
-Panel width and visibility persist in the browser or desktop window.
+Panel widths persist in the browser or desktop window, and so does whether the session panel is shown.
+
+Which of the browser, SSH and tasks/MCP panels are shown is kept for each conversation:
+
+* Opening a conversation again shows the panels it had, after a reload too.
+* A conversation opened for the first time starts with the panels on screen.
+* A panel localcode shows or hides itself counts: the SSH panel shown for a terminal's question, the browser or SSH panel hidden for the other in a narrow window.
+* A window narrower than when the conversation was left may not hold the browser and SSH panels both. The SSH panel stays.
+* The choices are stored in the browser or desktop window, for the 200 conversations opened most recently. Deleting a conversation drops its choice.
 
 | Panel | Default | Drag range |
 |---|---|---|

@@ -60,6 +60,99 @@ function store(patch) {
   }
 }
 
+// Which of the panels right of the conversation are shown belongs to the
+// conversation: the browser panel, the SSH panel, the tasks and MCP
+// panel. A conversation that works in a browser and one that works over
+// SSH want different columns, and going from one to the other meant
+// pressing the toggles each time.
+//
+// A conversation's choice is written down when it is opened for the
+// first time (as the panels are then) and on every change while it is
+// open, so it is the same after a reload as after a switch. Opening a
+// conversation again puts its panels back. The session panel on the left
+// stays the window's, and so do the widths.
+//
+// Kept as pairs, [conversation, the names of its hidden panels], the one
+// opened longest ago first: a conversation's id is not a safe key of an
+// object, and the order is what says which to forget.
+const VIEWS_KEY = 'localcode.panelViews';
+export const VIEWS_KEEP = 200;
+
+// The conversation on screen, whose choice a change is written to.
+let viewFor = '';
+
+function readViews() {
+  try {
+    const v = JSON.parse(localStorage.getItem(VIEWS_KEY));
+    if (!Array.isArray(v)) return [];
+    return v.filter((e) => Array.isArray(e) && typeof e[0] === 'string' && Array.isArray(e[1]));
+  } catch (err) {
+    return [];
+  }
+}
+
+function writeViews(views) {
+  try {
+    localStorage.setItem(VIEWS_KEY, JSON.stringify(views.slice(-VIEWS_KEEP)));
+  } catch (err) {
+    // ignore
+  }
+}
+
+// The panels a conversation chooses: name, panel, handle, toggle, and
+// the key the window's own record keeps it under.
+const rightPanels = () => [
+  ['browser', browserPanel, resizeBrowserHandle, toggleBrowserBtn, 'browserCollapsed'],
+  ['ssh', sshPanel, resizeSshHandle, toggleSshBtn, 'sshCollapsed'],
+  ['right', rightPanel, resizeRightHandle, toggleRightBtn, 'rightCollapsed'],
+];
+
+// rememberPanels writes down which panels the conversation on screen
+// shows.
+function rememberPanels() {
+  if (!viewFor) return;
+  const hidden = rightPanels().filter(([, panel]) => panel && panel.classList.contains('collapsed')).map(([name]) => name);
+  writeViews([...readViews().filter((e) => e[0] !== viewFor), [viewFor, hidden]]);
+}
+
+// showPanelsFor makes conversation id the one on screen: its panels as
+// it left them, or, opened for the first time, the panels as they are.
+export function showPanelsFor(id) {
+  viewFor = id || '';
+  if (!viewFor) return;
+  const views = readViews();
+  const mine = views.find((e) => e[0] === viewFor);
+  if (!mine) {
+    rememberPanels();
+    return;
+  }
+  // Opened again, it is the newest: the conversations forgotten are the
+  // ones not opened for longest.
+  if (views[views.length - 1] !== mine) writeViews([...views.filter((e) => e !== mine), mine]);
+  const patch = {};
+  for (const [name, panel, handle, btn, key] of rightPanels()) {
+    if (!panel) continue;
+    const collapsed = mine[1].includes(name);
+    setCollapsed(panel, handle, collapsed);
+    if (btn) btn.setAttribute('aria-expanded', String(!collapsed));
+    patch[key] = collapsed;
+  }
+  // The window's own record follows what is on screen, so a reload
+  // starts from it, and so does the next conversation opened for the
+  // first time.
+  store(patch);
+  // A window narrower than when the conversation was left may not hold
+  // the browser and SSH panels both. The SSH panel stays: a terminal may
+  // be waiting for the person.
+  if (showing(browserPanel) && showing(sshPanel)) makeRoomFor(sshPanel);
+}
+
+// forgetPanels drops a conversation's choice: it was deleted.
+export function forgetPanels(id) {
+  const views = readViews();
+  if (views.some((e) => e[0] === id)) writeViews(views.filter((e) => e[0] !== id));
+}
+
 export function setPanelWidth(panel, px, bounds = SIDE_BOUNDS) {
   panel.style.width = `${clamp(px, bounds)}px`;
 }
@@ -87,10 +180,19 @@ function roomFor(panel) {
 
 const showing = (p) => !!p && !p.hidden && !p.classList.contains('collapsed');
 
+// layoutWidth is the room the row of panels has, in the pixels their
+// widths are in: the body's width. The window's own width is not that on
+// a zoomed page (js/zoom.js): at 125% a window 1400 pixels wide lays out
+// 1120, and counted as 1400 it held panels that did not fit.
+function layoutWidth() {
+  const body = typeof document !== 'undefined' ? document.body : null;
+  return widthOf(body) || (typeof window !== 'undefined' && window.innerWidth) || 0;
+}
+
 // fitsWith reports whether the window holds every panel that would be on
 // screen at its minimum, with panel shown too: the side panels, the
 // transcript, the browser and SSH panels, and a handle for each.
-export function fitsWith(panel, width = (typeof window !== 'undefined' ? window.innerWidth : 0)) {
+export function fitsWith(panel, width = layoutWidth()) {
   if (!width) return true;
   let need = CENTER_MIN;
   const add = (p, min) => {
@@ -115,6 +217,7 @@ export function makeRoomFor(panel, width) {
   setCollapsed(other, handle, true);
   store({ [other === sshPanel ? 'sshCollapsed' : 'browserCollapsed']: true });
   if (btn) btn.setAttribute('aria-expanded', 'false');
+  rememberPanels();
 }
 
 // A handle drags one panel. side is which edge of that panel the handle
@@ -210,6 +313,7 @@ function attachToggle(btn, panel, handle, key) {
     store({ [key]: collapsed });
     btn.setAttribute('aria-expanded', String(!collapsed));
     if (!collapsed) btn.classList.remove('attention');
+    rememberPanels();
   });
 }
 
@@ -226,6 +330,7 @@ export function expandPanel(name) {
     toggleSshBtn.setAttribute('aria-expanded', 'true');
     toggleSshBtn.classList.remove('attention');
   }
+  rememberPanels();
 }
 
 // The browser panel is there while the browser setting is on in the

@@ -1,6 +1,7 @@
 import { sessionListEl, sessionIdEl, archiveToggleEl, archiveListEl, inputEl } from './dom.js';
 import { renderBrowserPanel } from './browser.js';
 import { renderSSHPanel } from './ssh.js';
+import { showPanelsFor, forgetPanels } from './resize.js';
 import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft, sessionWorking, overlayActivity } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, appendTool, clearTranscript } from './transcript.js';
@@ -1130,6 +1131,7 @@ export async function deleteSessionConfirm(s) {
     // about.
     forgetHistory(s.id);
     forgetDraft(s.id);
+    forgetPanels(s.id);
   } catch (err) {
     appendError(`failed to delete session: ${err}`);
     return;
@@ -1179,6 +1181,9 @@ export function selectSession(id, agent, workspace) {
   renderSessionHeader();
   clearTranscript();
   renderTasks();
+  // Before the two panels are drawn: they read which of them is shown,
+  // for their toggles and for the size the SSH panel tells its terminal.
+  showPanelsFor(id);
   renderBrowserPanel();
   renderSSHPanel();
   setWaiting(false);

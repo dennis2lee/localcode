@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+Each conversation keeps which panels are shown beside it.
+
+**Added**
+
+* The panels shown right of the conversation (browser, SSH, tasks and MCP) kept for each conversation and put back when it is opened again, after a reload too
+* A conversation opened for the first time starting with the panels on screen
+
+**Fixed**
+
+* The room for the browser and SSH panels counted in the page's own pixels: in a zoomed window both were shown where only one fits
+
 ## v0.177.1
 
 The SSH panel's screen no longer jumps while you type in a zoomed window.

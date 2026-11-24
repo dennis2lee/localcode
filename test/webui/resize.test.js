@@ -259,3 +259,151 @@ test('a drag whose side panel is collapsed under it ends without saving', async 
   assert.equal(left.style.width, '300px', 'the collapsed panel went on being resized');
   assert.equal(JSON.parse(app.storage.get('localcode.panelWidths')).left, undefined, 'a width nobody chose was remembered');
 });
+
+// Which panels right of the conversation are shown is the conversation's
+// own: the browser panel, the SSH panel, the tasks and MCP panel. A
+// conversation that works in a browser and one that works over SSH want
+// different columns, and switching between them meant pressing the
+// toggles each time.
+const collapsed = (app, id) => app.el(id).classList.contains('collapsed');
+const rightOf = (app) => ['browser-panel', 'ssh-panel', 'right-panel'].map((id) => (collapsed(app, id) ? 'hidden' : 'shown')).join(' ');
+const open = (app, id) => app.selectSession(id, 'general-purpose', '/tmp/workspace');
+const views = (app) => JSON.parse(app.storage.get('localcode.panelViews') || '[]');
+
+test('each conversation keeps which panels are shown right of it', async () => {
+  const app = await loadWide();
+  // The first conversation: the tasks panel hidden.
+  app.el('toggle-right').click();
+  assert.equal(rightOf(app), 'shown shown hidden');
+
+  // A conversation opened for the first time keeps what is on screen.
+  open(app, 'sess-2');
+  assert.equal(rightOf(app), 'shown shown hidden');
+  // And then makes its own choice: SSH hidden, tasks shown.
+  app.el('toggle-right').click();
+  app.el('toggle-ssh').click();
+  assert.equal(rightOf(app), 'shown hidden shown');
+
+  open(app, 'sess-1');
+  assert.equal(rightOf(app), 'shown shown hidden', 'the first conversation came back with the second one\'s panels');
+  assert.equal(app.el('toggle-right').getAttribute('aria-expanded'), 'false');
+  assert.equal(app.el('toggle-ssh').getAttribute('aria-expanded'), 'true');
+  assert.ok(collapsed(app, 'resize-right') && !collapsed(app, 'resize-ssh'), 'a handle goes with its panel');
+
+  open(app, 'sess-2');
+  assert.equal(rightOf(app), 'shown hidden shown');
+  assert.equal(app.el('toggle-ssh').getAttribute('aria-expanded'), 'false');
+  assert.equal(app.el('toggle-right').getAttribute('aria-expanded'), 'true');
+});
+
+test('the session panel and the widths stay the window\'s', async () => {
+  const app = await loadWide();
+  app.el('toggle-left').click();
+  open(app, 'sess-2');
+  app.el('toggle-left').click();
+  drag(app, 'resize-right', 1000, 900);
+  const width = app.el('right-panel').style.width;
+  open(app, 'sess-1');
+  assert.ok(!collapsed(app, 'left-panel'), 'the session panel followed a conversation');
+  assert.equal(app.el('right-panel').style.width, width);
+  assert.ok(views(app).every(([, hidden]) => !hidden.includes('left')));
+});
+
+test('a conversation\'s panels are the same after a reload, with the last change made in it', async () => {
+  const app = await loadWide();
+  app.el('toggle-ssh').click();
+  open(app, 'sess-2');
+  app.el('toggle-ssh').click();
+  app.el('toggle-right').click();
+  open(app, 'sess-1');
+  // Changed after coming back: this is the choice a reload must keep,
+  // not the one written when the conversation was left.
+  app.el('toggle-browser').click();
+  assert.equal(rightOf(app), 'hidden hidden shown');
+
+  const reopened = await loadWide({ localStorage: Object.fromEntries(app.storage) });
+  assert.equal(rightOf(reopened), 'hidden hidden shown');
+  open(reopened, 'sess-2');
+  assert.equal(rightOf(reopened), 'shown shown hidden');
+  // The window's own record follows what is on screen, so a window whose
+  // conversation has no choice written yet starts from it.
+  const fresh = await loadWide({ localStorage: { 'localcode.panelWidths': reopened.storage.get('localcode.panelWidths') } });
+  assert.equal(rightOf(fresh), 'shown shown hidden');
+});
+
+test('a panel the program shows or hides is the conversation\'s choice too', async () => {
+  const app = await loadWide();
+  app.el('browser-panel').hidden = false;
+  app.el('ssh-panel').hidden = false;
+  const { makeRoomFor } = app.internals;
+  // The window cannot hold both: showing SSH hides the browser panel.
+  makeRoomFor(app.el('ssh-panel'), 1100);
+  assert.equal(rightOf(app), 'hidden shown shown');
+  open(app, 'sess-2');
+  app.el('toggle-browser').click();
+  open(app, 'sess-1');
+  assert.equal(rightOf(app), 'hidden shown shown');
+});
+
+test('a window too narrow for a conversation\'s panels keeps the SSH panel', async () => {
+  const app = await loadWide();
+  app.el('browser-panel').hidden = false;
+  app.el('ssh-panel').hidden = false;
+  open(app, 'sess-2');
+  assert.equal(rightOf(app), 'shown shown shown');
+  open(app, 'sess-1');
+  // The page is 1100 pixels wide now: not room for both. (The harness
+  // has the two settings off, and opening a conversation hid the panels.)
+  app.doc.body.style.width = '1100px';
+  app.el('browser-panel').hidden = false;
+  app.el('ssh-panel').hidden = false;
+  open(app, 'sess-2');
+  assert.equal(rightOf(app), 'hidden shown shown');
+});
+
+test('the room the panels have is counted in the page\'s own pixels', async () => {
+  // A window 1400 pixels wide, zoomed to 125%, lays out 1120.
+  const app = await load({ globals: { innerWidth: 1400 } });
+  const { fitsWith } = app.internals;
+  app.el('browser-panel').hidden = false;
+  app.el('ssh-panel').hidden = false;
+  assert.equal(fitsWith(app.el('ssh-panel')), true, 'with no layout to ask, the window\'s width');
+  app.doc.body.style.width = '1120px';
+  assert.equal(fitsWith(app.el('ssh-panel')), false, 'counted as 1400, it held panels that did not fit');
+});
+
+test('a deleted conversation\'s panels are forgotten, and only the newest are kept', async () => {
+  const app = await loadWide();
+  const { showPanelsFor, forgetPanels, VIEWS_KEEP } = app.internals;
+  open(app, 'sess-2');
+  assert.deepEqual(views(app).map(([id]) => id), ['sess-1', 'sess-2']);
+  forgetPanels('sess-1');
+  assert.deepEqual(views(app).map(([id]) => id), ['sess-2']);
+  // An id is not a key of an object: one named like a property is kept
+  // like any other.
+  showPanelsFor('__proto__');
+  showPanelsFor('constructor');
+  assert.deepEqual(views(app).map(([id]) => id), ['sess-2', '__proto__', 'constructor']);
+  // Opened again, a conversation is the newest.
+  showPanelsFor('sess-2');
+  assert.deepEqual(views(app).map(([id]) => id), ['__proto__', 'constructor', 'sess-2']);
+  for (let i = 0; i < VIEWS_KEEP + 5; i++) {
+    showPanelsFor(`s-${i}`);
+    if (i === 100) showPanelsFor('sess-2');
+  }
+  const ids = views(app).map(([id]) => id);
+  assert.equal(ids.length, VIEWS_KEEP);
+  assert.equal(ids[ids.length - 1], `s-${VIEWS_KEEP + 4}`);
+  assert.ok(!ids.includes('constructor') && !ids.includes('s-0'), 'the ones opened longest ago go first');
+  assert.ok(ids.includes('sess-2'), 'one opened again since is kept');
+});
+
+test('a record that is not one starts the page all the same', async () => {
+  for (const bad of ['{', '{"a":1}', '[1,[2],["x"],["sess-1","ssh"],["sess-1",["ssh"]]]', 'null']) {
+    const app = await loadWide({ localStorage: { 'localcode.panelViews': bad } });
+    assert.ok(app.el('toggle-right'), bad);
+  }
+  // The one well-formed pair in the third is used.
+  const app = await loadWide({ localStorage: { 'localcode.panelViews': '[1,[2],["x"],["sess-1","ssh"],["sess-1",["ssh"]]]' } });
+  assert.equal(rightOf(app), 'shown hidden shown');
+});
