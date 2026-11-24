@@ -469,7 +469,7 @@ func (d *Daemon) handleSetBrowser(w http.ResponseWriter, r *http.Request) {
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetBrowserInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false
-			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
+			resp["error"] = notPersisted(err)
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)

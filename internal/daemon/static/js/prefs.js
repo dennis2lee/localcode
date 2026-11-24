@@ -40,6 +40,8 @@ function keeping() {
 }
 
 export function readPref(key) {
+  // What the storage would not take, in the desktop window: see unstored.
+  if (unstored.has(key)) return unstored.get(key);
   try {
     return localStorage.getItem(key);
   } catch {
@@ -47,24 +49,125 @@ export function readPref(key) {
   }
 }
 
+// What this page holds under a name that its storage would not take, in
+// the desktop window. Empty while storage takes writes, which is all but
+// always, and then nothing here is done differently for it.
+//
+// Storage that refuses a write goes on answering with the value from
+// before it. A page that went by that answer built its next change of a
+// value on one that left out its last, sent nothing for a change back to
+// the value the storage still gave, and took a fold another window made
+// for one it already had. The file is where the window's settings are
+// kept, so the page goes on from what it read from the file or sent to
+// it, and the storage only costs this address its own copy. A browser
+// tab sends nothing and has only its storage to go by, as before.
+const unstored = new Map();
+
 // writePref keeps value under key, or forgets key when value is empty.
 export function writePref(key, value) {
   const v = value === null || value === undefined || value === '' ? null : String(value);
-  let was;
+  const held = unstored.has(key);
+  let was = held ? unstored.get(key) : undefined;
   try {
-    was = localStorage.getItem(key);
+    if (!held) was = localStorage.getItem(key);
     if (v === null) localStorage.removeItem(key);
     else localStorage.setItem(key, v);
-  } catch { /* storage refused: this page keeps the choice, the next starts without it */ }
+    unstored.delete(key);
+  } catch {
+    // Storage refused: this page keeps the choice, and the next page at
+    // this address starts without it unless the window's file has it.
+    if (keeping() && OWN.test(key)) unstored.set(key, v);
+  }
   // Nothing changed, so there is nothing to send: several of these are
   // written again on every page load with the value they already have.
   if (was === v) return;
   keep(key, v);
 }
 
+// readShared is readPref for the read that starts a change to a value
+// holding several items: the panel widths, the panels each conversation
+// shows, the folded groups. A change to one item is written as the whole
+// value with that item changed, so the value the change starts from
+// decides what every other item is afterwards.
+//
+// Two browser tabs share one localStorage, and a tab starts from what the
+// other last wrote. Two desktop windows do not: each is on its own port,
+// with its own storage, filled from the file when its page started (see
+// js/kept.js). A change that started from that copy put every other item
+// back to what the page had read then. Hiding a panel for one
+// conversation in one window brought back the panel another window had
+// hidden for a different conversation since.
+//
+// So in the window the page's copy of key is made the file's again
+// first, with the synchronous request js/kept.js makes at the start of
+// the page: about a millisecond on loopback, and the answer has to be in
+// hand before the caller goes on. A read that only draws stays readPref.
+//
+// The page's copy is left as it is in two cases. A name this page has
+// changed and the daemon has not taken: the page's is then the newer of
+// the two, and the file's would undo the change that is on its way. And
+// any name when the daemon gives no answer that can be read: the change
+// is then made from what the page holds, as every change was before.
+export function readShared(key) {
+  const mine = readPref(key);
+  if (!keeping() || !OWN.test(key) || ahead.has(key)) return mine;
+  const kept = fileNow();
+  if (kept === null) return mine;
+  const has = Object.prototype.hasOwnProperty.call(kept, key);
+  // The daemon writes strings. Anything else is not read as a value,
+  // which is the rule js/kept.js has.
+  if (has && typeof kept[key] !== 'string') return mine;
+  const theirs = has ? kept[key] : null;
+  if (theirs !== mine) {
+    try {
+      if (theirs === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, theirs);
+      unstored.delete(key);
+    } catch {
+      // Storage refused: the change still starts from the file's, and
+      // the page goes on from it.
+      unstored.set(key, theirs);
+    }
+  }
+  return theirs;
+}
+
+// What the file holds, asked for once in a turn of the page: a panel's
+// toggle changes two of these values, and opening a conversation reads
+// two. null when there is no answer to read, which is also kept for the
+// turn, so a daemon that is not answering is asked once and not three
+// times with the page stopped for each.
+let asked = null;
+
+function fileNow() {
+  if (asked !== null) return asked.kept;
+  let kept = null;
+  try {
+    const ask = new XMLHttpRequest();
+    ask.open('GET', '/api/window/state', false);
+    ask.send(null);
+    if (ask.status === 200) {
+      const answer = JSON.parse(ask.responseText);
+      const k = answer && answer.available === true ? answer.kept : null;
+      // An object of names. null is a file not written yet, and an array
+      // has no names: neither is something to replace the page's copy
+      // with.
+      if (k && typeof k === 'object' && !Array.isArray(k)) kept = k;
+    }
+  } catch { /* no answer */ }
+  asked = { kept };
+  queueMicrotask(() => { asked = null; });
+  return kept;
+}
+
 // What has not reached the daemon yet, by name: a later write to a name
 // replaces an earlier one that was still waiting.
 const waiting = new Map();
+// The names whose value in this page the file does not have: changed
+// here, and not yet taken by the daemon. That is one waiting to be sent,
+// one in the request on its way, and one the daemon refused. readShared
+// leaves these as the page has them.
+const ahead = new Set();
 let sending = false;
 // Whether a change was made while a request was on its way.
 let arrived = false;
@@ -72,6 +175,7 @@ let arrived = false;
 function keep(key, value) {
   if (!keeping() || !OWN.test(key)) return;
   waiting.set(key, value);
+  ahead.add(key);
   arrived = true;
   send();
 }
@@ -106,6 +210,9 @@ async function send() {
           keepalive,
         });
         done = res.ok || (res.status >= 400 && res.status < 500);
+        // Taken: the file has these now, except a name changed again
+        // while this was on its way.
+        if (res.ok) for (const k of batch.keys()) if (!waiting.has(k)) ahead.delete(k);
       } catch {
         // The daemon is not answering, or the browser would not send
         // it as one that outlives the page.
@@ -147,7 +254,10 @@ function handOver() {
       const key = localStorage.key(i);
       if (typeof key !== 'string' || !OWN.test(key)) continue;
       const value = localStorage.getItem(key);
-      if (value !== null && value !== '') waiting.set(key, value);
+      if (value !== null && value !== '') {
+        waiting.set(key, value);
+        ahead.add(key);
+      }
     }
   } catch { /* storage refused: nothing to hand over */ }
   if (waiting.size > 0) send();

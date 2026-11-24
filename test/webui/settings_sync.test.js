@@ -97,7 +97,7 @@ test('a /keep-going typed anywhere moves the settings checkbox here', async () =
 });
 
 test('the checkbox posts the change to the daemon', async () => {
-  const app = await load({ routes: { 'POST /api/settings/keep-going': { status: 204 } } });
+  const app = await load({ routes: { 'POST /api/settings/keep-going': (body) => ({ keep_going: body.enabled, applied: true, persisted: true }) } });
   app.el('settings-btn').click();
   await app.settle();
 

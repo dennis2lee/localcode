@@ -46,8 +46,12 @@ client to the same release when both are yours.
     over the network. `404` unknown session, task, schedule, or pending
     prompt. `409` a turn (or delete-all, or the old daemon still draining
     a session after an update) holds the session; both shipped clients
-    queue on it. `500` the change applied but did not persist, or the
-    operation failed mid-way. `501` shutdown is not wired in this daemon.
+    queue on it. `500` the operation failed mid-way. `501` shutdown is not
+    wired in this daemon.
+  * A setting or permission rule that was applied and could not be
+    written to `config.json` is not an error status. Its route answers
+    `200` with `"applied": true`, `"persisted": false` and the reason in
+    `"error"`, and the daemon runs the new value until it restarts.
 * A write whose path is not canonical (a `.` or `..` segment, or a
   doubled slash) is answered `400` rather than redirected
   (`CanonicalWrites` in `internal/daemon/canonical.go`, in front of the
@@ -148,7 +152,7 @@ re-reads this endpoint on load.
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
 | `GET /api/settings` | nothing | `200` the snapshot above | none |
-| `POST /api/settings/auto-delegate` | `{"enabled"?, "agent"?, "match"?}`; pointers, so one field can move alone | `204` | `400` unknown agent or fewer than two agents configured; `400` bad body (text error); `500` applied for this run but not persisted (text error) |
+| `POST /api/settings/auto-delegate` | `{"enabled"?, "agent"?, "match"?}`; pointers, so one field can move alone | `200 {"auto_delegate", "auto_delegate_agent", "auto_delegate_match", "applied": true, "persisted", "error"?}`: the whole setting as the daemon now holds it. The switch and the target (agent and patterns) are written separately: `persisted` is false when either was not written, and `error` names each | `400` unknown agent or fewer than two agents configured; `400` bad body (text error) |
 | `POST /api/settings/smart-agent` | `{"enabled"}` | `200 {"smart_agent", "applied": true, "persisted", "error"?}`; `applied` is always true, `persisted` is the part that can fail | `400` bad body (text error) |
 | `POST /api/settings/browser` | `{"enabled"}`; off also quits the browser | `200 {"browser", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/ssh` | `{"enabled"}`; off also closes every SSH connection | `200 {"ssh", "applied": true, "persisted", "error"?}` | `400` bad body (text error); `403` refused by the SSH request guard (see SSH below) |
@@ -156,9 +160,9 @@ re-reads this endpoint on load.
 | `POST /api/browser/import` | nothing | `200 {"from", "profile", "skipped"}`: copies the person's Chrome or Edge profile in again and restarts the browser, closing every tab | `404` no browser in this daemon; `409` the browser setting is off; `400` no profile to copy |
 | `POST /api/settings/orchestrate` | `{"enabled"}` | `200 {"orchestrate", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/model-invocable` | `{"enabled"}` | `200 {"model_invocable", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
-| `POST /api/settings/keep-going` | `{"enabled"}` | `204` | `400` bad body (text error); `500` applied but not persisted (text error) |
+| `POST /api/settings/keep-going` | `{"enabled"}` | `200 {"keep_going", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/fold-thinking` | `{"enabled"}` | `200 {"fold_thinking", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
-| `POST /api/settings/repeat-limit` | `{"limit"}`; 0 turns the guard off | `204` | `400` outside 0..max (text error); `500` applied but not persisted (text error) |
+| `POST /api/settings/repeat-limit` | `{"limit"}`; 0 turns the guard off | `200 {"repeat_limit", "applied": true, "persisted", "error"?}` | `400` bad body, or a limit outside 0..max (text error) |
 
 ### The desktop window's own settings
 
@@ -169,6 +173,22 @@ and reads the set back before it draws, because the window's
 `localStorage` is tied to a port the window does not always get back.
 The file is `~/.localcode/window-state.json`. A browser tab calls neither
 route.
+
+Three names hold several items each: `localcode.panelWidths`,
+`localcode.panelViews` and `localcode.collapsedGroups`. The page writes
+each whole. It calls `GET` again before it changes one item and starts
+from the value the file has then. The items a second open window wrote
+are sent back unchanged.
+
+The page starts from its own copy in two cases:
+
+* A write of the same name from this page has not been answered with
+  `204` yet. The page then makes no `GET`.
+* The `GET` gives no answer the page can read.
+
+The read and the write are two requests. Each window has its own daemon.
+Two windows that change the same name within those two requests keep the
+value written last.
 
 Both routes pass the SSH request guard (see SSH below) and answer `403`
 when it refuses.
@@ -182,9 +202,9 @@ when it refuses.
 
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
-| `POST /api/permissions/skip` | `{"enabled"}` | `204` | `400` bad body (text error); `500` applied but not persisted (text error) |
-| `POST /api/permissions/rules` | `{"tool", "match", "decision"}`; all three required | `204` | `400` a field missing, or a `decision` that is not a known one (text error); `500` applied but not persisted (text error) |
-| `POST /api/permissions/rules/remove` | `{"tool", "match", "decision"}`; the exact rule to remove | `204` | `400` a field missing, or a `decision` that is not a known one (text error); `500` applied but not persisted (text error) |
+| `POST /api/permissions/skip` | `{"enabled"}` | `200 {"skip_permissions", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
+| `POST /api/permissions/rules` | `{"tool", "match", "decision"}`; all three required | `200 {"permission_rules", "applied": true, "persisted", "error"?}`: every rule the daemon now holds, as `GET /api/settings` reports them | `400` a field missing, or a `decision` that is not a known one (text error) |
+| `POST /api/permissions/rules/remove` | `{"tool", "match", "decision"}`; the exact rule to remove | `200 {"permission_rules", "applied": true, "persisted", "error"?}`, as for adding one | `400` a field missing, or a `decision` that is not a known one (text error) |
 
 ### Workspace
 

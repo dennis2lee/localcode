@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.179.1
+## v0.179.3
 
 An SSH terminal no longer takes text typed after Ctrl+C as gone, nor a slow prompt or a slow answer to Ctrl+C as text left on the command line.
 
@@ -17,6 +17,41 @@ An SSH terminal no longer takes text typed after Ctrl+C as gone, nor a slow prom
 * A line you typed on and erased after such a prompt no longer read as yours until your Enter or Ctrl+C
 * `run` after a Ctrl+C waiting up to 10 seconds for the prompt that answers it, up from 2: no longer refused on a slow remote for text the shell had dropped
 * The refusal saying so when no prompt followed the model's `ctrl+c`
+
+## v0.179.2
+
+A setting the daemon applied and could not save is shown as applied, with a warning, in the four places that called it not changed.
+
+**Fixed**
+
+* The keep-going box and the repeat guard in the settings window no longer put back and marked "Not changed" when the daemon applied the change and could not write `config.json`: the applied value shown, with the warning that it lasts only until the daemon restarts
+* That warning kept under each of the two until it is saved, or until the setting is moved from another window or with `/keep-going` or `/repeat-limit`
+* The auto-delegation panel showing the switch, agent and patterns the daemon is running after a save that failed, with one warning for the switch and one for the agent and patterns
+* The rules in the permissions window listing a rule that was added, and not one that was removed, after a save that failed, with each such rule named in a warning until it is saved
+* A control in the auto-delegation panel put back to what the daemon has when the daemon refuses the change
+* Changes made one after the other in the auto-delegation panel and the rules list sent one at a time: the older value no longer left on screen, a rule no longer missing or listed out of order, and the second of two patterns added quickly no longer dropping the first
+* The repeat guard's number held while a change to it is being sent
+* The permissions window naming each switch that could not be changed, where a second one replaced the first
+* An auto-delegation switch sent with an agent or patterns that could not be saved now applied, and announced to every window
+
+**Changed**
+
+* `POST /api/settings/keep-going`, `repeat-limit` and `auto-delegate`, and `POST /api/permissions/skip`, `rules` and `rules/remove`, answer `200` with the value, `"applied": true`, `"persisted"` and an `"error"` when not saved, where they answered `204`, and `500` for a save that failed
+
+## v0.179.1
+
+Two desktop windows open at once no longer undo each other's panel and group changes.
+
+**Fixed**
+
+* A conversation's panels changed in one desktop window no longer putting back what a second open window saved for another conversation
+* The same for one panel's width against another's, and one group's fold against another's
+* A conversation opened in a second window shown with the panels the first window left it
+* The conversation forgotten at the limit of 200 now the oldest in the file
+* A conversation deleted in one window forgotten in the file when another window had saved its panels
+* A folded group renamed in one window kept folded when another window had folded it
+* The fold another window makes for a group not in this window's list left alone
+* With browser storage that refuses writes, a change in the desktop window still written to the file whole
 
 ## v0.179.0
 

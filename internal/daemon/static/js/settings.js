@@ -168,92 +168,22 @@ async function toggleFoldThinking() {
   }
 }
 
-// Keep going.
-//
-// The tab carries the scope (muse models only); this only moves the box
-// and reports a save that did not stick.
-function renderKeepGoing(warning) {
-  keepGoingCheckbox.checked = !!app.keepGoing;
-  keepGoingWarnEl.textContent = warning || '';
-  keepGoingWarnEl.hidden = !warning;
-}
-
-// refreshKeepGoingIfOpen redraws the box when the switch moved somewhere
-// else: "/keep-going" typed at any prompt, or another window.
-export function refreshKeepGoingIfOpen() {
-  if (settings.isOpen) renderKeepGoing();
-}
-
-async function toggleKeepGoing() {
-  const enabled = keepGoingCheckbox.checked;
-  keepGoingCheckbox.disabled = true;
-  try {
-    await apiClient.setKeepGoing(enabled);
-    app.keepGoing = enabled;
-    renderKeepGoing();
-  } catch (err) {
-    keepGoingCheckbox.checked = !enabled;
-    renderKeepGoing(`Not changed: ${err}`);
-  } finally {
-    keepGoingCheckbox.disabled = false;
-  }
-}
-
-// The repeat guard.
-//
-// A checkbox and a number, because "off" and "give it room" are different
-// sizes of the same request. The number is only editable while the box
-// is checked; unchecking sends zero, checking sends the number.
-function renderRepeatLimit(warning) {
-  const on = app.repeatLimit > 0;
-  repeatLimitCheckbox.checked = on;
-  repeatLimitInput.disabled = !on;
-  if (on) repeatLimitInput.value = String(app.repeatLimit);
-  repeatLimitWarnEl.textContent = warning || '';
-  repeatLimitWarnEl.hidden = !warning;
-}
-
-export function refreshRepeatLimitIfOpen() {
-  if (settings.isOpen) renderRepeatLimit();
-}
-
-async function applyRepeatLimit() {
-  const wanted = repeatLimitCheckbox.checked ? Math.max(1, parseInt(repeatLimitInput.value, 10) || 3) : 0;
-  repeatLimitCheckbox.disabled = true;
-  repeatLimitInput.disabled = true;
-  try {
-    await apiClient.setRepeatLimit(wanted);
-    app.repeatLimit = wanted;
-    renderRepeatLimit();
-  } catch (err) {
-    renderRepeatLimit(`Not changed: ${err}`);
-  } finally {
-    repeatLimitCheckbox.disabled = false;
-    repeatLimitInput.disabled = app.repeatLimit === 0;
-  }
-}
-
-// Smart Agent.
-//
-// How one agent works: its prompt, its tools, fallback, caching, the turn
-// log. It delegates nothing; handing work to other agents is
-// orchestration, below. The switch is the whole control, and the note says
-// where the turn log is, which is the one thing it adds that a person
-// goes looking for.
-
 // A change the daemon applied and could not write to config.json is told
 // under its switch, and stays told until that switch is saved.
 //
-// Each of the five draws below is called two ways: with the outcome of a
+// Each of the seven draws below is called two ways: with the outcome of a
 // save (a warning, or '' for a save that reached the file), and with
 // nothing, to draw again because something else changed: another
 // setting, another window, the settings arriving. Drawn again with
 // nothing, a warning used to go: turn Smart Agent on with a config that
 // could not be written, then turn SSH on, and the first warning was gone
 // while the switch it was about was still not saved.
+//
+// The delegation panel keeps its two here as well (modals.js), under
+// "auto_delegate" and "auto_delegate_target".
 const unsaved = {};
 
-function unsavedWarning(name, outcome) {
+export function unsavedWarning(name, outcome) {
   if (outcome !== undefined) unsaved[name] = outcome || '';
   return unsaved[name] || '';
 }
@@ -267,6 +197,113 @@ export function movedElsewhere(name) {
   unsaved[name] = '';
 }
 
+// Keep going and the repeat guard have one line under them where the
+// other switches have two, so a request the daemon refused is said on the
+// line the unsaved warning is kept on. The refusal is about one request
+// and is drawn once. The warning is about the value the daemon is still
+// running, so it is drawn beside the refusal and is still there on the
+// next draw.
+function underSwitch(name, outcome, refused) {
+  const kept = unsavedWarning(name, outcome);
+  return refused && kept ? `${refused} ${kept}` : refused || kept;
+}
+
+// Keep going.
+//
+// The tab carries the scope (muse models only); this only moves the box
+// and reports a save that did not stick.
+function renderKeepGoing(outcome, refused) {
+  const warning = underSwitch('keep_going', outcome, refused);
+  keepGoingCheckbox.checked = !!app.keepGoing;
+  keepGoingWarnEl.textContent = warning;
+  keepGoingWarnEl.hidden = !warning;
+}
+
+// refreshKeepGoingIfOpen redraws the box when the switch moved somewhere
+// else: "/keep-going" typed at any prompt, or another window.
+export function refreshKeepGoingIfOpen() {
+  if (settings.isOpen) renderKeepGoing();
+}
+
+// The daemon answers in two parts, as it does for Smart Agent: "applied"
+// is the state the box has to show, "persisted" only whether config.json
+// was written. An answer that fails is a change that was not made.
+async function toggleKeepGoing() {
+  const enabled = keepGoingCheckbox.checked;
+  keepGoingCheckbox.disabled = true;
+  try {
+    const res = await apiClient.setKeepGoing(enabled);
+    app.keepGoing = res && 'keep_going' in res ? !!res.keep_going : enabled;
+    renderKeepGoing(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
+  } catch (err) {
+    // Nothing was applied. The box goes back to what the daemon has.
+    renderKeepGoing(undefined, `Not changed: ${err}`);
+  } finally {
+    keepGoingCheckbox.disabled = false;
+  }
+}
+
+// The repeat guard.
+//
+// A checkbox and a number, because "off" and "give it room" are different
+// sizes of the same request. The number is only editable while the box
+// is checked; unchecking sends zero, checking sends the number.
+//
+// Both are held while a change is out, and a draw in that time leaves
+// them held. The daemon announces a change before it answers it, and the
+// draw that announcement brings used to open the number again with the
+// request still out: a second number could be sent, and the answer to
+// the first then put the first number back over it.
+let repeatLimitOut = false;
+
+function renderRepeatLimit(outcome, refused) {
+  const warning = underSwitch('repeat_limit', outcome, refused);
+  const on = app.repeatLimit > 0;
+  repeatLimitCheckbox.checked = on;
+  repeatLimitInput.disabled = repeatLimitOut || !on;
+  if (on) repeatLimitInput.value = String(app.repeatLimit);
+  repeatLimitWarnEl.textContent = warning;
+  repeatLimitWarnEl.hidden = !warning;
+}
+
+export function refreshRepeatLimitIfOpen() {
+  if (settings.isOpen) renderRepeatLimit();
+}
+
+// Answered in two parts as well. The one refusal a person can cause from
+// here is a number past the daemon's ceiling, which is a 400 and changes
+// nothing.
+async function applyRepeatLimit() {
+  const wanted = repeatLimitCheckbox.checked ? Math.max(1, parseInt(repeatLimitInput.value, 10) || 3) : 0;
+  repeatLimitOut = true;
+  repeatLimitCheckbox.disabled = true;
+  repeatLimitInput.disabled = true;
+  try {
+    const res = await apiClient.setRepeatLimit(wanted);
+    app.repeatLimit = res && typeof res.repeat_limit === 'number' ? res.repeat_limit : wanted;
+    renderRepeatLimit(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
+  } catch (err) {
+    // Nothing was applied. The box and the number go back to what the
+    // daemon has.
+    renderRepeatLimit(undefined, `Not changed: ${err}`);
+  } finally {
+    repeatLimitOut = false;
+    repeatLimitCheckbox.disabled = false;
+    repeatLimitInput.disabled = app.repeatLimit === 0;
+  }
+}
+
+// Smart Agent.
+//
+// How one agent works: its prompt, its tools, fallback, caching, the turn
+// log. It delegates nothing; handing work to other agents is
+// orchestration, below. The switch is the whole control, and the note says
+// where the turn log is, which is the one thing it adds that a person
+// goes looking for.
 function renderSmartAgent(outcome) {
   const warning = unsavedWarning('smart_agent', outcome);
   smartAgentCheckbox.checked = !!app.smartAgent;

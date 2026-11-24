@@ -165,7 +165,7 @@ func (s *playedShell) step(op string) bool {
 	}
 	// With a line of the person's sent and its prompt not here, a command
 	// is running as far as the terminal knows. What is typed then is not
-	// this test's: see IMPROVEMENTS item 65.
+	// this test's: see IMPROVEMENTS item 67.
 	if s.sending {
 		return false
 	}

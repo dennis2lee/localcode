@@ -2,7 +2,7 @@ import { sessionListEl, sessionIdEl, archiveToggleEl, archiveListEl, inputEl } f
 import { renderBrowserPanel } from './browser.js';
 import { renderSSHPanel } from './ssh.js';
 import { showPanelsFor, forgetPanels } from './resize.js';
-import { readPref, writePref } from './prefs.js';
+import { readPref, readShared, writePref } from './prefs.js';
 import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft, sessionWorking, overlayActivity } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, appendTool, clearTranscript } from './transcript.js';
@@ -130,7 +130,9 @@ export function sessionMatchesFilter(s, q) {
 // shut should not fold it in the first. localStorage is per browser
 // profile, which is exactly that scope. (The desktop window also keeps it
 // in its own file, so it is there after a restart: see js/prefs.js. A
-// window already open is still not folded by another.)
+// window already open is not folded by another until it changes a fold
+// of its own, which starts from the folds as the file has them: see
+// collapsedGroupsNow.)
 //
 // Every read and write goes through js/prefs.js, which wraps them: a
 // private window, cleared site data or a storage quota all throw, and
@@ -143,9 +145,9 @@ const GROUP_COLLAPSE_KEY = 'localcode.collapsedGroups';
 // valueOf would draw folded shut on the day it was made and never open
 // again, with its sessions unreachable from the panel. A Set has no
 // inherited members to collide with.
-export function readCollapsedGroups() {
+export function readCollapsedGroups(read = readPref) {
   try {
-    const raw = readPref(GROUP_COLLAPSE_KEY);
+    const raw = read(GROUP_COLLAPSE_KEY);
     if (!raw) return new Set();
     const parsed = JSON.parse(raw);
     return new Set(Array.isArray(parsed) ? parsed.filter(n => typeof n === 'string') : []);
@@ -158,22 +160,72 @@ export function writeCollapsedGroups(collapsed) {
   writePref(GROUP_COLLAPSE_KEY, JSON.stringify([...collapsed]));
 }
 
+// The folds this page read from the file for a group that was not in its
+// list at the time. They are for the desktop window with a second window
+// open, and there are none in a browser tab.
+//
+// Each window has its own daemon, and a daemon does not hear what is done
+// to the groups through another: a group made there is not listed here,
+// and one deleted or renamed here is still listed there. So a fold that
+// arrives from the file for a name this page does not list is not a fold
+// left behind by a group that is gone. This page drops those when it sees
+// the group go. It is another window's fold of a group this one cannot
+// see, and dropping it would undo that window's change.
+const foldedElsewhere = new Set();
+
+// collapsedGroupsNow is the read that starts a change to the folds: one
+// group folded or opened, a fold carried to a new name, the folds of
+// groups that are gone dropped. It is the folds as they are kept now,
+// which in the desktop window is as the file has them and not as this
+// page read them when it started (readShared in js/prefs.js), so the
+// folds another window has made since are written back with the change.
+//
+// A fold is another window's when its group is not in this page's list
+// as the fold arrives. The list is read here and not handed in: a group
+// header keeps the list it was drawn with, and a click on one while a
+// delete or a rename waited for the session list judged by a list that
+// still had the group. A delete and a rename read the folds before they
+// change the list, so the group they act on is still in it.
+//
+// The panel draws this page's copy, and a click on a group goes by that
+// copy. So when the read changed the copy, the panel is drawn again here,
+// before anything else can happen: a rename or a delete goes on to wait
+// for the session list, and a click made in that wait acted on folds the
+// panel was not showing.
+function collapsedGroupsNow() {
+  const mine = readCollapsedGroups();
+  const now = readCollapsedGroups(readShared);
+  const known = new Set(app.sessionGroups || []);
+  // Once this page lists the group, its fold is one this page can judge.
+  for (const name of known) foldedElsewhere.delete(name);
+  for (const name of now) {
+    if (!mine.has(name) && !known.has(name)) foldedElsewhere.add(name);
+  }
+  if (now.size !== mine.size || [...now].some((name) => !mine.has(name))) renderSessionList();
+  return now;
+}
+
 // forgetCollapsedGroups drops folds for groups that are gone. Nothing on
 // the server prunes this, so a group that was folded and then deleted
 // would leave its name here for good — and fold a brand-new group of the
 // same name shut on the day it was made.
-export function forgetCollapsedGroups(groups) {
+//
+// deleted says a group has just been deleted through this page: its
+// fold is looked for in the file whatever this page's own copy says.
+export function forgetCollapsedGroups(groups, deleted) {
   const live = new Set(groups || []);
-  const collapsed = readCollapsedGroups();
-  let dropped = false;
-  for (const name of [...collapsed]) {
-    if (!live.has(name)) {
-      collapsed.delete(name);
-      dropped = true;
-    }
-  }
-  if (dropped) writeCollapsedGroups(collapsed);
-  return collapsed;
+  // The same as collapsedGroupsNow does, for the times it is not reached.
+  for (const name of live) foldedElsewhere.delete(name);
+  const gone = (collapsed) => [...collapsed].filter((name) => !live.has(name) && !foldedElsewhere.has(name));
+  // This page's copy is asked first. This runs on every refresh of the
+  // session list, and the file is only worth asking for when there is
+  // something to drop.
+  if (deleted === undefined && gone(readCollapsedGroups()).length === 0) return;
+  const collapsed = collapsedGroupsNow();
+  const dropped = gone(collapsed);
+  if (dropped.length === 0) return;
+  for (const name of dropped) collapsed.delete(name);
+  writeCollapsedGroups(collapsed);
 }
 
 // runningTitle says what is working in a session whose light blinks: its
@@ -477,9 +529,15 @@ export function renderSessionList() {
       // than one that does nothing. Dragging is off while filtering for
       // the same reason.
       if (filtering) return;
-      const cur = forgetCollapsedGroups(groups);
-      if (cur.has(groupName)) cur.delete(groupName);
-      else cur.add(groupName);
+      // The group goes to the opposite of what this panel shows, which is
+      // this page's own copy, read before anything makes it the file's.
+      // Decided from the file's, a click on a group another window had
+      // folded since would open it there and change nothing here.
+      const fold = !readCollapsedGroups().has(groupName);
+      forgetCollapsedGroups(groups);
+      const cur = collapsedGroupsNow();
+      if (fold) cur.add(groupName);
+      else cur.delete(groupName);
       writeCollapsedGroups(cur);
       renderSessionList();
     });
@@ -1043,6 +1101,11 @@ export async function promptCreateGroup() {
   try {
     await apiClient.setGroups(next);
     app.sessionGroups = next;
+    // A group made here is drawn as the folds are kept now. This page's
+    // copy can hold a fold under the same name that another window made
+    // for a group of its own and has dropped since, and the new group
+    // would start folded shut.
+    collapsedGroupsNow();
     renderSessionList();
   } catch (err) {
     appendError(`could not create group: ${err}`);
@@ -1067,12 +1130,15 @@ export async function promptRenameGroup(oldName) {
     // The fold belongs to the group, not to the name it had. Carrying it
     // across means renaming a folded group leaves it folded, and the old
     // name does not stay behind to fold a future group of that name.
-    const collapsed = readCollapsedGroups();
+    const collapsed = collapsedGroupsNow();
     if (collapsed.has(oldName)) {
       collapsed.delete(oldName);
       collapsed.add(trimmed);
       writeCollapsedGroups(collapsed);
     }
+    // This page lists the new name from here on, so a fold under it is
+    // this page's to judge, whatever it was read as before the rename.
+    foldedElsewhere.delete(trimmed);
     app.sessionGroups = next;
     await loadSessions();
   } catch (err) {
@@ -1086,9 +1152,12 @@ export async function promptDeleteGroup(groupName) {
   const next = (app.sessionGroups || []).filter(g => g !== groupName);
   try {
     await apiClient.setGroups(next);
+    // The daemon has taken the deletion, so the fold goes with it. Before
+    // the list is changed: reading the folds can draw the panel, and the
+    // sessions are in the order of the list it has been drawn with until
+    // loadSessions puts them in the order of the new one.
+    forgetCollapsedGroups(next, groupName);
     app.sessionGroups = next;
-    // The daemon has taken the deletion, so the fold goes with it.
-    forgetCollapsedGroups(next);
     await loadSessions();
   } catch (err) {
     appendError(`could not delete group: ${err}`);
