@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.179.1
+
+An SSH terminal no longer takes a slow prompt, or a slow answer to Ctrl+C, for text left on the command line.
+
+**Fixed**
+
+* The model's `run` typed only once the prompt is drawn, where a shell takes a while over its prompt (a prompt command, a status line from git): on bash without `PS0` the output no longer carries the prompt and the command's own echo
+* A line you typed on and erased after such a prompt no longer read as yours until your Enter or Ctrl+C
+* `run` after the model's `ctrl+c` waiting up to 10 seconds for the prompt that answers it, up from 2: no longer refused on a slow remote for text the shell had dropped
+* The refusal saying so when no prompt followed the model's `ctrl+c`
+
 ## v0.179.0
 
 Settings made in the desktop window are still there after it is closed and opened again.

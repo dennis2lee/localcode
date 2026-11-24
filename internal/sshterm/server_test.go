@@ -34,9 +34,18 @@ type testServer struct {
 	shell    string // what $SHELL says on an exec channel; "" refuses exec
 	// noKeepalive stops answering keepalives.
 	noKeepalive atomicBool
+	// A remote that is slow, or a shell that is: promptDelay is how long
+	// the shell takes over its prompt after it has marked the end of a
+	// command (a prompt command of the person's), interruptDelay how long
+	// over answering Ctrl+C at the prompt. With noInterrupt it does not
+	// take Ctrl+C as an interrupt at all ("stty intr undef").
+	promptDelay    time.Duration
+	interruptDelay time.Duration
+	noInterrupt    bool
 
 	mu       sync.Mutex
 	received []byte // every byte a shell was sent
+	early    []byte // what it was sent while it was working out a prompt
 	shells   []*fakeShell
 	sizes    [][2]int
 	ln       net.Listener
@@ -213,7 +222,7 @@ func (s *testServer) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			}
 		case "shell":
 			r.Reply(true, nil)
-			sh = &fakeShell{s: s, ch: ch, in: make(chan byte, 1<<16), reading: true}
+			sh = &fakeShell{s: s, ch: ch, in: make(chan byte, 1<<16), reading: true, ps1: "me@test:~$ "}
 			s.mu.Lock()
 			s.shells = append(s.shells, sh)
 			s.mu.Unlock()
@@ -246,6 +255,14 @@ func (s *testServer) got() string {
 	return string(s.received)
 }
 
+// gotEarly is what a shell was sent between marking the end of a command
+// and drawing the prompt after it.
+func (s *testServer) gotEarly() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return string(s.early)
+}
+
 func (s *testServer) lastSize() [2]int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -264,6 +281,10 @@ type fakeShell struct {
 	nested  bool
 	reading bool
 	wmu     sync.Mutex
+	// ps1 is the prompt's text; drawing is set while the shell is between
+	// the mark and the prompt.
+	ps1     string
+	drawing atomicBool
 }
 
 func (f *fakeShell) write(s string) {
@@ -287,7 +308,18 @@ func (f *fakeShell) prompt(status int) {
 		f.write("root# ")
 		return
 	}
-	f.write(f.mark("D", status) + "me@test:~$ ")
+	mark := f.mark("D", status)
+	if d := f.s.promptDelay; d > 0 && mark != "" {
+		// The mark, then whatever else the person's shell does before a
+		// prompt, then the prompt.
+		f.drawing.set(true)
+		f.write(mark)
+		time.Sleep(d)
+		f.drawing.set(false)
+		f.write(f.ps1)
+		return
+	}
+	f.write(mark + f.ps1)
 }
 
 func (f *fakeShell) run() {
@@ -297,6 +329,9 @@ func (f *fakeShell) run() {
 			n, err := f.ch.Read(buf)
 			f.s.mu.Lock()
 			f.s.received = append(f.s.received, buf[:n]...)
+			if f.drawing.get() {
+				f.s.early = append(f.s.early, buf[:n]...)
+			}
 			f.s.mu.Unlock()
 			for _, b := range buf[:n] {
 				f.in <- b
@@ -315,6 +350,7 @@ func (f *fakeShell) run() {
 			return
 		}
 		if line == "\x03" {
+			time.Sleep(f.s.interruptDelay)
 			f.write("^C\r\n")
 			f.prompt(130)
 			continue
@@ -352,6 +388,14 @@ func (f *fakeShell) readLine(echo bool) (string, bool) {
 			f.write("\r\n")
 			return string(line), true
 		case b == 0x03:
+			if f.s.noInterrupt {
+				// Only a character, shown as one.
+				line = append(line, b)
+				if echo {
+					f.write("^C")
+				}
+				continue
+			}
 			return "\x03", true
 		case b == 0x7f:
 			if len(line) > 0 {
@@ -467,6 +511,9 @@ func (f *fakeShell) exec(line string) (int, bool) {
 		f.write("real end\r\n")
 	case "nest":
 		f.nested = true
+	case "noprompt":
+		// PS1="": a prompt that draws nothing.
+		f.ps1 = ""
 	case "lines":
 		n, _ := strconv.Atoi(fields[1])
 		for i := 1; i <= n; i++ {

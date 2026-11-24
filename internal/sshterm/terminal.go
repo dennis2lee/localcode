@@ -74,6 +74,13 @@ var (
 	// inputAfter is how long a command has to be quiet at a line that
 	// looks like a question for run to return.
 	inputAfter = 3 * time.Second
+	// promptWait is how long a shell that has drawn nothing since a command
+	// ended is waited on for its prompt before the cursor is taken as where
+	// an empty prompt leaves it.
+	promptWait = 2 * time.Second
+	// interruptWait is how long after the model's Ctrl+C at the prompt a
+	// run waits for the prompt that says the shell took it.
+	interruptWait = 10 * time.Second
 )
 
 const (
@@ -81,8 +88,9 @@ const (
 	questionWait = 5 * time.Minute
 	// scrollbackLines is how much scrollback a terminal keeps.
 	scrollbackLines = 5000
-	// promptSettle is how long output has to be quiet after a command
-	// ends for the cursor to be taken as where the prompt leaves it.
+	// promptSettle is how long output has to be quiet, once the prompt has
+	// been drawn after a command, for the cursor to be taken as where the
+	// prompt leaves it.
 	promptSettle = 150 * time.Millisecond
 	// inputLimit bounds input queued for a shell that is not reading.
 	inputLimit = 1 << 20
@@ -138,6 +146,16 @@ type Terminal struct {
 	promptX     int
 	promptY     int
 	promptKnown bool
+	// markAt is when the shell last said a command ended, and markX and
+	// markY where that left the cursor (not yet known while markPending: the
+	// mark has been read and the output before it is still to be drawn).
+	// The mark comes before the prompt, which a shell can take a while to
+	// work out (a status line from git, a prompt command of the person's):
+	// while the cursor is where the mark left it, no prompt has been drawn.
+	markAt      time.Time
+	markX       int
+	markY       int
+	markPending bool
 	// personTyped and modelTyped are the person, or the model, having
 	// typed on the prompt's line since the prompt: what they typed may
 	// still be there, unsent. promptLeft, promptRest and promptNext are the
@@ -150,8 +168,9 @@ type Terminal struct {
 	// on the screen waited for it: the terminal keeps it, and it is on the
 	// next prompt's line when the command ends.
 	typedAhead bool
-	// modelInterrupt is when the model last pressed Ctrl+C at the prompt:
-	// run waits a moment for the prompt that confirms the line was dropped.
+	// modelInterrupt is when the model pressed Ctrl+C at the prompt, until
+	// the next prompt: run waits for that prompt, which says the shell took
+	// the key and dropped the line.
 	modelInterrupt time.Time
 	promptLeft     string
 	promptRest     string
@@ -363,9 +382,41 @@ const screenChunk = 1024
 // emulator is returned as an error, so a remote that finds one ends its
 // own terminal rather than the program.
 func (t *Terminal) feed(p []byte) error {
-	if !t.track(p) {
+	ok, mark := t.track(p)
+	if !ok {
 		return nil
 	}
+	if mark >= 0 {
+		// Where the end of the command leaves the cursor: the prompt is
+		// what moves it from there.
+		if err := t.show(p[:mark]); err != nil {
+			return err
+		}
+		t.mu.Lock()
+		pos := t.emu.CursorPosition()
+		t.markX, t.markY, t.markPending = pos.X, pos.Y, false
+		t.mu.Unlock()
+		p = p[mark:]
+	}
+	if err := t.show(p); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if w := t.run; w != nil && t.emu.IsAltScreen() {
+		w.alt = true
+		t.finishRun(w)
+	}
+	t.lastOutput = time.Now()
+	if !t.running {
+		t.armSettle(promptSettle)
+	}
+	t.notify()
+	return nil
+}
+
+// show draws output on the screen, a chunk at a time.
+func (t *Terminal) show(p []byte) error {
 	// Clearing the screen with its scrollback (ED 3, which clear sends)
 	// clears the terminal's own scrollback too, where it comes in the
 	// output: what was cleared is not there for the model to read, and
@@ -392,30 +443,22 @@ func (t *Terminal) feed(p []byte) error {
 		}
 		p = p[upto:]
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if w := t.run; w != nil && t.emu.IsAltScreen() {
-		w.alt = true
-		t.finishRun(w)
-	}
-	t.lastOutput = time.Now()
-	if !t.running {
-		t.armSettle()
-	}
-	t.notify()
 	return nil
 }
 
 var ed3 = []byte("\x1b[3J")
 
 // track reads the marks in a read of the shell's output and feeds the
-// waiting run's capture. It reports false for a terminal that has ended.
-func (t *Terminal) track(p []byte) bool {
+// waiting run's capture. It reports false for a terminal that has ended,
+// and where in the read the last end of a command is marked, -1 when none
+// is.
+func (t *Terminal) track(p []byte) (ok bool, mark int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.state == StateEnded {
-		return false
+		return false, -1
 	}
+	mark = -1
 	t.outputs++
 	from := 0
 	for _, ev := range t.marks.feed(p) {
@@ -437,18 +480,21 @@ func (t *Terminal) track(p []byte) bool {
 			}
 			t.running = false
 			t.promptKnown = false
+			t.markAt, t.markPending = time.Now(), true
+			mark = ev.end
 			t.integrated = true
 			t.personTyped = false
 			// What the model typed ahead is on this prompt's line.
 			t.modelTyped = t.typedAhead
 			t.typedAhead = false
+			t.modelInterrupt = time.Time{}
 		}
 		from = ev.end
 	}
 	if w := t.run; w != nil && from < len(p) {
 		w.out.write(p[from:])
 	}
-	return true
+	return true, mark
 }
 
 // draw writes output to the emulator and moves what scrolled off into the
@@ -476,28 +522,44 @@ func (t *Terminal) finishRun(w *runWait) {
 	}
 }
 
-// armSettle records where the prompt left the cursor once output has
-// been quiet for promptSettle after a command ended. Called with mu held.
-func (t *Terminal) armSettle() {
+// armSettle has the prompt looked for after d with no output: where it
+// left the cursor, once it has been drawn and output has been quiet for
+// promptSettle. Called with mu held.
+func (t *Terminal) armSettle(d time.Duration) {
 	if t.settle != nil {
 		t.settle.Stop()
 	}
-	t.settle = time.AfterFunc(promptSettle, func() {
-		defer func() {
-			if r := recover(); r != nil {
-				go t.end(fmt.Sprintf("the terminal stopped: %v", r))
-			}
-		}()
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		if t.running || t.personTyped || t.modelTyped || !t.integrated || time.Since(t.lastOutput) < promptSettle {
-			return
+	t.settle = time.AfterFunc(d, t.settled)
+}
+
+// settled records where the prompt left the cursor, when the shell is at
+// one it has finished drawing.
+func (t *Terminal) settled() {
+	defer func() {
+		if r := recover(); r != nil {
+			go t.end(fmt.Sprintf("the terminal stopped: %v", r))
 		}
-		pos := t.emu.CursorPosition()
-		t.promptX, t.promptY, t.promptKnown = pos.X, pos.Y, true
-		t.promptLeft, t.promptRest, t.promptNext = t.aroundCursor()
-		t.notify()
-	})
+	}()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.state == StateEnded || t.running || t.personTyped || t.modelTyped || !t.integrated || time.Since(t.lastOutput) < promptSettle {
+		return
+	}
+	pos := t.emu.CursorPosition()
+	// Quiet after the end of a command is not a prompt yet. The mark comes
+	// first and the prompt after whatever the shell does to work it out,
+	// which was taken for the prompt when it took longer than promptSettle:
+	// a line the person then typed on and erased never read as empty again,
+	// and a run typed its command before the prompt it was meant for. A
+	// prompt moves the cursor. One that does not (an empty one) is taken as
+	// drawn after promptWait.
+	if left := promptWait - time.Since(t.markAt); left > 0 && (t.markPending || pos.X == t.markX && pos.Y == t.markY) {
+		t.armSettle(left)
+		return
+	}
+	t.promptX, t.promptY, t.promptKnown = pos.X, pos.Y, true
+	t.promptLeft, t.promptRest, t.promptNext = t.aroundCursor()
+	t.notify()
 }
 
 // drainScrollback moves the lines the emulator scrolled off the top into
@@ -1299,8 +1361,8 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 	// The integration line being typed, or a prompt still being drawn
 	// after the last command: typing then would mix with it, or be echoed
 	// twice.
-	settleBy := time.Now().Add(3 * time.Second)
 	integrateBy := time.Now().Add(8 * time.Second)
+	var settleBy time.Time
 	for {
 		t.mu.Lock()
 		if t.integrating && time.Now().Before(integrateBy) {
@@ -1314,9 +1376,14 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 			}
 			continue
 		}
-		// The model's own Ctrl+C a moment ago: its prompt, which clears
-		// the line, is on the way.
-		if t.modelTyped && time.Since(t.modelInterrupt) < 2*time.Second {
+		// The model's own Ctrl+C: the prompt that answers it, which says
+		// the line was dropped, is on its way. A slow remote takes a while
+		// over it, and a run that gave up after two seconds was refused for
+		// text that was no longer on the line. Not waited for once the
+		// answer cannot matter: the terminal ended or is held, or the person
+		// typed.
+		if t.state == StateConnected && !t.hold && t.personGen == gen &&
+			t.modelTyped && !t.modelInterrupt.IsZero() && time.Since(t.modelInterrupt) < interruptWait {
 			ch := t.changed
 			t.mu.Unlock()
 			select {
@@ -1327,7 +1394,15 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 			}
 			continue
 		}
-		if !t.integrated || t.running || t.promptKnown || t.personTyped || time.Now().After(settleBy) {
+		// Three seconds for the prompt to be drawn, counted from here:
+		// the prompt that answers a Ctrl+C is as much to wait for as any,
+		// and the wait for its mark may have used up more than that. None
+		// when the line has typed text on it, which is refused below
+		// whatever the prompt is.
+		if settleBy.IsZero() {
+			settleBy = time.Now().Add(3 * time.Second)
+		}
+		if !t.integrated || t.running || t.promptKnown || t.personTyped || t.modelTyped || time.Now().After(settleBy) {
 			break
 		}
 		ch := t.changed
@@ -1360,8 +1435,15 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 		return RunResult{}, ErrLineNotEmpty
 	}
 	if t.lineHasModelText() {
+		err := ErrModelLine
+		if !t.modelInterrupt.IsZero() {
+			// Pressing the key again is what the refusal says to do, and
+			// the model just did.
+			err = fmt.Errorf("%w. No prompt has followed the ctrl+c you pressed %s ago: the remote may be slow (wait, then run again), or the shell did not take the key (press it again; if no prompt follows that either, ask the person to clear the line)",
+				ErrModelLine, time.Since(t.modelInterrupt).Round(time.Second))
+		}
 		t.mu.Unlock()
-		return RunResult{}, ErrModelLine
+		return RunResult{}, err
 	}
 	// History expansion is off in a shell with integration (integrate.go);
 	// in one without, the line is refused where the shell would expand it.
@@ -1545,8 +1627,8 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 		t.modelTyped = true
 		// Ctrl+C discards the line where the shell takes it as an
 		// interrupt; the prompt that follows says so (its mark clears
-		// modelTyped). Nothing is taken for granted before it: with
-		// "stty intr undef" the key is only a character.
+		// modelTyped and modelInterrupt). Nothing is taken for granted
+		// before it: with "stty intr undef" the key is only a character.
 		if last := evs[len(evs)-1]; last.Mod == uv.ModCtrl && last.Code == 'c' {
 			t.modelInterrupt = time.Now()
 		}

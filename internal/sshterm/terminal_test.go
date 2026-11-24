@@ -29,14 +29,22 @@ func spec(s *testServer) string { return "me@" + s.addr }
 
 func within(t *testing.T, d time.Duration, what string, ok func() bool) {
 	t.Helper()
+	if !eventually(d, ok) {
+		t.Fatalf("not within %s: %s", d, what)
+	}
+}
+
+// eventually waits up to d for ok, and reports whether it came. For a
+// goroutine beside the test, which must not end the test itself.
+func eventually(d time.Duration, ok func() bool) bool {
 	end := time.Now().Add(d)
 	for time.Now().Before(end) {
 		if ok() {
-			return
+			return true
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("not within %s: %s", d, what)
+	return false
 }
 
 // connected opens a terminal to s and waits for it to be connected and
@@ -75,6 +83,48 @@ func run(t *testing.T, term *Terminal, cmd string) RunResult {
 		t.Fatalf("run %q: %v", cmd, err)
 	}
 	return res
+}
+
+// typedLine waits until the line the cursor is on ends with text: what was
+// typed has reached the shell, and its echo has come back.
+func typedLine(t *testing.T, term *Terminal, text string) {
+	t.Helper()
+	within(t, 10*time.Second, "on the command line: "+text, lineEnds(term, text))
+}
+
+// lineEnds reports the line the cursor is on ending with text.
+func lineEnds(term *Terminal, text string) func() bool {
+	return func() bool {
+		term.mu.Lock()
+		defer term.mu.Unlock()
+		return strings.HasSuffix(strings.TrimRight(term.cursorLine(), " "), text)
+	}
+}
+
+// received reports the test server's shell having been sent text.
+func received(s *testServer, text string) func() bool {
+	return func() bool { return strings.Contains(s.got(), text) }
+}
+
+// runWhenFree runs cmd as soon as the terminal takes it after the person
+// typed. Two things have to have happened by then, neither on the test's
+// clock: the person's last key is personYield old, and the shell has drawn
+// what their keys did to the line. Sleeping a fixed time for both was a
+// guess, and a loaded machine made it wrong. A line that never reads as
+// free still fails, ten seconds later.
+func runWhenFree(t *testing.T, term *Terminal, cmd string) RunResult {
+	t.Helper()
+	end := time.Now().Add(10 * time.Second)
+	for {
+		res, err := term.Run(context.Background(), cmd, 10*time.Second, term.PersonGen())
+		if err == nil {
+			return res
+		}
+		if !(errors.Is(err, ErrPersonActive) || errors.Is(err, ErrLineNotEmpty)) || time.Now().After(end) {
+			t.Fatalf("run %q: %v", cmd, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func TestRunReturnsOutputAndStatus(t *testing.T) {
@@ -220,16 +270,24 @@ func TestPasswordIsAskedOfThePerson(t *testing.T) {
 	s := startServer(t, func(s *testServer) { s.userKey = nil; s.password = "hunter2" })
 	m := testManager(t, testHome(t, s, true))
 	term, _ := m.Open("c1", spec(s), ByModel)
-	answer := func(pw string) {
+	// A password question other than the one answered last. An answer
+	// takes its question away at once, and the next can be there before
+	// this looks again: waiting to see none in between waited for a moment
+	// that a slow enough look never saw.
+	answer := func(pw string, last int) int {
 		var q *Question
-		within(t, 5*time.Second, "a password question", func() bool { q = term.Info().Question; return q != nil && q.Kind == AskPassword })
+		within(t, 10*time.Second, "a password question", func() bool {
+			q = term.Info().Question
+			return q != nil && q.Kind == AskPassword && q.ID != last
+		})
 		if err := term.Answer(q.ID, Answer{Accept: true, Values: [][]byte{[]byte(pw)}}, ""); err != nil {
 			t.Fatal(err)
 		}
-		within(t, 5*time.Second, "the question gone", func() bool { q := term.Info().Question; return q == nil || q.ID != q.ID })
+		return q.ID
 	}
-	answer("wrong")
-	answer("hunter2")
+	// A wrong password is asked for again, as a new question.
+	first := answer("wrong", 0)
+	answer("hunter2", first)
 	if err := term.WaitConnected(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -256,10 +314,14 @@ func TestAnEncryptedKeyAsksForItsPassphraseOnlyWhenTheServerTakesIt(t *testing.T
 	s := startServer(t)
 	home := testHome(t, s, true)
 	writeKey(t, filepath.Join(home, ".ssh", "id_ed25519"), s.userKey, []byte("secret phrase"))
+	// Unlocking the key is the slow step of this handshake under the race
+	// detector, and the handshake's default 15 seconds is not what is
+	// tested here: starved of processor, the unlock alone outlasted it.
+	os.WriteFile(filepath.Join(home, ".ssh", "config"), []byte("Host *\n  ConnectTimeout 120\n"), 0o600)
 	m := testManager(t, home)
 	term, _ := m.Open("c1", spec(s), ByModel)
 	var q *Question
-	within(t, 5*time.Second, "a passphrase question", func() bool { q = term.Info().Question; return q != nil })
+	within(t, 10*time.Second, "a passphrase question", func() bool { q = term.Info().Question; return q != nil })
 	if q.Kind != AskPassphrase || !strings.HasSuffix(q.Key, "id_ed25519") {
 		t.Fatalf("question %+v", q)
 	}
@@ -349,7 +411,9 @@ func TestStoppingTheTurnInterruptsTheCommand(t *testing.T) {
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { time.Sleep(300 * time.Millisecond); cancel() }()
+	// Stopped once the command has reached the shell, not a moment after
+	// asking for it.
+	go func() { eventually(10*time.Second, received(s, "sleep 30s\r")); cancel() }()
 	if _, err := term.Run(ctx, "sleep 30s", 30*time.Second, term.PersonGen()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v", err)
 	}
@@ -455,18 +519,22 @@ func TestANestedShellIsNoticed(t *testing.T) {
 
 func TestThePersonComesFirst(t *testing.T) {
 	old := personYield
-	personYield = 400 * time.Millisecond
 	defer func() { personYield = old }()
 	s := startServer(t)
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
 
+	// At the yield the terminal ships with: a short one can pass between
+	// two lines of a test on a loaded machine.
 	gen := term.PersonGen()
 	term.PersonInput(nil, "ls", "")
 	if _, err := term.Run(context.Background(), "echo x", time.Second, term.PersonGen()); !errors.Is(err, ErrPersonActive) {
 		t.Fatalf("while the person types: %v", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	// Past the yield, with their text on the line.
+	typedLine(t, term, "$ ls")
+	personYield = 50 * time.Millisecond
+	time.Sleep(2 * personYield)
 	// What was approved before the person typed is not run.
 	if _, err := term.Run(context.Background(), "echo x", time.Second, gen); !errors.Is(err, ErrChanged) {
 		t.Fatalf("approved before the person typed: %v", err)
@@ -487,8 +555,7 @@ func TestThePersonComesFirst(t *testing.T) {
 	// Erased, the line is free again.
 	term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
 	term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
-	time.Sleep(500 * time.Millisecond)
-	if res := run(t, term, "echo free"); res.Output != "free" {
+	if res := runWhenFree(t, term, "echo free"); res.Output != "free" {
 		t.Fatalf("after erasing: %+v", res)
 	}
 
@@ -513,9 +580,12 @@ func TestARunSaysThePersonTypedDuringIt(t *testing.T) {
 	s := startServer(t)
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
+	// Once the command is running: before it, their key would be a reason
+	// to refuse the run.
 	go func() {
-		time.Sleep(300 * time.Millisecond)
-		term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+		if eventually(10*time.Second, received(s, "sleep 5s\r")) {
+			term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+		}
 	}()
 	res := run(t, term, "sleep 5s")
 	if !res.Person || res.Status != "130" {

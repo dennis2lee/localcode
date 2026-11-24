@@ -107,13 +107,19 @@ func TestALongRepeatHoldsNothingUp(t *testing.T) {
 // A run waiting when the person pressed Hold returned what they typed
 // while holding it.
 func TestHoldEndsAWaitingRunWithNothingOfWhatCameAfter(t *testing.T) {
+	// The run is to be ended by the hold, not by the question it stops at.
+	old := inputAfter
+	inputAfter = time.Minute
+	defer func() { inputAfter = old }()
 	s := startServer(t)
 	m := testManager(t, testHome(t, s, true))
 	term := connected(t, m, s)
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		// Held once the command is waiting for its answer.
+		if !eventually(10*time.Second, lineEnds(term, "[Y/n]")) {
+			return
+		}
 		term.SetHold(true)
-		time.Sleep(200 * time.Millisecond)
 		term.PersonInput(nil, "MYSECRETANSWER", "")
 		term.PersonInput(&PersonKey{Key: "Enter"}, "", "")
 	}()
@@ -205,23 +211,32 @@ func TestThePersonsLineIsTheirsWhereverTheCursorIs(t *testing.T) {
 	personYield = 400 * time.Millisecond
 	defer func() { personYield = old }()
 	term := realBash(t)
+	term.mu.Lock()
+	promptX := term.promptX
+	term.mu.Unlock()
 	term.PersonInput(nil, " PERSONS_HALF_LINE", "")
 	term.PersonInput(&PersonKey{Key: "a", Ctrl: true}, "", "")
-	time.Sleep(700 * time.Millisecond)
+	// Their text drawn, and the cursor back at the start of it: on the
+	// shell's time, not this test's. Then past the yield, which sleeping
+	// longer cannot miss.
+	within(t, 10*time.Second, "the person's line drawn, the cursor at its start", func() bool {
+		r, _ := term.Read(0, false)
+		return r.CursorX == promptX && strings.Contains(strings.Join(r.Screen, "\n"), "PERSONS_HALF_LINE")
+	})
+	time.Sleep(personYield + 100*time.Millisecond)
 	if _, err := term.Run(context.Background(), "echo MODEL", 10*time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
 		t.Fatalf("got %v", err)
 	}
 	// Ctrl+U at the start of the line erases nothing: still theirs.
 	term.PersonInput(&PersonKey{Key: "u", Ctrl: true}, "", "")
-	time.Sleep(700 * time.Millisecond)
+	time.Sleep(personYield + 100*time.Millisecond)
 	if _, err := term.Run(context.Background(), "echo MODEL", 10*time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
 		t.Fatalf("after Ctrl+A Ctrl+U: %v", err)
 	}
 	// From the end, Ctrl+U empties it, and the line is free again.
 	term.PersonInput(&PersonKey{Key: "e", Ctrl: true}, "", "")
 	term.PersonInput(&PersonKey{Key: "u", Ctrl: true}, "", "")
-	time.Sleep(700 * time.Millisecond)
-	if res := run(t, term, "echo MODEL"); res.Output != "MODEL" {
+	if res := runWhenFree(t, term, "echo MODEL"); res.Output != "MODEL" {
 		t.Fatalf("after Ctrl+U: %+v", res)
 	}
 }
@@ -266,16 +281,14 @@ func TestAnEmptyLineIsEmptyWhereverThePromptIsDrawn(t *testing.T) {
 			run(t, term, "echo one; echo two; echo three")
 			settled(t, term)
 			term.PersonInput(&PersonKey{Key: "l", Ctrl: true}, "", "")
-			time.Sleep(600 * time.Millisecond)
-			if res := run(t, term, "echo after-clear"); res.Output != "after-clear" {
+			if res := runWhenFree(t, term, "echo after-clear"); res.Output != "after-clear" {
 				t.Fatalf("after Ctrl+L: %+v", res)
 			}
 			settled(t, term)
 			term.PersonInput(nil, "x", "")
 			term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
 			term.ViewerSize("v", 90, 30)
-			time.Sleep(800 * time.Millisecond)
-			if res := run(t, term, "echo after-resize"); res.Output != "after-resize" {
+			if res := runWhenFree(t, term, "echo after-resize"); res.Output != "after-resize" {
 				t.Fatalf("after typing, erasing and a resize: %+v", res)
 			}
 		})
@@ -324,6 +337,14 @@ func TestAtThePromptCommandsGoThroughRun(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if res := run(t, term, "echo clean"); res.Output != "clean" {
 		t.Fatalf("after clearing it: %+v", res)
+	}
+	// Text typed at the prompt the Ctrl+C brought is new text: refused as
+	// any is, with nothing said of a key that was answered.
+	if err := term.Type("more", false, term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := term.Run(context.Background(), "echo x", time.Second, term.PersonGen()); !errors.Is(err, ErrModelLine) || strings.Contains(err.Error(), "ctrl+c you pressed") {
+		t.Fatalf("run onto text typed after an answered ctrl+c: %v", err)
 	}
 }
 
@@ -451,17 +472,25 @@ func TestTheModelsCtrlCCountsWhenTheShellTakesIt(t *testing.T) {
 			within(t, 15*time.Second, "integrated", func() bool { return term.Info().Integrated })
 			settled(t, term)
 			// Right after a Ctrl+C that is an interrupt, run waits for the
-			// prompt and reports its own command.
+			// prompt and reports its own command. The key is pressed once
+			// the shell has drawn the text and is reading again: sent in
+			// one burst with it, the key reached a zsh still busy with the
+			// first letter, which then drew no prompt.
 			if err := term.Type("junk", false, term.PersonGen()); err != nil {
 				t.Fatal(err)
 			}
+			typedLine(t, term, "junk")
 			if err := term.Keys("ctrl+c", term.PersonGen()); err != nil {
 				t.Fatal(err)
 			}
 			if res := run(t, term, "echo afterc"); res.Output != "afterc" || res.Status != "0" {
 				t.Fatalf("run right after ctrl+c: %+v", res)
 			}
-			// With the interrupt key undefined, it is not one.
+			// With the interrupt key undefined, it is not one, and no
+			// prompt comes however long run waits for it.
+			old := interruptWait
+			interruptWait = time.Second
+			defer func() { interruptWait = old }()
 			run(t, term, "stty intr undef")
 			mark := filepath.Join(home, "PWNED")
 			if err := term.Type("touch "+mark+"; ", false, term.PersonGen()); err != nil {
