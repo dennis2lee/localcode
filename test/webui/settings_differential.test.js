@@ -9,7 +9,7 @@
 // settings window, the delegation panel and the rules list, against a
 // daemon that fails some saves, refuses some requests, answers late and
 // announces late. The first version of it was written by a reviewer of
-// the two-part answers (v0.179.1), where 42 of 200 sequences disagreed:
+// the two-part answers (v0.179.2), where 42 of 200 sequences disagreed:
 // two changes out at once, with their answers crossed, left the older
 // value drawn, a rule in the wrong place, or a rule missing. Changes now
 // go one at a time in each window (serial, in modals.js), and none do.

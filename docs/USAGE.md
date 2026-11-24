@@ -2104,7 +2104,7 @@ Sessions can be put into named groups. Which groups exist, what order they are d
 | Rename a group | **rename** on the group's header | `POST /api/sessions/groups` with the new list *and* `{"rename": {"from", "to"}}` |
 | Reorder the groups | Drag a group's header onto another group's header. It lands above that group when it came from below and below it, after its last card, when it came from above. A line shows which. | `GET /api/sessions/groups` to compare, then `POST /api/sessions/groups` with the whole list in the new order. Cards keep the order they had. |
 | Delete a group | **delete** on the group's header | `POST /api/sessions/groups` with the list minus that name |
-| Fold one shut | Click the group's header | Browser-local; nothing is sent |
+| Fold one shut | Click the group's header | None. Kept by the browser. The desktop window keeps it through `GET` and `PUT /api/window/state`: see [Settings](#settings). |
 
 While a filter is on, neither cards nor groups can be dragged: the panel shows only part of the list, and a move among some of the rows would have no clear meaning for the rest. Like a card, a group is not redrawn while it is carried.
 
@@ -2249,9 +2249,15 @@ Deleting `window-state.json` while the window is closed does not reset these set
 
 Limits of the desktop window's file:
 
-* Two windows open at once share it. Each setting is kept under its own name, so two windows changing different settings do not undo each other. The panel widths, the panels each conversation shows, and the folded groups are one value each: when both windows change the same one, the value written last is kept.
+* Two windows open at once share it. A setting changed in one window is not undone by a different setting changed in the other.
+* Three settings hold several items each: the panel widths, the panels each conversation shows, and the folded groups. A window reads the file again before it changes one item: one panel's width, one conversation's panels, one group's fold. The items the other window changed are kept.
+* When both windows change the same setting or the same item, the change written last is kept.
+* A change to one of those items is made from the window's own copy in two cases. The daemon does not answer that read. Or an earlier change to the same setting from that window is not written yet. Items another window changed after that copy was read are then put back.
+* A conversation's panels are one item. A window that hides or shows any panel, the session panel included, writes the panels of the conversation it shows as they are on its own screen. With the same conversation in two windows, the window that did that last decides that conversation's panels.
+* A window that changes one of those items takes what the other window wrote for the rest of that setting. It draws the other window's folds at that moment: after a group is folded, opened, made, renamed or deleted in it. A conversation opens with the panels the other window left it.
+* Each window has its own daemon. A group made in one window is not listed in another until that one is started again. A group deleted or renamed in one window stays listed in the other. A window leaves alone the fold another window makes for a group that is not in its own list. A reload of its page drops that fold.
 * A change is written as it is made, one request at a time. A second change made while the first is still being written, with the window ended in that same moment, is not written.
-* The window asks for the file three times when its page starts. With no answer, or with a file that is there and cannot be read, the page writes nothing to the file while it stays open, and the settings changed in it are not there the next time. A file that cannot be read is never replaced.
+* The window's page asks for the file when it starts, up to three times. With no answer, or with a file that is there and cannot be read, the page writes nothing to the file while it stays open, and the settings changed in it are not there the next time. A file that cannot be read is never replaced.
 
 A switch on the Agents tab, the repeat guard on the Turns tab, or keep going on the Muse tab that the daemon applied and could not write to `config.json` says so under the switch, and the setting lasts only until the daemon restarts. The switch shows the applied value. The warning stays until that switch is saved from this window, or moved from another window or a prompt.
 

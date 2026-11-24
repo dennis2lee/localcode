@@ -603,17 +603,17 @@ Completed findings remain in this list to preserve item numbers and release hist
 65. **Settings: an answer and an announcement cannot be put in order. Open.**
 
     * A setting change is answered to the client that made it and announced to every client as `settings.changed`. Neither carries anything that orders the two. The page compares the announced value with the one it holds, and takes a difference as "moved from somewhere else".
-    * Found by review of v0.179.1: when the announcement of a page's own change arrives after the answer to its next change of the same switch, the page clears the "applied, but not saved" warning the second change earned. The switch is then in force, not saved and not warned about. Reproduced in the test harness for keep going and auto-delegation. The same comparison has been in the five Agents-tab switches since v0.179.0.
+    * Found by review of v0.179.2: when the announcement of a page's own change arrives after the answer to its next change of the same switch, the page clears the "applied, but not saved" warning the second change earned. The switch is then in force, not saved and not warned about. Reproduced in the test harness for keep going and auto-delegation. The same comparison has been in the five Agents-tab switches since v0.179.0.
     * The other direction, also known: an answer that arrives after the announcement of a later change made elsewhere is drawn over it, for every switch that answers in two parts.
-    * Both need the announcement to be late by a whole further change, which has not been seen outside the harness. Not fixed in v0.179.1.
+    * Both need the announcement to be late by a whole further change, which has not been seen outside the harness. Not fixed in v0.179.2.
     * A fix: number the daemon's setting changes, apply and announce each under one lock, and carry the number in `settings.changed`, in each two-part answer and in `GET /api/settings`. A page can then drop whatever is older than what it has drawn. The commands in `internal/agent/toggles.go` change the same settings and would have to take the same lock.
 
 66. **Permissions window: a switch's answers are not ordered, and not tied to their conversation. Open.**
 
-    * The four switches in the permissions window are sent as they are pressed (`setSessionSwitch` in `internal/daemon/static/js/modals.js`). Two changes of one switch can be out at once and their answers can arrive in either order. The delegation panel and the rules list send one change at a time since v0.179.1. The switches do not.
+    * The four switches in the permissions window are sent as they are pressed (`setSessionSwitch` in `internal/daemon/static/js/modals.js`). Two changes of one switch can be out at once and their answers can arrive in either order. The delegation panel and the rules list send one change at a time since v0.179.2. The switches do not.
     * An answer that arrives last is drawn last. A failure that arrives after a later change of the same switch was taken is still said, though the daemon has what the box shows. A snapshot from an earlier change draws the box at a value the daemon no longer has.
     * The answer is not checked against the open conversation. A request still out when the conversation is switched applies its snapshot to the new conversation's window, or says its failure there. `loadSessionPermissions` in the same file has that check.
-    * All three are in v0.179.0. Found by review of v0.179.1, which for one commit cleared a switch's failure when a later change of it was taken: with the answers crossed that cleared a failure the box still disagreed about, and it was taken out again. A failure stays said until the window is opened again.
+    * All three are in v0.179.0. Found by review of v0.179.2, which for one commit cleared a switch's failure when a later change of it was taken: with the answers crossed that cleared a failure the box still disagreed about, and it was taken out again. A failure stays said until the window is opened again.
     * A fix: send the switches through `serial()` as the other two windows do, and drop an answer whose conversation is no longer the open one. Clearing a failure when the switch is next taken is sound after that, and not before.
 
 ## UI ideas

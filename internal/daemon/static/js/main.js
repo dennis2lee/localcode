@@ -435,5 +435,5 @@ export {
 } from './find.js';
 export { resetMCPServers, mcpResetConfirmText } from './loaders.js';
 export { wireZoom, applyZoom, zoomKey, zoomWheel } from './zoom.js';
-export { readPref, writePref } from './prefs.js';
+export { readPref, readShared, writePref } from './prefs.js';
 export { wirePromptDialog, askText, askConfirm, anyPromptOpen } from './prompt.js';

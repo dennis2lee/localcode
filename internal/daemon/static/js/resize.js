@@ -3,7 +3,7 @@ import {
   resizeLeftHandle, resizeRightHandle, resizeBrowserHandle, resizeSshHandle,
   toggleLeftBtn, toggleRightBtn, toggleBrowserBtn, toggleSshBtn,
 } from './dom.js';
-import { readPref, writePref } from './prefs.js';
+import { readPref, readShared, writePref } from './prefs.js';
 
 // Every panel is a flex item with a fixed width, so resizing is just
 // writing a new width — no layout recalculation of our own, and the
@@ -45,16 +45,21 @@ function clamp(px, bounds) {
 // The store is best-effort on purpose. A WebView with storage disabled, or
 // a browser in a private mode that throws on write, should cost the user a
 // remembered width — not a dead handle or a page that fails to start.
-function readStored() {
+function readStored(read = readPref) {
   try {
-    return JSON.parse(readPref(STORAGE_KEY)) || {};
+    return JSON.parse(read(STORAGE_KEY)) || {};
   } catch (err) {
     return {};
   }
 }
 
+// store changes the widths and flags named in patch and leaves the
+// others as they are kept now, which in the desktop window is as the
+// file has them and not as this page read them when it started: another
+// window may have dragged a different panel since (readShared in
+// js/prefs.js).
 function store(patch) {
-  writePref(STORAGE_KEY, JSON.stringify({ ...readStored(), ...patch }));
+  writePref(STORAGE_KEY, JSON.stringify({ ...readStored(readShared), ...patch }));
 }
 
 // Which of the panels right of the conversation are shown belongs to the
@@ -78,9 +83,15 @@ export const VIEWS_KEEP = 200;
 // The conversation on screen, whose choice a change is written to.
 let viewFor = '';
 
+// Every read of the choices starts a change to one conversation's: it is
+// written down, moved to the newest place, or dropped. So each starts
+// from the choices as they are kept now (readShared in js/prefs.js), and
+// the other conversations' are written back as another window left them.
+// The one forgotten at the limit is then the oldest in the file, not the
+// oldest this page knew of.
 function readViews() {
   try {
-    const v = JSON.parse(readPref(VIEWS_KEY));
+    const v = JSON.parse(readShared(VIEWS_KEY));
     if (!Array.isArray(v)) return [];
     return v.filter((e) => Array.isArray(e) && typeof e[0] === 'string' && Array.isArray(e[1]));
   } catch (err) {
