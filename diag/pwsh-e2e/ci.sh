@@ -30,6 +30,10 @@ cat > "$H/.localcode/config.json" << EOF
 EOF
 
 node "$ROOT/diag/pwsh-e2e/fakemodel.mjs" 9123 "$OUT" > "$OUT/fakemodel.log" 2>&1 &
+for i in $(seq 1 60); do
+  grep -q 'fake model on' "$OUT/fakemodel.log" 2> /dev/null && break
+  sleep 0.5
+done
 (cd "$WORK" && "$ROOT/bin/localcode.exe" --headless --listen 127.0.0.1:4196 > "$OUT/daemon.log" 2>&1 &)
 for i in $(seq 1 60); do
   curl -s -o /dev/null http://127.0.0.1:4196/api/settings && break
