@@ -261,7 +261,10 @@ export function renderDelegatePanel() {
     const removeBtn = document.createElement('button');
     removeBtn.textContent = 'remove';
     removeBtn.addEventListener('click', () => {
-      saveAutoDelegate(() => ({ match: app.autoDelegateMatch.filter(p => p !== pattern) }));
+      // Nothing is sent for a pattern an earlier removal already took.
+      saveAutoDelegate(() => (app.autoDelegateMatch.includes(pattern)
+        ? { match: app.autoDelegateMatch.filter(p => p !== pattern) }
+        : null));
     });
     row.appendChild(removeBtn);
     delegateMatchListEl.appendChild(row);
@@ -290,7 +293,11 @@ export function refreshDelegatePanelIfOpen() {
 
 export function addDelegateMatch() {
   const pattern = delegateMatchInput.value.trim();
-  if (!pattern || app.autoDelegateMatch.includes(pattern)) return;
+  // Whether the list already has it is asked when this change's turn
+  // comes, below. Asked here, a pattern added again while its own
+  // removal was still out was found in the list and dropped, and the
+  // removal then took it. Found by review.
+  if (!pattern) return;
   delegateNote.classList.remove('err');
   saveAutoDelegate(() => (app.autoDelegateMatch.includes(pattern)
     ? null
@@ -380,20 +387,37 @@ function renderUnsavedRules() {
     `${NOT_SAVED}: ${entries[entries.length - 1].reason} Not saved: ${entries.map((e) => e.text).join('; ')}.`;
 }
 
-// The line under the rules: what the window says about them when it has
-// nothing else to say. Drawn when the window opens and after a rule
-// change that was applied, which also takes away what an earlier,
-// refused change left there.
+// The line under the rules. Three things are said on it, and each used
+// to be written straight onto it, over whatever was there:
+//
+//   * one of the four switches above the rules could not be changed. Its
+//     box is left where it was put, so this is the only sign the daemon
+//     does not have that value, and it stays until the window is opened
+//     again and the boxes are drawn from what the daemon has;
+//   * a rule the daemon refused. It is about one request, and goes with
+//     the next rule change that is applied;
+//   * with neither, how rules are kept.
+//
+// So they are kept apart and the line is drawn from them. Written over
+// each other, a rule that was added took away the only sign of a switch
+// that was not changed (found by review, in a fix for the opposite: a
+// refused rule still said after a later one was applied).
+let switchFailure = '';
+let ruleRefusal = '';
+
 function drawPermissionNote() {
-  permissionSettingsNote.classList.remove('err');
-  if (!app.canEditPermissions) {
+  permissionSettingsNote.classList.toggle('err', !!switchFailure);
+  const said = [switchFailure, ruleRefusal].filter(Boolean).join(' ');
+  if (said) {
+    permissionSettingsNote.textContent = said;
+  } else if (!app.canEditPermissions) {
     permissionSettingsNote.textContent = 'No config.json path is available in this run, so rules are read-only.';
-    return;
+  } else {
+    // Not said beside a warning that one was not written.
+    permissionSettingsNote.textContent = unsavedRules.size > 0
+      ? 'Rules apply immediately. The four switches above are saved with the conversation.'
+      : 'Rules apply immediately and are written to config.json. The four switches above are saved with the conversation.';
   }
-  // Not said beside a warning that one was not written.
-  permissionSettingsNote.textContent = unsavedRules.size > 0
-    ? 'Rules apply immediately. The four switches above are saved with the conversation.'
-    : 'Rules apply immediately and are written to config.json. The four switches above are saved with the conversation.';
 }
 
 export function renderPermissionRulesList() {
@@ -478,8 +502,8 @@ async function setSessionSwitch(name, enabled) {
   try {
     applySessionPermissions(await apiClient.setSessionPermission(session.sessionID, name, enabled));
   } catch (err) {
-    permissionSettingsNote.textContent = `could not change ${name}: ${err.message}`;
-    permissionSettingsNote.classList.add('err');
+    switchFailure = `could not change ${name}: ${err.message}`;
+    drawPermissionNote();
   }
 }
 
@@ -538,6 +562,8 @@ function drawPermissionSettings() {
 export function openPermissionSettings() {
   drawPermissionSettings();
   ruleToolInput.disabled = ruleMatchInput.disabled = ruleDecisionSelect.disabled = !app.canEditPermissions;
+  switchFailure = '';
+  ruleRefusal = '';
   drawPermissionNote();
   renderPermissionRulesList();
   permissionSettings.open();
@@ -575,11 +601,13 @@ export function addPermissionRule() {
         ruleToolInput.value = '';
         ruleMatchInput.value = '';
       }
+      ruleRefusal = '';
       drawPermissionNote();
       renderPermissionRulesList();
       renderPermissionStatus();
     } catch (err) {
-      permissionSettingsNote.textContent = `Failed to add rule: ${String(err)}`;
+      ruleRefusal = `Failed to add rule: ${String(err)}`;
+      drawPermissionNote();
     }
   });
 }
@@ -589,11 +617,13 @@ function removePermissionRule(tool, rule) {
     try {
       const res = await apiClient.removePermissionRule(tool, rule.match, rule.decision);
       applyRuleChange('removed', tool, rule.match, rule.decision, res);
+      ruleRefusal = '';
       drawPermissionNote();
       renderPermissionRulesList();
       renderPermissionStatus();
     } catch (err) {
-      permissionSettingsNote.textContent = `Failed to remove rule: ${String(err)}`;
+      ruleRefusal = `Failed to remove rule: ${String(err)}`;
+      drawPermissionNote();
     }
   });
 }

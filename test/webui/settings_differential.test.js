@@ -19,6 +19,12 @@
 // saved exactly when the two disagree about it" is checked against the
 // two, not against the page's own reasoning.
 //
+// And it holds the patterns to what was asked for. The page and the
+// daemon can agree with each other about a list that has lost a pattern:
+// one added again while its own removal was still out was dropped that
+// way, which a second review found with this check and the first version
+// of this test, comparing only page with daemon, could not.
+//
 // Not walked: a setting moved from somewhere else while this page has a
 // request out. The answer can then arrive after the announcement of the
 // other change and be drawn over it, for every switch that answers in
@@ -169,7 +175,9 @@ function rulesNotSaved(d) {
 }
 
 // One step of a run. Each says what it did, for the trace of a failure.
-async function step(rng, app, d) {
+// asked is the list of patterns as the person's adds and removes leave
+// it, in the order they were made.
+async function step(rng, app, d, asked) {
   const r = rng();
   if (r < 0.10) {
     d.writable = rng() < 0.5;
@@ -232,11 +240,14 @@ async function step(rng, app, d) {
     const listed = rows(app, 'delegate-match-list', 'match-row');
     if (listed.length > 0 && rng() < 0.45) {
       const row = pick(rng, listed);
+      const gone = row.children[0].textContent;
+      if (asked.includes(gone)) asked.splice(asked.indexOf(gone), 1);
       row.children[1].click();
       await app.settle(5);
-      return `pattern removed: ${row.children[0].textContent}`;
+      return `pattern removed: ${gone}`;
     }
     const pattern = pick(rng, ['what is *', 'explain *', 'where is *']);
+    if (!asked.includes(pattern)) asked.push(pattern);
     app.el('delegate-match-input').value = pattern;
     app.el('delegate-match-add').click();
     await app.settle(5);
@@ -250,14 +261,15 @@ async function step(rng, app, d) {
       await app.settle(5);
       return `rule removed: ${row.children[0].textContent}`;
     }
-    const match = pick(rng, ['echo *', 'npm *', 'ls *']);
+    const tool = pick(rng, ['bash', 'bash', 'git']);
+    const match = pick(rng, ['echo *', 'npm *', 'ls *', '*']);
     const decision = pick(rng, ['allow', 'deny']);
-    app.el('rule-tool-input').value = 'bash';
+    app.el('rule-tool-input').value = tool;
     app.el('rule-match-input').value = match;
     app.el('rule-decision-select').value = decision;
     app.el('rule-add-btn').click();
     await app.settle(5);
-    return `rule added: ${match} ${decision}`;
+    return `rule added: ${tool} ${match} ${decision}`;
   }
   // Moved elsewhere, and only with nothing of this page's out: see the
   // note at the top.
@@ -276,16 +288,21 @@ test(`a page open through ${RUNS} runs of changes shows what a fresh page shows,
     const seed = 4100 + run;
     const rng = seeded(seed);
     // Half the runs start with an exact rule, which "always allow" at a
-    // prompt writes and this window never does.
-    const d = fakeDaemon(run % 2
+    // prompt writes and this window never does. A third start with a
+    // second tool allowed outright, which config.json may write as a bare
+    // "git": "allow" and the daemon reports as a rule matching "*".
+    const start = run % 2
       ? { bash: [{ match: 'echo *', decision: 'allow', literal: true }] }
-      : { bash: [{ match: 'ls *', decision: 'allow' }] });
+      : { bash: [{ match: 'ls *', decision: 'allow' }] };
+    if (run % 3 === 0) start.git = [{ match: '*', decision: 'allow' }];
+    const d = fakeDaemon(start);
     const app = await load({ globals: { lcGUI: true }, routes: d.routes });
     shown(app);
     await app.settle(10);
 
     const trace = [];
-    for (let i = 0; i < STEPS; i++) trace.push(await step(rng, app, d));
+    const asked = [];
+    for (let i = 0; i < STEPS; i++) trace.push(await step(rng, app, d, asked));
     // Everything still out is let go, oldest first. An answer can send
     // the change that was waiting behind it, so this goes round until
     // nothing is left.
@@ -301,8 +318,9 @@ test(`a page open through ${RUNS} runs of changes shows what a fresh page shows,
     const fresh = await load({ globals: { lcGUI: true }, routes: { 'GET /api/settings': d.settings() } });
     assert.deepEqual(open, shown(fresh), `the page that was open shows something a fresh page does not. ${where}`);
 
-    // The page's own reading of the daemon, which is what it draws from.
-    assert.deepEqual(open.patterns, d.running.auto_delegate_match, `the patterns shown are not the daemon's. ${where}`);
+    // The patterns are the ones asked for, in the daemon and on the page.
+    assert.deepEqual(d.running.auto_delegate_match, asked, `the daemon's patterns are not the ones that were asked for. ${where}`);
+    assert.deepEqual(open.patterns, asked, `the patterns shown are not the ones that were asked for. ${where}`);
 
     const warning = app.el('permission-rules-warn');
     const expected = rulesNotSaved(d);

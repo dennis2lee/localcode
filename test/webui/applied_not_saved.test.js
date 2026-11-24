@@ -217,6 +217,71 @@ test('two patterns added one after the other are both kept', async () => {
   assert.deepEqual(patternsShown(app), ['what is *', 'where is *', 'how do *']);
 });
 
+test('a pattern added again while its removal is out is kept', async () => {
+  // Whether the list has the pattern is asked when the addition's turn
+  // comes. Asked when the button was pressed, the pattern was still
+  // listed, the addition was dropped, and the removal then took it.
+  const daemon = fakeDelegation({ auto_delegate_match: ['what is *', 'where is *'] });
+  const pending = later((body) => daemon.route(body));
+  const app = await load({
+    routes: {
+      'GET /api/settings': { ...defaultRoutes()['GET /api/settings'], auto_delegate_match: ['what is *', 'where is *'] },
+      'POST /api/settings/auto-delegate': pending.route,
+    },
+  });
+  app.el('auto-delegate-btn').click();
+  await app.settle();
+  const remove = (pattern) => {
+    const row = Array.from(app.el('delegate-match-list').children).find((r) => r.className === 'match-row' && r.children[0].textContent === pattern);
+    assert.ok(row, `"${pattern}" is not listed: ${patternsShown(app).join(' | ')}`);
+    row.children[1].click();
+  };
+
+  remove('what is *');
+  // Pressed twice before the first is answered: sent once.
+  remove('what is *');
+  await addPattern(app, 'what is *');
+  assert.equal(pending.count, 1);
+  pending.answer(0);
+  await app.settle();
+  assert.deepEqual(app.callsTo('POST', '/api/settings/auto-delegate')[0].body, { match: ['where is *'] });
+  assert.equal(pending.count, 2, 'the second removal of the same pattern was sent, or the addition was dropped');
+  pending.answer(1);
+  await app.settle();
+
+  assert.equal(pending.count, 2);
+  assert.deepEqual(daemon.held.auto_delegate_match, ['where is *', 'what is *'], 'the pattern added again was lost');
+  assert.deepEqual(patternsShown(app), ['where is *', 'what is *']);
+  assert.equal(app.el('delegate-match-input').value, '');
+});
+
+test('a pattern the list already has is not sent, and the field is cleared', async () => {
+  const daemon = fakeDelegation({ auto_delegate_match: ['what is *'] });
+  const app = await load({
+    routes: {
+      'GET /api/settings': { ...defaultRoutes()['GET /api/settings'], auto_delegate_match: ['what is *'] },
+      'POST /api/settings/auto-delegate': (body) => daemon.route(body),
+    },
+  });
+  app.el('auto-delegate-btn').click();
+  await app.settle();
+  await addPattern(app, 'what is *');
+  assert.equal(app.callsTo('POST', '/api/settings/auto-delegate').length, 0);
+  assert.deepEqual(patternsShown(app), ['what is *']);
+  assert.equal(app.el('delegate-match-input').value, '');
+});
+
+test('a change that throws is told to whoever made it, and the ones behind it still go', async () => {
+  // No control builds a change that throws. If one ever does, it must
+  // not leave every later change in that window waiting behind it.
+  const daemon = fakeDelegation();
+  const app = await openDelegation(daemon);
+  await assert.rejects(app.internals.saveAutoDelegate(() => { throw new Error('a change that cannot be built'); }), /cannot be built/);
+  await turnDelegation(app, true);
+  assert.equal(daemon.held.auto_delegate, true, 'the change behind the one that threw was never sent');
+  assert.equal(app.el('delegate-enabled-checkbox').checked, true);
+});
+
 test('a pattern typed while another is being added is not cleared by the answer', async () => {
   const daemon = fakeDelegation();
   const pending = later((body) => daemon.route(body));
@@ -533,7 +598,7 @@ test('a rule the daemon refuses is not listed, and is said to have failed', asyn
   assert.equal(app.el('permission-rules-warn').hidden, true);
 });
 
-async function openRulesLater(daemon) {
+async function openRulesLater(daemon, extra = {}) {
   const removes = later((body) => daemon.remove(body));
   const adds = later((body) => daemon.add(body));
   const app = await load({
@@ -541,6 +606,7 @@ async function openRulesLater(daemon) {
       'GET /api/settings': { ...defaultRoutes()['GET /api/settings'], permission_rules: JSON.parse(JSON.stringify(daemon.held)) },
       'POST /api/permissions/rules': adds.route,
       'POST /api/permissions/rules/remove': removes.route,
+      ...extra,
     },
   });
   app.el('permission-status-btn').click();
@@ -681,4 +747,80 @@ test('a rule change that is applied takes away what a refused one left under the
   app.el('permission-status-btn').click();
   await app.settle();
   assert.equal(note.textContent.includes('written to config.json'), false, 'opened again, the line says rules are written');
+});
+
+test('a rule change that is applied leaves a switch that could not be changed said', async () => {
+  // The same line says when one of the four switches above the rules
+  // could not be changed, and the box is left where it was put: the line
+  // is the only sign the daemon does not have that value. Found by review
+  // of the test before this one, whose fix took the line away.
+  const daemon = fakeRules();
+  const app = await load({
+    routes: {
+      'POST /api/sessions/sess-1/permissions': { status: 500, body: { error: 'the session log could not be written' } },
+      'POST /api/permissions/rules': (body) => daemon.add(body),
+      'POST /api/permissions/rules/remove': (body) => daemon.remove(body),
+    },
+  });
+  app.el('permission-status-btn').click();
+  await app.settle();
+  const note = app.el('permission-settings-note');
+
+  const box = app.el('skip-permissions-checkbox');
+  box.checked = true;
+  box.fire('change');
+  await app.settle();
+  assert.match(note.textContent, /could not change skip_all/);
+  assert.equal(note.classList.contains('err'), true);
+
+  await addRule(app, 'bash', 'npm *', 'allow');
+  assert.deepEqual(rulesShown(app), ['bash: "npm *" -> allow']);
+  assert.match(note.textContent, /could not change skip_all/, 'a rule that was added took away what says the switch was not changed');
+  assert.equal(note.classList.contains('err'), true);
+  await removeRule(app, 'bash: "npm *" -> allow');
+  assert.match(note.textContent, /could not change skip_all/, 'a rule that was removed took it away');
+
+  // A rule the daemon refuses is said beside it, not over it, and goes
+  // alone when the next rule is applied.
+  daemon.refusal = { status: 400, body: 'unknown decision "permit"' };
+  await addRule(app, 'bash', 'go *', 'allow');
+  assert.match(note.textContent, /Failed to add rule/);
+  assert.match(note.textContent, /could not change skip_all/, 'a refused rule was written over the switch that was not changed');
+  daemon.refusal = null;
+  await addRule(app, 'bash', 'go *', 'allow');
+  assert.doesNotMatch(note.textContent, /Failed to add rule/, 'the refusal stayed after a rule was applied');
+  assert.match(note.textContent, /could not change skip_all/);
+  assert.equal(note.classList.contains('err'), true);
+
+  // Opened again, the boxes are drawn from what the daemon has and the
+  // line starts over.
+  app.el('permission-settings-close').click();
+  app.el('permission-status-btn').click();
+  await app.settle();
+  assert.equal(box.checked, false);
+  assert.equal(note.classList.contains('err'), false);
+  assert.doesNotMatch(note.textContent, /could not change/);
+});
+
+test('a rule change answered after a switch could not be changed leaves that said too', async () => {
+  // The rule was sent first and answered last. What the line holds is
+  // looked at when the answer comes, not when the rule was sent.
+  const daemon = fakeRules();
+  const { app, adds } = await openRulesLater(daemon, {
+    'POST /api/sessions/sess-1/permissions': { status: 500, body: { error: 'the session log could not be written' } },
+  });
+  const note = app.el('permission-settings-note');
+
+  await addRule(app, 'bash', 'npm *', 'allow');
+  const box = app.el('read-outside-checkbox');
+  box.checked = true;
+  box.fire('change');
+  await app.settle();
+  assert.match(note.textContent, /could not change read_outside/);
+  adds.answer(0);
+  await app.settle();
+
+  assert.deepEqual(rulesShown(app), ['bash: "npm *" -> allow']);
+  assert.match(note.textContent, /could not change read_outside/, 'the answer to the rule took away what says the switch was not changed');
+  assert.equal(note.classList.contains('err'), true);
 });

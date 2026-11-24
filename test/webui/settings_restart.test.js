@@ -625,6 +625,12 @@ test('the repeat guard stays held while a change is out, through the daemon\'s a
   assert.equal(number.disabled, false, 'the number was left held after the answer');
   assert.equal(box.disabled, false);
   assert.equal(app.callsTo('POST', '/api/settings/repeat-limit').length, 1);
+
+  // And a draw after the answer does not hold it again.
+  announce(app, { repeat_limit: 6, orchestrate: true });
+  await app.settle();
+  assert.equal(app.el('orchestrate-checkbox').checked, true, 'the announcement did not reach the settings window');
+  assert.equal(number.disabled, false, 'a later draw held the number with nothing out');
 });
 
 test('every control in the settings window is one of the above', () => {

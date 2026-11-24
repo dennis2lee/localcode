@@ -600,6 +600,14 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Card and group drags were driven with a real mouse in WebView2 on a Windows runner, by a workflow on a `diag/` branch that is not part of the release checks, and in a Chromium pane. A request to drive the macOS window was declined, so no drag has been tried in WKWebView.
     * The Windows hook reads an unexported field of `webview_go` and calls COM through hand-built tables. `internal/gui/newwindow_test.go` pins the library version and checks every slot number against its header. Bumping the module means repeating a real click on Windows.
 
+65. **Settings: an answer and an announcement cannot be put in order. Open.**
+
+    * A setting change is answered to the client that made it and announced to every client as `settings.changed`. Neither carries anything that orders the two. The page compares the announced value with the one it holds, and takes a difference as "moved from somewhere else".
+    * Found by review of v0.179.1: when the announcement of a page's own change arrives after the answer to its next change of the same switch, the page clears the "applied, but not saved" warning the second change earned. The switch is then in force, not saved and not warned about. Reproduced in the test harness for keep going and auto-delegation. The same comparison has been in the five Agents-tab switches since v0.179.0.
+    * The other direction, also known: an answer that arrives after the announcement of a later change made elsewhere is drawn over it, for every switch that answers in two parts.
+    * Both need the announcement to be late by a whole further change, which has not been seen outside the harness. Not fixed in v0.179.1.
+    * A fix: number the daemon's setting changes, apply and announce each under one lock, and carry the number in `settings.changed`, in each two-part answer and in `GET /api/settings`. A page can then drop whatever is older than what it has drawn. The commands in `internal/agent/toggles.go` change the same settings and would have to take the same lock.
+
 ## UI ideas
 
 ### Web UI
