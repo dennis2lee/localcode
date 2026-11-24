@@ -299,7 +299,18 @@ func TestTheWindowStateBodyIsOneObject(t *testing.T) {
 	if a := getWindowState(t, srv); a.Kept != nil {
 		t.Errorf("after only refused bodies something is kept: %v", *a.Kept)
 	}
-	// Space after the object is not "more".
+	// Space after the object is not "more", up to the limit and no
+	// further: past it the body is too large, like any other.
+	const object = `{"localcode.zoom":"1.5"}`
+	if status, out := windowStateRequest(t, "PUT", srv.URL+"/api/window/state", object+strings.Repeat(" ", maxWindowStateFile), nil); status != http.StatusRequestEntityTooLarge {
+		t.Errorf("an object followed by space past the limit: %d %s, want 413", status, out)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("a body over the limit left a file behind (stat: %v)", err)
+	}
+	if status, out := windowStateRequest(t, "PUT", srv.URL+"/api/window/state", object+strings.Repeat(" ", maxWindowStateFile-len(object)), nil); status != http.StatusNoContent {
+		t.Errorf("an object followed by space up to the limit: %d %s, want 204", status, out)
+	}
 	if status, out := windowStateRequest(t, "PUT", srv.URL+"/api/window/state", "{\"localcode.zoom\":\"1.5\"}\n  \n", nil); status != http.StatusNoContent {
 		t.Errorf("an object followed by blank lines: %d %s, want 204", status, out)
 	}

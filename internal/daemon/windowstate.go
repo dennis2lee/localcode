@@ -146,25 +146,30 @@ func (d *Daemon) handleSetWindowState(w http.ResponseWriter, r *http.Request) {
 	}
 	var req map[string]*string
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxWindowStateFile))
-	notAnObject := errors.New("the body must be one object of names to a string or null")
-	if err := dec.Decode(&req); err != nil {
+	// refuse answers for a body that is not one object. A body over the
+	// limit is told apart wherever the reading stopped on it: in the
+	// object, or in what follows it.
+	refuse := func(err error) {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("the body is larger than %d bytes", maxWindowStateFile))
 			return
 		}
-		writeError(w, http.StatusBadRequest, notAnObject)
+		writeError(w, http.StatusBadRequest, errors.New("the body must be one object of names to a string or null"))
+	}
+	if err := dec.Decode(&req); err != nil {
+		refuse(err)
 		return
 	}
 	// A body of null decodes without an error and names nothing. Taken,
 	// it would write an empty file, and a file that exists is the record:
 	// the next page would clear its own settings to match it.
 	if req == nil {
-		writeError(w, http.StatusBadRequest, notAnObject)
+		refuse(nil)
 		return
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		writeError(w, http.StatusBadRequest, notAnObject)
+		refuse(err)
 		return
 	}
 	if len(req) > maxWindowStateKeys {
