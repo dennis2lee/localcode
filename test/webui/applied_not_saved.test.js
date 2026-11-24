@@ -920,11 +920,13 @@ test('the line under the rules says each switch that could not be changed and th
     await addRule(app, 'bash', `r${fresh++} *`, 'allow');
     daemon.refusal = null;
   };
-  // What each event leaves true: which switches the daemon refused and
-  // has not since taken, and whether the last rule change was refused.
+  // What each event leaves true: which switches the daemon has refused
+  // since the window was opened, and whether the last rule change was
+  // refused. A switch that is taken later is still said to have been
+  // refused: see the test after this one for why.
   const events = {
     'skip_all fails': async (m) => { await turn('skip_all', true); m.failed.add('skip_all'); },
-    'skip_all taken': async (m) => { await turn('skip_all', false); m.failed.delete('skip_all'); },
+    'skip_all taken': async () => { await turn('skip_all', false); },
     'read_outside fails': async (m) => { await turn('read_outside', true); m.failed.add('read_outside'); },
     'rule refused': async (m) => { await addOne(true); m.refused = true; },
     'rule added': async (m) => { await addOne(false); m.refused = false; },
@@ -954,6 +956,54 @@ test('the line under the rules says each switch that could not be changed and th
       assert.equal(note.textContent.includes('Rules apply immediately'), m.failed.size === 0 && !m.refused, `the line about how rules are kept is wrong ${where}`);
     }
   }
+});
+
+test('a switch failure is not taken away by the answer to an earlier change of the same switch', async () => {
+  // The switches are sent as they are pressed, so three changes of one
+  // switch can be out at once. The daemon takes the first two and
+  // refuses the third. The answer to the first arrives last, and says
+  // the switch is on: the box is drawn on, the daemon has it off, and
+  // the line is the only thing that says so. Clearing a switch's
+  // failure when a change of it was taken, which the commit before this
+  // test did, cleared it here. Found by review.
+  const daemonHas = { read_outside: false };
+  const script = ['taken', 'taken', 'refused'];
+  const held = [];
+  const app = await load({
+    routes: {
+      'POST /api/sessions/sess-1/permissions': (body) => new Promise((resolve) => {
+        let answer = { status: 500, body: { error: 'the session log could not be written' } };
+        if (script[held.length] === 'taken') {
+          daemonHas[body.switch] = body.enabled;
+          answer = { effective: { ...daemonHas }, source: {}, remembered: { read: [], write: [] } };
+        }
+        held.push(() => resolve(answer));
+      }),
+    },
+  });
+  app.el('permission-status-btn').click();
+  await app.settle();
+  const note = app.el('permission-settings-note');
+  const box = app.el('read-outside-checkbox');
+  for (const to of [true, false, true]) {
+    box.checked = to;
+    box.fire('change');
+    await app.settle();
+  }
+  assert.equal(held.length, 3, 'a change waited for the answer to the one before it');
+
+  held[1]();
+  await app.settle();
+  held[2]();
+  await app.settle();
+  assert.match(note.textContent, /could not change read_outside/);
+  held[0]();
+  await app.settle();
+
+  assert.equal(daemonHas.read_outside, false);
+  assert.equal(box.checked, true, 'the box is expected to show what the last answer said');
+  assert.match(note.textContent, /could not change read_outside/, 'the daemon does not have what the box shows, and nothing says so');
+  assert.equal(note.classList.contains('err'), true);
 });
 
 test('a rule that was refused is said without the error mark, and goes when a rule is removed or the window is opened again', async () => {

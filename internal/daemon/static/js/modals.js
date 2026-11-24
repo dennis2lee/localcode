@@ -401,10 +401,14 @@ function renderUnsavedRules() {
 //
 //   * one of the four switches above the rules could not be changed. Its
 //     box is left where it was put, so this is the only sign the daemon
-//     does not have that value. It stays until that switch is changed, or
-//     the window is opened again and the boxes are drawn from what the
-//     daemon has. Each switch has its own: a second that could not be
-//     changed used to be written over the first;
+//     does not have that value. It stays until the window is opened
+//     again and the boxes are drawn from what the daemon has. Each switch
+//     has its own: a second that could not be changed used to be written
+//     over the first. A later change of the same switch that is taken
+//     does not clear it. The switches are sent as they are pressed, two
+//     can be out at once, and the answer to an earlier one arriving last
+//     took away a failure the box still disagreed about (found by review
+//     of the commit that cleared it);
 //   * a rule the daemon refused. It is about one request, and goes with
 //     the next rule change that is applied;
 //   * with neither, how rules are kept.
@@ -512,8 +516,6 @@ async function setSessionSwitch(name, enabled) {
   if (!session.sessionID) return;
   try {
     applySessionPermissions(await apiClient.setSessionPermission(session.sessionID, name, enabled));
-    // The daemon has what this box shows again.
-    if (switchFailures.delete(name)) drawPermissionNote();
   } catch (err) {
     switchFailures.set(name, `could not change ${name}: ${err.message}`);
     drawPermissionNote();
