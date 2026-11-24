@@ -119,11 +119,12 @@ func received(s *testServer, text string) func() bool {
 }
 
 // runWhenFree runs cmd as soon as the terminal takes it after the person
-// typed. Two things have to have happened by then, neither on the test's
-// clock: the person's last key is personYield old, and the shell has drawn
-// what their keys did to the line. Sleeping a fixed time for both was a
-// guess, and a loaded machine made it wrong. A line that never reads as
-// free still fails, ten seconds later.
+// typed. Three things have to have happened by then, none on the test's
+// clock: the person's last key is personYield old, the shell has drawn
+// what their keys did to the line, and a line they sent has run to its
+// prompt. Sleeping a fixed time for them was a guess, and a loaded machine
+// made it wrong. A terminal that never reads as free still fails, ten
+// seconds later.
 func runWhenFree(t *testing.T, term *Terminal, cmd string) RunResult {
 	t.Helper()
 	end := time.Now().Add(10 * time.Second)
@@ -132,7 +133,7 @@ func runWhenFree(t *testing.T, term *Terminal, cmd string) RunResult {
 		if err == nil {
 			return res
 		}
-		if !(errors.Is(err, ErrPersonActive) || errors.Is(err, ErrLineNotEmpty)) || time.Now().After(end) {
+		if !(errors.Is(err, ErrPersonActive) || errors.Is(err, ErrLineNotEmpty) || errors.Is(err, ErrBusy)) || time.Now().After(end) {
 			t.Fatalf("run %q: %v", cmd, err)
 		}
 		time.Sleep(20 * time.Millisecond)

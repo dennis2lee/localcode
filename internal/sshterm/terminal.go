@@ -2008,8 +2008,9 @@ func (t *Terminal) applySize() {
 	// A smaller screen cuts off what is past its edges, and puts a cursor
 	// that was past them back inside. With text of the person's cut off,
 	// or the cursor moved to another row, what is left can look like the
-	// prompt alone: the screen says nothing about the line after that.
-	if t.personTyped && t.cutsLine(cols, rows) {
+	// prompt alone: the screen says nothing about the line after that. A
+	// line that reads as empty now has nothing of theirs to cut.
+	if t.personTyped && !t.lineEmpty() && t.cutsLine(cols, rows) {
 		t.promptKnown = false
 	}
 	t.emu.Resize(cols, rows)

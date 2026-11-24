@@ -516,6 +516,37 @@ func TestASmallerScreenDoesNotHideWhatWasTyped(t *testing.T) {
 	if err := s.run(); err != nil {
 		t.Fatalf("run after a smaller screen, the line typed on and erased: %v", err)
 	}
+	// So does one that cuts nothing of the text on the line, erased after.
+	s = playedFor(t, true)
+	s.term.PersonInput(nil, "x", "")
+	s.prints("x")
+	s.term.ViewerSize("v", DefaultCols-10, DefaultRows-5)
+	s.term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+	s.prints("\b \b")
+	if err := s.run(); err != nil {
+		t.Fatalf("run after a smaller screen that cut nothing off, the line erased after: %v", err)
+	}
+}
+
+// A line that reads as empty has nothing of the person's for a smaller
+// screen to cut, wherever the cursor is. The prompt is on the bottom row
+// after a screen of output, so a screen one row shorter cuts the cursor's
+// row off: the shell draws its prompt again on the row the cursor is put
+// on.
+func TestASmallerScreenLeavesAnEmptyLineEmpty(t *testing.T) {
+	s := playedFor(t, true)
+	s.prints(strings.Repeat("out\r\n", DefaultRows) + s.promptText(0))
+	if y := s.term.Snapshot().CursorY; y != DefaultRows-1 {
+		t.Fatalf("the prompt is on row %d, not the bottom row", y)
+	}
+	s.term.PersonInput(nil, "x", "")
+	s.term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+	s.prints("x\b \b")
+	s.term.ViewerSize("v", DefaultCols, DefaultRows-1)
+	s.prints("\r\x1b[K$ ")
+	if err := s.run(); err != nil {
+		t.Fatalf("run after a shorter screen, the line typed on and erased before it: %v", err)
+	}
 }
 
 // A new size between the mark and the prompt can move the cursor (the
