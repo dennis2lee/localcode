@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.179.0
+
+Settings made in the desktop window are still there after it is closed and opened again.
+
+**Fixed**
+
+* The desktop window's typography, zoom, panel widths, shown panels, folded groups and archive section kept in `~/.localcode/window-state.json`, written as each is changed and read back before the page draws
+* Those settings no longer back at their defaults when the window comes up on another port: another program on the last one, a port Windows reserved at boot, or a second window open
+* The same settings kept when the program runs under another file name
+* What the window's own storage already holds copied into that file on the first start
+* A key added to a `config.json` that has comments, at the end of the object with every comment left where it was: a switch turned on in the settings window no longer off again after a restart
+* The repeat guard on the settings window's Turns tab drawn when the window opens: no longer shown unticked and empty after a restart or a reload, whatever was saved
+* The settings window drawn again when the daemon's settings arrive, if it was opened before they did
+
+**Added**
+
+* `GET /api/window/state` and `PUT /api/window/state`, which the window's page keeps those settings through
+
 ## v0.178.0
 
 Each conversation keeps which panels are shown beside it.

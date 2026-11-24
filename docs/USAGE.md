@@ -304,7 +304,7 @@ Supported JSONC syntax:
 * Trailing commas before `}` or `]`
 * Literal `//` inside strings, including `https://example.com/v1`
 
-When the file has comments and the change updates an existing key, LocalCode splices the new value in place: comments, indentation, key order, and unrelated bytes survive. A file with no comments is rewritten whole with top-level keys sorted alphabetically, so one edit there can reorder the file. LocalCode refuses to add a missing key to a commented file because there is no unambiguous insertion point. The runtime change still applies, and the key can be added manually.
+When the file has comments and the change updates an existing key, LocalCode splices the new value in place: comments, indentation, key order, and unrelated bytes survive. A file with no comments is rewritten whole with top-level keys sorted alphabetically, so one edit there can reorder the file. A key the commented file does not have yet is added at the end of the top-level object, on its own line: after the last member and after any comments that follow it, so no existing comment moves. A trailing comma after the last member is kept as the file's style. Before v0.179.0 LocalCode refused to add a key to a commented file, and a switch turned on in the settings window was off again after a restart.
 
 #### Values from the environment: `{env:NAME}`
 
@@ -2057,7 +2057,7 @@ The Web UI shares daemon sessions with the TUI and desktop window. The left pane
 | Back to the default width | Double-click that same handle |
 | Hide or show a panel | The toggle button in the header: at the far left for the session panel, at the far right for the tasks/MCP panel, the globe right of the session name for the browser panel, and the terminal beside it for the SSH panel. The globe is there while the browser panel is (the desktop window, with the browser setting on), the terminal while the SSH panel is (the SSH setting on). Hiding the browser panel keeps its page running: the model keeps the browser. Hiding the SSH panel keeps its connections. |
 
-Panel widths persist in the browser or desktop window, and so does whether the session panel is shown.
+Panel widths persist in the browser or desktop window, and so does whether the session panel is shown. The desktop window keeps them in `~/.localcode/window-state.json`: see [Settings](#settings).
 
 Which of the browser, SSH and tasks/MCP panels are shown is kept for each conversation:
 
@@ -2065,7 +2065,7 @@ Which of the browser, SSH and tasks/MCP panels are shown is kept for each conver
 * A conversation opened for the first time starts with the panels on screen.
 * A panel localcode shows or hides itself counts: the SSH panel shown for a terminal's question, the browser or SSH panel hidden for the other in a narrow window.
 * A window narrower than when the conversation was left may not hold the browser and SSH panels both. The SSH panel stays.
-* The choices are stored in the browser or desktop window, for the 200 conversations opened most recently. Deleting a conversation drops its choice.
+* The choices are stored in the browser, or by the desktop window in `~/.localcode/window-state.json`, for the 200 conversations opened most recently. Deleting a conversation drops its choice.
 
 | Panel | Default | Drag range |
 |---|---|---|
@@ -2092,7 +2092,7 @@ Cards show the session's current workspace. Sessions without a recorded workspac
 
 #### Session groups
 
-Sessions can be put into named groups. Which groups exist, what order they are drawn in, and which sessions are in them live on the daemon, so the browser and the desktop window show the same panel and all of it survives a restart. Whether a group is folded shut is the one exception: that is about the panel in front of you, not about the group, so it is remembered per browser.
+Sessions can be put into named groups. Which groups exist, what order they are drawn in, and which sessions are in them live on the daemon, so the browser and the desktop window show the same panel and all of it survives a restart. Whether a group is folded shut is the one exception: that is about the panel in front of you, not about the group, so it is remembered per browser, and by the desktop window in `~/.localcode/window-state.json`.
 
 | Action | Control | API |
 |---|---|---|
@@ -2235,7 +2235,19 @@ The **settings** pill opens the settings window, grouped into one tab per subjec
 | Updates | Check for updates, and download and install. See [Checking for updates](#checking-for-updates) |
 | Typography | The reading, interface and monospace faces, and the text sizes. See below |
 
-Typography is per person, not per daemon. The faces and the size live in this browser's storage, survive a reload, and apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
+Every setting in this window is still there after LocalCode is closed and opened again. Where each is kept:
+
+| Setting | Kept in |
+|---|---|
+| Agents, Turns and Muse tabs, and the permission settings | `~/.localcode/config.json` (or the file given with `--config`), written when the switch moves. A file with comments keeps them: see [Comments](#comments-the-file-is-jsonc). |
+| Typography, in the desktop window | `~/.localcode/window-state.json`, written when the choice is made |
+| Typography, in a browser tab | That browser's storage for the daemon's address |
+
+The desktop window keeps these in the same file, for the same reason: the [zoom](#zoom-and-what-a-reload-keeps), the panel widths, which panels each conversation shows, which groups are folded, and whether the archive is open. The window's own browser storage is tied to the port the window is on, and the window does not always get its last port back: another program may hold it, Windows may have reserved it at boot (Hyper-V, WSL and Docker reserve ranges of ports), or a second window may be open. Before v0.179.0 each of those brought these settings back at their defaults. The first start of v0.179.0 or later copies what the window's storage holds into the file.
+
+Deleting `window-state.json` while the window is closed does not reset these settings when the window comes back on the same port: the page writes the file again from its own storage. To reset them, put each back to its default in the window.
+
+Typography is per person, not per daemon. The faces and the size apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
 
 Text size is the type only: one overall size from 87.5% to 140% of the nine-step scale, plus a trim per group over the same range. Reading trims the transcript, the model's questions to you, thinking and review blocks, and headings. Interface trims controls, panels, status, notes (except the model's questions), and the ids shown in those rows. Code trims code set in monospace. A trim reaches steps, not faces: an id set in monospace inside an interface row, like the session id, follows the interface trim. The trims compose with the overall size: each step is its pixel value times the overall size times its trim, so making everything bigger and then bringing the code down a notch is two choices. [Zoom](#zoom-and-what-a-reload-keeps) is separate: ctrl+wheel scales the whole page, spacing included. The two compose: zoom multiplies everything, text size multiplies only the type.
 
@@ -3262,7 +3274,7 @@ Reasoning appears as a separate muted block in the Web UI. The TUI status reads 
 
 ### Zoom and what a reload keeps
 
-Ctrl and the wheel, or ctrl with `+`, `-` and `0`, size the page. The zoom belongs to the page rather than to the window, so it survives a reload and comes back in the next window; the panel widths do the same.
+Ctrl and the wheel, or ctrl with `+`, `-` and `0`, size the page. The zoom belongs to the page rather than to the window, so it survives a reload and comes back in the next window; the panel widths do the same. The desktop window also keeps both in `~/.localcode/window-state.json`, so they come back after the window is closed and opened again, on whatever port it is given: see [Settings](#settings).
 
 Which conversation a window is looking at survives a reload too, per window: two windows on one daemon each come back to their own. A window opened fresh starts at the newest conversation, as before.
 

@@ -82,6 +82,12 @@ func (d *Daemon) sshTerminal(w http.ResponseWriter, r *http.Request, mustBeOn bo
 //   - the host the request was sent to must be an address or localhost,
 //     or the name the daemon was started to listen on.
 func (d *Daemon) sshGuard(w http.ResponseWriter, r *http.Request) bool {
+	return d.sameSiteGuard(w, r, "the SSH panel")
+}
+
+// sameSiteGuard is sshGuard's rule for any route that needs it; what
+// names the thing being asked for, in the refusal.
+func (d *Daemon) sameSiteGuard(w http.ResponseWriter, r *http.Request, what string) bool {
 	refuse := func(why string) bool {
 		writeError(w, http.StatusForbidden, errors.New("refused: "+why))
 		return false
@@ -92,7 +98,7 @@ func (d *Daemon) sshGuard(w http.ResponseWriter, r *http.Request) bool {
 			ct = ct[:i]
 		}
 		if !strings.EqualFold(strings.TrimSpace(ct), "application/json") {
-			return refuse("a request to the SSH panel must be JSON")
+			return refuse("a request to " + what + " must be JSON")
 		}
 	}
 	if s := r.Header.Get("Sec-Fetch-Site"); s != "" && s != "same-origin" && s != "none" {

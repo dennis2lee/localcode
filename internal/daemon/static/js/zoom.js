@@ -1,4 +1,5 @@
 import { app } from './state.js';
+import { readPref, writePref } from './prefs.js';
 
 // Ctrl+wheel zoom, owned by the page.
 //
@@ -19,7 +20,9 @@ import { app } from './state.js';
 // localStorage rather than sessionStorage, unlike the open conversation:
 // a comfortable size is a property of the person and their screen, not
 // of this window, and somebody who sized the text once should not do it
-// again in the next window.
+// again in the next window. Through js/prefs.js, which in the desktop
+// window also keeps it in a file, so it is there on whatever port the
+// window comes up on next.
 
 const KEY = 'localcode.zoom';
 const MIN = 0.5;
@@ -32,18 +35,12 @@ function clamp(z) {
 }
 
 function read() {
-  try {
-    const v = parseFloat(localStorage.getItem(KEY));
-    return Number.isFinite(v) ? clamp(v) : 1;
-  } catch {
-    return 1;
-  }
+  const v = parseFloat(readPref(KEY));
+  return Number.isFinite(v) ? clamp(v) : 1;
 }
 
 function write(z) {
-  try {
-    localStorage.setItem(KEY, String(z));
-  } catch { /* storage refused: this window keeps the size, the next starts at 1 */ }
+  writePref(KEY, String(z));
 }
 
 // apply sets the factor on the root element.

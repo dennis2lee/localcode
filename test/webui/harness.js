@@ -360,6 +360,10 @@ async function load(opts = {}) {
     getItem: (k) => (stored.has(k) ? stored.get(k) : null),
     setItem: (k, v) => stored.set(k, String(v)),
     removeItem: (k) => stored.delete(k),
+    // Listing what is stored, as a real one can: the page does it once,
+    // to hand what it already holds to the desktop window's daemon.
+    get length() { return stored.size; },
+    key: (i) => [...stored.keys()][i] ?? null,
   };
   harness.storage = stored;
   // sessionStorage is its own store, per window: which conversation this

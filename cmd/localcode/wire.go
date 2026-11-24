@@ -541,6 +541,11 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	if path, err := resolvedConfigPath(configPath); err == nil {
 		d.ConfigPath = path
 	}
+	// What the desktop window's page remembers for itself, beside the
+	// config and not in it. Every daemon gets the path: the one behind a
+	// window after an update is a successor that does not know there is
+	// a window, and only a window's page ever asks.
+	d.WindowStatePath = filepath.Join(e.home, ".localcode", "window-state.json")
 
 	return d, cleanup, nil
 }

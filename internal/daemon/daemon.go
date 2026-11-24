@@ -116,6 +116,12 @@ type Daemon struct {
 	// silently forgets.
 	ConfigPath string
 
+	// WindowStatePath is the file the desktop window's page keeps its own
+	// settings in (see windowstate.go), or "" for a daemon that keeps
+	// none. windowStateMu is held across a read and the write after it.
+	WindowStatePath string
+	windowStateMu   sync.Mutex
+
 	// PickDirectory opens a native folder picker on the machine the daemon
 	// runs on, and is nil unless that machine is also the one looking at
 	// the screen — i.e. only the desktop-window mode sets it. A daemon
@@ -259,6 +265,8 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/trace", d.handleTrace)
 	d.mux.HandleFunc("GET /api/usage", d.handleUsage)
 	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)
+	d.mux.HandleFunc("GET /api/window/state", d.handleGetWindowState)
+	d.mux.HandleFunc("PUT /api/window/state", d.handleSetWindowState)
 	d.mux.HandleFunc("POST /api/settings/auto-delegate", d.handleSetAutoDelegate)
 	d.mux.HandleFunc("POST /api/settings/smart-agent", d.handleSetSmartAgent)
 	d.mux.HandleFunc("POST /api/settings/ssh", d.handleSetSSH)

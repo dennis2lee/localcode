@@ -70,15 +70,40 @@ export function openSettings() {
   // up changed in a panel nobody watched open.
   renderTypography();
   selectSettingsTab(settingsTabs.length ? settingsTabs[0].name : '');
+  renderDaemonSettings();
+  settings.open();
+}
+
+// renderDaemonSettings draws every control the daemon holds the value of,
+// from what the page knows of it now.
+//
+// One list, used by both callers, because a control left out of it is a
+// control that shows whatever the markup starts with. The repeat guard
+// was left out of the window's opening: its box was drawn only when the
+// number was changed, so after the page had been loaded again (a restart
+// of the desktop window, a reload) the Turns tab showed the box unticked
+// and the number empty whatever the daemon was holding, which reads as a
+// setting that was not kept. test/webui/settings_restart.test.js opens
+// the window against every one of them.
+function renderDaemonSettings() {
   renderSmartAgent();
   renderBrowserSetting();
   renderSSHSetting();
   renderOrchestrate();
   renderModelInvocable();
+  renderRepeatLimit();
   renderKeepGoing();
   renderMuseNote();
   renderFoldThinking();
-  settings.open();
+}
+
+// refreshSettingsIfOpen draws them again when the page's first read of
+// the daemon's settings lands. The window can be opened before that, in
+// the first moment after the page appears, and it then shows the values
+// the page starts with: every switch off. Nothing else would correct it,
+// because the other redraws wait for a setting to change.
+export function refreshSettingsIfOpen() {
+  if (settings.isOpen) renderDaemonSettings();
 }
 
 // The Muse tab.

@@ -157,17 +157,38 @@ func hasComments(data []byte) bool {
 // indentation somebody chose, and the ordering they put the keys in all
 // survive a toggle written by this program.
 //
+// A key the change adds goes after everything else in the object: after
+// the last member and after whatever comments follow it, on a line of
+// its own before the closing brace. Nothing that was there moves, so no
+// comment ends up beside a key it was not written for. Adding used to be
+// refused outright, on the reasoning that any position chooses a side of
+// somebody's comment, and the cost was a switch in the settings window
+// that did not survive a restart for anybody whose config had a note in
+// it. The end of the object is the one position that chooses no side.
+//
 // It reports false rather than guessing when it meets something it
-// cannot do safely: a key that is being added rather than changed (there
-// is no span to replace, and inventing a position would mean deciding
-// where somebody's comments belong), a key that was removed, or a file
-// whose top level will not scan. The caller then refuses the write and
-// says so, which is the honest outcome: the alternative is rewriting the
-// file and taking the comments with it.
+// cannot do safely: a key that was removed, or a file whose top level
+// will not scan. The caller then refuses the write and says so, which is
+// the honest outcome: the alternative is rewriting the file and taking
+// the comments with it.
 func spliceKeys(data []byte, before, after map[string]json.RawMessage) ([]byte, bool) {
 	spans, ok := topLevelSpans(data)
 	if !ok {
 		return nil, false
+	}
+
+	// The file's own line ends, in everything written into it: a value
+	// that takes several lines is marshalled with bare newlines, and a
+	// file written on Windows would come back with two kinds.
+	nl := "\n"
+	if bytes.Contains(data, []byte("\r\n")) {
+		nl = "\r\n"
+	}
+	lines := func(b []byte) []byte {
+		if nl == "\n" {
+			return b
+		}
+		return bytes.ReplaceAll(b, []byte("\n"), []byte(nl))
 	}
 
 	type edit struct {
@@ -175,6 +196,7 @@ func spliceKeys(data []byte, before, after map[string]json.RawMessage) ([]byte, 
 		value    []byte
 	}
 	var edits []edit
+	var added []string
 	for key, want := range after {
 		had, existed := before[key]
 		if existed && bytes.Equal(canonical(had), canonical(want)) {
@@ -182,9 +204,8 @@ func spliceKeys(data []byte, before, after map[string]json.RawMessage) ([]byte, 
 		}
 		span, found := spans[key]
 		if !found {
-			// A key this change adds. Nowhere to put it that does not
-			// mean choosing a side of somebody's comment.
-			return nil, false
+			added = append(added, key)
+			continue
 		}
 		// Indented to sit where the old value sat, so a nested object
 		// replacing another reads like the rest of the file.
@@ -192,18 +213,66 @@ func spliceKeys(data []byte, before, after map[string]json.RawMessage) ([]byte, 
 		if err != nil {
 			return nil, false
 		}
-		edits = append(edits, edit{from: span.from, to: span.to, value: pretty})
+		edits = append(edits, edit{from: span.from, to: span.to, value: lines(pretty)})
 	}
 	for key := range before {
 		if _, still := after[key]; !still {
 			return nil, false // a removal; same reasoning as an addition
 		}
 	}
+	if len(added) > 0 {
+		// In a fixed order, so the same change writes the same file.
+		sort.Strings(added)
+		tail, ok := objectTail(data, spans)
+		if !ok {
+			return nil, false
+		}
+		var b bytes.Buffer
+		for _, key := range added {
+			name, err := json.Marshal(key)
+			if err != nil {
+				return nil, false
+			}
+			pretty, err := json.MarshalIndent(after[key], tail.indent, "  ")
+			if err != nil {
+				return nil, false
+			}
+			if tail.members {
+				b.WriteByte(',')
+			}
+			tail.members = true
+			b.WriteString(nl)
+			b.WriteString(tail.indent)
+			b.Write(name)
+			b.WriteString(": ")
+			b.Write(lines(pretty))
+		}
+		text := b.Bytes()
+		if tail.comma >= 0 {
+			// The last member already ends in a comma, which a JSONC
+			// file may: the new members go after it and take over the
+			// trailing one.
+			text = append(text[1:], ',')
+		} else if tail.lastEnd >= 0 && tail.lastEnd != tail.at {
+			// A comment sits between the last member and the end of
+			// the object. The comma belongs to the member, before the
+			// comment, and the new lines go after it.
+			edits = append(edits, edit{from: tail.lastEnd, to: tail.lastEnd, value: []byte{','}})
+			text = text[1:]
+		}
+		if tail.at < len(data) && data[tail.at] == '}' {
+			// Nothing between the last thing and the brace, as in an
+			// object written on one line: the brace goes on its own.
+			text = append(text, nl...)
+		}
+		edits = append(edits, edit{from: tail.at, to: tail.at, value: text})
+	}
 	if len(edits) == 0 {
 		return data, true
 	}
-	// Back to front, so an earlier edit does not move a later one.
-	sort.Slice(edits, func(i, j int) bool { return edits[i].from > edits[j].from })
+	// Back to front, so an earlier edit does not move a later one. Two
+	// edits at one offset keep the order they were made in.
+	sort.SliceStable(edits, func(i, j int) bool { return edits[i].from > edits[j].from })
 
 	out := append([]byte(nil), data...)
 	for _, e := range edits {
@@ -287,4 +356,81 @@ func indentOfLine(data []byte, off int) string {
 		end++
 	}
 	return string(data[start:end])
+}
+
+// objectEnd is where a new member of the top-level object goes.
+type objectEnd struct {
+	// at is the offset to write at: after the last thing in the object
+	// that is not whitespace, a comment included.
+	at int
+	// lastEnd is the end of the last member's value, or -1 in an object
+	// with no members.
+	lastEnd int
+	// comma is the offset of a comma already written after the last
+	// member, or -1.
+	comma int
+	// members is whether the object has any.
+	members bool
+	// indent is what the new member's line starts with.
+	indent string
+}
+
+// objectTail finds the end of the top-level object in the original text:
+// everything from the last member to the closing brace is whitespace,
+// comments and at most one comma, and anything else means the file is
+// not the shape this can edit.
+func objectTail(data []byte, spans map[string]valueSpan) (objectEnd, bool) {
+	end := objectEnd{lastEnd: -1, comma: -1, indent: "  "}
+	for _, span := range spans {
+		if span.to > end.lastEnd {
+			end.lastEnd = span.to
+			end.indent = span.indent
+			end.members = true
+		}
+	}
+	i := end.lastEnd
+	if i < 0 {
+		// No members: start after the opening brace, which is the first
+		// thing in the file that is not whitespace or a comment.
+		clean := stripComments(append([]byte(nil), data...))
+		i = bytes.IndexByte(clean, '{')
+		if i < 0 {
+			return end, false
+		}
+		i++
+	}
+	end.at = i
+	for i < len(data) {
+		c := data[i]
+		switch {
+		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
+			i++
+		case c == '/' && i+1 < len(data) && data[i+1] == '/':
+			for i < len(data) && data[i] != '\n' {
+				i++
+			}
+			// A line comment ends at a carriage return too, when the
+			// file has Windows line ends: the new line goes before it.
+			end.at = i
+			if i > 0 && data[i-1] == '\r' {
+				end.at = i - 1
+			}
+		case c == '/' && i+1 < len(data) && data[i+1] == '*':
+			close := bytes.Index(data[i+2:], []byte("*/"))
+			if close < 0 {
+				return end, false
+			}
+			i += 2 + close + 2
+			end.at = i
+		case c == ',' && end.comma < 0 && end.members:
+			end.comma = i
+			i++
+			end.at = i
+		case c == '}':
+			return end, true
+		default:
+			return end, false
+		}
+	}
+	return end, false
 }

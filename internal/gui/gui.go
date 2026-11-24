@@ -129,6 +129,13 @@ func Launch(title string, start func(progress func(string), setVersion func(stri
 		// the remembered one is taken, so a collision costs a preference
 		// rather than a window that will not open. Loopback only either
 		// way, so nothing is exposed off the machine.
+		//
+		// It no longer costs a preference either. The remembered port is
+		// lost for good whenever another program has it, the system has
+		// reserved it, or a second window is open, and each of those was
+		// measured to bring the settings back at their defaults. The page
+		// now keeps them in a file as well (internal/daemon/windowstate.go),
+		// so this is only what keeps the address the same when it can be.
 		ln, lerr := listenRemembered()
 		if lerr != nil {
 			startErr = fmt.Errorf("bind loopback port: %w", lerr)

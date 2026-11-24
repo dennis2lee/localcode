@@ -3,6 +3,7 @@ import {
   resizeLeftHandle, resizeRightHandle, resizeBrowserHandle, resizeSshHandle,
   toggleLeftBtn, toggleRightBtn, toggleBrowserBtn, toggleSshBtn,
 } from './dom.js';
+import { readPref, writePref } from './prefs.js';
 
 // Every panel is a flex item with a fixed width, so resizing is just
 // writing a new width — no layout recalculation of our own, and the
@@ -46,18 +47,14 @@ function clamp(px, bounds) {
 // remembered width — not a dead handle or a page that fails to start.
 function readStored() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+    return JSON.parse(readPref(STORAGE_KEY)) || {};
   } catch (err) {
     return {};
   }
 }
 
 function store(patch) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...readStored(), ...patch }));
-  } catch (err) {
-    // ignore
-  }
+  writePref(STORAGE_KEY, JSON.stringify({ ...readStored(), ...patch }));
 }
 
 // Which of the panels right of the conversation are shown belongs to the
@@ -83,7 +80,7 @@ let viewFor = '';
 
 function readViews() {
   try {
-    const v = JSON.parse(localStorage.getItem(VIEWS_KEY));
+    const v = JSON.parse(readPref(VIEWS_KEY));
     if (!Array.isArray(v)) return [];
     return v.filter((e) => Array.isArray(e) && typeof e[0] === 'string' && Array.isArray(e[1]));
   } catch (err) {
@@ -92,11 +89,7 @@ function readViews() {
 }
 
 function writeViews(views) {
-  try {
-    localStorage.setItem(VIEWS_KEY, JSON.stringify(views.slice(-VIEWS_KEEP)));
-  } catch (err) {
-    // ignore
-  }
+  writePref(VIEWS_KEY, JSON.stringify(views.slice(-VIEWS_KEEP)));
 }
 
 // The panels a conversation chooses: name, panel, handle, toggle, and

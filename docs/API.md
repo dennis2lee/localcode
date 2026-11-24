@@ -160,6 +160,24 @@ re-reads this endpoint on load.
 | `POST /api/settings/fold-thinking` | `{"enabled"}` | `200 {"fold_thinking", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/repeat-limit` | `{"limit"}`; 0 turns the guard off | `204` | `400` outside 0..max (text error); `500` applied but not persisted (text error) |
 
+### The desktop window's own settings
+
+What the page keeps for itself (faces, text sizes, zoom, panel widths,
+which panels a conversation shows, folded groups) lives in the browser's
+`localStorage`. The desktop window's page also writes each change here,
+and reads the set back before it draws, because the window's
+`localStorage` is tied to a port the window does not always get back.
+The file is `~/.localcode/window-state.json`. A browser tab calls neither
+route.
+
+Both routes pass the SSH request guard (see SSH below) and answer `403`
+when it refuses.
+
+| Method and path | Takes | Answers | Errors |
+|---|---|---|---|
+| `GET /api/window/state` | nothing | `200 {"available", "kept"}`. `kept` is an object of name to string, or `null` when nothing has been written yet. `available` is false for a daemon started without a path | `403` refused by the request guard |
+| `PUT /api/window/state` | an object of name to string or `null`: a string keeps the name, `null` forgets it, names not in the body are left alone. Names are `archiveOpen` or `localcode.` followed by 1 to 64 letters, digits, `.`, `_` or `-`, starting with a letter or digit. At most 64 names, 256 KiB a value, 1 MiB in all | `204`, with the file on disk | `400` a name outside the rule, a value that is not a string or `null`, or more than 64 names; `403` refused by the request guard; `404` a daemon started without a path; `413` a value or the whole file too large; `500` the file could not be written |
+
 ### Daemon-wide permission defaults
 
 | Method and path | Takes | Answers | Errors |

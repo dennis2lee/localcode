@@ -7,6 +7,12 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 <!--
+  What the desktop window remembered, read back from the daemon before
+  anything below reads localStorage. Returns at once in a browser tab. See
+  js/kept.js.
+-->
+<script src="js/kept.js"></script>
+<!--
   Typography before first paint.
 
   The faces and the text size live in localStorage (see js/typography.js:
@@ -840,7 +846,7 @@
     <div class="settings-field">
       <label class="field-label" for="typo-size-code-select">Code: code set in monospace</label>
       <select id="typo-size-code-select"></select>
-      <p class="note" id="typo-note">Each trim multiplies the overall size, from 87.5% to 140%. A trim reaches steps, not faces: an id set in monospace inside an interface row, like the session id, follows the interface trim. Stored in this browser, restored on reload. Ctrl+wheel zoom is separate: it scales the whole page, spacing included.</p>
+      <p class="note" id="typo-note">Each trim multiplies the overall size, from 87.5% to 140%. A trim reaches steps, not faces: an id set in monospace inside an interface row, like the session id, follows the interface trim. Stored in this browser, restored on reload; the desktop window also keeps it in ~/.localcode/window-state.json, so it is there the next time the window is opened. Ctrl+wheel zoom is separate: it scales the whole page, spacing included.</p>
     </div>
     </section>
 

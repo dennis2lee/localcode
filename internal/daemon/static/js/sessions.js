@@ -2,6 +2,7 @@ import { sessionListEl, sessionIdEl, archiveToggleEl, archiveListEl, inputEl } f
 import { renderBrowserPanel } from './browser.js';
 import { renderSSHPanel } from './ssh.js';
 import { showPanelsFor, forgetPanels } from './resize.js';
+import { readPref, writePref } from './prefs.js';
 import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft, sessionWorking, overlayActivity } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, appendTool, clearTranscript } from './transcript.js';
@@ -127,11 +128,13 @@ export function sessionMatchesFilter(s, q) {
 // lives on the daemon. Whether a group is folded is not about the group,
 // it is about the panel in front of you, and a second window folding one
 // shut should not fold it in the first. localStorage is per browser
-// profile, which is exactly that scope.
+// profile, which is exactly that scope. (The desktop window also keeps it
+// in its own file, so it is there after a restart: see js/prefs.js. A
+// window already open is still not folded by another.)
 //
-// Every read and write is wrapped: a private window, cleared site data or
-// a storage quota all throw here, and none of them is a reason for the
-// session panel not to draw.
+// Every read and write goes through js/prefs.js, which wraps them: a
+// private window, cleared site data or a storage quota all throw, and
+// none of them is a reason for the session panel not to draw.
 const GROUP_COLLAPSE_KEY = 'localcode.collapsedGroups';
 
 // A Set, not an object keyed by name. A group is called whatever somebody
@@ -142,7 +145,7 @@ const GROUP_COLLAPSE_KEY = 'localcode.collapsedGroups';
 // inherited members to collide with.
 export function readCollapsedGroups() {
   try {
-    const raw = localStorage.getItem(GROUP_COLLAPSE_KEY);
+    const raw = readPref(GROUP_COLLAPSE_KEY);
     if (!raw) return new Set();
     const parsed = JSON.parse(raw);
     return new Set(Array.isArray(parsed) ? parsed.filter(n => typeof n === 'string') : []);
@@ -152,11 +155,7 @@ export function readCollapsedGroups() {
 }
 
 export function writeCollapsedGroups(collapsed) {
-  try {
-    localStorage.setItem(GROUP_COLLAPSE_KEY, JSON.stringify([...collapsed]));
-  } catch {
-    /* a private window, or storage turned off: the panel still draws */
-  }
+  writePref(GROUP_COLLAPSE_KEY, JSON.stringify([...collapsed]));
 }
 
 // forgetCollapsedGroups drops folds for groups that are gone. Nothing on
@@ -1400,7 +1399,7 @@ function renderArchiveList() {
 
 export async function toggleArchive() {
   app.archiveOpen = !app.archiveOpen;
-  try { localStorage.setItem('archiveOpen', app.archiveOpen ? '1' : ''); } catch { /* private window */ }
+  writePref('archiveOpen', app.archiveOpen ? '1' : '');
   if (app.archiveOpen) {
     await loadArchived();
   } else {

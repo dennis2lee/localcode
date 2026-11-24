@@ -26,6 +26,7 @@ import {
 import { loadAgents, loadCommands, loadSkills, loadSlashCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent, resetMCPServers } from './loaders.js';
 import { loadSessions, selectSession, createNewSession, deleteAllSessions, wireArchiveDrop, wireSessionDragGuard, loadArchived, rememberedOpenSession, renderSessionList, promptCreateGroup } from './sessions.js';
 import { wireZoom, applyZoom } from './zoom.js';
+import { readPref } from './prefs.js';
 import {
   openScheduleDialog, closeScheduleDialog, saveSchedule, previewWhen,
   closeScheduleDetails,
@@ -45,7 +46,7 @@ import { closeTaskView, cancelOpenTask, deleteOpenTask, deleteAllTasks, taskView
 import { wirePromptDialog, askText, askConfirm, anyPromptOpen } from './prompt.js';
 import { initResizers } from './resize.js';
 import { tryComplete, resetCompletion } from './complete.js';
-import { initSettings, settings } from './settings.js';
+import { initSettings, settings, refreshSettingsIfOpen } from './settings.js';
 import { initBrowserPanel, renderBrowserPanel } from './browser.js';
 import { initSSHPanel, renderSSHPanel } from './ssh.js';
 import { wireExternalLinks } from './links.js';
@@ -349,6 +350,9 @@ async function init() {
   // reads both the settings and the agent list, and whichever of those two
   // landed second would otherwise decide what it shows.
   renderStatusBar();
+  // And the settings window, if somebody opened it before the settings
+  // arrived: it was drawn from the values the page starts with.
+  refreshSettingsIfOpen();
   // Likewise the browser panel: the conversation can open before the
   // setting that decides whether the panel is drawn has arrived.
   renderBrowserPanel();
@@ -368,9 +372,7 @@ async function init() {
   if (typeof window.addEventListener === 'function') {
     window.addEventListener('resize', autoResizeInput);
   }
-  try {
-    app.archiveOpen = !!localStorage.getItem('archiveOpen');
-  } catch { /* private window, or storage refused: stay collapsed */ }
+  app.archiveOpen = !!readPref('archiveOpen');
   // Fetched once at load whether or not the section is open, because the
   // header carries a count and a count that appears only after the first
   // expand is one nobody can trust. One request, on a page that already
@@ -433,4 +435,5 @@ export {
 } from './find.js';
 export { resetMCPServers, mcpResetConfirmText } from './loaders.js';
 export { wireZoom, applyZoom, zoomKey, zoomWheel } from './zoom.js';
+export { readPref, writePref } from './prefs.js';
 export { wirePromptDialog, askText, askConfirm, anyPromptOpen } from './prompt.js';
