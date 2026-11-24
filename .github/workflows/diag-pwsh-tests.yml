@@ -3,8 +3,7 @@
 name: diag-pwsh-tests
 
 on:
-  push:
-    branches: ['diag/**']
+  workflow_dispatch:
 
 permissions:
   contents: read

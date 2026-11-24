@@ -3,8 +3,10 @@
 name: diag-pwsh-e2e
 
 on:
+  workflow_dispatch:
   push:
     branches: ['diag/**']
+    paths: ['diag/pwsh-e2e/**', '.github/workflows/diag-pwsh-e2e.yml']
 
 permissions:
   contents: read
