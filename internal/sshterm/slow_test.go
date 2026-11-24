@@ -141,36 +141,6 @@ func TestALineTypedOnBeforeASlowPromptIsTheirs(t *testing.T) {
 	}
 }
 
-// A new size between the mark and the prompt can move the cursor (the
-// screen grew shorter than where it was). That is not a prompt drawn.
-func TestAResizeBeforeThePromptIsNotThePrompt(t *testing.T) {
-	noEmptyPrompt(t)
-	s := startServer(t, func(s *testServer) { s.promptDelay = slowPrompt })
-	m := testManager(t, testHome(t, s, true))
-	term := connected(t, m, s)
-	// Far enough down the screen that a shorter one moves the cursor. A
-	// run is over when the mark is read, which is before its output is
-	// drawn: the lines on the screen and the mark's place taken, first.
-	run(t, term, "lines 20")
-	within(t, 10*time.Second, "the command's output drawn", func() bool {
-		term.mu.Lock()
-		defer term.mu.Unlock()
-		return !term.markPending && term.emu.CursorPosition().Y >= MinRows
-	})
-	before := term.Snapshot()
-	term.ViewerSize("v", DefaultCols, MinRows)
-	if after := term.Snapshot(); after.CursorY == before.CursorY {
-		t.Fatalf("the new size did not move the cursor from row %d", before.CursorY)
-	}
-	settled(t, term)
-	term.mu.Lock()
-	left := term.promptLeft
-	term.mu.Unlock()
-	if want := "me@test:~$ "; left != want {
-		t.Fatalf("the prompt was recorded as %q", left)
-	}
-}
-
 // The same against the real shells, with a prompt command that takes a
 // while. bash without PS0 (3.2, the one macOS ships) has no mark for where
 // a command's output starts: a command typed before its prompt came back

@@ -682,16 +682,24 @@ func (t *Terminal) aroundCursor() (left, rest, below string) {
 	return cells(pos.Y, 0, pos.X), strings.TrimRight(cells(pos.Y, pos.X, w), " "), strings.TrimRight(strings.Join(rows, "\n"), "\n")
 }
 
-// rowReaches reports the cursor, or something on its row, at column col
-// or past it. Called with mu held.
-func (t *Terminal) rowReaches(col int) bool {
+// cutsLine reports a screen of cols by rows cutting into the line being
+// typed: the cursor is outside it, or something on the cursor's row or a
+// row under it is. Called with mu held.
+func (t *Terminal) cutsLine(cols, rows int) bool {
 	pos := t.emu.CursorPosition()
-	if pos.X >= col {
+	if pos.X >= cols || pos.Y >= rows {
 		return true
 	}
-	for x := col; x < t.emu.Width(); x++ {
-		if c := t.emu.CellAt(x, pos.Y); c != nil && c.Content != "" && c.Content != " " {
-			return true
+	w, h := t.emu.Width(), t.emu.Height()
+	for y := pos.Y; y < h; y++ {
+		from := cols
+		if y >= rows {
+			from = 0
+		}
+		for x := from; x < w; x++ {
+			if c := t.emu.CellAt(x, y); c != nil && c.Content != "" && c.Content != " " {
+				return true
+			}
 		}
 	}
 	return false
@@ -1693,6 +1701,10 @@ func (t *Terminal) Type(text string, enter bool, gen uint64) error {
 			return ErrUseRun
 		}
 		t.modelTyped, t.typedAfter = true, true
+		// Not refused above: the line read as empty of the person's. It
+		// is the model's now, and nothing of theirs is on it to keep the
+		// model from clearing what it types.
+		t.personTyped, t.personAfter = false, false
 	} else if t.typeaheadOnly() {
 		if strings.Contains(text, "\r") {
 			return ErrTypeahead
@@ -1729,6 +1741,7 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 			}
 		}
 		t.modelTyped = true
+		t.personTyped, t.personAfter = false, false
 		// Ctrl+C discards the line where the shell takes it as an
 		// interrupt; the prompt that follows says so. Nothing is taken for
 		// granted before it: with "stty intr undef" the key is only a
@@ -1879,6 +1892,11 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 	// prompt: enter sends it, clears is Ctrl+C. after is something on the
 	// line that comes after the line end of the same input.
 	enter, clears, after := false, false, false
+	// rows is a line break put in the line without sending it: the line
+	// is over several rows after that, and the row the cursor is on does
+	// not say what is on it. The last row of a paste can read as the
+	// prompt does, when what was copied had a prompt in it.
+	rows := false
 	atPrompt := !(t.integrated && t.running)
 	switch {
 	case k != nil:
@@ -1894,6 +1912,7 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		// typed it, and it is there.
 		enter = endsLine(ev) && ev.Mod&uv.ModAlt == 0
 		after = enter && ev.Mod&uv.ModCtrl != 0 && ev.Code == 'o'
+		rows = endsLine(ev) && !enter
 		// Ctrl+C drops the line, where the shell takes it. Ctrl+U does
 		// not, at the start of the line: whether it is empty is lineEmpty's
 		// to say.
@@ -1912,6 +1931,7 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		// the paste on the line, line ends and all.
 		enter = strings.Contains(paste, "\r") && !t.emu.BracketedPaste()
 		after = enter && !strings.HasSuffix(paste, "\r")
+		rows = strings.Contains(paste, "\r") && !enter
 		t.emu.Paste(paste)
 	}
 	switch {
@@ -1943,6 +1963,9 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		}
 	case atPrompt:
 		t.personTyped, t.personAfter = true, true
+		if rows {
+			t.promptKnown = false
+		}
 	}
 	t.notify()
 	return nil
@@ -1982,10 +2005,11 @@ func (t *Terminal) applySize() {
 	// cursor was still as the end of the last command left it, that is no
 	// prompt drawn: the mark moves with it.
 	atMark := t.atMark()
-	// A narrower screen cuts rows off at its edge. With the person's text
-	// on the cursor's row past that edge, what is left can look like the
-	// prompt alone: the row says nothing about the line after that.
-	if t.personTyped && t.rowReaches(cols) {
+	// A smaller screen cuts off what is past its edges, and puts a cursor
+	// that was past them back inside. With text of the person's cut off,
+	// or the cursor moved to another row, what is left can look like the
+	// prompt alone: the screen says nothing about the line after that.
+	if t.personTyped && t.cutsLine(cols, rows) {
 		t.promptKnown = false
 	}
 	t.emu.Resize(cols, rows)

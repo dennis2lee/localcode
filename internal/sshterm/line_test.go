@@ -209,14 +209,15 @@ func (s *playedShell) step(op string) bool {
 
 // runs tries a run, and reports whether it was typed. A run waits for the
 // prompt that answers a Ctrl+C, for so long. This is the run at the end of
-// that wait, with the prompt still not here. Typed is told by the terminal
-// taking a command as started, not by how the call came back: one that was
-// neither typed nor refused in two seconds was waiting for something.
+// that wait, with the prompt still not here: the last press is put as far
+// back as the wait is long. Typed is told by the terminal taking a command
+// as started, not by how the call came back: one that was neither typed
+// nor refused in two seconds was waiting for something.
 func (s *playedShell) runs() (typed bool, err error) {
 	s.echoes()
-	wait := interruptWait
-	interruptWait = 0
-	defer func() { interruptWait = wait }()
+	s.term.mu.Lock()
+	s.term.interrupts.last = time.Now().Add(-2 * interruptWait)
+	s.term.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_, err = s.term.Run(ctx, "true", time.Millisecond, s.term.PersonGen())
@@ -371,18 +372,26 @@ func TestEnterIntoARunningCommandIsNotTheShellsLine(t *testing.T) {
 
 // With Alt, Enter and the keys read as Enter are other keys: zsh puts a
 // line break in the line, bash does nothing. None of them sends the line,
-// so none clears what was typed on it, and none starts a command.
+// so none clears what was typed on it, and none starts a command. With a
+// line break in it the line is over several rows, and the row the cursor
+// is on is not what says it is empty.
 func TestWithAltTheKeysReadAsEnterSendNothing(t *testing.T) {
 	keys := []PersonKey{
 		{Key: "Enter", Alt: true}, {Key: "m", Ctrl: true, Alt: true},
 		{Key: "j", Ctrl: true, Alt: true}, {Key: "o", Ctrl: true, Alt: true},
 	}
 	for _, key := range keys {
-		// On an empty line: nothing is running after it.
+		// On an empty line: nothing is running after it, and the line is
+		// the person's until they send it.
 		s := playedFor(t, true)
 		s.term.PersonInput(&key, "", "")
-		if err := s.run(); err != nil {
+		if err := s.run(); !errors.Is(err, ErrLineNotEmpty) {
 			t.Fatalf("after %+v on an empty line: %v", key, err)
+		}
+		s.term.PersonInput(&PersonKey{Key: "Enter"}, "", "")
+		s.prints("\r\n" + s.promptText(0))
+		if err := s.run(); err != nil {
+			t.Fatalf("after %+v and then Enter: %v", key, err)
 		}
 		// After a Ctrl+C whose prompt is on its way, with text typed since:
 		// the text is on that prompt's line still.
@@ -396,6 +405,15 @@ func TestWithAltTheKeysReadAsEnterSendNothing(t *testing.T) {
 		if err := s.run(); !errors.Is(err, ErrLineNotEmpty) {
 			t.Fatalf("after %+v with text on the line: %v", key, err)
 		}
+	}
+	// The line break zsh puts in, and a last row that reads as the prompt.
+	s := playedFor(t, true)
+	s.term.PersonInput(nil, "rm -rf x", "")
+	s.term.PersonInput(&PersonKey{Key: "Enter", Alt: true}, "", "")
+	s.term.PersonInput(nil, "$ ", "")
+	s.prints("rm -rf x\r\n$ ")
+	if err := s.run(); !errors.Is(err, ErrLineNotEmpty) {
+		t.Fatalf("run onto a line with a line break in it: %v", err)
 	}
 }
 
@@ -425,26 +443,110 @@ func TestALineAtAPromptThatDrawsNothingIsNotJudgedByTheScreen(t *testing.T) {
 	}
 }
 
-// A narrower screen cuts rows off at its edge. Text of the person's that
-// started with a space in the last column left a row that read as the
-// prompt alone.
-func TestANarrowerScreenDoesNotHideWhatWasTyped(t *testing.T) {
-	s := playedFor(t, true)
-	prompt := strings.Repeat("p", MinCols-3) + "$ "
-	s.prints("\r\n\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07" + prompt)
-	s.term.PersonInput(nil, " rm -rf x", "")
-	s.prints(" rm -rf x")
-	s.term.ViewerSize("v", MinCols, DefaultRows)
-	if err := s.run(); !errors.Is(err, ErrLineNotEmpty) {
-		t.Fatalf("run after a narrower screen cut the person's text off: %v", err)
+// A smaller screen cuts off what is past its edges and moves a cursor
+// that was past them. Each of these left a row that read as the prompt
+// alone, with the person's text cut off or on a row the cursor had left.
+func TestASmallerScreenDoesNotHideWhatWasTyped(t *testing.T) {
+	refused := func(t *testing.T, s *playedShell) {
+		t.Helper()
+		if err := s.run(); !errors.Is(err, ErrLineNotEmpty) {
+			t.Fatalf("run after a smaller screen cut into the person's line: %v", err)
+		}
 	}
-	// A narrower screen that cuts nothing off leaves an erased line empty.
-	s = playedFor(t, true)
+	t.Run("text starting with a space in the last column", func(t *testing.T) {
+		s := playedFor(t, true)
+		prompt := strings.Repeat("p", MinCols-3) + "$ "
+		s.prints("\r\n\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07" + prompt)
+		s.term.PersonInput(nil, " rm -rf x", "")
+		s.prints(" rm -rf x")
+		s.term.ViewerSize("v", MinCols, DefaultRows)
+		refused(t, s)
+	})
+	t.Run("the cursor's row cut off, an earlier prompt above it", func(t *testing.T) {
+		s := playedFor(t, true)
+		for i := 0; i < MinRows; i++ {
+			s.prints("\r\n" + s.promptText(0))
+		}
+		line := "rm -rf x #" + strings.Repeat("a", DefaultCols-10)
+		s.term.PersonInput(nil, line, "")
+		s.prints(line)
+		s.term.ViewerSize("v", DefaultCols, MinRows)
+		refused(t, s)
+	})
+	t.Run("the cursor on a row with nothing on it cut off, an earlier prompt above it", func(t *testing.T) {
+		s := playedFor(t, true)
+		for i := 0; i < MinRows; i++ {
+			s.prints("\r\n" + s.promptText(0))
+		}
+		// The text ends in spaces that wrap: the cursor is on a row with
+		// nothing drawn on it, as far in as the prompt leaves it.
+		line := "rm -rf x" + strings.Repeat(" ", DefaultCols-len("rm -rf x"))
+		s.term.PersonInput(nil, line, "")
+		s.prints(line)
+		s.term.ViewerSize("v", DefaultCols, MinRows)
+		refused(t, s)
+	})
+	t.Run("a wrapped row under the cursor cut off by a shorter screen", func(t *testing.T) {
+		s := playedFor(t, true)
+		for i := 0; i < MinRows-1; i++ {
+			s.prints("\r\n" + s.promptText(0))
+		}
+		pad := strings.Repeat(" ", DefaultCols-2)
+		s.term.PersonInput(nil, pad+"rm -rf x", "")
+		s.term.PersonInput(&PersonKey{Key: "a", Ctrl: true}, "", "")
+		s.prints(pad + "rm -rf x\x1b[A\x1b[3G")
+		s.term.ViewerSize("v", DefaultCols, MinRows)
+		refused(t, s)
+	})
+	t.Run("a wrapped row under the cursor cut off by a narrower screen", func(t *testing.T) {
+		s := playedFor(t, true)
+		pad := strings.Repeat(" ", DefaultCols-2+MinCols)
+		s.term.PersonInput(nil, pad+"rm -rf x", "")
+		s.term.PersonInput(&PersonKey{Key: "a", Ctrl: true}, "", "")
+		s.prints(pad + "rm -rf x\x1b[A\x1b[3G")
+		s.term.ViewerSize("v", MinCols, DefaultRows)
+		refused(t, s)
+	})
+	// A smaller screen that cuts nothing of theirs off leaves an erased
+	// line empty.
+	s := playedFor(t, true)
 	s.term.PersonInput(nil, "x", "")
 	s.prints("x\b \b")
-	s.term.ViewerSize("v", DefaultCols-10, DefaultRows)
+	s.term.ViewerSize("v", DefaultCols-10, DefaultRows-5)
 	if err := s.run(); err != nil {
-		t.Fatalf("run after a narrower screen, the line typed on and erased: %v", err)
+		t.Fatalf("run after a smaller screen, the line typed on and erased: %v", err)
+	}
+}
+
+// A new size between the mark and the prompt can move the cursor (the
+// screen grew shorter than where it was). That is not a prompt drawn.
+func TestAResizeBeforeThePromptIsNotThePrompt(t *testing.T) {
+	setWait(t, &promptWait, time.Hour)
+	s := playedFor(t, true)
+	var lines strings.Builder
+	for i := 0; i < 20; i++ {
+		lines.WriteString("line\r\n")
+	}
+	// The command's output and its mark. The prompt has not come.
+	s.prints(lines.String() + "\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07")
+	before := s.term.Snapshot()
+	s.term.ViewerSize("v", DefaultCols, MinRows)
+	if after := s.term.Snapshot(); after.CursorY == before.CursorY {
+		t.Fatalf("the new size did not move the cursor from row %d", before.CursorY)
+	}
+	s.quiet()
+	s.term.mu.Lock()
+	known := s.term.promptKnown
+	s.term.mu.Unlock()
+	if known {
+		t.Fatal("a prompt was recorded before one was drawn")
+	}
+	s.prints("$ ")
+	s.term.mu.Lock()
+	known, left := s.term.promptKnown, s.term.promptLeft
+	s.term.mu.Unlock()
+	if !known || left != "$ " {
+		t.Fatalf("the prompt, once drawn: recorded=%v as %q", known, left)
 	}
 }
 
@@ -484,6 +586,56 @@ func TestABracketedPasteWithALineEndIsOnTheLine(t *testing.T) {
 	s.prints("\r\n\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07me@test\r\n")
 	if err := s.run(); err != nil {
 		t.Fatalf("after the person sent it: %v", err)
+	}
+}
+
+// The same at an ordinary prompt, when what was copied ended in a prompt:
+// the last row of the paste is the prompt's own text, with the cursor
+// where the prompt leaves it.
+func TestABracketedPasteEndingInAPromptIsOnTheLine(t *testing.T) {
+	s := playedFor(t, true)
+	s.prints("\x1b[?2004h")
+	s.term.PersonInput(nil, "", "rm -rf x\n$ ")
+	s.prints("rm -rf x\r\n$ ")
+	if err := s.run(); !errors.Is(err, ErrLineNotEmpty) {
+		t.Fatalf("run onto a paste the shell is holding: %v", err)
+	}
+}
+
+// What the person typed on and erased is gone: the model can type on the
+// line, and clear what it typed. Their having typed was kept, and the
+// model's own text then read as theirs, with no key of the model's left
+// to clear it.
+func TestTheModelClearsItsOwnTextOnALineThePersonLeftEmpty(t *testing.T) {
+	s := playedFor(t, true)
+	s.term.PersonInput(nil, "x", "")
+	s.term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+	s.prints("x\b \b")
+	if err := s.term.Type("junk", false, s.term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	s.prints("junk")
+	if err := s.run(); !errors.Is(err, ErrModelLine) {
+		t.Fatalf("run onto the model's text: %v", err)
+	}
+	if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
+		t.Fatalf("the model's ctrl+c on its own text: %v", err)
+	}
+	s.prints("^C\r\n" + s.promptText(130))
+	if err := s.run(); err != nil {
+		t.Fatalf("after the model cleared it: %v", err)
+	}
+	// The same with the model's text typed as keys.
+	s = playedFor(t, true)
+	s.term.PersonInput(nil, "x", "")
+	s.term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+	s.prints("x\b \b")
+	if err := s.term.Keys("j", s.term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	s.prints("j")
+	if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
+		t.Fatalf("the model's ctrl+c on a key of its own: %v", err)
 	}
 }
 
@@ -529,16 +681,14 @@ func TestACtrlCThatWentUnansweredIsNotWaitedForAgain(t *testing.T) {
 	if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
 		t.Fatal(err)
 	}
-	// From here any press still counted would be waited for. (The played
-	// shell stops the terminal's timers: nothing else reads this now.)
-	interruptWait = time.Hour
-	s.prints("^C\r\n" + s.promptText(130))
+	s.term.output([]byte("^C\r\n" + s.promptText(130)))
 	s.term.mu.Lock()
-	left, known := s.term.interrupts.pending(), s.term.promptKnown
+	counted := s.term.interrupts.n
 	s.term.mu.Unlock()
-	if left != 0 || !known {
-		t.Fatalf("after the one prompt: a press still waited for (%s), prompt recorded=%v", left, known)
+	if counted != 0 {
+		t.Fatalf("after the one prompt, %d Ctrl+C still counted as unanswered", counted)
 	}
+	s.quiet()
 	if err := s.run(); err != nil {
 		t.Fatalf("run after it: %v", err)
 	}
