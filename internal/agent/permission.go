@@ -254,7 +254,7 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 		// write into .git is one (tools.Outcome.GitDir), and a grant for
 		// "notes.txt" must not cover notes.txt once it is a link into .git.
 		rule := config.PermissionRuleFor(toolName, subject)
-		if !ask.Once && b.coveredBySession(sessionID, toolName, subject, rule) {
+		if !ask.Once && b.coveredBySession(ctx, sessionID, toolName, subject, rule) {
 			return true, nil
 		}
 		// A directory this conversation already approved leaving the
@@ -509,8 +509,9 @@ func (b *PermissionBroker) grant(sessionID, toolName, pattern string) {
 // only when each of its commands is, by that command's own rule: the rule
 // a line generalizes to names its first command, and matching the whole
 // line against it let "ls -la && rm -rf ~" run on a grant for "ls -la".
-// See config.GrantSegments for the lines no grant covers.
-func (b *PermissionBroker) coveredBySession(sessionID, toolName, subject string, rule config.PermissionRule) bool {
+// See config.GrantSegmentsFor for the lines no grant covers. ctx says
+// which shell an ssh line is for.
+func (b *PermissionBroker) coveredBySession(ctx context.Context, sessionID, toolName, subject string, rule config.PermissionRule) bool {
 	if !config.IsShellTool(toolName) || subject == "" {
 		return b.isGranted(sessionID, toolName, rule.Match)
 	}
@@ -519,7 +520,7 @@ func (b *PermissionBroker) coveredBySession(sessionID, toolName, subject string,
 	if b.isGranted(sessionID, toolName, lineKey(subject)) {
 		return true
 	}
-	readings, ok := config.GrantSegments(subject)
+	readings, ok := config.GrantSegmentsFor(ctx, toolName, subject)
 	if !ok {
 		return false
 	}

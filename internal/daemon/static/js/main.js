@@ -49,6 +49,7 @@ import { tryComplete, resetCompletion } from './complete.js';
 import { initSettings, settings, refreshSettingsIfOpen } from './settings.js';
 import { initBrowserPanel, renderBrowserPanel } from './browser.js';
 import { initSSHPanel, renderSSHPanel } from './ssh.js';
+import { initPowerShellPanel, renderPowerShellPanel } from './powershell.js';
 import { wireExternalLinks } from './links.js';
 
 agentSelectEl.addEventListener('change', async () => {
@@ -326,6 +327,7 @@ async function init() {
   initWindowControls();
   initBrowserPanel();
   initSSHPanel();
+  initPowerShellPanel();
   wireExternalLinks();
   initResizers();
   initSettings();
@@ -357,6 +359,7 @@ async function init() {
   // setting that decides whether the panel is drawn has arrived.
   renderBrowserPanel();
   renderSSHPanel();
+  renderPowerShellPanel();
 
   // The section stays collapsed by default: it is where things go to be
   // out of the way. What it does not do any more is stay unloaded, for
@@ -423,7 +426,8 @@ export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
 export { renderBrowserPanel, STALE_FALLBACK_MS, pagePoint, keyEventFor, editCommandFor, modifierBits, browserShown, inGUI } from './browser.js';
 export { renderSSHPanel, runStyle, keyAction, fitSize, inputPlace, sshShown, VIEWER, SCROLL_KEEP } from './ssh.js';
-export { fitsWith, makeRoomFor, showPanelsFor, forgetPanels, VIEWS_KEEP, SSH_BOUNDS } from './resize.js';
+export { renderPowerShellPanel, powershellShown } from './powershell.js';
+export { fitsWith, makeRoomFor, showPanelsFor, forgetPanels, VIEWS_KEEP, SSH_BOUNDS, PS_BOUNDS } from './resize.js';
 export { snapshotURL } from './transcript.js';
 export { externalHref, openExternally } from './links.js';
 export { linkify, splitURL } from './markdown.js';

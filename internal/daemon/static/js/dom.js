@@ -146,6 +146,9 @@ export const toggleBrowserBtn = document.getElementById('toggle-browser');
 export const sshPanel = document.getElementById('ssh-panel');
 export const resizeSshHandle = document.getElementById('resize-ssh');
 export const toggleSshBtn = document.getElementById('toggle-ssh');
+export const psPanel = document.getElementById('ps-panel');
+export const resizePsHandle = document.getElementById('resize-ps');
+export const togglePsBtn = document.getElementById('toggle-ps');
 export const appVersionEl = document.getElementById('app-version');
 
 // The settings window.
@@ -195,7 +198,7 @@ export const updateNoteEl = document.getElementById('update-note');
 // The settings tabs. One entry per tab, in the order the tablist shows
 // them: the first is where the window always opens, and settings.js
 // reads the panels' visibility from the Modal flag, never from the DOM.
-export const settingsTabs = ['agents', 'turns', 'muse', 'updates', 'typography'].map((name) => ({
+export const settingsTabs = ['tools', 'behavior', 'appearance', 'updates'].map((name) => ({
   name,
   tab: document.getElementById('settings-tab-' + name),
   panel: document.getElementById('settings-panel-' + name),

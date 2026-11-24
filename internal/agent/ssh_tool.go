@@ -57,11 +57,47 @@ func (l *Loop) sshOffered(ctx context.Context) bool {
 
 // SSHTool drives the conversation's SSH terminals.
 type SSHTool struct {
-	loop *Loop
+	termTool
 }
 
 // NewSSHTool returns the tool.
-func NewSSHTool(loop *Loop) SSHTool { return SSHTool{loop: loop} }
+func NewSSHTool(loop *Loop) SSHTool { return SSHTool{termTool{loop: loop, kind: &sshKind}} }
+
+// termKind is what differs between the two tools that work in terminals
+// shown in a panel: the ssh tool and the powershell tool. Everything an
+// action does once it has a terminal is the same code (termTool).
+type termKind struct {
+	// tool is the tool's name, and the rule name its commands are
+	// decided under.
+	tool string
+	// input is the rule name typed text and keys are asked under.
+	input string
+	// panel is where the person sees the terminals, as a refusal names it.
+	panel string
+	// manager is the loop's manager of these terminals.
+	manager func(*Loop) *sshterm.Manager
+	// posix is whether a terminal's shell splits a line as bash does.
+	posix func(sshterm.Info) bool
+	// where names a terminal in a question to the person.
+	where func(sshterm.Info) string
+}
+
+var sshKind = termKind{
+	tool:    config.SSHToolName,
+	input:   config.SSHInputToolName,
+	panel:   "SSH panel",
+	manager: func(l *Loop) *sshterm.Manager { return l.SSH },
+	posix:   remotePOSIX,
+	where:   func(i sshterm.Info) string { return "ssh " + i.Target },
+}
+
+// termTool is the actions a terminal tool shares.
+type termTool struct {
+	loop *Loop
+	kind *termKind
+}
+
+func (t termTool) manager() *sshterm.Manager { return t.kind.manager(t.loop) }
 
 func (SSHTool) Name() string { return SSHToolName }
 
@@ -184,7 +220,7 @@ func (t SSHTool) Execute(ctx context.Context, input json.RawMessage) tools.Resul
 		if err != nil {
 			return sshRefused(err)
 		}
-		return tools.Result{Content: formatRead(r)}
+		return tools.Result{Content: t.kind.formatRead(r)}
 	case "wait":
 		return t.wait(ctx, term, in)
 	case "close":
@@ -193,8 +229,8 @@ func (t SSHTool) Execute(ctx context.Context, input json.RawMessage) tools.Resul
 	return sshError("unknown action %q", in.Action)
 }
 
-func (t SSHTool) terminal(sessionID, id string) *sshterm.Terminal {
-	m := t.loop.SSH
+func (t termTool) terminal(sessionID, id string) *sshterm.Terminal {
+	m := t.manager()
 	if id == "" {
 		return m.Default(sessionID)
 	}
@@ -335,7 +371,7 @@ func remotePOSIX(i sshterm.Info) bool {
 	return i.Integrated && (i.Shell == "bash" || i.Shell == "zsh")
 }
 
-func (t SSHTool) run(ctx context.Context, term *sshterm.Terminal, in sshInput) tools.Result {
+func (t termTool) run(ctx context.Context, term *sshterm.Terminal, in sshInput) tools.Result {
 	if err := sshterm.CheckCommand(in.Command); err != nil {
 		return sshError("%v", err)
 	}
@@ -345,8 +381,11 @@ func (t SSHTool) run(ctx context.Context, term *sshterm.Terminal, in sshInput) t
 	}
 	info := term.Info()
 	gen := term.PersonGen()
-	describe := fmt.Sprintf("ssh %s (%s): run %s\nA grant for this command covers it on every host.", info.Target, term.ID, in.Command)
-	ok, why := t.loop.Tools.PermitNamed(config.WithRemoteShell(ctx, remotePOSIX(info)), config.SSHToolName, in.Command, describe, false)
+	describe := fmt.Sprintf("%s (%s): run %s", t.kind.where(info), term.ID, in.Command)
+	if t.kind.tool == config.SSHToolName {
+		describe += "\nA grant for this command covers it on every host."
+	}
+	ok, why := t.loop.Tools.PermitNamed(config.WithRemoteShell(ctx, t.kind.posix(info)), t.kind.tool, in.Command, describe, false)
 	if !ok {
 		return tools.Result{Content: why, IsError: true, Refused: true}
 	}
@@ -357,10 +396,10 @@ func (t SSHTool) run(ctx context.Context, term *sshterm.Terminal, in sshInput) t
 		}
 		return sshRefused(err)
 	}
-	return tools.Result{Content: formatRun(term.ID, res, timeout)}
+	return tools.Result{Content: formatRun(term.ID, res, timeout, t.kind.panel)}
 }
 
-func formatRun(id string, res sshterm.RunResult, timeout time.Duration) string {
+func formatRun(id string, res sshterm.RunResult, timeout time.Duration, panel string) string {
 	var b strings.Builder
 	switch {
 	case res.Ended != "":
@@ -368,7 +407,7 @@ func formatRun(id string, res sshterm.RunResult, timeout time.Duration) string {
 	case res.Alt:
 		b.WriteString("The command took over the screen (a full-screen program). Use read to see it, key to work it, and wait for it to end.")
 	case res.Asking:
-		b.WriteString("Output stopped at what may be a question for input (a password prompt, a yes/no). If it asks for a password, passphrase or code, tell the user to type it in the SSH panel; otherwise answer with type or key.")
+		b.WriteString("Output stopped at what may be a question for input (a password prompt, a yes/no). If it asks for a password, passphrase or code, tell the user to type it in the " + panel + "; otherwise answer with type or key.")
 	case res.TimedOut:
 		fmt.Fprintf(&b, "Still running after %s; it keeps running. Use wait, read, or key ctrl+c.", timeout)
 	case res.Lost:
@@ -387,7 +426,7 @@ func formatRun(id string, res sshterm.RunResult, timeout time.Duration) string {
 	return b.String()
 }
 
-func (t SSHTool) typeText(ctx context.Context, term *sshterm.Terminal, in sshInput) tools.Result {
+func (t termTool) typeText(ctx context.Context, term *sshterm.Terminal, in sshInput) tools.Result {
 	if in.Text == "" && !in.Enter {
 		return sshError("type needs text")
 	}
@@ -402,8 +441,8 @@ func (t SSHTool) typeText(ctx context.Context, term *sshterm.Terminal, in sshInp
 	if refusal := t.deniedLines(ctx, info, in.Text, in.Enter); refusal != "" {
 		return tools.Result{Content: refusal, IsError: true, Refused: true}
 	}
-	describe := fmt.Sprintf("ssh %s (%s): type %q", info.Target, term.ID, shown)
-	if ok, why := t.loop.Tools.PermitNamed(ctx, config.SSHInputToolName, subject, describe, true); !ok {
+	describe := fmt.Sprintf("%s (%s): type %q", t.kind.where(info), term.ID, shown)
+	if ok, why := t.loop.Tools.PermitNamed(ctx, t.kind.input, subject, describe, true); !ok {
 		return tools.Result{Content: why, IsError: true, Refused: true}
 	}
 	if err := term.Type(in.Text, in.Enter, gen); err != nil {
@@ -412,7 +451,7 @@ func (t SSHTool) typeText(ctx context.Context, term *sshterm.Terminal, in sshInp
 	return t.afterInput(ctx, term, "Typed.")
 }
 
-func (t SSHTool) key(ctx context.Context, term *sshterm.Terminal, in sshInput) tools.Result {
+func (t termTool) key(ctx context.Context, term *sshterm.Terminal, in sshInput) tools.Result {
 	if strings.TrimSpace(in.Keys) == "" {
 		return sshError("key needs keys")
 	}
@@ -421,8 +460,8 @@ func (t SSHTool) key(ctx context.Context, term *sshterm.Terminal, in sshInput) t
 	}
 	info := term.Info()
 	gen := term.PersonGen()
-	describe := fmt.Sprintf("ssh %s (%s): press %s", info.Target, term.ID, in.Keys)
-	if ok, why := t.loop.Tools.PermitNamed(ctx, config.SSHInputToolName, "key "+in.Keys, describe, true); !ok {
+	describe := fmt.Sprintf("%s (%s): press %s", t.kind.where(info), term.ID, in.Keys)
+	if ok, why := t.loop.Tools.PermitNamed(ctx, t.kind.input, "key "+in.Keys, describe, true); !ok {
 		return tools.Result{Content: why, IsError: true, Refused: true}
 	}
 	if err := term.Keys(in.Keys, gen); err != nil {
@@ -437,7 +476,7 @@ func (t SSHTool) key(ctx context.Context, term *sshterm.Terminal, in sshInput) t
 // this is for a nested shell (sudo -i, ssh) or a program reading lines:
 // a line the rules deny is not sent there either. A command put together
 // key by key is not seen; docs/USAGE.md says so.
-func (t SSHTool) deniedLines(ctx context.Context, info sshterm.Info, text string, enter bool) string {
+func (t termTool) deniedLines(ctx context.Context, info sshterm.Info, text string, enter bool) string {
 	if t.loop.Config == nil {
 		return ""
 	}
@@ -447,13 +486,13 @@ func (t SSHTool) deniedLines(ctx context.Context, info sshterm.Info, text string
 		// The last line has no Enter: it is not sent as a line yet.
 		lines = lines[:len(lines)-1]
 	}
-	posix := config.WithRemoteShell(ctx, remotePOSIX(info))
+	posix := config.WithRemoteShell(ctx, t.kind.posix(info))
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		if t.loop.Config.ResolvePermissionFor(posix, config.SSHToolName, line, true) == config.DecisionDeny {
-			return fmt.Sprintf("%q, sent as a line, is a command a permission rule for %q denies", line, config.SSHToolName)
+		if t.loop.Config.ResolvePermissionFor(posix, t.kind.tool, line, true) == config.DecisionDeny {
+			return fmt.Sprintf("%q, sent as a line, is a command a permission rule for %q denies", line, t.kind.tool)
 		}
 	}
 	return ""
@@ -461,7 +500,7 @@ func (t SSHTool) deniedLines(ctx context.Context, info sshterm.Info, text string
 
 // afterInput waits a moment for the screen to answer what was typed, and
 // returns it.
-func (t SSHTool) afterInput(ctx context.Context, term *sshterm.Terminal, what string) tools.Result {
+func (t termTool) afterInput(ctx context.Context, term *sshterm.Terminal, what string) tools.Result {
 	quiet, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 	for {
@@ -480,7 +519,7 @@ func (t SSHTool) afterInput(ctx context.Context, term *sshterm.Terminal, what st
 	return tools.Result{Content: what + "\n\n" + formatScreen(r)}
 }
 
-func (t SSHTool) wait(ctx context.Context, term *sshterm.Terminal, in sshInput) tools.Result {
+func (t termTool) wait(ctx context.Context, term *sshterm.Terminal, in sshInput) tools.Result {
 	d := 10 * time.Second
 	if in.Seconds > 0 {
 		d = time.Duration(min(in.Seconds, 300) * float64(time.Second))
@@ -503,10 +542,10 @@ func (t SSHTool) wait(ctx context.Context, term *sshterm.Terminal, in sshInput) 
 			head = fmt.Sprintf("%q is on the screen.", in.For)
 		}
 	}
-	return tools.Result{Content: head + "\n\n" + formatRead(r)}
+	return tools.Result{Content: head + "\n\n" + t.kind.formatRead(r)}
 }
 
-func (t SSHTool) close(sessionID string, term *sshterm.Terminal) tools.Result {
+func (t termTool) close(sessionID string, term *sshterm.Terminal) tools.Result {
 	info := term.Info()
 	if info.Held {
 		return sshRefused(sshterm.ErrHeld)
@@ -514,23 +553,36 @@ func (t SSHTool) close(sessionID string, term *sshterm.Terminal) tools.Result {
 	if info.Opener == sshterm.ByPerson {
 		return sshRefused(fmt.Errorf("terminal %s was opened by the user; ask them to close it", term.ID))
 	}
-	t.loop.SSH.Remove(sessionID, term.ID, "closed by the model")
+	t.manager().Remove(sessionID, term.ID, "closed by the model")
 	return tools.Result{Content: "Closed terminal " + term.ID + "."}
 }
 
-func (t SSHTool) list(sessionID string) tools.Result {
-	terms := t.loop.SSH.List(sessionID)
+func (t termTool) list(sessionID string) tools.Result {
+	terms := t.manager().List(sessionID)
 	if len(terms) == 0 {
-		return tools.Result{Content: "No SSH terminals in this conversation."}
+		return tools.Result{Content: "No " + t.kind.label() + " terminals in this conversation."}
 	}
 	var b strings.Builder
 	for _, term := range terms {
-		b.WriteString(describeTerminal(term.Info()) + "\n")
+		b.WriteString(t.kind.describe(term.Info()) + "\n")
 	}
 	return tools.Result{Content: strings.TrimRight(b.String(), "\n")}
 }
 
-func describeTerminal(i sshterm.Info) string {
+// label is the kind as a list names it.
+func (k *termKind) label() string {
+	if k.tool == config.SSHToolName {
+		return "SSH"
+	}
+	return "PowerShell"
+}
+
+// describe is one terminal as list and read describe it.
+func (k *termKind) describe(i sshterm.Info) string { return describeTerminal(i, k.panel) }
+
+func (k *termKind) formatRead(r sshterm.ReadResult) string { return formatRead(r, k.panel) }
+
+func describeTerminal(i sshterm.Info, panel string) string {
 	where := i.Target
 	if where == "" {
 		where = i.Spec
@@ -540,7 +592,7 @@ func describeTerminal(i sshterm.Info) string {
 		parts = append(parts, "("+i.Reason+")")
 	}
 	if i.Question != nil {
-		parts = append(parts, "waiting for the user to answer in the SSH panel")
+		parts = append(parts, "waiting for the user to answer in the "+panel)
 	}
 	if i.Held {
 		parts = append(parts, "held by the user")
@@ -564,9 +616,9 @@ func formatScreen(r sshterm.ReadResult) string {
 	return b.String()
 }
 
-func formatRead(r sshterm.ReadResult) string {
+func formatRead(r sshterm.ReadResult, panel string) string {
 	var b strings.Builder
-	b.WriteString(describeTerminal(r.Info))
+	b.WriteString(describeTerminal(r.Info, panel))
 	if r.RunningFor > 0 {
 		fmt.Fprintf(&b, " for %s", r.RunningFor)
 	}

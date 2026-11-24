@@ -62,6 +62,12 @@ export const app = {
   // the SSH panel. See ssh.js.
   ssh: false,
   sshAvailable: true,
+  // The PowerShell setting: whether the model may work in PowerShell on
+  // this computer, shown in the PowerShell panel. See powershell.js.
+  // Available only where the daemon has PowerShell (Windows): false until
+  // the daemon says otherwise.
+  powershell: false,
+  powershellAvailable: false,
   orchestrate: false,         // the Orchestrate tool, a separate switch
   modelInvocable: false,      // whether the model may run this session's commands
   modelCommands: [],          // which ones it may run, with their slashes

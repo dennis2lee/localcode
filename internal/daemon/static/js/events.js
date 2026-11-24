@@ -16,9 +16,10 @@ import {
   applyEffort,
 } from './modals.js';
 import { applyScheduleEvent, applyRunActivity } from './schedules.js';
-import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen, refreshModelInvocableIfOpen, refreshBrowserIfOpen, refreshSSHIfOpen, movedElsewhere } from './settings.js';
+import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen, refreshModelInvocableIfOpen, refreshBrowserIfOpen, refreshSSHIfOpen, refreshPowerShellIfOpen, movedElsewhere } from './settings.js';
 import { renderBrowserPanel } from './browser.js';
 import { renderSSHPanel } from './ssh.js';
+import { renderPowerShellPanel } from './powershell.js';
 import { refreshTaskViewStatus, taskDeleted } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
@@ -475,6 +476,12 @@ const handlers = {
       renderSSHPanel();
       refreshSSHIfOpen();
     }
+    if (typeof d.powershell === 'boolean' && d.powershell !== app.powershell) {
+      movedElsewhere('powershell');
+      app.powershell = d.powershell;
+      renderPowerShellPanel();
+      refreshPowerShellIfOpen();
+    }
     if (rosterMayHaveChanged) loadAgents();
   },
   // Daemon-wide, and the live half of every switch: a toggle typed at
@@ -521,6 +528,12 @@ const handlers = {
       app.ssh = d.ssh;
       renderSSHPanel();
       refreshSSHIfOpen();
+    }
+    if (typeof d.powershell === 'boolean' && d.powershell !== app.powershell) {
+      movedElsewhere('powershell');
+      app.powershell = d.powershell;
+      renderPowerShellPanel();
+      refreshPowerShellIfOpen();
     }
     if (typeof d.keep_going === 'boolean') {
       if (d.keep_going !== app.keepGoing) movedElsewhere('keep_going');

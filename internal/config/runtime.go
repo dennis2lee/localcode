@@ -184,6 +184,21 @@ func (c *Config) SetSSHRuntime(v bool) {
 	c.SSH = &v
 }
 
+// PowerShellLive reports whether the PowerShell panel is on right now.
+func (c *Config) PowerShellLive() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.PowerShell != nil && *c.PowerShell
+}
+
+// SetPowerShellRuntime changes the live PowerShell setting. The in-memory
+// counterpart to SetPowerShellInFile.
+func (c *Config) SetPowerShellRuntime(v bool) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.PowerShell = &v
+}
+
 // OrchestrateLive reports whether the Orchestrate tool is on right now,
 // read the same way and for the same reasons as SmartAgentLive.
 func (c *Config) OrchestrateLive() bool {

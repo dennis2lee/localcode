@@ -1,6 +1,7 @@
 import { sessionListEl, sessionIdEl, archiveToggleEl, archiveListEl, inputEl } from './dom.js';
 import { renderBrowserPanel } from './browser.js';
 import { renderSSHPanel } from './ssh.js';
+import { renderPowerShellPanel } from './powershell.js';
 import { showPanelsFor, forgetPanels } from './resize.js';
 import { readPref, readShared, writePref } from './prefs.js';
 import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft, sessionWorking, overlayActivity } from './state.js';
@@ -1249,11 +1250,12 @@ export function selectSession(id, agent, workspace) {
   renderSessionHeader();
   clearTranscript();
   renderTasks();
-  // Before the two panels are drawn: they read which of them is shown,
-  // for their toggles and for the size the SSH panel tells its terminal.
+  // Before the panels are drawn: they read which of them is shown, for
+  // their toggles and for the size a terminal panel tells its terminal.
   showPanelsFor(id);
   renderBrowserPanel();
   renderSSHPanel();
+  renderPowerShellPanel();
   setWaiting(false);
   // Through the Modal object, not by reaching past it to the class list.
   // The class is an output of that object and never an input, so hiding

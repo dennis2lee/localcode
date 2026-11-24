@@ -33,7 +33,7 @@ The full reference: every capability localcode ships, one line each, grouped by 
 | Context window | Server supplied values from `GET /v1/models` or llama.cpp `/props`. Length errors cause summarization and trimming until acceptance. |
 | Prompt cache | With Smart Agent on, breakpoints after the stable prefix (tool schemas and system prompt) and conversation tail. Anthropic uses `cache_control`; Bedrock uses `cachePoint`; providers with server-side prefix caching receive neither. |
 | Fallback | With Smart Agent on, two endpoint retries after 1 and 2 seconds, then the profile `fallback`. A 401 or unknown model ID skips the delay. localcode derives a new request for the fallback model and records the switch. |
-| Model specific handling | Additional prompt lines for required model families, automatic continuation for models that stop during tasks, `/keep-going off` to disable it, a folding reasoning block for muse, and LaTeX unwrapping for Gemma. The settings window's Muse tab holds the muse switches. |
+| Model specific handling | Additional prompt lines for required model families, automatic continuation for models that stop during tasks, `/keep-going off` to disable it, a folding reasoning block for muse, and LaTeX unwrapping for Gemma. The settings window's Behavior tab holds the muse switches, in a group of their own. |
 | Repeated tool calls | `/repeat-limit` ends a turn after N steps that only repeat tool calls already made, naming them. Off by default; `on` is 3. Some local models think by re-reading, which the guard would cut short. |
 | LLM doctor | `/llm-doctor` checks a local muse or gemma against canaries and a stored baseline. See [USAGE.md](USAGE.md#llm-doctor). |
 

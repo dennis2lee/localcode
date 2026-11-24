@@ -127,6 +127,10 @@
   <symbol id="i-terminal" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
     <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"/><path d="M4.5 6.25l2 1.75-2 1.75M8.25 10.25h3.25"/>
   </symbol>
+  <!-- The terminal above, slanted: a PowerShell window rather than any shell. -->
+  <symbol id="i-powershell" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.9 2.75h8.35q1 0 .8.98l-1.75 8.54q-.2.98-1.2.98H2.75q-1 0-.8-.98l1.75-8.54q.2-.98 1.2-.98Z"/><path d="M5.25 6.25l2.25 1.75-2.25 1.75M8.25 10.25h3"/>
+  </symbol>
   <symbol id="i-server" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
     <rect x="2.25" y="2.75" width="11.5" height="4.5" rx="1"/><rect x="2.25" y="8.75" width="11.5" height="4.5" rx="1"/>
     <path d="M4.75 5h.01M4.75 11h.01"/>
@@ -191,6 +195,10 @@
          Hiding it keeps every connection: the model keeps working in
          them, and a question for you shows the panel again. -->
     <button class="panel-toggle" id="toggle-ssh" title="show/hide the SSH panel" hidden><svg class="ico"><use href="#i-terminal"/></svg></button>
+    <!-- Hides the PowerShell panel and shows it again. There while the
+         PowerShell setting is on, on Windows. Hiding it keeps every
+         PowerShell running: the model keeps working in them. -->
+    <button class="panel-toggle" id="toggle-ps" title="show/hide the PowerShell panel" hidden><svg class="ico"><use href="#i-powershell"/></svg></button>
     <button class="panel-toggle" id="toggle-right" title="show/hide the tasks and MCP panel"><svg class="ico"><use href="#i-drawer"/></svg></button>
   </div>
 </header>
@@ -365,6 +373,41 @@
         <textarea class="ssh-input" id="ssh-input" aria-label="type into the terminal" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
       </div>
       <p class="note ssh-empty" id="ssh-empty">No connection yet. Press + to open one, or ask the model to connect.</p>
+    </div>
+  </aside>
+  <!--
+    The PowerShell terminals the model and you work in, on this computer,
+    in a column of their own after the SSH panel. There while the
+    PowerShell setting is on, on Windows only, in the desktop window and
+    in the Web UI: js/powershell.js shows it. It is the SSH panel's
+    terminal (js/termpanel.js) over the PowerShell routes, so its inner
+    elements keep the ssh-* classes; + starts a PowerShell at once, in the
+    conversation's working directory, and Start again starts a new one in
+    an ended terminal's tab.
+  -->
+  <div class="resizer" id="resize-ps" title="drag to resize" hidden></div>
+  <aside id="ps-panel" hidden>
+    <div class="side-section">
+      <h2>PowerShell</h2>
+      <div class="ssh-tabs">
+        <div class="ssh-tab-list" id="ps-tab-list" role="tablist"></div>
+        <button class="icon-btn ssh-tab-new" id="ps-tab-new" title="start a PowerShell"><svg class="ico ico-12"><use href="#i-plus"/></svg></button>
+      </div>
+      <div class="ssh-bar" id="ps-bar" hidden>
+        <span class="ssh-status" id="ps-status"></span>
+        <button class="icon-btn" id="ps-hold" aria-pressed="false" title="keep the model out of this terminal, its screen included, until you let go">Hold</button>
+        <button class="icon-btn" id="ps-reconnect" title="start a new PowerShell in this tab" hidden>Start again</button>
+      </div>
+      <div class="ssh-question" id="ps-question" role="dialog" aria-live="polite" hidden></div>
+      <p class="note warn" id="ps-error" hidden></p>
+      <div class="ssh-term" id="ps-term" tabindex="0" hidden>
+        <div class="ssh-lines" id="ps-lines">
+          <div id="ps-scroll"></div>
+          <div class="ssh-screen" id="ps-screen"><div class="ssh-cursor" id="ps-cursor" hidden></div></div>
+        </div>
+        <textarea class="ssh-input" id="ps-input" aria-label="type into the terminal" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+      </div>
+      <p class="note ssh-empty" id="ps-empty">No PowerShell yet. Press + to start one, or ask the model to open one.</p>
     </div>
   </aside>
   <div class="resizer" id="resize-right" title="drag to resize"></div>
@@ -581,197 +624,306 @@
 <!--
   Settings.
 
-  One section per subject, each self-contained: adding a setting later is
-  adding a block to a panel here and a line in settings.js, and putting
-  it in no panel fails the reachability test in test/webui/settings_tabs
-  rather than disappearing into a tab nobody opens.
+  Four tabs, each a few groups, each group one box of rows. A switch is one
+  row of one shape: a name, one line saying what it reaches, a note only
+  when there is something to say that the switch cannot, and the switch on
+  the right. Adding a setting later is adding a row to a group here and a
+  line in settings.js, and putting it in no panel fails the reachability
+  test in test/webui/settings_tabs rather than disappearing into a tab
+  nobody opens. test/webui/settings_rows holds every switch to the row
+  shape.
 -->
 <div id="settings-modal">
   <div class="box">
     <h3>Settings</h3>
     <div class="settings-tabs" role="tablist" aria-label="Settings sections">
-      <button type="button" role="tab" id="settings-tab-agents" aria-controls="settings-panel-agents" aria-selected="true">Agents</button>
-      <button type="button" role="tab" id="settings-tab-turns" aria-controls="settings-panel-turns" aria-selected="false" tabindex="-1">Turns</button>
-      <button type="button" role="tab" id="settings-tab-muse" aria-controls="settings-panel-muse" aria-selected="false" tabindex="-1">Muse</button>
+      <button type="button" role="tab" id="settings-tab-tools" aria-controls="settings-panel-tools" aria-selected="true">Tools</button>
+      <button type="button" role="tab" id="settings-tab-behavior" aria-controls="settings-panel-behavior" aria-selected="false" tabindex="-1">Behavior</button>
+      <button type="button" role="tab" id="settings-tab-appearance" aria-controls="settings-panel-appearance" aria-selected="false" tabindex="-1">Appearance</button>
       <button type="button" role="tab" id="settings-tab-updates" aria-controls="settings-panel-updates" aria-selected="false" tabindex="-1">Updates</button>
-      <button type="button" role="tab" id="settings-tab-typography" aria-controls="settings-panel-typography" aria-selected="false" tabindex="-1">Typography</button>
     </div>
 
     <!--
-      Agents: everything about what the model may do on its own (Smart
-      Agent, Orchestration, and the commands it may run). One tab because
-      the three switches compose into a single answer: how much of the
-      work leaves this conversation.
+      Tools: what the model may reach beyond answering in this
+      conversation. The panels it works in beside the conversation, then
+      the other agents and the commands it may start.
     -->
-    <section role="tabpanel" id="settings-panel-agents" aria-labelledby="settings-tab-agents" tabindex="0">
-    <!--
-      Smart Agent.
-
-      A single switch, off by default: how one agent works, its prompt,
-      tools, fallback, caching and turn log. It delegates nothing. The
-      sentence beside the box groups what the switch gates into one line
-      and leaves the rest to docs/USAGE.md.
-    -->
-    <h4 class="settings-section">Smart Agent</h4>
-
-    <div class="settings-field">
-      <div class="check-row">
-        <input type="checkbox" id="smart-agent-checkbox">
-        <label for="smart-agent-checkbox">Work in a set order, with plan and ask tools, model fallback, prompt caching and a turn log</label>
-      </div>
-      <p class="note" id="smart-agent-note"></p>
-      <!-- Whether the change reached config.json, which is a different
-           question from whether it took effect. Separate from the note
-           above so the switch's own description does not turn into a
-           warning, and empty (and hidden) whenever there is nothing
-           wrong. -->
-      <p class="note warn" id="smart-agent-warn" hidden></p>
-    </div>
-
-    <!--
-      The browser. Shown only in the desktop window, the only place it can
-      be used: the panel that shows it is drawn there and nowhere else.
-    -->
-    <div id="browser-settings" hidden>
-      <h4 class="settings-section">Browser</h4>
-      <div class="settings-field">
-        <div class="check-row">
-          <input type="checkbox" id="browser-checkbox">
-          <label for="browser-checkbox">Let the model use a web browser, shown in its own panel beside the conversation, signed in with a copy of your Chrome profile</label>
+    <section role="tabpanel" id="settings-panel-tools" aria-labelledby="settings-tab-tools" tabindex="0">
+      <h4 class="settings-group">Panels beside the conversation</h4>
+      <div class="setting-list">
+        <!--
+          The browser. Shown only in the desktop window, the only place it
+          can be used: the panel that shows it is drawn there and nowhere
+          else.
+        -->
+        <div class="setting-row" id="browser-settings" hidden>
+          <div class="setting-text">
+            <label class="setting-name" for="browser-checkbox">Browser</label>
+            <p class="setting-desc">Web pages in a panel, signed in with a copy of your Chrome profile</p>
+            <p class="note" id="browser-note"></p>
+            <p class="note warn" id="browser-warn" hidden></p>
+            <details class="setting-more">
+              <summary>How it asks</summary>
+              <p>It asks nothing before it acts. A deny rule for "browser" keeps a site out of reach.</p>
+            </details>
+            <button class="icon-btn" id="browser-import-btn" title="copy your everyday Chrome profile in again, for sites you signed in to since; the browser restarts">copy Chrome profile again</button>
+          </div>
+          <input type="checkbox" class="setting-switch" role="switch" id="browser-checkbox">
         </div>
-        <p class="note" id="browser-note"></p>
-        <p class="note warn" id="browser-warn" hidden></p>
-        <button class="icon-btn" id="browser-import-btn" title="copy your everyday Chrome profile in again, for sites you signed in to since; the browser restarts">copy Chrome profile again</button>
-      </div>
-    </div>
 
-    <!--
-      SSH. In the desktop window and the Web UI, where the SSH panel is.
-    -->
-    <div id="ssh-settings">
-      <h4 class="settings-section">SSH</h4>
-      <div class="settings-field">
-        <div class="check-row">
-          <input type="checkbox" id="ssh-checkbox">
-          <label for="ssh-checkbox">Let the model open SSH connections and work in them, shown in the SSH panel beside the conversation</label>
+        <!--
+          SSH. In the desktop window and the Web UI, where the SSH panel is.
+          How it asks is fixed, so it is markup rather than a note: the note
+          is left for what the daemon says, and the list under it is every
+          connection open now.
+        -->
+        <div class="setting-row" id="ssh-settings">
+          <div class="setting-text">
+            <label class="setting-name" for="ssh-checkbox">SSH</label>
+            <p class="setting-desc">Connections to other machines, in the SSH panel</p>
+            <p class="note" id="ssh-note"></p>
+            <p class="note warn" id="ssh-warn" hidden></p>
+            <details class="setting-more">
+              <summary>How it asks</summary>
+              <p>The model asks before it connects, runs a command, or types: as bash asks, with the same rules ("ssh_connect" for hosts, "ssh" for commands, "ssh_input" for typing). Host keys and passwords are asked of you in the SSH panel. Turning it off closes every connection.</p>
+            </details>
+            <div class="ssh-live" id="ssh-live"></div>
+          </div>
+          <input type="checkbox" class="setting-switch" role="switch" id="ssh-checkbox">
         </div>
-        <p class="note" id="ssh-note"></p>
-        <p class="note warn" id="ssh-warn" hidden></p>
-        <div class="ssh-live" id="ssh-live"></div>
+
+        <!--
+          PowerShell. Shown only where the daemon has PowerShell (Windows),
+          in the desktop window and the Web UI, where the PowerShell panel
+          is. Drawn as the SSH row is: how it asks is markup, the note is
+          for what the daemon says, and the list is every PowerShell open
+          now.
+        -->
+        <div class="setting-row" id="powershell-settings" hidden>
+          <div class="setting-text">
+            <label class="setting-name" for="powershell-checkbox">PowerShell</label>
+            <p class="setting-desc">PowerShell on this computer, in the PowerShell panel</p>
+            <p class="note" id="powershell-note"></p>
+            <p class="note warn" id="powershell-warn" hidden></p>
+            <details class="setting-more">
+              <summary>How it asks</summary>
+              <p>The model asks before it runs a command (rule key powershell) and before it types (powershell_input). An allow rule does not skip the question for a command, because PowerShell does not split a line as bash does; a deny rule still denies. Allow for this session covers the same line again, and a plain line of a program you allowed. Each terminal starts with your PowerShell profile, in the conversation's working directory. Turning it off closes every PowerShell terminal.</p>
+            </details>
+            <div class="ssh-live" id="powershell-live"></div>
+          </div>
+          <input type="checkbox" class="setting-switch" role="switch" id="powershell-checkbox">
+        </div>
       </div>
-    </div>
 
-    <!--
-      Orchestration.
-      Everything that hands work to another agent: the built-in
-      specialists, Task, the background pair, and plans of up to 32 agent
-      turns. The note under it names the specialists, which the daemon
-      supplies and the page cannot know.
-    -->
-    <h4 class="settings-section">Orchestration</h4>
+      <h4 class="settings-group">Other agents and commands</h4>
+      <div class="setting-list">
+        <!--
+          Orchestration. Everything that hands work to another agent: the
+          built-in specialists, Task, the background pair, and plans of up
+          to 32 agent turns. The note names the specialists, which the
+          daemon supplies and the page cannot know.
+        -->
+        <div class="setting-row">
+          <div class="setting-text">
+            <label class="setting-name" for="orchestrate-checkbox">Orchestration</label>
+            <p class="setting-desc">Sub-agents, the six built-in specialists, and multi-stage plans</p>
+            <p class="note" id="orchestrate-note"></p>
+            <p class="note warn" id="orchestrate-warn" hidden></p>
+          </div>
+          <input type="checkbox" class="setting-switch" role="switch" id="orchestrate-checkbox">
+        </div>
 
-    <div class="settings-field">
-      <div class="check-row">
-        <input type="checkbox" id="orchestrate-checkbox">
-        <label for="orchestrate-checkbox">Let the model delegate to sub-agents, including the six built-in specialists, and run multi-stage plans</label>
+        <!--
+          The model running commands. Its own row rather than a line under
+          orchestration, because what it opens is different in kind: not
+          more sub-agents but the commands a person types. The note names
+          what is actually reachable, since the switch on its own says
+          nothing about that: the list lives in config.json and in each
+          command's own frontmatter.
+        -->
+        <div class="setting-row">
+          <div class="setting-text">
+            <label class="setting-name" for="model-invocable-checkbox">Commands the model may run</label>
+            <p class="setting-desc">Opted-in commands the model may run itself</p>
+            <p class="note" id="model-invocable-note"></p>
+            <p class="note warn" id="model-invocable-warn" hidden></p>
+          </div>
+          <input type="checkbox" class="setting-switch" role="switch" id="model-invocable-checkbox">
+        </div>
       </div>
-      <p class="note" id="orchestrate-note"></p>
-      <p class="note warn" id="orchestrate-warn" hidden></p>
-    </div>
-
-    <!--
-      The model running commands.
-      Its own switch, and its own section rather than a line under
-      orchestration, because what it opens is different in kind: not more
-      sub-agents but the commands a person types. The note names what is
-      actually reachable, since the switch on its own says nothing about
-      that - the list lives in config.json and in each command's own
-      frontmatter.
-    -->
-    <h4 class="settings-section">Commands the model may run</h4>
-
-    <div class="settings-field">
-      <div class="check-row">
-        <input type="checkbox" id="model-invocable-checkbox">
-        <label for="model-invocable-checkbox">Let the model run opted-in commands itself</label>
-      </div>
-      <p class="note" id="model-invocable-note"></p>
-      <p class="note warn" id="model-invocable-warn" hidden></p>
-    </div>
     </section>
 
     <!--
-      Turns: how a turn proceeds and when it ends. The repeat guard is
-      the answer to "why did it stop" for every model; the muse family's
-      own answer, Keep going, is on the Muse tab with that family's other
-      switches.
+      Behavior: how a turn proceeds. The switches every model gets, then
+      the ones that reach a muse model and no other. Grouped by family
+      rather than filed under what each one is about, because the first
+      question somebody on another model has is whether any of this is
+      theirs, and one group answers it once.
     -->
-    <section role="tabpanel" id="settings-panel-turns" aria-labelledby="settings-tab-turns" tabindex="0" hidden>
-    <!--
-      The repeat guard.
+    <section role="tabpanel" id="settings-panel-behavior" aria-labelledby="settings-tab-behavior" tabindex="0" hidden>
+      <h4 class="settings-group">Every model</h4>
+      <div class="setting-list">
+        <!--
+          Smart Agent. How one agent works: its prompt, tools, fallback,
+          caching and turn log. It delegates nothing. The line under the
+          name groups what the switch gates and leaves the rest to
+          docs/USAGE.md.
+        -->
+        <div class="setting-row">
+          <div class="setting-text">
+            <label class="setting-name" for="smart-agent-checkbox">Smart Agent</label>
+            <p class="setting-desc">A set order of work, plan and ask tools, model fallback, prompt caching and a turn log</p>
+            <p class="note" id="smart-agent-note"></p>
+            <!-- Whether the change reached config.json, which is a
+                 different question from whether it took effect. Empty,
+                 and hidden, whenever there is nothing wrong. -->
+            <p class="note warn" id="smart-agent-warn" hidden></p>
+          </div>
+          <input type="checkbox" class="setting-switch" role="switch" id="smart-agent-checkbox">
+        </div>
 
-      A number beside a checkbox, because the two things a person means
-      by "turn it off" differ in size: room for a model that thinks by
-      re-reading is a bigger number, and never ending a turn for it is
-      zero. The label says what a repeat is, since the notice this
-      controls was read as "one call three times" and is not.
-    -->
-    <h4 class="settings-section">Repeated tool calls</h4>
-    <div class="settings-field">
-      <div class="check-row">
-        <input type="checkbox" id="repeat-limit-checkbox">
-        <label for="repeat-limit-checkbox">End a turn after <input type="number" id="repeat-limit-input" min="1" max="50" step="1" style="width:4em"> steps that only repeat earlier tool calls</label>
+        <!--
+          The repeat guard. A number beside a switch, because the two things
+          a person means by "turn it off" differ in size: room for a model
+          that thinks by re-reading is a bigger number, and never ending a
+          turn for it is zero. The line says what a repeat is, since the
+          notice this controls was read as "one call three times" and is
+          not.
+        -->
+        <div class="setting-row">
+          <div class="setting-text">
+            <label class="setting-name" for="repeat-limit-checkbox">Repeated tool calls</label>
+            <p class="setting-desc">End a turn after <input type="number" class="setting-number" id="repeat-limit-input" min="1" max="50" step="1" aria-label="Steps that only repeat earlier tool calls"> steps that only repeat earlier tool calls</p>
+            <p class="note warn" id="repeat-limit-warn" hidden></p>
+          </div>
+          <input type="checkbox" class="setting-switch" role="switch" id="repeat-limit-checkbox">
+        </div>
       </div>
-      <p class="note warn" id="repeat-limit-warn" hidden></p>
-    </div>
+
+      <!--
+        Muse models only. The note under the heading says which profiles in
+        this config run a muse model, and says it when none do.
+      -->
+      <h4 class="settings-group">Muse models only</h4>
+      <p class="note group-note" id="muse-note"></p>
+      <div class="setting-list">
+        <!--
+          The reasoning block. A muse model reasons at length before every
+          answer, often by restating the question first, and drawn the plain
+          way that read as the start of the reply. The note speaks only when
+          show_thinking is hiding reasoning altogether, since this switch
+          then changes nothing on screen.
+        -->
+        <div class="setting-row">
+          <div class="setting-text">
+            <label class="setting-name" for="fold-thinking-checkbox">Reasoning</label>
+            <p class="setting-desc">Label the reasoning with its running time, and fold it when the answer starts</p>
+            <p class="note" id="fold-thinking-note"></p>
+            <p class="note warn" id="fold-thinking-warn" hidden></p>
+          </div>
+          <input type="checkbox" class="setting-switch" role="switch" id="fold-thinking-checkbox">
+        </div>
+
+        <!--
+          Keep going. The family's habit of stopping mid-task, and the nudge
+          that answers it. The group carries the scope: the switch is
+          daemon-wide and only ever reaches a muse model.
+        -->
+        <div class="setting-row">
+          <div class="setting-text">
+            <label class="setting-name" for="keep-going-checkbox">Keep going</label>
+            <p class="setting-desc">Tell a model that stops mid-task to carry on</p>
+            <p class="note warn" id="keep-going-warn" hidden></p>
+          </div>
+          <input type="checkbox" class="setting-switch" role="switch" id="keep-going-checkbox">
+        </div>
+      </div>
     </section>
 
     <!--
-      Muse: the switches that exist for one model family and reach no
-      other. Grouped by family rather than filed under what each one is
-      about, because the first question somebody on another model has is
-      whether any of this is theirs, and one tab answers it once. The note
-      at the top says which profiles in this config run a muse model, and
-      says it when none do.
+      Appearance: the faces and the text size. Per person, not per daemon,
+      so these live in this browser's localStorage (see js/typography.js)
+      and never in config.json. Each face offers the stacks that fit its
+      role plus a free-text field; whatever is chosen keeps a fallback
+      stack behind it, so a name that resolves to nothing degrades to
+      something readable. A picker is a row of two columns: what it sets on
+      the left, the picker on the right.
     -->
-    <section role="tabpanel" id="settings-panel-muse" aria-labelledby="settings-tab-muse" tabindex="0" hidden>
-    <p class="note" id="muse-note"></p>
-
-    <!--
-      The reasoning block.
-
-      A muse model reasons at length before every answer, often by
-      restating the question first. Drawn the plain way that read as the
-      start of the reply. On, it is a block of its own with a label and a
-      running time, folded to one line once the answer starts. The note
-      says when show_thinking is hiding reasoning altogether, since this
-      switch then changes nothing on screen.
-    -->
-    <h4 class="settings-section">Reasoning</h4>
-    <div class="settings-field">
-      <div class="check-row">
-        <input type="checkbox" id="fold-thinking-checkbox">
-        <label for="fold-thinking-checkbox">Label the reasoning with its running time, and fold it to one line when the answer starts</label>
+    <section role="tabpanel" id="settings-panel-appearance" aria-labelledby="settings-tab-appearance" tabindex="0" hidden>
+      <h4 class="settings-group">Faces</h4>
+      <div class="setting-list setting-grid">
+        <div class="setting-pick">
+          <div class="setting-text">
+            <label class="setting-name" for="typo-doc-select">Reading</label>
+            <p class="setting-desc">The transcript and anything set as a document</p>
+          </div>
+          <div class="setting-control">
+            <select id="typo-doc-select"></select>
+            <input type="text" id="typo-doc-custom" class="typo-custom" placeholder="A font name you have installed" spellcheck="false" autocomplete="off" hidden>
+          </div>
+        </div>
+        <div class="setting-pick">
+          <div class="setting-text">
+            <label class="setting-name" for="typo-ui-select">Interface</label>
+            <p class="setting-desc">Controls, panels and the status strip</p>
+          </div>
+          <div class="setting-control">
+            <select id="typo-ui-select"></select>
+            <input type="text" id="typo-ui-custom" class="typo-custom" placeholder="A font name you have installed" spellcheck="false" autocomplete="off" hidden>
+          </div>
+        </div>
+        <div class="setting-pick">
+          <div class="setting-text">
+            <label class="setting-name" for="typo-mono-select">Monospace</label>
+            <p class="setting-desc">Paths, ids, tool names and code</p>
+          </div>
+          <div class="setting-control">
+            <select id="typo-mono-select"></select>
+            <input type="text" id="typo-mono-custom" class="typo-custom" placeholder="A font name you have installed" spellcheck="false" autocomplete="off" hidden>
+          </div>
+        </div>
       </div>
-      <p class="note" id="fold-thinking-note"></p>
-      <p class="note warn" id="fold-thinking-warn" hidden></p>
-    </div>
 
-    <!--
-      Keep going.
-
-      The family's habit of stopping mid-task, and the nudge that answers
-      it. The tab carries the scope now: the switch is daemon-wide and
-      only ever reaches a muse model.
-    -->
-    <h4 class="settings-section">Keep going</h4>
-    <div class="settings-field">
-      <div class="check-row">
-        <input type="checkbox" id="keep-going-checkbox">
-        <label for="keep-going-checkbox">Tell a muse model that stops mid-task to carry on</label>
+      <h4 class="settings-group">Text size</h4>
+      <div class="setting-list setting-grid">
+        <div class="setting-pick">
+          <div class="setting-text">
+            <label class="setting-name" for="typo-size-select">Overall</label>
+            <p class="setting-desc">From 87.5% to 140% of the nine-step scale</p>
+          </div>
+          <div class="setting-control">
+            <select id="typo-size-select"></select>
+          </div>
+        </div>
+        <div class="setting-pick">
+          <div class="setting-text">
+            <label class="setting-name" for="typo-size-read-select">Reading</label>
+            <p class="setting-desc">The transcript, the model's questions, thinking and review blocks, and headings</p>
+          </div>
+          <div class="setting-control">
+            <select id="typo-size-read-select"></select>
+          </div>
+        </div>
+        <div class="setting-pick">
+          <div class="setting-text">
+            <label class="setting-name" for="typo-size-ui-select">Interface</label>
+            <p class="setting-desc">Controls, panels, status, notes, and the ids shown in those rows</p>
+          </div>
+          <div class="setting-control">
+            <select id="typo-size-ui-select"></select>
+          </div>
+        </div>
+        <div class="setting-pick">
+          <div class="setting-text">
+            <label class="setting-name" for="typo-size-code-select">Code</label>
+            <p class="setting-desc">Code set in monospace</p>
+          </div>
+          <div class="setting-control">
+            <select id="typo-size-code-select"></select>
+          </div>
+        </div>
       </div>
-      <p class="note warn" id="keep-going-warn" hidden></p>
-    </div>
+      <p class="note" id="typo-note">Each trim multiplies the overall size, from 87.5% to 140%. A trim reaches steps, not faces: an id set in monospace inside an interface row, like the session id, follows the interface trim. Stored in this browser, restored on reload; the desktop window also keeps it in ~/.localcode/window-state.json, so it is there the next time the window is opened. Ctrl+wheel zoom is separate: it scales the whole page, spacing included.</p>
     </section>
 
     <!--
@@ -797,56 +949,6 @@
         <button id="update-install-btn" hidden>Download and install</button>
       </div>
       <p class="note" id="update-note"></p>
-    </div>
-    </section>
-
-    <!--
-      Typography: the faces and the text size. Per person, not per
-      daemon, so these live in this browser's localStorage (see
-      js/typography.js) and never in config.json. Each face offers the
-      stacks that fit its role plus a free-text field; whatever is
-      chosen keeps a fallback stack behind it, so a name that resolves
-      to nothing degrades to something readable.
-    -->
-    <section role="tabpanel" id="settings-panel-typography" aria-labelledby="settings-tab-typography" tabindex="0" hidden>
-    <h4 class="settings-section">Reading face</h4>
-    <div class="settings-field">
-      <label class="field-label" for="typo-doc-select">The transcript and anything set as a document</label>
-      <select id="typo-doc-select"></select>
-      <input type="text" id="typo-doc-custom" class="typo-custom" placeholder="A font name you have installed" spellcheck="false" autocomplete="off" hidden>
-    </div>
-
-    <h4 class="settings-section">Interface face</h4>
-    <div class="settings-field">
-      <label class="field-label" for="typo-ui-select">Controls, panels and the status strip</label>
-      <select id="typo-ui-select"></select>
-      <input type="text" id="typo-ui-custom" class="typo-custom" placeholder="A font name you have installed" spellcheck="false" autocomplete="off" hidden>
-    </div>
-
-    <h4 class="settings-section">Monospace face</h4>
-    <div class="settings-field">
-      <label class="field-label" for="typo-mono-select">Paths, ids, tool names and code</label>
-      <select id="typo-mono-select"></select>
-      <input type="text" id="typo-mono-custom" class="typo-custom" placeholder="A font name you have installed" spellcheck="false" autocomplete="off" hidden>
-    </div>
-
-    <h4 class="settings-section">Text size</h4>
-    <div class="settings-field">
-      <label class="field-label" for="typo-size-select">Overall, from 87.5% to 140% of the nine-step scale</label>
-      <select id="typo-size-select"></select>
-    </div>
-    <div class="settings-field">
-      <label class="field-label" for="typo-size-read-select">Reading: the transcript, the model's questions, thinking and review blocks, and headings</label>
-      <select id="typo-size-read-select"></select>
-    </div>
-    <div class="settings-field">
-      <label class="field-label" for="typo-size-ui-select">Interface: controls, panels, status, notes, and the ids shown in those rows</label>
-      <select id="typo-size-ui-select"></select>
-    </div>
-    <div class="settings-field">
-      <label class="field-label" for="typo-size-code-select">Code: code set in monospace</label>
-      <select id="typo-size-code-select"></select>
-      <p class="note" id="typo-note">Each trim multiplies the overall size, from 87.5% to 140%. A trim reaches steps, not faces: an id set in monospace inside an interface row, like the session id, follows the interface trim. Stored in this browser, restored on reload; the desktop window also keeps it in ~/.localcode/window-state.json, so it is there the next time the window is opened. Ctrl+wheel zoom is separate: it scales the whole page, spacing included.</p>
     </div>
     </section>
 

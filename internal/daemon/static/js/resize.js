@@ -1,7 +1,7 @@
 import {
-  leftPanel, rightPanel, browserPanel, sshPanel, centerEl,
-  resizeLeftHandle, resizeRightHandle, resizeBrowserHandle, resizeSshHandle,
-  toggleLeftBtn, toggleRightBtn, toggleBrowserBtn, toggleSshBtn,
+  leftPanel, rightPanel, browserPanel, sshPanel, psPanel, centerEl,
+  resizeLeftHandle, resizeRightHandle, resizeBrowserHandle, resizeSshHandle, resizePsHandle,
+  toggleLeftBtn, toggleRightBtn, toggleBrowserBtn, toggleSshBtn, togglePsBtn,
 } from './dom.js';
 import { readPref, readShared, writePref } from './prefs.js';
 
@@ -29,6 +29,10 @@ export const BROWSER_BOUNDS = { min: 360, max: 1280 + 2 + 24 + 1 };
 // narrow for a shell prompt and a command; above its maximum it would be
 // wider than any terminal sshterm makes (300 columns).
 export const SSH_BOUNDS = { min: 320, max: 1400 };
+
+// The PowerShell panel holds the same terminals (internal/sshterm), so it
+// has the SSH panel's bounds.
+export const PS_BOUNDS = { min: 320, max: 1400 };
 
 // What a drag leaves the transcript, however wide the panel being dragged
 // is allowed to be. A window narrower than every panel's width put
@@ -63,10 +67,10 @@ function store(patch) {
 }
 
 // Which of the panels right of the conversation are shown belongs to the
-// conversation: the browser panel, the SSH panel, the tasks and MCP
-// panel. A conversation that works in a browser and one that works over
-// SSH want different columns, and going from one to the other meant
-// pressing the toggles each time.
+// conversation: the browser panel, the SSH panel, the PowerShell panel,
+// the tasks and MCP panel. A conversation that works in a browser and one
+// that works over SSH want different columns, and going from one to the
+// other meant pressing the toggles each time.
 //
 // A conversation's choice is written down when it is opened for the
 // first time (as the panels are then) and on every change while it is
@@ -108,7 +112,16 @@ function writeViews(views) {
 const rightPanels = () => [
   ['browser', browserPanel, resizeBrowserHandle, toggleBrowserBtn, 'browserCollapsed'],
   ['ssh', sshPanel, resizeSshHandle, toggleSshBtn, 'sshCollapsed'],
+  ['powershell', psPanel, resizePsHandle, togglePsBtn, 'powershellCollapsed'],
   ['right', rightPanel, resizeRightHandle, toggleRightBtn, 'rightCollapsed'],
+];
+
+// The wide panels: the browser panel and the two terminal panels, in the
+// order a window too narrow for all of them hides them in (makeRoomFor).
+const widePanels = () => [
+  { name: 'browser', panel: browserPanel, handle: resizeBrowserHandle, btn: toggleBrowserBtn, key: 'browserCollapsed', bounds: BROWSER_BOUNDS },
+  { name: 'ssh', panel: sshPanel, handle: resizeSshHandle, btn: toggleSshBtn, key: 'sshCollapsed', bounds: SSH_BOUNDS },
+  { name: 'powershell', panel: psPanel, handle: resizePsHandle, btn: togglePsBtn, key: 'powershellCollapsed', bounds: PS_BOUNDS },
 ];
 
 // rememberPanels writes down which panels the conversation on screen
@@ -146,9 +159,12 @@ export function showPanelsFor(id) {
   // first time.
   store(patch);
   // A window narrower than when the conversation was left may not hold
-  // the browser and SSH panels both. The SSH panel stays: a terminal may
-  // be waiting for the person.
-  if (showing(browserPanel) && showing(sshPanel)) makeRoomFor(sshPanel);
+  // every wide panel it shows. The terminal panels stay over the browser
+  // panel, since a terminal may be waiting for the person, and of the two
+  // the PowerShell panel stays over the SSH panel.
+  if (widePanels().filter((w) => showing(w.panel)).length > 1) {
+    makeRoomFor(showing(psPanel) ? psPanel : sshPanel);
+  }
 }
 
 // forgetPanels drops a conversation's choice: it was deleted.
@@ -166,18 +182,17 @@ const widthOf = (el) => Number(el && el.offsetWidth) || 0;
 // roomFor is how much wider panel can get before the transcript is
 // narrower than CENTER_MIN. The transcript is always laid out, so a width
 // of zero is a transcript the panels have squeezed out, which has no room
-// to give. While the browser panel is shown, a side panel can also take
-// what the browser panel has above its minimum: the stylesheet shrinks the
-// browser panel before the transcript. The browser panel's own drag gets
-// only the transcript's room, so widening it never squeezes the side
-// panels.
+// to give. While a wide panel (the browser, SSH or PowerShell panel) is
+// shown, another panel can also take what it has above its minimum: the
+// stylesheet shrinks the wide panels before the transcript. The browser
+// panel's own drag gets only the transcript's room, so widening it never
+// squeezes the side panels or the terminal panels.
 function roomFor(panel) {
   let room = Math.max(0, widthOf(centerEl) - CENTER_MIN);
-  if (browserPanel && panel !== browserPanel && !browserPanel.hidden && !browserPanel.classList.contains('collapsed')) {
-    room += Math.max(0, widthOf(browserPanel) - BROWSER_BOUNDS.min);
-  }
-  if (sshPanel && panel !== sshPanel && panel !== browserPanel && !sshPanel.hidden && !sshPanel.classList.contains('collapsed')) {
-    room += Math.max(0, widthOf(sshPanel) - SSH_BOUNDS.min);
+  if (panel === browserPanel) return room;
+  for (const w of widePanels()) {
+    if (w.panel === panel || !showing(w.panel)) continue;
+    room += Math.max(0, widthOf(w.panel) - w.bounds.min);
   }
   return room;
 }
@@ -195,33 +210,39 @@ function layoutWidth() {
 
 // fitsWith reports whether the window holds every panel that would be on
 // screen at its minimum, with panel shown too: the side panels, the
-// transcript, the browser and SSH panels, and a handle for each.
+// transcript, the browser, SSH and PowerShell panels, and a handle for
+// each.
 export function fitsWith(panel, width = layoutWidth()) {
   if (!width) return true;
   let need = CENTER_MIN;
   const add = (p, min) => {
-    if (p === panel || showing(p)) need += min + 4;
+    if (p && (p === panel || showing(p))) need += min + 4;
   };
   add(leftPanel, SIDE_BOUNDS.min);
   add(rightPanel, SIDE_BOUNDS.min);
-  add(browserPanel, BROWSER_BOUNDS.min);
-  add(sshPanel, SSH_BOUNDS.min);
+  for (const w of widePanels()) add(w.panel, w.bounds.min);
   return need <= width;
 }
 
-// makeRoomFor hides the other of the browser and SSH panels when the
-// window cannot hold both beside everything else: they take turns, and
-// the one just shown wins. The side panels and the transcript keep their
-// room; a person who wants both can hide a side panel.
+// makeRoomFor hides other wide panels when the window cannot hold them
+// beside panel and everything else: they take turns, and the one just
+// shown wins. The others that are showing are hidden one at a time, in
+// the order browser, SSH, PowerShell, until panel fits. The side panels
+// and the transcript keep their room; a person who wants more than one
+// wide panel can hide a side panel.
 export function makeRoomFor(panel, width) {
-  const other = panel === sshPanel ? browserPanel : panel === browserPanel ? sshPanel : null;
-  if (!other || !showing(other) || fitsWith(panel, width)) return;
-  const handle = other === sshPanel ? resizeSshHandle : resizeBrowserHandle;
-  const btn = other === sshPanel ? toggleSshBtn : toggleBrowserBtn;
-  setCollapsed(other, handle, true);
-  store({ [other === sshPanel ? 'sshCollapsed' : 'browserCollapsed']: true });
-  if (btn) btn.setAttribute('aria-expanded', 'false');
-  rememberPanels();
+  const wide = widePanels();
+  if (!panel || !wide.some((w) => w.panel === panel)) return;
+  let hid = false;
+  for (const w of wide) {
+    if (fitsWith(panel, width)) break;
+    if (w.panel === panel || !showing(w.panel)) continue;
+    setCollapsed(w.panel, w.handle, true);
+    store({ [w.key]: true });
+    if (w.btn) w.btn.setAttribute('aria-expanded', 'false');
+    hid = true;
+  }
+  if (hid) rememberPanels();
 }
 
 // A handle drags one panel. side is which edge of that panel the handle
@@ -321,18 +342,19 @@ function attachToggle(btn, panel, handle, key) {
   });
 }
 
-// expandPanel shows a collapsed panel the program wants seen (the SSH
-// panel, when a terminal asks the person something), as its toggle
+// expandPanel shows a collapsed panel the program wants seen (the SSH or
+// PowerShell panel, when a terminal wants the person), as its toggle
 // would, and remembers that.
 export function expandPanel(name) {
-  if (name !== 'ssh' || !sshPanel) return;
-  if (!sshPanel.classList.contains('collapsed')) return;
-  makeRoomFor(sshPanel);
-  setCollapsed(sshPanel, resizeSshHandle, false);
-  store({ sshCollapsed: false });
-  if (toggleSshBtn) {
-    toggleSshBtn.setAttribute('aria-expanded', 'true');
-    toggleSshBtn.classList.remove('attention');
+  const w = widePanels().find((x) => x.name === name && (name === 'ssh' || name === 'powershell'));
+  if (!w || !w.panel) return;
+  if (!w.panel.classList.contains('collapsed')) return;
+  makeRoomFor(w.panel);
+  setCollapsed(w.panel, w.handle, false);
+  store({ [w.key]: false });
+  if (w.btn) {
+    w.btn.setAttribute('aria-expanded', 'true');
+    w.btn.classList.remove('attention');
   }
   rememberPanels();
 }
@@ -347,16 +369,20 @@ export function initResizers() {
   if (typeof saved.right === 'number') setPanelWidth(rightPanel, saved.right);
   if (typeof saved.browser === 'number' && browserPanel) setPanelWidth(browserPanel, saved.browser, BROWSER_BOUNDS);
   if (typeof saved.ssh === 'number' && sshPanel) setPanelWidth(sshPanel, saved.ssh, SSH_BOUNDS);
+  if (typeof saved.powershell === 'number' && psPanel) setPanelWidth(psPanel, saved.powershell, PS_BOUNDS);
   setCollapsed(leftPanel, resizeLeftHandle, saved.leftCollapsed === true);
   setCollapsed(rightPanel, resizeRightHandle, saved.rightCollapsed === true);
   setCollapsed(browserPanel, resizeBrowserHandle, saved.browserCollapsed === true);
   setCollapsed(sshPanel, resizeSshHandle, saved.sshCollapsed === true);
+  setCollapsed(psPanel, resizePsHandle, saved.powershellCollapsed === true);
   attach(resizeLeftHandle, leftPanel, 'left', 'left', SIDE_BOUNDS);
   attach(resizeRightHandle, rightPanel, 'right', 'right', SIDE_BOUNDS);
   attach(resizeBrowserHandle, browserPanel, 'right', 'browser', BROWSER_BOUNDS);
   attach(resizeSshHandle, sshPanel, 'right', 'ssh', SSH_BOUNDS);
+  attach(resizePsHandle, psPanel, 'right', 'powershell', PS_BOUNDS);
   attachToggle(toggleLeftBtn, leftPanel, resizeLeftHandle, 'leftCollapsed');
   attachToggle(toggleRightBtn, rightPanel, resizeRightHandle, 'rightCollapsed');
   attachToggle(toggleBrowserBtn, browserPanel, resizeBrowserHandle, 'browserCollapsed');
   attachToggle(toggleSshBtn, sshPanel, resizeSshHandle, 'sshCollapsed');
+  attachToggle(togglePsBtn, psPanel, resizePsHandle, 'powershellCollapsed');
 }

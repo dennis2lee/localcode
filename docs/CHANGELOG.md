@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.180.0
+
+PowerShell terminals on Windows that the model works in and you share, and the settings window's switches regrouped into four tabs.
+
+**Added**
+
+* PowerShell panel on Windows: terminals on this computer, beside the SSH panel in the desktop window and the Web UI, that the model opens and works in through the `powershell` tool and you type in too
+* Each PowerShell command's output and exit status, read off the screen, on Windows PowerShell 5.1 and PowerShell 7
+* `powershell` and `powershell_path` in config.json, `/powershell`, and a PowerShell switch on the settings window's Tools tab, shown only on Windows
+* `powershell` and `powershell_input` permission keys
+
+**Changed**
+
+* Settings window: four tabs (Tools, Behavior, Appearance, Updates) in place of Agents, Turns, Muse, Updates and Typography, with every setting kept
+* Each switch as one row: its name, one line on what it reaches, and the switch on the right, with a note only where the switch alone cannot say it
+* Muse switches grouped under Behavior, apart from the switches for every model
+
+**Fixed**
+
+* The model's `ctrl+c`, `ctrl+\` or `ctrl+z` to a running command no longer counted as text typed ahead, which left the next `run` refused
+* A "for this session" grant in an SSH terminal whose shell is not bash or zsh no longer covers a line that shell runs as two commands (`echo a\;rm x`)
+* The refusal for a held terminal no longer names the SSH panel
+
 ## v0.179.3
 
 An SSH terminal no longer takes text typed after Ctrl+C as gone, nor a slow prompt or a slow answer to Ctrl+C as text left on the command line.

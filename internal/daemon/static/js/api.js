@@ -173,6 +173,9 @@ export const setBrowser = (enabled) => api('POST', '/api/settings/browser', { en
 export const setSSH = (enabled) => api('POST', '/api/settings/ssh', { enabled });
 export const listSSH = () => api('GET', '/api/ssh');
 export const closeSSH = (session, terminal) => api('DELETE', `/api/sessions/${encodeURIComponent(session)}/ssh/${encodeURIComponent(terminal)}`, {});
+export const setPowerShell = (enabled) => api('POST', '/api/settings/powershell', { enabled });
+export const listPowerShell = () => api('GET', '/api/powershell');
+export const closePowerShell = (session, terminal) => api('DELETE', `/api/sessions/${encodeURIComponent(session)}/powershell/${encodeURIComponent(terminal)}`, {});
 export const importBrowserProfile = () => api('POST', '/api/browser/import');
 export const setOrchestrate = (enabled) => api('POST', '/api/settings/orchestrate', { enabled });
 export const setModelInvocable = (enabled) => api('POST', '/api/settings/model-invocable', { enabled });

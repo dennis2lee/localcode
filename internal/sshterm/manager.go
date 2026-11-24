@@ -60,6 +60,18 @@ type Options struct {
 	// or stopped asking the person something, so a session list can mark
 	// it. Called with no lock held.
 	OnAsking func(conv string)
+	// Local, when set, makes this a manager of shells on this computer
+	// (the PowerShell panel) rather than of SSH connections. A terminal's
+	// spec is then only its label. See local.go.
+	Local *LocalShell
+}
+
+// what is what the manager's terminals are called in a refusal.
+func (m *Manager) what() (one, many string) {
+	if m.opts.Local != nil {
+		return "PowerShell", "PowerShell terminals"
+	}
+	return "SSH", "connections"
 }
 
 // Manager holds every conversation's terminals.
@@ -167,24 +179,27 @@ func (m *Manager) Open(conv, spec string, by Opener) (*Terminal, error) {
 // with where the connection resolves when it is made, so a change to
 // ~/.ssh/config in between cannot send it somewhere else.
 func (m *Manager) OpenApproved(conv, spec string, by Opener, approved string) (*Terminal, error) {
-	if _, err := ParseSpec(spec); err != nil {
-		return nil, err
+	if m.opts.Local == nil {
+		if _, err := ParseSpec(spec); err != nil {
+			return nil, err
+		}
 	}
+	one, many := m.what()
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return nil, errors.New("SSH is off")
+		return nil, errors.New(one + " is off")
 	}
 	c := m.conv(conv)
 	live, ended := m.countLocked(c)
 	if live >= m.opts.MaxPerConversation {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("%w: this conversation has %d connections open; close one first", ErrLimit, live)
+		return nil, fmt.Errorf("%w: this conversation has %d %s open; close one first", ErrLimit, live, many)
 	}
 	if all := m.liveLocked(); all >= m.opts.MaxTotal {
 		names := m.holdersLocked()
 		m.mu.Unlock()
-		return nil, fmt.Errorf("%w: %d connections are open, in conversations %s; close some (the settings window lists them)", ErrLimit, all, strings.Join(names, ", "))
+		return nil, fmt.Errorf("%w: %d %s are open, in conversations %s; close some (the settings window lists them)", ErrLimit, all, many, strings.Join(names, ", "))
 	}
 	if ended >= m.opts.MaxPerConversation {
 		// The oldest ended terminal makes room.

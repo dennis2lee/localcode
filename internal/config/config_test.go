@@ -261,6 +261,8 @@ func TestMergeFieldsGuard(t *testing.T) {
 		"SmartAgent":            true,
 		"Browser":               true,
 		"SSH":                   true,
+		"PowerShell":            true,
+		"PowerShellPath":        true,
 		"BrowserPath":           true,
 		"Orchestrate":           true,
 		"TraceMaxAgeDays":       true,

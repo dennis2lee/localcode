@@ -37,6 +37,8 @@ var leftOutOfARun = map[string]string{
 		"and a run has no window",
 	"ssh": "its host keys and passwords are answered in a panel a run does " +
 		"not have, and a connection outliving the run would be one nobody owns",
+	"powershell": "its terminals are shown in a panel a run does not have, " +
+		"and a shell outliving the run would be one nobody owns",
 }
 
 func TestTheOneShotRosterDiffersFromTheDaemonsOnlyOnPurpose(t *testing.T) {

@@ -49,10 +49,10 @@ function sent(app, from = 0) {
   return all;
 }
 
-async function openTypography(app) {
+async function openAppearance(app) {
   app.el('settings-btn').click();
   await app.settle();
-  app.el('settings-tab-typography').click();
+  app.el('settings-tab-appearance').click();
 }
 
 async function setTextSize(app, value) {
@@ -64,7 +64,7 @@ async function setTextSize(app, value) {
 
 test('a browser tab keeps its settings in its own storage and tells the daemon nothing', async () => {
   const app = await load();
-  await openTypography(app);
+  await openAppearance(app);
   await setTextSize(app, '1.25');
   app.applyZoom(1.5);
   await app.settle();
@@ -77,7 +77,7 @@ test('a browser tab keeps its settings in its own storage and tells the daemon n
 test('in the desktop window a setting made in Settings goes to the daemon as it is made', async () => {
   const app = await inWindow();
   const loaded = writes(app).length;
-  await openTypography(app);
+  await openAppearance(app);
   await setTextSize(app, '1.125');
 
   assert.equal(app.storage.get('localcode.textScale'), '1.125', 'the page\'s own storage is still written');
@@ -90,7 +90,7 @@ test('in the desktop window a setting made in Settings goes to the daemon as it 
 test('putting a setting back to its default forgets it in the file too', async () => {
   const app = await inWindow('read', { localStorage: { 'localcode.textScale': '1.25' } });
   const loaded = writes(app).length;
-  await openTypography(app);
+  await openAppearance(app);
   await setTextSize(app, '1');
 
   assert.equal(app.storage.has('localcode.textScale'), false);
@@ -106,7 +106,7 @@ test('every kind of thing the page remembers is written, each under the name it 
   });
 
   // The faces and the four sizes.
-  await openTypography(app);
+  await openAppearance(app);
   const doc = app.el('typo-doc-select');
   doc.value = Array.from(doc.querySelectorAll('option')).map((o) => o.value).find((v) => v.includes('Georgia'));
   doc.fire('change');
@@ -200,7 +200,7 @@ test('a window whose daemon did not answer at the start writes nothing to it', a
   // the page has not been given the file, and writing to it from here
   // would replace settings it never read.
   const app = await load({ globals: { lcGUI: true }, routes: { [`PUT ${ROUTE}`]: { status: 204 } } });
-  await openTypography(app);
+  await openAppearance(app);
   await setTextSize(app, '1.25');
   assert.equal(app.storage.get('localcode.textScale'), '1.25');
   assert.deepEqual(writes(app), []);
@@ -714,7 +714,7 @@ test('a setting made in one window is there in a window on another address', asy
   const daemon = sharedFile();
   const first = daemon.window();
   const a = await first.open();
-  await openTypography(a);
+  await openAppearance(a);
   await setTextSize(a, '1.125');
   a.applyZoom(1.25);
   await a.settle();
@@ -726,7 +726,7 @@ test('a setting made in one window is there in a window on another address', asy
   assert.equal(b.storage.get('localcode.textScale'), '1.125');
   assert.equal(b.document.documentElement.style.getPropertyValue('--t-scale'), '1.125', 'the size was kept and not applied');
   assert.equal(b.document.documentElement.style.zoom, '1.25');
-  await openTypography(b);
+  await openAppearance(b);
   assert.equal(b.el('typo-size-select').value, '1.125', 'the settings window does not show the size that was kept');
 });
 
@@ -740,7 +740,7 @@ test('two windows open at once do not undo each other\'s settings', async () => 
   await b.settle();
 
   // Each changes a different setting, the second after the first.
-  await openTypography(a);
+  await openAppearance(a);
   await setTextSize(a, '1.25');
   b.applyZoom(1.5);
   await a.settle();

@@ -303,28 +303,36 @@ test('switching conversations drops the block that was streaming', async () => {
   assert.equal(blocks[0].querySelector('.body').textContent, 'new', 'the new block wrote into the old one');
 });
 
-// The Muse tab.
+// The Muse group, on the Behavior tab.
 
-test('the Muse tab holds the reasoning switch and keep going', async () => {
+test('the Muse group holds the reasoning switch and keep going', async () => {
   const app = await load();
   app.el('settings-btn').click();
   await app.settle();
-  app.el('settings-tab-muse').click();
-  assert.equal(app.el('settings-panel-muse').hidden, false);
+  app.el('settings-tab-behavior').click();
+  assert.equal(app.el('settings-panel-behavior').hidden, false);
   // Located in the shipped markup, the way settings_tabs.test.js locates
-  // every control: inside the Muse panel's section, and nowhere else.
+  // every control: inside the Behavior panel's section, under the group
+  // heading that says they reach muse models only, and nowhere else.
   const html = fs.readFileSync(path.join(__dirname, '..', '..', 'internal', 'daemon', 'static', 'index.html'), 'utf8');
-  const start = html.indexOf('<section role="tabpanel" id="settings-panel-muse"');
+  const start = html.indexOf('<section role="tabpanel" id="settings-panel-behavior"');
   const end = html.indexOf('</section>', start);
-  assert.ok(start >= 0 && end > start, 'index.html has no Muse panel');
-  for (const id of ['fold-thinking-checkbox', 'keep-going-checkbox', 'muse-note']) {
+  assert.ok(start >= 0 && end > start, 'index.html has no Behavior panel');
+  const group = html.indexOf('<h4 class="settings-group">Muse models only</h4>', start);
+  assert.ok(group > start && group < end, 'the Behavior tab has no Muse models only group');
+  for (const id of ['muse-note', 'fold-thinking-checkbox', 'keep-going-checkbox']) {
     const at = html.indexOf(`id="${id}"`);
-    assert.ok(at > start && at < end, `${id} is not on the Muse tab`);
+    assert.ok(at > group && at < end, `${id} is not in the Muse group`);
+  }
+  // And the switches every model gets are not under that heading.
+  for (const id of ['smart-agent-checkbox', 'repeat-limit-checkbox']) {
+    const at = html.indexOf(`id="${id}"`);
+    assert.ok(at > start && at < group, `${id} is under the Muse heading`);
   }
   assert.equal(app.el('fold-thinking-checkbox').checked, true, 'the switch defaults to on');
 });
 
-test('the Muse tab says which profiles run a muse model, and says it when none do', async () => {
+test('the Muse group says which profiles run a muse model, and says it when none do', async () => {
   let app = await load();
   app.el('settings-btn').click();
   await app.settle();
@@ -351,7 +359,8 @@ test('the reasoning checkbox posts the change and follows a change made elsewher
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].body, { enabled: false });
   assert.equal(app.state.foldThinking, false);
-  assert.match(app.el('fold-thinking-note').textContent, /^Off\./);
+  // The switch says it is off; the note does not say it again.
+  assert.equal(app.el('fold-thinking-note').textContent, '');
 
   app.applyEvent({ type: 'settings.changed', data: { fold_thinking: true } });
   assert.equal(box.checked, true, 'the open panel shows a stale box');

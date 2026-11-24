@@ -41,6 +41,9 @@ type Daemon struct {
 	// SSH holds the conversations' SSH terminals, shown in the SSH panel.
 	// Nil when the daemon was built without one.
 	SSH *sshterm.Manager
+	// PowerShell holds the conversations' PowerShell terminals, shown in
+	// the PowerShell panel. Nil where there is none (anywhere but Windows).
+	PowerShell *sshterm.Manager
 	// ListenHost is the host name the daemon was started to listen on,
 	// which the SSH routes accept as well as an address and localhost.
 	ListenHost string
@@ -270,16 +273,28 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/settings/auto-delegate", d.handleSetAutoDelegate)
 	d.mux.HandleFunc("POST /api/settings/smart-agent", d.handleSetSmartAgent)
 	d.mux.HandleFunc("POST /api/settings/ssh", d.handleSetSSH)
-	d.mux.HandleFunc("GET /api/ssh", d.handleSSHLive)
-	d.mux.HandleFunc("GET /api/sessions/{id}/ssh", d.handleSSHState)
-	d.mux.HandleFunc("GET /api/sessions/{id}/ssh/stream", d.handleSSHStream)
+	d.mux.HandleFunc("GET /api/ssh", d.on(sshRoutes, d.handleTermLive))
+	d.mux.HandleFunc("GET /api/sessions/{id}/ssh", d.on(sshRoutes, d.handleTermState))
+	d.mux.HandleFunc("GET /api/sessions/{id}/ssh/stream", d.on(sshRoutes, d.handleTermStream))
 	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/connect", d.handleSSHConnect)
-	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/input", d.handleSSHInput)
-	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/size", d.handleSSHSize)
-	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/hold", d.handleSSHHold)
-	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/answer", d.handleSSHAnswer)
-	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/reconnect", d.handleSSHReconnect)
-	d.mux.HandleFunc("DELETE /api/sessions/{id}/ssh/{term}", d.handleSSHClose)
+	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/input", d.on(sshRoutes, d.handleTermInput))
+	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/size", d.on(sshRoutes, d.handleTermSize))
+	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/hold", d.on(sshRoutes, d.handleTermHold))
+	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/answer", d.on(sshRoutes, d.handleTermAnswer))
+	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/reconnect", d.on(sshRoutes, d.handleTermReconnect))
+	d.mux.HandleFunc("DELETE /api/sessions/{id}/ssh/{term}", d.on(sshRoutes, d.handleTermClose))
+	// The PowerShell panel: the same routes over the PowerShell terminals,
+	// and open in place of connect. See ssh.go.
+	d.mux.HandleFunc("POST /api/settings/powershell", d.handleSetPowerShell)
+	d.mux.HandleFunc("GET /api/powershell", d.on(powershellRoutes, d.handleTermLive))
+	d.mux.HandleFunc("GET /api/sessions/{id}/powershell", d.on(powershellRoutes, d.handleTermState))
+	d.mux.HandleFunc("GET /api/sessions/{id}/powershell/stream", d.on(powershellRoutes, d.handleTermStream))
+	d.mux.HandleFunc("POST /api/sessions/{id}/powershell/open", d.handlePowerShellOpen)
+	d.mux.HandleFunc("POST /api/sessions/{id}/powershell/{term}/input", d.on(powershellRoutes, d.handleTermInput))
+	d.mux.HandleFunc("POST /api/sessions/{id}/powershell/{term}/size", d.on(powershellRoutes, d.handleTermSize))
+	d.mux.HandleFunc("POST /api/sessions/{id}/powershell/{term}/hold", d.on(powershellRoutes, d.handleTermHold))
+	d.mux.HandleFunc("POST /api/sessions/{id}/powershell/{term}/reconnect", d.on(powershellRoutes, d.handleTermReconnect))
+	d.mux.HandleFunc("DELETE /api/sessions/{id}/powershell/{term}", d.on(powershellRoutes, d.handleTermClose))
 	d.mux.HandleFunc("POST /api/settings/browser", d.handleSetBrowser)
 	d.mux.HandleFunc("POST /api/browser/import", d.handleBrowserImport)
 	d.mux.HandleFunc("GET /api/sessions/{id}/browser", d.handleBrowserState)
@@ -380,6 +395,7 @@ func (d *Daemon) announceSettings() {
 			"smart_agent":          d.Loop.SmartAgentEnabled(),
 			"browser":              d.Loop.Config.BrowserLive(),
 			"ssh":                  d.Loop.Config.SSHLive(),
+			"powershell":           d.Loop.Config.PowerShellLive(),
 			"skip_permissions":     d.Loop.Config.PermissionsSkipped(),
 			"keep_going":           d.Loop.KeepGoingEnabled(),
 			"fold_thinking":        d.Loop.FoldThinkingEnabled(),

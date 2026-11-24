@@ -1,8 +1,11 @@
 package sshterm
 
 import (
+	"encoding/base64"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // A command's output as text, and the marks that say a command ended.
@@ -28,14 +31,16 @@ const (
 
 // maxMarkPayload bounds what is kept of an OSC's text: a mark is short,
 // and an OSC carrying a long title or a clipboard payload is not one.
-const maxMarkPayload = 96
+const maxMarkPayload = 1024
 
 // markEvent is a mark: its kind ('C' or 'D'), the index in the read just
-// after it, and the status a D mark carries.
+// after it, the status a D mark carries, and the prompt a local shell's D
+// mark carries too (local.go), as text.
 type markEvent struct {
 	kind   byte
 	end    int
 	status string
+	prompt string
 }
 
 func (s *markScanner) feed(p []byte) []markEvent {
@@ -101,6 +106,12 @@ func (s *markScanner) parse() (markEvent, bool) {
 		return markEvent{kind: 'C'}, true
 	case parts[1] == "D" && len(parts) == 4:
 		return markEvent{kind: 'D', status: parts[2]}, true
+	case parts[1] == "D" && len(parts) == 5 && strings.HasPrefix(parts[3], "p="):
+		b, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(parts[3], "p="))
+		if err != nil || !utf8.Valid(b) {
+			return markEvent{kind: 'D', status: parts[2]}, true
+		}
+		return markEvent{kind: 'D', status: parts[2], prompt: ansi.Strip(strings.ReplaceAll(string(b), "\r", ""))}, true
 	}
 	return markEvent{}, false
 }

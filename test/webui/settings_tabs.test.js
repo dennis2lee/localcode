@@ -19,6 +19,10 @@ const { load } = require('./harness');
 const STATIC_DIR = path.join(__dirname, '..', '..', 'internal', 'daemon', 'static');
 const CSS_PATH = path.join(STATIC_DIR, 'style.css');
 
+// The tabs by the name in their ids, in the order the tablist shows them.
+// The first is where the window always opens.
+const TABS = ['tools', 'behavior', 'appearance', 'updates'];
+
 function settingsMarkup() {
   const html = fs.readFileSync(path.join(STATIC_DIR, 'index.html'), 'utf8');
   const start = html.indexOf('<div id="settings-modal">');
@@ -98,22 +102,44 @@ test('every tab controls exactly one panel and every panel answers to one tab', 
   }
 });
 
+test('four tabs, in this order, and the window opens on Tools', async () => {
+  const modal = settingsMarkup();
+  const tabs = [...modal.matchAll(/<button\b([^>]*)role="tab"([^>]*)>([^<]*)<\/button>/g)];
+  assert.deepEqual(tabs.map((m) => /id="settings-tab-([^"]+)"/.exec(m[1] + m[2])[1]), TABS,
+    'the tabs are not these four, in this order');
+  assert.deepEqual(tabs.map((m) => m[3].trim()), ['Tools', 'Behavior', 'Appearance', 'Updates']);
+  for (const name of TABS) {
+    assert.ok(modal.includes(`aria-controls="settings-panel-${name}"`), `the ${name} tab controls no settings-panel-${name}`);
+  }
+
+  const app = await load();
+  app.el('settings-btn').click();
+  await app.settle();
+  for (const [i, name] of TABS.entries()) {
+    const first = i === 0;
+    assert.equal(app.el(`settings-panel-${name}`).hidden, !first,
+      first ? 'the window does not open on Tools' : `the ${name} panel is shown on opening`);
+    assert.equal(app.el(`settings-tab-${name}`).getAttribute('aria-selected'), first ? 'true' : 'false');
+    assert.equal(app.el(`settings-tab-${name}`).tabIndex, first ? 0 : -1);
+  }
+});
+
 test('switching tabs shows one panel and hides the others', async () => {
   const app = await load();
   app.el('settings-btn').click();
   await app.settle();
 
-  const visible = () => ['agents', 'turns', 'muse', 'updates', 'typography']
+  const visible = () => TABS
     .filter((n) => !app.el(`settings-panel-${n}`).hidden);
-  assert.deepEqual(visible(), ['agents'], 'the window does not open on the first tab');
+  assert.deepEqual(visible(), ['tools'], 'the window does not open on the first tab');
 
-  app.el('settings-tab-turns').click();
-  assert.deepEqual(visible(), ['turns'], 'two panels visible, or none');
-  assert.equal(app.el('settings-tab-turns').getAttribute('aria-selected'), 'true');
-  assert.equal(app.el('settings-tab-agents').getAttribute('aria-selected'), 'false');
+  app.el('settings-tab-behavior').click();
+  assert.deepEqual(visible(), ['behavior'], 'two panels visible, or none');
+  assert.equal(app.el('settings-tab-behavior').getAttribute('aria-selected'), 'true');
+  assert.equal(app.el('settings-tab-tools').getAttribute('aria-selected'), 'false');
 
-  app.el('settings-tab-typography').click();
-  assert.deepEqual(visible(), ['typography']);
+  app.el('settings-tab-appearance').click();
+  assert.deepEqual(visible(), ['appearance']);
 });
 
 test('the choice of tab does not leak between openings', async () => {
@@ -127,9 +153,9 @@ test('the choice of tab does not leak between openings', async () => {
   app.el('settings-btn').click();
   await app.settle();
 
-  const visible = () => ['agents', 'turns', 'muse', 'updates', 'typography']
+  const visible = () => TABS
     .filter((n) => !app.el(`settings-panel-${n}`).hidden);
-  assert.deepEqual(visible(), ['agents'], 'the window reopened where it was left');
+  assert.deepEqual(visible(), ['tools'], 'the window reopened where it was left');
 });
 
 test('arrow keys move between tabs and carry the focus', async () => {
@@ -137,22 +163,22 @@ test('arrow keys move between tabs and carry the focus', async () => {
   app.el('settings-btn').click();
   await app.settle();
 
-  app.el('settings-tab-agents').focus();
-  app.el('settings-tab-agents').fire('keydown', { key: 'ArrowRight' });
-  assert.equal(app.document.activeElement, app.el('settings-tab-turns'), 'ArrowRight did not move focus');
-  assert.equal(app.el('settings-panel-turns').hidden, false, 'the focused tab did not show');
+  app.el('settings-tab-tools').focus();
+  app.el('settings-tab-tools').fire('keydown', { key: 'ArrowRight' });
+  assert.equal(app.document.activeElement, app.el('settings-tab-behavior'), 'ArrowRight did not move focus');
+  assert.equal(app.el('settings-panel-behavior').hidden, false, 'the focused tab did not show');
 
-  app.el('settings-tab-turns').fire('keydown', { key: 'ArrowLeft' });
-  assert.equal(app.document.activeElement, app.el('settings-tab-agents'), 'ArrowLeft did not move back');
+  app.el('settings-tab-behavior').fire('keydown', { key: 'ArrowLeft' });
+  assert.equal(app.document.activeElement, app.el('settings-tab-tools'), 'ArrowLeft did not move back');
 
   // Wrapping: left of the first tab is the last one.
-  app.el('settings-tab-agents').fire('keydown', { key: 'ArrowLeft' });
-  assert.equal(app.document.activeElement, app.el('settings-tab-typography'), 'tabs do not wrap');
+  app.el('settings-tab-tools').fire('keydown', { key: 'ArrowLeft' });
+  assert.equal(app.document.activeElement, app.el('settings-tab-updates'), 'tabs do not wrap');
 
-  app.el('settings-tab-typography').fire('keydown', { key: 'Home' });
-  assert.equal(app.document.activeElement, app.el('settings-tab-agents'), 'Home did not jump to the first tab');
-  app.el('settings-tab-agents').fire('keydown', { key: 'End' });
-  assert.equal(app.document.activeElement, app.el('settings-tab-typography'), 'End did not jump to the last tab');
+  app.el('settings-tab-updates').fire('keydown', { key: 'Home' });
+  assert.equal(app.document.activeElement, app.el('settings-tab-tools'), 'Home did not jump to the first tab');
+  app.el('settings-tab-tools').fire('keydown', { key: 'End' });
+  assert.equal(app.document.activeElement, app.el('settings-tab-updates'), 'End did not jump to the last tab');
 });
 
 test('tabs show a visible focus ring', () => {
@@ -168,7 +194,7 @@ test('Escape closes the settings window', async () => {
   await app.settle();
   assert.equal(app.settings.isOpen, true);
 
-  app.doc.fire('keydown', { key: 'Escape', target: app.el('settings-tab-agents') });
+  app.doc.fire('keydown', { key: 'Escape', target: app.el('settings-tab-tools') });
   assert.equal(app.settings.isOpen, false, 'Escape did not close the settings window');
 });
 
@@ -177,7 +203,7 @@ test('Escape with the settings window open still cancels nothing by itself', asy
   app.el('settings-btn').click();
   await app.settle();
 
-  app.doc.fire('keydown', { key: 'Escape', target: app.el('settings-tab-agents') });
+  app.doc.fire('keydown', { key: 'Escape', target: app.el('settings-tab-tools') });
   await app.settle();
   assert.equal(app.callsTo('POST', '/api/sessions/sess-1/cancel').length, 0,
     'closing the settings window called the daemon');
@@ -204,7 +230,7 @@ test('Escape closes the settings window and leaves a running turn alone', async 
   await app.settle();
   assert.equal(app.settings.isOpen, true, 'the settings window did not open');
 
-  app.doc.fire('keydown', { key: 'Escape', target: app.el('settings-tab-agents') });
+  app.doc.fire('keydown', { key: 'Escape', target: app.el('settings-tab-tools') });
   await app.settle();
 
   assert.equal(app.settings.isOpen, false, 'Escape left the settings window open');

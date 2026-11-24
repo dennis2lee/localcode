@@ -105,6 +105,12 @@ func TestEveryRouteThePageCallsWorksThroughTheWindowProxy(t *testing.T) {
 		{method: "GET", path: "/api/ssh", ok: only(200)},
 		{method: "DELETE", path: "/api/sessions/" + sid + "/ssh/t-nope", body: `{}`,
 			ok: only(404), note: "no such terminal"},
+		{method: "POST", path: "/api/settings/powershell", body: `{"enabled":false}`, ok: only(200)},
+		{method: "GET", path: "/api/powershell", ok: only(200)},
+		// 404 either way: no PowerShell here (macOS, Linux), or no such
+		// terminal (Windows).
+		{method: "DELETE", path: "/api/sessions/" + sid + "/powershell/t-nope", body: `{}`,
+			ok: only(404), note: "no such terminal, or no PowerShell"},
 		{method: "POST", path: "/api/settings/orchestrate", body: `{"enabled":false}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/settings/model-invocable", body: `{"enabled":false}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/settings/auto-delegate", body: `{"enabled":false}`, ok: only(200, 204)},

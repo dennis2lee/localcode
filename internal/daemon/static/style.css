@@ -924,13 +924,15 @@ main:has(> #browser-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #rig
   pointer-events: none;
 }
 .browser-empty[hidden] { display: none; }
-/* The SSH panel, in its own column after the browser panel. Its
-   terminal fills what the panel has below the strip and the status line,
-   so the panel is a column rather than a scrolling list. Like the browser
-   panel it gives way first in a narrow window (flex-shrink), down to
-   resize.js SSH_BOUNDS.min; when the browser and SSH panels together do
-   not fit, showing one hides the other (resize.js makeRoomFor). */
-#ssh-panel {
+/* The SSH panel, in its own column after the browser panel, and the
+   PowerShell panel after it: the same terminal (js/termpanel.js), so
+   every rule here is for both. Its terminal fills what the panel has
+   below the strip and the status line, so the panel is a column rather
+   than a scrolling list. Like the browser panel it gives way first in a
+   narrow window (flex-shrink), down to resize.js SSH_BOUNDS.min and
+   PS_BOUNDS.min; when the browser, SSH and PowerShell panels together do
+   not fit, showing one hides the others (resize.js makeRoomFor). */
+#ssh-panel, #ps-panel {
   width: 560px;
   min-width: 320px;
   flex-shrink: 100;
@@ -938,16 +940,18 @@ main:has(> #browser-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #rig
   flex-direction: column;
   overflow: hidden;
 }
-#ssh-panel[hidden], #resize-ssh[hidden] { display: none; }
+#ssh-panel[hidden], #resize-ssh[hidden], #ps-panel[hidden], #resize-ps[hidden] { display: none; }
 /* Its own display (a column) outranks aside.collapsed; collapsing it
    has to say so again. */
-#ssh-panel.collapsed { display: none; }
-#ssh-panel > .side-section { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 0; }
-main:has(> #ssh-panel:not([hidden]):not(.collapsed)) > #center { min-width: 280px; }
-main:has(> #ssh-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #right-panel) { flex-shrink: 1; min-width: 160px; }
-#toggle-ssh[hidden] { display: none; }
-/* Something in a hidden SSH panel wants you: a host key, a password. */
-#toggle-ssh.attention { color: var(--warn); }
+#ps-panel.collapsed, #ssh-panel.collapsed { display: none; }
+#ssh-panel > .side-section, #ps-panel > .side-section { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 0; }
+main:has(> #ssh-panel:not([hidden]):not(.collapsed)) > #center,
+main:has(> #ps-panel:not([hidden]):not(.collapsed)) > #center { min-width: 280px; }
+main:has(> #ssh-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #right-panel),
+main:has(> #ps-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #right-panel) { flex-shrink: 1; min-width: 160px; }
+#toggle-ssh[hidden], #toggle-ps[hidden] { display: none; }
+/* Something in a hidden terminal panel wants you: a host key, a password. */
+#toggle-ssh.attention, #toggle-ps.attention { color: var(--warn); }
 .ssh-tabs { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
 .ssh-tab-list { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
 .ssh-tab {
@@ -985,7 +989,7 @@ main:has(> #ssh-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #right-p
 .ssh-bar { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
 .ssh-bar[hidden] { display: none; }
 .ssh-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--t-ui); }
-#ssh-hold[aria-pressed="true"] { border-color: var(--warn); color: var(--warn); }
+#ssh-hold[aria-pressed="true"], #ps-hold[aria-pressed="true"] { border-color: var(--warn); color: var(--warn); }
 /* A question from localcode, not from the remote: drawn as the app's own
    dialog, so text a remote program prints cannot pass for one. */
 .ssh-question {
@@ -1118,7 +1122,7 @@ aside h2 {
   width: min(560px, calc(90vw / var(--zoom, 1)));
 }
 #schedule-modal h3, #debate-modal h3, #prompt-modal h3 { margin-top: 0; }
-#schedule-modal .field-label, #debate-modal .field-label, #settings-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: var(--t-ui); }
+#schedule-modal .field-label, #debate-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: var(--t-ui); }
 #schedule-modal input, #schedule-modal textarea, #debate-modal input, #debate-modal textarea, #prompt-modal input {
   width: 100%;
   background: var(--bg);
@@ -1941,9 +1945,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    see .comm-dot. */
 
 /* The settings window. Same box as the other modals; the additions are
-   the section heading and the per-field grouping, which exist so that
-   adding a setting later is adding a block rather than rebalancing a
-   layout. */
+   the group heading and the row, which exist so that adding a setting
+   later is adding a row rather than rebalancing a layout. */
 /* The scheduled-task details window is the Settings window's shape: the
    request was for "the window Settings opens in", and matching it here
    rather than restating it is what keeps the two from drifting. Its own
@@ -1996,17 +1999,150 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Two controls that belong together on one line — the update panel's
    check and install buttons. */
 #settings-modal .field-row { display: flex; gap: 8px; }
-/* A checkbox and its label on one line, the label wrapping under itself
-   rather than under the box. */
-#settings-modal .check-row { display: flex; align-items: flex-start; gap: 8px; }
-#settings-modal .check-row input[type="checkbox"] { margin-top: 3px; flex: 0 0 auto; }
+/* A note: what a switch cannot say for itself. Quieter than the line
+   that says what the switch reaches, and wrapped anywhere, since it can
+   hold a path. */
+#settings-modal .note {
+  margin: 4px 0 0;
+  color: var(--faint);
+  font-size: var(--t-fine);
+  overflow-wrap: anywhere;
+}
+/* A note with nothing to say takes no space. settings.js empties a note
+   rather than hiding it, so this one rule is what keeps an empty note
+   from leaving a gap under its switch. */
+#settings-modal .note:empty { display: none; }
 /* A note that has to be noticed rather than merely available. */
 #settings-modal .note.warn { color: var(--warn); }
+/* A group: a small heading, then one box of rows divided by a rule, so
+   the group reads as a list and not as separate sections. Square
+   corners: the box is not something you press. */
+#settings-modal h4.settings-group {
+  margin: 18px 0 6px;
+  color: var(--muted);
+  font-size: var(--t-cap);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+#settings-modal .group-note { margin: 0 0 8px; }
+#settings-modal .setting-list { border: 1px solid var(--border); }
+/* The rule between rows, drawn above every row that has a shown row
+   before it, so a hidden first row (the browser outside the desktop
+   window) leaves no rule at the top of the box. */
+#settings-modal .setting-list > :not([hidden]) ~ * { border-top: 1px solid var(--border); }
+/* One switch, one row: the text on the left, the switch on the right. */
+#settings-modal .setting-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 10px 12px;
+}
+#settings-modal .setting-text { flex: 1 1 auto; min-width: 0; }
+#settings-modal .setting-name {
+  display: block;
+  color: var(--text);
+  font-size: var(--t-ui);
+  font-weight: 600;
+  cursor: pointer;
+}
+#settings-modal .setting-desc {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: var(--t-fine);
+}
+/* The repeat guard's number, inline in its line. */
+#settings-modal .setting-number {
+  width: 4em;
+  padding: 1px 4px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  font: inherit;
+}
+#settings-modal .setting-number:disabled { opacity: 0.5; }
+/* Fixed detail about a switch, folded until asked for. */
+#settings-modal .setting-more { margin-top: 4px; color: var(--muted); font-size: var(--t-fine); }
+#settings-modal .setting-more summary { width: fit-content; cursor: pointer; }
+#settings-modal .setting-more summary:hover { color: var(--text); }
+#settings-modal .setting-more summary:focus-visible { outline: 2px solid var(--interactive); outline-offset: 1px; }
+#settings-modal .setting-more p { margin: 4px 0 0; overflow-wrap: anywhere; }
+#settings-modal #browser-import-btn { margin-top: 6px; }
+#settings-modal .ssh-live:empty { display: none; }
+/* The switch: the same checkbox, drawn as a track and a knob. Checked is
+   the second ink drawing it, an outline and a knob, never a filled track:
+   the palette's accent draws and does not flood. */
+#settings-modal .setting-switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 16px;
+  margin: 1px 0 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  cursor: pointer;
+}
+#settings-modal .setting-switch::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.12s ease;
+}
+#settings-modal .setting-switch:checked { border-color: var(--interactive); }
+#settings-modal .setting-switch:checked::before {
+  background: var(--interactive);
+  transform: translateX(14px);
+}
+#settings-modal .setting-switch:hover { border-color: var(--text); }
+#settings-modal .setting-switch:checked:hover { border-color: var(--interactive); }
+#settings-modal .setting-switch:focus-visible { outline: 2px solid var(--interactive); outline-offset: 2px; }
+#settings-modal .setting-switch:disabled { opacity: 0.5; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) {
+  #settings-modal .setting-switch::before { transition: none; }
+}
+/* A picker row on the Appearance tab: what it sets on the left, the
+   picker on the right, the same two columns in every row so the pickers
+   line up. One column where the window is too narrow for two. */
+#settings-modal .setting-grid { container-type: inline-size; }
+#settings-modal .setting-pick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px 16px;
+  align-items: start;
+  padding: 10px 12px;
+}
+#settings-modal .setting-pick .setting-name { cursor: default; }
+#settings-modal .setting-control { min-width: 0; }
+#settings-modal .setting-control select,
+#settings-modal .setting-control input[type="text"] {
+  padding: 4px 6px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  font: inherit;
+}
+@container (max-width: 380px) {
+  #settings-modal .setting-pick { grid-template-columns: minmax(0, 1fr); }
+}
+#settings-panel-appearance #typo-note { margin-top: 10px; }
+#settings-modal .close-row { margin-top: 16px; }
 /* The settings tabs: one row of plain buttons under the title, the
    current one marked with the select colour rather than a fill. No new
-   hue: the palette has already spent both of its accents. */
+   hue: the palette has already spent both of its accents. Wrapped onto a
+   second line rather than scrolled where the window is narrow. */
 #settings-modal .settings-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 4px;

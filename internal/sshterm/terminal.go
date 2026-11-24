@@ -16,6 +16,7 @@ import (
 	"time"
 
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -51,7 +52,7 @@ const (
 
 // Refusals of the model's actions, said to the model as they are.
 var (
-	ErrHeld         = errors.New("the person is holding this terminal (Hold in the SSH panel): its screen and input are theirs until they release it; ask them in the conversation, or wait")
+	ErrHeld         = errors.New("the person is holding this terminal (Hold in its panel): its screen and input are theirs until they release it; ask them in the conversation, or wait")
 	ErrPersonActive = errors.New("the person typed in this terminal in the last few seconds; wait for them, or ask them in the conversation")
 	ErrBusy         = errors.New("the shell has not reported the end of the last command: it is still running, or a nested shell (sudo -i, su, ssh, docker exec) is at its own prompt, which reports nothing. Use wait or read to see which; key ctrl+c stops a command; in a nested shell, use type with enter")
 	ErrLineNotEmpty = errors.New("the person has typed part of a command line in this terminal and not run it; ask them to finish or clear it")
@@ -269,6 +270,19 @@ type runWait struct {
 	held      bool   // the person held the terminal: what came is theirs
 	sentAt    uint64 // outputs when the command was typed
 	personGen uint64
+	// local is a run in a local terminal, whose output is read off the
+	// screen rather than from the stream (see localOutput), from the row
+	// after the command's echo. startAbs and startX are where the
+	// command was typed (startAbs counting every line the terminal has
+	// had), width its width in cells, cols the screen's.
+	local    bool
+	startAbs int
+	startX   int
+	width    int
+	cols     int
+	// prompt is the prompt the D mark said follows the command, "" when
+	// it said none.
+	prompt string
 }
 
 func newNonce() string {
@@ -537,7 +551,14 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 			if w != nil {
 				w.out.write(p[from:ev.end])
 				w.status, w.ended = ev.status, true
-				t.finishRun(w)
+				if w.local {
+					// Finished once the screen shows the prompt the mark
+					// names (promptDrawn): a pseudo console can send the
+					// mark ahead of the output before it.
+					w.prompt = ev.prompt
+				} else {
+					t.finishRun(w)
+				}
 			}
 			t.running = false
 			t.promptKnown = false
@@ -630,6 +651,9 @@ func (t *Terminal) settled() {
 	pos := t.emu.CursorPosition()
 	t.promptX, t.promptY, t.promptKnown = pos.X, pos.Y, true
 	t.promptLeft, t.promptRest, t.promptNext = t.aroundCursor()
+	if w := t.run; w != nil && w.local && w.ended && t.promptDrawn(w) {
+		t.finishRun(w)
+	}
 	t.notify()
 }
 
@@ -808,6 +832,12 @@ func (t *Terminal) Answer(id int, a Answer, fingerprint string) error {
 // connect makes the connection and starts the shell, in its own
 // goroutine: the terminal is in the panel from the start.
 func (t *Terminal) connect(ctx context.Context) {
+	if t.isLocal() {
+		if err := t.startLocal(ctx); err != nil {
+			t.end("could not start: " + err.Error())
+		}
+		return
+	}
 	if err := t.dialAndStart(ctx); err != nil {
 		t.end("could not connect: " + err.Error())
 		return
@@ -1558,13 +1588,20 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 	}
 	// History expansion is off in a shell with integration (integrate.go);
 	// in one without, the line is refused where the shell would expand it.
-	if !t.integrated {
+	// A local shell is a PowerShell, which has none.
+	if !t.integrated && !t.isLocal() {
 		if err := checkHistory(command); err != nil {
 			t.mu.Unlock()
 			return RunResult{}, err
 		}
 	}
 	w := &runWait{out: capture{max: captureLimit}, done: make(chan struct{}), personGen: t.personGen, sentAt: t.outputs}
+	if t.isLocal() {
+		pos := t.emu.CursorPosition()
+		w.local = true
+		w.startAbs, w.startX = t.absRow(pos.Y), pos.X
+		w.width, w.cols = max(1, ansi.StringWidth(command)), t.emu.Width()
+	}
 	t.run = w
 	integrated := t.integrated
 	t.modelTyped = false
@@ -1617,6 +1654,10 @@ wait:
 				// clock's resolution, or before the wait's clock starts.
 				spoke := t.outputs > w.sentAt
 				switch {
+				case w.local && w.ended && quiet >= 2*promptSettle && (t.promptDrawn(w) || time.Since(t.markAt) >= promptWait):
+					// The prompt was not taken as settled (somebody typed
+					// on it, or it looks like none): the screen is quiet.
+					t.finishRun(w)
 				case spoke && quiet > 700*time.Millisecond && askingSecret.MatchString(line):
 					res.Asking = true
 					t.finishRun(w)
@@ -1642,7 +1683,11 @@ wait:
 		t.mu.Unlock()
 		return RunResult{}, ErrHeld
 	}
-	res.Output = w.out.text(!w.started)
+	if w.local {
+		res.Output = t.localOutput(w)
+	} else {
+		res.Output = w.out.text(!w.started)
+	}
 	res.Status = w.status
 	res.Finished = w.ended
 	res.Alt = w.alt
@@ -1763,7 +1808,18 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 				return ErrTypeahead
 			}
 		}
-		t.typedAhead = true
+		// A key that signals the running command (Ctrl+C, Ctrl+\, Ctrl+Z)
+		// is no text typed ahead of the next prompt: the terminal takes it,
+		// and drops whatever was typed ahead before it. Counted as text, a
+		// Ctrl+C that stopped a command (what a run that timed out says to
+		// press) left the next run refused for a line nothing was on.
+		for _, ev := range evs {
+			if signalKey(ev) {
+				t.typedAhead = false
+			} else {
+				t.typedAhead = true
+			}
+		}
 	}
 	for _, ev := range evs {
 		t.sendKey(ev)
@@ -1836,6 +1892,19 @@ func endsLine(ev uv.KeyPressEvent) bool {
 		case 'j', 'm', 'o':
 			return true
 		}
+	}
+	return false
+}
+
+// signalKey is a key a terminal turns into a signal for the command in
+// the foreground, rather than into input: interrupt, quit, suspend.
+func signalKey(ev uv.KeyPressEvent) bool {
+	if ev.Mod != uv.ModCtrl {
+		return false
+	}
+	switch ev.Code {
+	case 'c', '\\', 'z':
+		return true
 	}
 	return false
 }

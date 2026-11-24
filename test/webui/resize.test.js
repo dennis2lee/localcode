@@ -407,3 +407,150 @@ test('a record that is not one starts the page all the same', async () => {
   const app = await loadWide({ localStorage: { 'localcode.panelViews': '[1,[2],["x"],["sess-1","ssh"],["sess-1",["ssh"]]]' } });
   assert.equal(rightOf(app), 'shown hidden shown');
 });
+
+// The PowerShell panel is a fourth panel right of the conversation, and
+// the third wide one: the browser, SSH and PowerShell panels each want
+// hundreds of pixels.
+const fourOf = (app) => ['browser-panel', 'ssh-panel', 'ps-panel', 'right-panel'].map((id) => (collapsed(app, id) ? 'hidden' : 'shown')).join(' ');
+const wideOf = (app) => ['browser', 'ssh', 'ps'].map((n) => (collapsed(app, `${n}-panel`) ? 'hidden' : 'shown')).join(' ');
+
+// The three wide panels drawn, as their settings would draw them, with
+// their handles.
+function showWide(app) {
+  for (const id of ['browser', 'ssh', 'ps']) {
+    app.el(`${id}-panel`).hidden = false;
+    app.el(`resize-${id}`).hidden = false;
+  }
+}
+
+test('each conversation keeps whether the PowerShell panel is shown', async () => {
+  const app = await loadWide();
+  open(app, 'sess-2');
+  app.el('toggle-ps').click();
+  assert.equal(fourOf(app), 'shown shown hidden shown');
+  assert.ok(views(app).find(([id]) => id === 'sess-2')[1].includes('powershell'));
+  assert.equal(JSON.parse(app.storage.get('localcode.panelWidths')).powershellCollapsed, true);
+
+  open(app, 'sess-1');
+  assert.equal(fourOf(app), 'shown shown shown shown', 'the first conversation came back with the second one\'s PowerShell panel');
+  assert.equal(app.el('toggle-ps').getAttribute('aria-expanded'), 'true');
+  assert.ok(!collapsed(app, 'resize-ps'), 'the handle stayed hidden');
+
+  open(app, 'sess-2');
+  assert.equal(fourOf(app), 'shown shown hidden shown');
+  assert.equal(app.el('toggle-ps').getAttribute('aria-expanded'), 'false');
+  assert.ok(collapsed(app, 'resize-ps'), 'a handle goes with its panel');
+
+  // And after a reload.
+  const reopened = await loadWide({ localStorage: Object.fromEntries(app.storage) });
+  open(reopened, 'sess-2');
+  assert.equal(fourOf(reopened), 'shown shown hidden shown');
+  open(reopened, 'sess-1');
+  assert.equal(fourOf(reopened), 'shown shown shown shown');
+});
+
+test('the PowerShell panel has its own width, its own bounds, and a default to go back to', async () => {
+  const app = await loadWide();
+  const { PS_BOUNDS } = app.internals;
+  showWide(app);
+  const panel = app.el('ps-panel');
+  panel.style.width = '500px';
+  drag(app, 'resize-ps', 900, 800);
+  assert.equal(panel.style.width, '600px');
+  assert.equal(JSON.parse(app.storage.get('localcode.panelWidths')).powershell, 600);
+  drag(app, 'resize-ps', 900, 5000);
+  assert.equal(panel.style.width, `${PS_BOUNDS.min}px`);
+  drag(app, 'resize-ps', 900, -5000);
+  assert.equal(panel.style.width, `${PS_BOUNDS.max}px`);
+  assert.ok(!app.el('ssh-panel').style.width, 'the SSH panel moved with it');
+
+  const reopened = await load({ localStorage: { 'localcode.panelWidths': JSON.stringify({ powershell: 700 }) } });
+  assert.equal(reopened.el('ps-panel').style.width, '700px');
+  reopened.el('resize-ps').fire('dblclick');
+  assert.equal(reopened.el('ps-panel').style.width, '');
+});
+
+// In a window that cannot hold every wide panel beside the side panels
+// and the transcript, the one just shown wins, and the others showing are
+// hidden one at a time, browser first, then SSH, then PowerShell, until
+// it fits. At their minimums with a handle each: the side panels and the
+// transcript 608 pixels, the browser panel 364, a terminal panel 324.
+test('in a narrow window the three wide panels take turns', async () => {
+  const cases = [
+    // [window width, shown before, the one shown now, what is shown after]
+    [1300, ['browser', 'ssh'], 'ps', 'hidden shown shown'],
+    [1000, ['browser', 'ssh'], 'ps', 'hidden hidden shown'],
+    [1300, ['ssh', 'ps'], 'browser', 'shown hidden shown'],
+    [1000, ['ssh', 'ps'], 'browser', 'shown hidden hidden'],
+    [1300, ['browser', 'ps'], 'ssh', 'hidden shown shown'],
+    [1000, ['browser', 'ps'], 'ssh', 'hidden shown hidden'],
+    [2000, ['browser', 'ssh'], 'ps', 'shown shown shown'],
+  ];
+  for (const [width, before, now, after] of cases) {
+    const what = `${width}px, ${before.join(' and ')} shown, then ${now}`;
+    const app = await loadWide();
+    showWide(app);
+    app.doc.body.style.width = `${width}px`;
+    // Hiding one leaves the two before: hiding never makes room.
+    app.el(`toggle-${now}`).click();
+    for (const n of ['browser', 'ssh', 'ps']) {
+      assert.equal(collapsed(app, `${n}-panel`), !before.includes(n), `${what}: set up`);
+    }
+    app.el(`toggle-${now}`).click();
+    assert.equal(wideOf(app), after, what);
+    for (const n of ['browser', 'ssh', 'ps']) {
+      assert.equal(app.el(`toggle-${n}`).getAttribute('aria-expanded'), String(!collapsed(app, `${n}-panel`)), `${what}: ${n}'s toggle says otherwise`);
+    }
+    // And what was hidden is the conversation's choice.
+    const hidden = views(app).find(([id]) => id === 'sess-1')[1];
+    for (const [n, name] of [['browser', 'browser'], ['ssh', 'ssh'], ['ps', 'powershell']]) {
+      assert.equal(hidden.includes(name), collapsed(app, `${n}-panel`), `${what}: ${name} in the conversation's record`);
+    }
+  }
+});
+
+test('a window too narrow for a conversation\'s wide panels keeps the terminals, PowerShell first', async () => {
+  for (const [width, after] of [[1300, 'hidden shown shown'], [1000, 'hidden hidden shown'], [2000, 'shown shown shown']]) {
+    const app = await loadWide();
+    open(app, 'sess-2');
+    open(app, 'sess-1');
+    app.doc.body.style.width = `${width}px`;
+    showWide(app);
+    open(app, 'sess-2');
+    assert.equal(wideOf(app), after, `${width}px`);
+  }
+  // Without the PowerShell panel the SSH panel is kept, as before.
+  const app = await loadWide();
+  open(app, 'sess-2');
+  app.el('toggle-ps').click();
+  open(app, 'sess-1');
+  app.doc.body.style.width = '1100px';
+  showWide(app);
+  open(app, 'sess-2');
+  assert.equal(fourOf(app), 'hidden shown hidden shown');
+});
+
+test('a terminal panel\'s drag can take the other wide panels\' room, and the browser panel\'s cannot', async () => {
+  const app = await load();
+  showWide(app);
+  app.el('center').style.width = '280px';
+  app.el('browser-panel').style.width = '400px';
+  app.el('ssh-panel').style.width = '400px';
+  app.el('ps-panel').style.width = '520px';
+  // The browser panel has 40 pixels above its minimum, the PowerShell
+  // panel 200: the SSH panel can take 240.
+  drag(app, 'resize-ssh', 1000, 0);
+  assert.equal(app.el('ssh-panel').style.width, '640px');
+  // And the PowerShell panel what the browser and SSH panels have.
+  app.el('ssh-panel').style.width = '400px';
+  drag(app, 'resize-ps', 1000, 0);
+  assert.equal(app.el('ps-panel').style.width, `${520 + 40 + 80}px`);
+  // The browser panel's drag gets only the transcript's room.
+  drag(app, 'resize-browser', 1000, 0);
+  assert.equal(app.el('browser-panel').style.width, '400px');
+  // A side panel can take what each wide panel has above its minimum.
+  app.el('ps-panel').style.width = '400px';
+  app.el('right-panel').style.width = '200px';
+  drag(app, 'resize-right', 1000, 0);
+  assert.equal(app.el('right-panel').style.width, `${200 + 40 + 80 + 80}px`);
+});

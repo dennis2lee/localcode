@@ -20,7 +20,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { load } = require('./harness');
+const { load, defaultRoutes } = require('./harness');
 
 const STATIC_DIR = path.join(__dirname, '..', '..', 'internal', 'daemon', 'static');
 
@@ -39,6 +39,8 @@ const MOVED = {
   smart_agent: true,
   browser: true,
   ssh: true,
+  powershell: true,
+  powershell_available: true,
   orchestrate: true,
   model_invocable: true,
   repeat_limit: 7,
@@ -52,6 +54,7 @@ const DAEMON_CONTROLS = [
   { id: 'smart-agent-checkbox', read: (el) => el.checked, start: false, moved: true },
   { id: 'browser-checkbox', read: (el) => el.checked, start: false, moved: true },
   { id: 'ssh-checkbox', read: (el) => el.checked, start: false, moved: true },
+  { id: 'powershell-checkbox', read: (el) => el.checked, start: false, moved: true },
   { id: 'orchestrate-checkbox', read: (el) => el.checked, start: false, moved: true },
   { id: 'model-invocable-checkbox', read: (el) => el.checked, start: false, moved: true },
   { id: 'repeat-limit-checkbox', read: (el) => el.checked, start: false, moved: true },
@@ -93,7 +96,7 @@ test('every control the daemon holds shows its value when the window opens on a 
 test('and shows the other value when the daemon holds that', async () => {
   // The opposite of MOVED for every one of them, so a control stuck on
   // either value fails one of the two tests.
-  const back = { ...MOVED, smart_agent: false, browser: false, ssh: false, orchestrate: false, model_invocable: false, repeat_limit: 0, keep_going: true, fold_thinking: true };
+  const back = { ...MOVED, smart_agent: false, browser: false, ssh: false, powershell: false, orchestrate: false, model_invocable: false, repeat_limit: 0, keep_going: true, fold_thinking: true };
   const app = await load({ globals: { lcGUI: true }, routes: { 'GET /api/settings': back } });
   await open(app);
   for (const c of DAEMON_CONTROLS) {
@@ -108,7 +111,7 @@ test('every control the page keeps for itself shows its value when the window op
   for (const c of PAGE_CONTROLS) stored[c.key] = c.stored;
   const app = await load({ localStorage: stored });
   await open(app);
-  app.el('settings-tab-typography').click();
+  app.el('settings-tab-appearance').click();
   for (const c of PAGE_CONTROLS) {
     assert.equal(app.el(c.id).value, c.shows, `${c.id} does not show what was stored under ${c.key}`);
   }
@@ -117,7 +120,7 @@ test('every control the page keeps for itself shows its value when the window op
 test('a font named by hand is shown again as the name that was typed', async () => {
   const app = await load({ localStorage: { 'localcode.face.doc': '"IBM Plex Serif", Charter, "Sitka Text", "Iowan Old Style", "Bitstream Charter", Cambria, Georgia, serif' } });
   await open(app);
-  app.el('settings-tab-typography').click();
+  app.el('settings-tab-appearance').click();
   assert.equal(app.el('typo-doc-custom').hidden, false, 'the field for a typed name is hidden');
   assert.equal(app.el('typo-doc-custom').value, 'IBM Plex Serif');
 });
@@ -217,7 +220,7 @@ test('a warning that a switch was not saved stays through other redraws, until i
   assert.equal(warn.hidden, true);
 });
 
-test('each of the seven switches that answer with whether they were saved keeps its own warning', async () => {
+test('each of the eight switches that answer with whether they were saved keeps its own warning', async () => {
   // Each with its own reason, and one of them saved, so a warning kept
   // under the wrong switch shows.
   const reply = (key, error, field = 'enabled') => (body) => (error
@@ -226,9 +229,12 @@ test('each of the seven switches that answer with whether they were saved keeps 
   const app = await load({
     globals: { lcGUI: true },
     routes: {
+      // On Windows, where the PowerShell row is shown.
+      'GET /api/settings': { ...defaultRoutes()['GET /api/settings'], powershell_available: true },
       'POST /api/settings/smart-agent': reply('smart_agent', 'reason one'),
       'POST /api/settings/browser': reply('browser', 'reason two'),
       'POST /api/settings/ssh': reply('ssh', 'reason three'),
+      'POST /api/settings/powershell': reply('powershell', 'reason eight'),
       'POST /api/settings/orchestrate': reply('orchestrate', ''),
       'POST /api/settings/model-invocable': reply('model_invocable', 'reason five'),
       'POST /api/settings/keep-going': reply('keep_going', 'reason six'),
@@ -240,6 +246,7 @@ test('each of the seven switches that answer with whether they were saved keeps 
     ['smart-agent-checkbox', 'smart-agent-warn', 'reason one'],
     ['browser-checkbox', 'browser-warn', 'reason two'],
     ['ssh-checkbox', 'ssh-warn', 'reason three'],
+    ['powershell-checkbox', 'powershell-warn', 'reason eight'],
     ['orchestrate-checkbox', 'orchestrate-warn', ''],
     ['model-invocable-checkbox', 'model-invocable-warn', 'reason five'],
     ['keep-going-checkbox', 'keep-going-warn', 'reason six'],
@@ -260,7 +267,7 @@ test('each of the seven switches that answer with whether they were saved keeps 
   // The same values, and the reasoning switch moved, which shows the
   // announcement was read and the window drawn from it.
   assert.equal(app.el('fold-thinking-checkbox').checked, true);
-  announce(app, { smart_agent: true, ssh: true, browser: true, orchestrate: true, model_invocable: true, keep_going: false, repeat_limit: 3, fold_thinking: false });
+  announce(app, { smart_agent: true, ssh: true, powershell: true, browser: true, orchestrate: true, model_invocable: true, keep_going: false, repeat_limit: 3, fold_thinking: false });
   await app.settle();
   assert.equal(app.el('fold-thinking-checkbox').checked, false, 'the announcement did not reach the settings window');
   for (const [, warnId, reason] of switches) {
