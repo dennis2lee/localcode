@@ -209,6 +209,18 @@ type Config struct {
 	// and "/ssh on|off". See internal/sshterm.
 	SSH *bool `json:"ssh,omitempty"`
 
+	// PowerShell gives the model PowerShell terminals on this computer to
+	// work in, shown in the PowerShell panel, where the person can watch
+	// and type too. Windows only, and off unless set; toggled from the
+	// settings window and "/powershell on|off". See internal/sshterm's
+	// local.go.
+	PowerShell *bool `json:"powershell,omitempty"`
+
+	// PowerShellPath is the shell the PowerShell panel starts:
+	// powershell.exe (Windows PowerShell, the default), pwsh.exe
+	// (PowerShell 7), or a full path to either.
+	PowerShellPath string `json:"powershell_path,omitempty"`
+
 	// Orchestrate turns on the Orchestrate tool: a plan of delegated
 	// stages, authored by filling in that tool's input schema and run by a
 	// Go loop rather than by the model deciding one step at a time. See

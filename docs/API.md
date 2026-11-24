@@ -157,6 +157,8 @@ re-reads this endpoint on load.
 | `POST /api/settings/browser` | `{"enabled"}`; off also quits the browser | `200 {"browser", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/ssh` | `{"enabled"}`; off also closes every SSH connection | `200 {"ssh", "applied": true, "persisted", "error"?}` | `400` bad body (text error); `403` refused by the SSH request guard (see SSH below) |
 | `GET /api/ssh` | nothing | `200 [{"session", "title", "id", "target", "state"}]`: every SSH connection open now, in any conversation | `403` refused by the SSH request guard (see SSH below) |
+| `POST /api/settings/powershell` | `{"enabled"}`; off also closes every PowerShell terminal. Saved where there is no PowerShell (anywhere but Windows) too | `200 {"powershell", "applied": true, "persisted", "error"?}` | `400` bad body (text error); `403` refused by the SSH request guard (see SSH below) |
+| `GET /api/powershell` | nothing | `200 [{"session", "title", "id", "target", "state"}]`: every PowerShell terminal open now, in any conversation | `403` refused by the SSH request guard (see SSH below); `404` no PowerShell (anywhere but Windows) |
 | `POST /api/browser/import` | nothing | `200 {"from", "profile", "skipped"}`: copies the person's Chrome or Edge profile in again and restarts the browser, closing every tab | `404` no browser in this daemon; `409` the browser setting is off; `400` no profile to copy |
 | `POST /api/settings/orchestrate` | `{"enabled"}` | `200 {"orchestrate", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/model-invocable` | `{"enabled"}` | `200 {"model_invocable", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
@@ -341,6 +343,36 @@ A terminal's `Info` is `{"id", "epoch", "spec", "target"?, "state":
 | `POST /api/sessions/{id}/ssh/{term}/answer` | `{"question", "accept", "values"?, "fingerprint"?}`: `values` for a password, a passphrase or prompts, one per prompt; `fingerprint`, the one the question showed, to accept a host key | `204` | `403`; `409` the question is no longer asked, the fingerprint does not match, or the wrong number of values |
 | `POST /api/sessions/{id}/ssh/{term}/reconnect` | `{}` | `200 {"terminal"}`: a new connection to the same place under the same id and a new `epoch` | `403`; `409` the terminal is still connected, or the setting is off |
 | `DELETE /api/sessions/{id}/ssh/{term}` | `{}` | `204`: the connection is closed and the terminal removed | `403`; `404` |
+
+### PowerShell (per session)
+
+The PowerShell panel, on Windows. Its terminals are the SSH panel's, each
+a PowerShell on this computer under a pseudo console instead of a
+connection, so its routes are the SSH routes above under
+`/api/sessions/{id}/powershell`, with the same request guard, the same
+`Info` and the same answers, except:
+
+* `open` takes the place of `connect`: it takes `{}` and starts a
+  PowerShell (`powershell.exe`, or `powershell_path`) in the
+  conversation's working directory.
+* There is no `answer`: a PowerShell terminal asks the person nothing
+  through the panel. A program's own question is on its screen.
+* Every route answers `404` on a daemon with no PowerShell (anywhere but
+  Windows), and `open`, input and reconnect answer `409` while the
+  powershell setting is off.
+* `Info.shell` is `powershell` or `pwsh`. `Info.target` is empty and
+  `spec` is `PowerShell`.
+
+| Method and path | Takes | Answers | Errors |
+|---|---|---|---|
+| `GET /api/sessions/{id}/powershell` | nothing | as `GET /api/sessions/{id}/ssh` | `403`; `404` |
+| `GET /api/sessions/{id}/powershell/stream` | as the SSH stream | as the SSH stream | `403`; `404` |
+| `POST /api/sessions/{id}/powershell/open` | `{}` | `200 {"terminal"}`: the terminal, starting | `400` the limit; `403`; `404`; `409` the setting is off |
+| `POST /api/sessions/{id}/powershell/{term}/input` | as the SSH route | `204` | `403`; `404`; `409` |
+| `POST /api/sessions/{id}/powershell/{term}/size` | as the SSH route | `204` | `400`; `403`; `404` |
+| `POST /api/sessions/{id}/powershell/{term}/hold` | `{"on"}` | `204` | `403`; `404` |
+| `POST /api/sessions/{id}/powershell/{term}/reconnect` | `{}` | `200 {"terminal"}`: a new PowerShell under the same id and a new `epoch` | `403`; `404`; `409` still running, or the setting is off |
+| `DELETE /api/sessions/{id}/powershell/{term}` | `{}` | `204`: the shell is ended and the terminal removed | `403`; `404` |
 
 ### Effort and model (per session)
 

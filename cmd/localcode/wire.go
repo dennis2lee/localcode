@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"localcode/internal/agent"
 	"localcode/internal/browser"
@@ -396,6 +397,26 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	loop.SSH = sshManager
 	loop.CloseSSH = func() { sshManager.CloseAll("SSH was turned off", false) }
 
+	// PowerShell on this computer, shown in the PowerShell panel. The
+	// same terminals as SSH's, started under a pseudo console instead of
+	// over a connection, so Windows only: elsewhere there is no manager,
+	// the tool is never offered and the panel is never drawn. Each starts
+	// in its conversation's working directory.
+	registry.Register(agent.NewPowerShellTool(loop))
+	if runtime.GOOS == "windows" {
+		psPath := cfg.PowerShellPath
+		if psPath == "" {
+			psPath = "powershell.exe"
+		}
+		psManager := sshterm.NewManager(sshterm.Options{
+			Local:    &sshterm.LocalShell{Path: psPath, Dir: loop.SessionDir},
+			OnAsking: d.AnnounceActivity,
+		})
+		d.PowerShell = psManager
+		loop.PowerShell = psManager
+		loop.ClosePowerShell = func() { psManager.CloseAll("PowerShell was turned off", false) }
+	}
+
 	// "/update": the same install the settings window's button performs,
 	// reached from the prompt box so the TUI has it too. The daemon owns
 	// it because everything the refusal is made of is the daemon's — which
@@ -529,6 +550,9 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		browserManager.Close()
 		// SSH connections end with the daemon that holds them.
 		sshManager.CloseAll("localcode stopped", true)
+		if loop.PowerShell != nil {
+			loop.PowerShell.CloseAll("localcode stopped", true)
+		}
 		closeMCPServers()
 		if loop.Trace != nil {
 			loop.Trace.Close()

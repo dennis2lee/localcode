@@ -423,6 +423,8 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `browser` | Gives the model a web browser, shown in the desktop window's browser panel. Off unless set to true; also `/browser` and the settings window. See [Browser](#browser). |
 | `ssh` | Gives the model SSH connections to work in, shown in the SSH panel of the desktop window and the Web UI. Off unless set to true; also `/ssh` and the settings window. See [SSH](#ssh). |
 | `browser_path` | The browser to run instead of the Chrome or Edge found in the usual places. |
+| `powershell` | Gives the model PowerShell terminals on this computer to work in, shown in the PowerShell panel. Windows only. Off unless set to true; also `/powershell` and the settings window. See [PowerShell](#powershell). |
+| `powershell_path` | The shell the PowerShell panel starts: `powershell.exe` (Windows PowerShell, the default), `pwsh.exe` (PowerShell 7), or a full path to either. |
 | `model_invocable` | The switch for whether the model may run commands itself. Off unless set; `/model-invocable` toggles it. On opens nothing by itself: each built-in must be named in `model_commands`, and each custom command or skill must opt in from its own frontmatter. See [/model-invocable](#model-invocable). |
 | `model_commands` | Which built-in commands the model may run, each with its leading slash. Empty, the default, means none. Inert while `model_invocable` is off. |
 | `auto_compact_enabled` | Automatic compaction past the threshold. Opencode spelling `compaction.auto` is also accepted. On unless set to false; `/auto-compact` toggles it. |
@@ -431,13 +433,13 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `memory_retire_days` | How many days a project or reference note may go unused, alongside 30 conversations, before it moves to the memory archive. `90` unless set; `0` turns retirement off. See [Auto memory](#auto-memory). |
 | `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
 | `show_thinking` | Whether the clients paint the model's reasoning while it arrives. On unless set to false; `/thinking` toggles it. Daemon-wide, like `show_tps`. The Web UI and the desktop window paint every model's reasoning. The TUI paints only a Muse model's reasoning block (see `fold_thinking`) and otherwise shows a `thinking` state on the busy line. This changes nothing about what the model does, and nothing about what is kept: a Muse model's reasoning blocks are logged while `fold_thinking` is on, whatever this switch says, and other models' reasoning is never logged. See [What the transcript shows](#what-the-transcript-shows). |
-| `fold_thinking` | Whether a Muse model's reasoning is drawn as a block of its own: labelled Thinking with its running time, and folded to one line when the answer starts. On unless set to false; `/fold-thinking` and the settings Muse tab toggle it. Daemon-wide. Applies only to model IDs containing `muse`; other models keep the plain drawing. `show_thinking` off hides the block too. While it is on, each block is also written to the session log, so a reload draws it again. See [What the transcript shows](#what-the-transcript-shows). |
+| `fold_thinking` | Whether a Muse model's reasoning is drawn as a block of its own: labelled Thinking with its running time, and folded to one line when the answer starts. On unless set to false; `/fold-thinking` and the Reasoning switch on the settings Behavior tab toggle it. Daemon-wide. Applies only to model IDs containing `muse`; other models keep the plain drawing. `show_thinking` off hides the block too. While it is on, each block is also written to the session log, so a reload draws it again. See [What the transcript shows](#what-the-transcript-shows). |
 | `show_timestamps` | Whether a time is shown beside each turn boundary in the Web UI and the desktop window. Off unless set to true; `/timestamps` toggles it. Daemon-wide. The TUI shows no turn-boundary times. See [What the transcript shows](#what-the-transcript-shows). |
 | `mouse` | Whether the TUI takes the mouse for a clickable scrollbar beside the transcript. Off unless set to true. Read from the config on the machine running the TUI, never from the daemon. See [Screen controls](#screen-controls). |
 | `trace_max_age_days` | How long a day of the Smart Agent turn log is kept. 30 when unset; zero or below means that default, not "keep forever". See [What it did](#the-turn-log). |
 | `trace_max_total_mb` | Optional cap on the trace directory, and separately on the prompt-manifest directory beside it. When set, each is bounded on its own: the oldest files go until it fits, and today's file is never removed. See [What it did](#the-turn-log). |
 | `default_profile` | The profile a conversation runs on unless its agent names another. A config needs it unless every agent it uses names a profile. `general-purpose` with no entry under `agents` names none. |
-| `keep_going` | The carry-on nudge for Muse models. Daemon-wide, on unless set to false; `/keep-going` and the settings Muse tab toggle it. The per-profile `keep_going` below is a different, numeric setting. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
+| `keep_going` | The carry-on nudge for Muse models. Daemon-wide, on unless set to false; `/keep-going` and the Keep going switch on the settings Behavior tab toggle it. The per-profile `keep_going` below is a different, numeric setting. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
 | `repeat_limit` | How many steps in a row may only repeat earlier tool calls before the turn ends. Daemon-wide; unset or `0` is off, the default, and a number arms the guard at that ceiling, at most 50. `/repeat-limit` changes it. See [A model that repeats itself](#a-model-that-repeats-itself). |
 | `orchestrate` | Delegation: the six built-in specialists, `Task`, `TaskBackground`, `TaskCollect`, the delegation prompt and the `Orchestrate` tool. Daemon-wide, off unless set. Off means the model delegates to no agent, including agents declared under `agents`. `/orchestrate` toggles it. See [Orchestration](#orchestration). |
 | `auto_update` | Whether a newer release is installed at startup. Daemon-wide, on unless set to false; a project config.json can turn it off for that checkout alone. See [At startup](#at-startup). |
@@ -474,7 +476,7 @@ Each question and carry-on is a user message marked `auto`, hidden by both clien
 
 | Control | Scope | Behavior |
 |---|---|---|
-| `/keep-going` or GUI checkbox | Daemon | Enables or disables the feature and saves the value to config.json |
+| `/keep-going` or the Keep going switch in Settings | Daemon | Enables or disables the feature and saves the value to config.json |
 | Profile `keep_going` | Profile | Maximum carry-ons per turn (answers of MORE that are acted on) |
 | Unset or `0` on a Muse model | Profile | Default budget of 3 |
 | `-1` on a Muse model | Profile | Disabled for that profile |
@@ -1762,13 +1764,14 @@ The following daemon commands work in both clients.
 | `/smart-agent` | `smart_agent` | The work-order prompt, the enhanced tools (paged reads, `update_plan`, `ask_user`), the fallback chain, the trace, the prompt cache markers and the guards. It delegates nothing. See [Smart Agent](#smart-agent). |
 | `/browser` | `browser` | The web browser shown in the desktop window's browser panel, for the model to work in. See [Browser](#browser). |
 | `/ssh` | `ssh` | SSH connections for the model to work in, shown in the SSH panel. Off closes every connection. See [SSH](#ssh). |
+| `/powershell` | `powershell` | PowerShell terminals on this computer for the model to work in, shown in the PowerShell panel. Windows only. Off closes every PowerShell terminal. See [PowerShell](#powershell). |
 | `/orchestrate` | `orchestrate` | Delegation: the specialist roster, `Task`, the background pair, the delegation policy and the Orchestrate tool. Reports the agents it can delegate to, or says why there are none. See [Orchestration](#orchestration). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
-| `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also on the settings Muse tab. |
-| `/fold-thinking` | `fold_thinking` | A Muse model's reasoning as a labelled block that folds when the answer starts. See [What the transcript shows](#what-the-transcript-shows). Also on the settings Muse tab. |
+| `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also on the settings Behavior tab. |
+| `/fold-thinking` | `fold_thinking` | A Muse model's reasoning as a labelled block that folds when the answer starts. See [What the transcript shows](#what-the-transcript-shows). Also on the settings Behavior tab. |
 | `/thinking` | `show_thinking` | Whether the clients paint the model's reasoning. See [What the transcript shows](#what-the-transcript-shows). |
 | `/timestamps` | `show_timestamps` | A time beside each turn boundary in the Web UI. See [What the transcript shows](#what-the-transcript-shows). |
-| `/repeat-limit` | `repeat_limit` | How many steps that only repeat earlier tool calls end a turn. Off by default. See [A model that repeats itself](#a-model-that-repeats-itself). Also on the settings Turns tab. |
+| `/repeat-limit` | `repeat_limit` | How many steps that only repeat earlier tool calls end a turn. Off by default. See [A model that repeats itself](#a-model-that-repeats-itself). Also on the settings Behavior tab. |
 | `/auto-compact` | `auto_compact_enabled`, `auto_compact_percent` | Auto-compaction. A number sets the threshold and turns it on: `/auto-compact 70` compacts past 70% of the context window. The default threshold is 50%. |
 | `/model-invocable` | `model_invocable` | Whether the model may run commands itself. Off unless set; each command still needs its own opt-in. See [/model-invocable](#model-invocable). |
 
@@ -1831,6 +1834,7 @@ These commands are recognized by the client or the daemon rather than sent to th
 | `/auto-delegate` | Toggles auto-delegation the same way. |
 | `/browser` | Toggles the browser the same way. Off closes the browser and every tab in it. See [Browser](#browser). |
 | `/ssh` | Toggles SSH the same way. Off closes every SSH connection. See [SSH](#ssh). |
+| `/powershell` | Toggles PowerShell the same way. Off closes every PowerShell terminal. Windows only. See [PowerShell](#powershell). |
 | `/permission-skip-all` | Allows every prompt in this conversation, the workspace boundary included. |
 | `/permission-skip-tools` | Allows every tool prompt in this conversation, and still asks before a path leaves the workspace. |
 | `/read-outside` | Reading outside the workspace: `on`, `off`, or `mem-clear` to forget the directories approved at a prompt. See [Leaving the project](#leaving-the-project). |
@@ -2225,23 +2229,37 @@ One line directly below the input box:
 
 ### Settings
 
-The **settings** pill opens the settings window, grouped into one tab per subject. Tabs are keyboard controls: arrows move between them, Home and End jump, Escape closes the window.
+The **settings** pill opens the settings window. It has four tabs, Tools, Behavior, Appearance and Updates, and always opens on Tools. Tabs are keyboard controls: arrows move between them, Home and End jump, Escape closes the window.
 
-| Tab | What is in it |
+| Tab | Group | What is in it |
+|---|---|---|
+| Tools | Panels beside the conversation | The [Browser](#browser), shown only in the desktop window, [SSH](#ssh), and [PowerShell](#powershell), shown only on Windows |
+| Tools | Other agents and commands | [Orchestration](#orchestration), and whether the model may run opted-in commands itself |
+| Behavior | Every model | [Smart Agent](#smart-agent), and the repeat guard that ends a turn which only repeats earlier tool calls |
+| Behavior | Muse models only | The reasoning block (`fold_thinking`) and the carry-on nudge (`keep_going`). A note under the group heading names the profiles in this config that run a Muse model, or says that none do. |
+| Appearance | Faces | The reading, interface and monospace faces. See below |
+| Appearance | Text size | The overall text size and the reading, interface and code trims. See below |
+| Updates | | Check for updates, and download and install. See [Checking for updates](#checking-for-updates) |
+
+Each switch is one row: its name, one line saying what it reaches, and the switch on the right. A note appears under the line only when it says something the switch cannot. The switch alone shows whether it is on.
+
+| Switch | Note |
 |---|---|
-| Agents | [Smart Agent](#smart-agent), [Orchestration](#orchestration), and whether the model may run opted-in commands itself |
-| Turns | The repeat guard that ends a turn which only repeats earlier tool calls |
-| Muse | The switches that apply only to Muse models: the reasoning block (`fold_thinking`) and the carry-on nudge (`keep_going`). A note names the profiles in this config that run a Muse model, or says that none do. |
-| Updates | Check for updates, and download and install. See [Checking for updates](#checking-for-updates) |
-| Typography | The reading, interface and monospace faces, and the text sizes. See below |
+| Browser | While on: where the profile copy is, and when it was last copied |
+| Orchestration | While on: the specialists, the cost in model calls, and the two ceilings (8 stages, 32 agent turns) |
+| Commands the model may run | While on: the commands it may run, or where to opt one in when none is |
+| Smart Agent | While on: where the turn log goes |
+| Reasoning | While `show_thinking` is off: that reasoning is not drawn at all |
+
+**How it asks**, under Browser and under SSH, opens to say what each asks before it acts.
 
 Every setting in this window is still there after LocalCode is closed and opened again. Where each is kept:
 
 | Setting | Kept in |
 |---|---|
-| Agents, Turns and Muse tabs, and the permission settings | `~/.localcode/config.json` (or the file given with `--config`), written when the switch moves. A file with comments keeps them: see [Comments](#comments-the-file-is-jsonc). |
-| Typography, in the desktop window | `~/.localcode/window-state.json`, written when the choice is made |
-| Typography, in a browser tab | That browser's storage for the daemon's address |
+| Tools and Behavior tabs, and the permission settings | `~/.localcode/config.json` (or the file given with `--config`), written when the switch moves. A file with comments keeps them: see [Comments](#comments-the-file-is-jsonc). |
+| Appearance, in the desktop window | `~/.localcode/window-state.json`, written when the choice is made |
+| Appearance, in a browser tab | That browser's storage for the daemon's address |
 
 The desktop window keeps these in the same file, for the same reason: the [zoom](#zoom-and-what-a-reload-keeps), the panel widths, which panels each conversation shows, which groups are folded, and whether the archive is open. The window's own browser storage is tied to the port the window is on, and the window does not always get its last port back: another program may hold it, Windows may have reserved it at boot (Hyper-V, WSL and Docker reserve ranges of ports), or a second window may be open. Before v0.179.0 each of those brought these settings back at their defaults. The first start of v0.179.0 or later copies what the window's storage holds into the file.
 
@@ -2259,7 +2277,7 @@ Limits of the desktop window's file:
 * A change is written as it is made, one request at a time. A second change made while the first is still being written, with the window ended in that same moment, is not written.
 * The window's page asks for the file when it starts, up to three times. With no answer, or with a file that is there and cannot be read, the page writes nothing to the file while it stays open, and the settings changed in it are not there the next time. A file that cannot be read is never replaced.
 
-A switch on the Agents tab, the repeat guard on the Turns tab, or keep going on the Muse tab that the daemon applied and could not write to `config.json` says so under the switch, and the setting lasts only until the daemon restarts. The switch shows the applied value. The warning stays until that switch is saved from this window, or moved from another window or a prompt.
+A switch on the Tools tab, or Smart Agent, the repeat guard or keep going on the Behavior tab, that the daemon applied and could not write to `config.json` says so under the switch, and the setting lasts only until the daemon restarts. The switch shows the applied value. The warning stays until that switch is saved from this window, or moved from another window or a prompt.
 
 The auto-delegation panel and the rules in the permissions window say the same. The panel keeps one warning for the switch and one for the agent and patterns, because the two are written to `config.json` separately. The rules list names each rule that was added or removed and not saved, because rules are written one at a time: a later rule that is saved does not save an earlier one. A rule added and removed again without being saved is not named.
 
@@ -2267,7 +2285,7 @@ These warnings are kept by the page. A reload, or the desktop window opened agai
 
 Limit: the page takes a switch as moved from somewhere else when the daemon announces a value for it that the page does not hold, and clears the warning. It cannot tell the announcement of its own earlier change from one made elsewhere. When the announcement of one change reaches the page after the answer to the next change of the same switch, the warning about that next change is cleared, and the switch is then in force, not saved and not warned about. The announcement normally arrives before the answer it belongs to.
 
-Typography is per person, not per daemon. The faces and the size apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
+The Appearance tab is per person, not per daemon. The faces and the size apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
 
 Text size is the type only: one overall size from 87.5% to 140% of the nine-step scale, plus a trim per group over the same range. Reading trims the transcript, the model's questions to you, thinking and review blocks, and headings. Interface trims controls, panels, status, notes (except the model's questions), and the ids shown in those rows. Code trims code set in monospace. A trim reaches steps, not faces: an id set in monospace inside an interface row, like the session id, follows the interface trim. The trims compose with the overall size: each step is its pixel value times the overall size times its trim, so making everything bigger and then bringing the code down a notch is two choices. [Zoom](#zoom-and-what-a-reload-keeps) is separate: ctrl+wheel scales the whole page, spacing included. The two compose: zoom multiplies everything, text size multiplies only the type.
 
@@ -2357,6 +2375,7 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. One run at a time per directory, so a concurrent panel of reviewers does not start several copies of your test suite in one tree; a call that queued says so. |
 | `browser` | No | Work a web page in the browser shown in the desktop window's browser panel: open, read, screenshot, click, type, key, scroll. Offered only with the browser setting on and the conversation open in the desktop window. A deny rule matches the page's URL. See [Browser](#browser). |
 | `ssh` | Yes, inside the tool | Work on other machines over SSH, in terminals shown in the SSH panel: connect, run, type, key, read, wait, list, close. Offered with the ssh setting on, in a turn that is not a scheduled run. Asks under `ssh_connect`, `ssh` and `ssh_input`. See [SSH](#ssh). |
+| `powershell` | Yes, inside the tool | Work in PowerShell on this computer, in terminals shown in the PowerShell panel: open, run, type, key, read, wait, list, close. Windows only. Offered with the powershell setting on, in a turn that is not a scheduled run. Asks under `powershell` and `powershell_input`. See [PowerShell](#powershell). |
 | `session_read` | No | Read another conversation on this daemon: `mode=summary` for what it concluded and which files it touched, `mode=transcript` for its messages a page at a time. Not offered to a delegated sub agent. See [Referring to another conversation](#referring-to-another-conversation-with-name) |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server. Never in a turn `localcode run` builds itself, which connects no MCP servers; a `--session` turn routed to a running daemon has the daemon's. |
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only with [orchestration](#orchestration) on and 2 or more agents to delegate to. |
@@ -2458,7 +2477,7 @@ Orchestration is everything that hands work to another agent. It is disabled by 
 | Control | Location or effect |
 |---|---|
 | `/orchestrate on\|off` | Answered by the daemon, so both clients have it. Saved to config.json. |
-| Settings window | The Orchestration section, under Smart Agent. |
+| Settings window | The Orchestration switch on the Tools tab. |
 | `"orchestrate": true` | In config.json. |
 
 With it on:
@@ -2701,7 +2720,7 @@ Background tasks appear in the Web UI's right panel while they run, the same as 
 
 ### Smart Agent
 
-Smart Agent changes how one agent works: a work-order prompt, enhanced tools, fallback, tracing, cache markers, and credential-path checks. It delegates nothing: handing work to another agent is [Orchestration](#orchestration). It is disabled by default. Use the settings window, `/smart-agent on|off`, `/config smart_agent on|off`, or `"smart_agent": true`.
+Smart Agent changes how one agent works: a work-order prompt, enhanced tools, fallback, tracing, cache markers, and credential-path checks. It delegates nothing: handing work to another agent is [Orchestration](#orchestration). It is disabled by default. Use the Smart Agent switch on the settings window's Behavior tab, `/smart-agent on|off`, `/config smart_agent on|off`, or `"smart_agent": true`.
 
 Each admitted turn retains its initial Smart Agent setting:
 
@@ -2866,7 +2885,7 @@ The model can work a web page the way a person does, in a browser shown in the d
 
 | Item | Behavior |
 |---|---|
-| Turning it on | The settings window's Browser section, `/browser on`, or `"browser": true` in config.json. Off unless set. |
+| Turning it on | The Browser switch on the settings window's Tools tab, `/browser on`, or `"browser": true` in config.json. Off unless set. |
 | Where it works | The desktop window only. The model is offered the `browser` tool while the setting is on and the conversation is open in a desktop window. A Web UI in another browser, the TUI and `localcode run` never have it. |
 | Browser | Google Chrome, or Microsoft Edge when Chrome is not installed. `browser_path` names another one. It runs with no window of its own; the panel is its window. |
 | Profile | The first use copies your last used Chrome (or Edge) profile to `~/.localcode/browser`: cookies, saved passwords, site storage and preferences. History, extensions, caches, and autofill data (addresses and payment cards) are not copied. Page zoom is not kept: the copy's default zoom and each site's zoom are removed at every start, and every page is at 100%. "copy Chrome profile again" in the settings window copies it again for sites you signed in to since, and closes every tab. A file your running browser holds locked is skipped and named in the settings window; close that browser and copy again for it. With no profile to copy, the browser starts on an empty one, which keeps its passwords in the profile rather than in the system keychain. Sync is off: the model's browsing is not synced to a browser account the copy is signed in to. |
@@ -2912,7 +2931,7 @@ The model can open SSH connections and work in them, and you can work in the sam
 
 | Item | Behavior |
 |---|---|
-| Turning it on | The settings window's SSH section, `/ssh on`, or `"ssh": true` in config.json. Off unless set. Turning it off closes every connection. |
+| Turning it on | The SSH switch on the settings window's Tools tab, `/ssh on`, or `"ssh": true` in config.json. Off unless set. Turning it off closes every connection. |
 | Where it works | The panel is in the desktop window and in the Web UI. The model is offered the `ssh` tool while the setting is on, in any turn but a scheduled run (nobody would answer a host key or a password) and a delegated sub-agent's (its terminals would be in a session no panel shows). A turn started from the TUI has the tool; its questions are answered in the panel of a desktop window or Web UI. |
 | Lifetime | A connection ends when you close it, when the model closes one it opened, when the remote shell exits, when the server misses 3 keepalives (30 seconds apart, or `ServerAliveInterval` and `ServerAliveCountMax` from `~/.ssh/config`), when the conversation is archived or deleted, when the setting is turned off, or when localcode stops. Closing the desktop window stops localcode. `/update` and the settings window's Install button, with connections open, name them and update only when asked again within two minutes. A remote that sends output the terminal cannot draw ends that terminal, with the reason, and nothing else. Nothing else ends one: there is no idle timeout. Work that must outlive localcode belongs in `tmux` or `screen` on the remote. |
 | Limits | 8 open connections per conversation and 32 in all. An ended terminal stays in the panel with its last screen until it is closed; a conversation keeps at most 8, the oldest going first. |
@@ -2973,7 +2992,7 @@ The terminal takes the size of the smallest panel showing it, so no window cuts 
 | Key | Asked for | Matched against |
 |---|---|---|
 | `ssh_connect` | `connect` | The alias as written when it is not the host itself, the target as `user@host:port`, and each jump host: `prod-db deploy@10.0.0.5:22 via me@bastion:22`. Host names are in lower case, as OpenSSH lowers them: write these rules in lower case. "For this session" and "always" cover that subject exactly. The connection is made only to the route approved: when `~/.ssh/config` changes between the question and the dial, it is refused. |
-| `ssh` | `run` | The command, decided as a `bash` line is: each command of the line on its own, with "for this session" generalising to the program (`systemctl *`). The question names the host; a grant covers every host. An allow decided by splitting the line holds only when the terminal's shell is bash or zsh; otherwise it asks. |
+| `ssh` | `run` | The command, decided as a `bash` line is: each command of the line on its own, with "for this session" generalising to the program (`systemctl *`). The question names the host; a grant covers every host. An allow decided by splitting the line holds only when the terminal's shell is bash or zsh; otherwise it asks, and "for this session" covers another line only when it is made of letters, digits, spaces and ``-_./\:=,+~"'*?@``. |
 | `ssh_input` | `type` and `key` | `type <text>` or `key <keys>`. Asked every time: no "for this session". A rule still answers it. Each line `type` sends with Enter (in a nested shell or a program) is also checked against the deny rules for `ssh`. |
 
 A deny rule for `ssh_connect` also keeps the model off a terminal you opened to that host: every action on it is refused. `read`, `wait`, `list` and `close` ask nothing. `skip_permissions` and `/permission-skip-tools` turn these questions into allows, as they do for `bash`: a remote host is not a path, so the workspace boundary does not apply. A deny still denies.
@@ -3013,6 +3032,54 @@ What remote output can do is limited to the screen. A remote program's title is 
 * "Something waits for input" is read from the cursor's line. A running command whose output stops at a line ending like a prompt or a question takes a line from the model; if it does not read it, the shell runs it after the command ends.
 * The SSH panel answers a daemon reached by an address or `localhost`. Reached by another name (`http://devbox.local:4096`), the panel says it cannot reach its terminals; use the address.
 * The terminal is xterm-like. Mouse reporting is not supported.
+
+### PowerShell
+
+On Windows the model can open PowerShell terminals on this computer and work in them, and you can work in the same terminals. Each terminal is shown in the PowerShell panel, a column of its own beside the SSH panel, in the desktop window and in the Web UI. It is the SSH panel's terminal with a local shell in place of a connection: what [SSH](#ssh) says about taking over, Hold, the keys, the size, the questions and `run` holds here too, except as below.
+
+| Item | Behavior |
+|---|---|
+| Turning it on | The PowerShell switch on the settings window's Tools tab, `/powershell on`, or `"powershell": true` in config.json. Off unless set. Turning it off closes every PowerShell terminal. On macOS and Linux the switch is not shown and the setting does nothing. |
+| Where it works | Windows only. The panel is in the desktop window and in the Web UI. The model is offered the `powershell` tool while the setting is on, in any turn but a scheduled run and a delegated sub-agent's, as for `ssh`. |
+| The shell | `powershell.exe` (Windows PowerShell 5.1), or the program `powershell_path` names (`pwsh.exe` for PowerShell 7). It starts in the conversation's working directory, loads your profile, and has localcode's environment. It runs under a Windows pseudo console (ConPTY), with no window of its own. |
+| Lifetime | A terminal ends when you close it, when the model closes one it opened, when the shell exits (`exit`), when the conversation is archived or deleted, when the setting is turned off, or when localcode stops. `/update` and the Install button, with terminals open, name them and update only when asked again within two minutes, as for SSH connections. |
+| Limits | 8 open terminals per conversation and 32 in all, counted apart from SSH connections. An ended terminal stays in the panel with its last screen until it is closed. |
+| Opening one | `+` in the panel's tab strip, or the model's `open`. Opening asks nothing: every command typed into it does. |
+
+**Knowing when a command ends.** localcode starts the shell with a script (`-EncodedCommand`) that wraps your `prompt` function and PSReadLine's line reader, after your profile has run. Nothing is typed into the terminal. The wrapper prints an invisible mark before each prompt, carrying the exit status and the prompt's text, and one as each command starts, both with a number only this terminal knows. Your prompt is drawn as before.
+
+| Case | What `run` returns |
+|---|---|
+| A command that ends | Its output and its exit status: the program's own exit code when it set one (`$LASTEXITCODE` changed), 1 for a cmdlet or script that failed (`$?` false), and 0 otherwise. |
+| A shell that drew no mark within 20 seconds of starting (a profile that replaces `prompt` later, a program in `powershell_path` that is not PowerShell) | Returns when output has been quiet for 2 seconds, with no exit status, as for a shell other than bash or zsh over SSH. |
+| The timeout (120 seconds, at most 600) | What came so far. The command goes on running. Ctrl+C from `key` or the panel stops it. |
+
+The output is read off the screen: the rows after the command line, up to the prompt. Windows Server 2022 (measured) sends the marks ahead of the text they follow, so the screen is the only reliable record. A row filled to the last column is joined with the next, so a long line wrapped by the terminal comes back as one line. Colours are dropped. Output longer than the 5,000 lines of scrollback starts with a line saying how many earlier lines were lost.
+
+**Permissions.** Two keys:
+
+| Key | Asked for | Matched against |
+|---|---|---|
+| `powershell` | `run` | The command. A deny rule that matches any part of the line, split as a `bash` line is, denies it. An allow rule does not run a command unasked: PowerShell does not split a line as bash does, as [under a shell that is not POSIX](#naming-the-shell). "For this session" runs the answered line again unasked, and another line only when it is made of letters, digits, spaces and ``-_./\:=,+~"'*?@`` and its program was granted. |
+| `powershell_input` | `type` and `key` | `type <text>` or `key <keys>`. Asked every time, as `ssh_input` is. Each line `type` sends with Enter is also checked against the deny rules for `powershell`. |
+
+`read`, `wait`, `list`, `open` and `close` ask nothing. A deny rule for `powershell` with the match `*` keeps the model out of every PowerShell terminal.
+
+```json
+"permission": {
+  "powershell": [{ "match": "Remove-Item *", "decision": "deny" }, { "match": "Format-Volume *", "decision": "deny" }]
+}
+```
+
+The `powershell` tool's actions are the `ssh` tool's, with `open` (no input) in place of `connect`.
+
+**Limits.**
+
+* The daemon has no authentication. A program running as you on this computer can call the PowerShell panel's routes as the window does. It could also start PowerShell itself: the boundary is the same as for `bash`. The routes refuse requests from another website and from a name pointed at this computer.
+* The shell has your rights on this computer. A command the model runs there is not limited to the workspace: the workspace boundary applies to the file tools, not to commands. Deny what the model must not run.
+* Terminals do not survive localcode stopping or an update.
+* A line exactly as wide as the terminal is joined with the line after it in `run` output.
+* Ctrl+C reaches the command in the terminal. A program that ignores Ctrl+C keeps running; close the terminal to end it.
 
 ### Leaving the project
 
@@ -3312,7 +3379,7 @@ Which conversation a window is looking at survives a reload too, per window: two
 
 Both matter because `/update` reloads the page on its own when the daemon behind a desktop window hands over. An update that finished by moving you to a different conversation at 100% zoom was taking something away from whoever ran it.
 
-The [Typography](#settings) text size is the other half of sizing: zoom scales the whole page, spacing included, while text size scales only the type. Both are stored in the browser and restored on reload, and changing one never resets the other.
+The text size on the settings window's [Appearance](#settings) tab is the other half of sizing: zoom scales the whole page, spacing included, while text size scales only the type. Both are stored in the browser and restored on reload, and changing one never resets the other.
 
 ### Debug log
 
@@ -3600,7 +3667,7 @@ The settings window's install button is the one path that closes the window. It 
 
 #### The settings window
 
-The **Updates** section checks or installs only when a button is clicked.
+The **Updates** tab checks or installs only when a button is clicked.
 
 | Button | What it does |
 | --- | --- |

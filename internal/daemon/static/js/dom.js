@@ -195,7 +195,7 @@ export const updateNoteEl = document.getElementById('update-note');
 // The settings tabs. One entry per tab, in the order the tablist shows
 // them: the first is where the window always opens, and settings.js
 // reads the panels' visibility from the Modal flag, never from the DOM.
-export const settingsTabs = ['agents', 'turns', 'muse', 'updates', 'typography'].map((name) => ({
+export const settingsTabs = ['tools', 'behavior', 'appearance', 'updates'].map((name) => ({
   name,
   tab: document.getElementById('settings-tab-' + name),
   panel: document.getElementById('settings-panel-' + name),

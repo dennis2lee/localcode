@@ -136,6 +136,39 @@ func (l *Loop) routeSSH(sessionID, text string) (bool, error) {
 	return true, l.replyText(sessionID, b.String())
 }
 
+// routePowerShell answers "/powershell [on|off]".
+func (l *Loop) routePowerShell(sessionID, text string) (bool, error) {
+	arg, ok := matchToggleCommand(text, "/powershell")
+	if !ok {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+
+	want, valid := toggleArg(arg, l.Config.PowerShellLive())
+	if !valid {
+		return true, l.replyText(sessionID, "usage: /powershell [on|off]")
+	}
+	l.Config.SetPowerShellRuntime(want)
+	if !want && l.ClosePowerShell != nil {
+		l.ClosePowerShell()
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "powershell: %s", onOff(want))
+	switch {
+	case want && l.PowerShell == nil:
+		b.WriteString("\nSaved, and it does nothing here: the PowerShell panel is Windows only.")
+	case want:
+		b.WriteString("\nThe model is offered the powershell tool. Its terminals are shown in the PowerShell panel of the desktop window and the Web UI, where you can watch and type.")
+	default:
+		b.WriteString("\nEvery PowerShell terminal was closed.")
+	}
+	b.WriteString(l.persist(func(path string) error { return config.SetPowerShellInFile(path, want) }))
+
+	l.announceConfig(sessionID)
+	return true, l.replyText(sessionID, b.String())
+}
+
 // routeOrchestrate answers "/orchestrate [on|off]".
 func (l *Loop) routeOrchestrate(sessionID, text string) (bool, error) {
 	arg, ok := matchToggleCommand(text, "/orchestrate")
@@ -376,6 +409,7 @@ func (l *Loop) announceConfig(sessionID string) {
 		"orchestrate":          l.OrchestrateEnabled(),
 		"browser":              l.Config.BrowserLive(),
 		"ssh":                  l.Config.SSHLive(),
+		"powershell":           l.Config.PowerShellLive(),
 	})
 	l.announceSettings()
 }
@@ -445,6 +479,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "smart-agent", Description: "turn the Smart Agent bundle on or off", Usage: "[on|off]"},
 		{Name: "browser", Description: "let the model use the web browser shown in the desktop window's browser panel", Usage: "[on|off]"},
 		{Name: "ssh", Description: "let the model open SSH connections and work in them, shown in the SSH panel", Usage: "[on|off]"},
+		{Name: "powershell", Description: "let the model work in PowerShell on this computer, shown in the PowerShell panel (Windows)", Usage: "[on|off]"},
 		{Name: "orchestrate", Description: "turn delegation on or off: the specialists, Task, TaskBackground, TaskCollect and Orchestrate", Usage: "[on|off]"},
 		{Name: "workflow", Description: "saved orchestration plans: list them, show one, run one by name, resume a run, save the last plan, delete one", Usage: "[list|show <name>|run <name> [args]|resume [run]|save <name>|delete <name>]"},
 		{Name: "auto-delegate", Description: "turn auto-delegation on or off", Usage: "[on|off]"},

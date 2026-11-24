@@ -108,7 +108,7 @@ test('every control the page keeps for itself shows its value when the window op
   for (const c of PAGE_CONTROLS) stored[c.key] = c.stored;
   const app = await load({ localStorage: stored });
   await open(app);
-  app.el('settings-tab-typography').click();
+  app.el('settings-tab-appearance').click();
   for (const c of PAGE_CONTROLS) {
     assert.equal(app.el(c.id).value, c.shows, `${c.id} does not show what was stored under ${c.key}`);
   }
@@ -117,7 +117,7 @@ test('every control the page keeps for itself shows its value when the window op
 test('a font named by hand is shown again as the name that was typed', async () => {
   const app = await load({ localStorage: { 'localcode.face.doc': '"IBM Plex Serif", Charter, "Sitka Text", "Iowan Old Style", "Bitstream Charter", Cambria, Georgia, serif' } });
   await open(app);
-  app.el('settings-tab-typography').click();
+  app.el('settings-tab-appearance').click();
   assert.equal(app.el('typo-doc-custom').hidden, false, 'the field for a typed name is hidden');
   assert.equal(app.el('typo-doc-custom').value, 'IBM Plex Serif');
 });

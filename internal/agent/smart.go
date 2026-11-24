@@ -230,11 +230,11 @@ func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []
 		// and naming it does not put a desktop window in front of anyone.
 		// The ssh tool likewise follows its setting and whether anybody
 		// can answer its questions.
-		browser, ssh := l.browserOffered(ctx), l.sshOffered(ctx)
-		if !browser || !ssh {
+		browser, ssh, ps := l.browserOffered(ctx), l.sshOffered(ctx), l.powershellOffered(ctx)
+		if !browser || !ssh || !ps {
 			out := make([]string, 0, len(agentCfg.Tools))
 			for _, name := range agentCfg.Tools {
-				if (name == BrowserToolName && !browser) || (name == SSHToolName && !ssh) {
+				if (name == BrowserToolName && !browser) || (name == SSHToolName && !ssh) || (name == PowerShellToolName && !ps) {
 					continue
 				}
 				out = append(out, name)
@@ -446,6 +446,10 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	// or a password.
 	if !l.sshOffered(ctx) {
 		hidden[SSHToolName] = true
+	}
+	// PowerShell likewise, and only where there is one.
+	if !l.powershellOffered(ctx) {
+		hidden[PowerShellToolName] = true
 	}
 	// Answer belongs to one role in one situation: a stage that declared
 	// what it returns, which is given it explicitly through the pinned

@@ -303,3 +303,57 @@ func TestAPastedLineEndSendsTheLineWhereTheShellReadsItAsTyped(t *testing.T) {
 		t.Fatalf("after the person sent the rest: %+v", res)
 	}
 }
+
+// The model's Ctrl+C to a running command stops it, which is what a run
+// that timed out tells it to press. It is not text typed ahead: the next
+// run goes, and the prompt is waited for as any other.
+func TestCtrlCToARunningCommandIsNoTextTypedAhead(t *testing.T) {
+	s := startServer(t)
+	m := testManager(t, testHome(t, s, true))
+	term := connected(t, m, s)
+	res, err := term.Run(context.Background(), "sleep 5s", 300*time.Millisecond, term.PersonGen())
+	if err != nil || !res.TimedOut {
+		t.Fatalf("sleep: %+v %v", res, err)
+	}
+	if err := term.Keys("ctrl+c", term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if !term.WaitPrompt(ctx, 6*time.Second) {
+		t.Fatal("no prompt after the ctrl+c that stopped the command")
+	}
+	if res := run(t, term, "echo after"); res.Output != "after" || res.Status != "0" {
+		t.Fatalf("after: %+v", res)
+	}
+
+	// Text typed ahead and then a Ctrl+C: the key drops the text with it.
+	res, err = term.Run(context.Background(), "sleep 5s", 300*time.Millisecond, term.PersonGen())
+	if err != nil || !res.TimedOut {
+		t.Fatalf("sleep: %+v %v", res, err)
+	}
+	if err := term.Type("ls", false, term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	if err := term.Keys("ctrl+c", term.PersonGen()); err != nil {
+		t.Fatal(err)
+	}
+	if !term.WaitPrompt(ctx, 6*time.Second) {
+		t.Fatal("no prompt after typed-ahead text and a ctrl+c")
+	}
+	if res := run(t, term, "echo again"); res.Output != "again" {
+		t.Fatalf("after: %+v", res)
+	}
+}
+
+func TestSignalKeysAreTheThreeATerminalTakes(t *testing.T) {
+	for keys, want := range map[string]bool{"ctrl+c": true, "ctrl+\\": true, "ctrl+z": true, "ctrl+d": false, "c": false, "Enter": false, "ctrl+x": false} {
+		evs, err := ParseKeys(keys)
+		if err != nil {
+			t.Fatalf("%s: %v", keys, err)
+		}
+		if got := signalKey(evs[0]); got != want {
+			t.Errorf("signalKey(%s) = %v, want %v", keys, got, want)
+		}
+	}
+}

@@ -330,6 +330,7 @@ var RegisteredToolNames = []string{
 	"Verdict",
 	"browser",
 	"ssh",
+	"powershell",
 	"Debate",
 	"update_plan",
 	"ask_user",
@@ -342,7 +343,7 @@ var RegisteredToolNames = []string{
 // RuleOnlyKeys are permission keys that name no tool of their own: the
 // ssh tool asks about connecting and about typing under these names, so
 // a rule can be written for each apart from the rules for its commands.
-var RuleOnlyKeys = []string{SSHConnectToolName, SSHInputToolName}
+var RuleOnlyKeys = []string{SSHConnectToolName, SSHInputToolName, PowerShellInputToolName}
 
 // IgnoredOpencodeTools lists opencode tools that localcode does not
 // implement. A rule for one of these is vacuous in localcode because
@@ -539,9 +540,20 @@ const (
 	SSHInputToolName   = "ssh_input"
 )
 
+// The powershell tool's rule names. PowerShellToolName's subject is a
+// command for a PowerShell on this computer. It is decided as a command
+// for a shell that does not split lines as bash does: a deny rule found
+// in any part of the line denies it, and an allow that splitting would
+// decide is asked instead. PowerShellInputToolName's is text or keys
+// typed into whatever runs there, asked every time as ssh_input is.
+const (
+	PowerShellToolName      = "powershell"
+	PowerShellInputToolName = "powershell_input"
+)
+
 // IsShellTool reports a tool whose subject is a shell command line.
 func IsShellTool(name string) bool {
-	return name == BashToolName || name == SSHToolName
+	return name == BashToolName || name == SSHToolName || name == PowerShellToolName
 }
 
 // shellToolKey carries which shell tool a line is being resolved for, so
@@ -609,6 +621,19 @@ func (c *Config) ResolvePermissionFor(ctx context.Context, toolName, subject str
 		}
 		posix, _ := ctx.Value(remoteShellKey{}).(bool)
 		return c.resolveShellCommandUnder(context.WithValue(ctx, shellToolKey{}, SSHToolName), subject, staticRequiresPermission, posix)
+	}
+	if toolName == PowerShellToolName {
+		if subject == "" {
+			// As for ssh: the tool asks inside, and here only a deny
+			// decides.
+			if d := c.resolveOne(ctx, toolName, subject, false); d == DecisionDeny {
+				return DecisionDeny
+			}
+			return DecisionAllow
+		}
+		// Never POSIX: PowerShell's ";", "|", "&&" and "&" are not bash's,
+		// and its quoting is its own.
+		return c.resolveShellCommandUnder(context.WithValue(ctx, shellToolKey{}, PowerShellToolName), subject, staticRequiresPermission, false)
 	}
 	return c.resolveOne(ctx, toolName, subject, staticRequiresPermission)
 }

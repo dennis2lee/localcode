@@ -262,6 +262,12 @@ type Loop struct {
 	CloseSSH func()
 	// SSH holds the conversations' SSH terminals. Nil when there is none.
 	SSH *sshterm.Manager
+	// ClosePowerShell closes every PowerShell terminal, for
+	// "/powershell off". Nil when there is no PowerShell manager.
+	ClosePowerShell func()
+	// PowerShell holds the conversations' PowerShell terminals. Nil where
+	// there is none, which is everywhere but Windows.
+	PowerShell *sshterm.Manager
 	// CloseBrowser quits the browser, for "/browser off". Nil when there
 	// is none.
 	CloseBrowser func()

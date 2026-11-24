@@ -39,6 +39,8 @@ Every coding agent runs one model in one loop and asks it to review its own work
 
 **SSH terminals you share with it.** With SSH on, the model can [open SSH connections and work in them](docs/USAGE.md#ssh), in terminals shown in a panel of their own in the desktop window and the Web UI. A terminal stays connected between turns for as long as the conversation exists, so its shell keeps its directory and what runs in it. You type in the same terminal, hold it to keep the model out, and answer host keys and passwords in the panel; the model never sees them. It reads your `~/.ssh/config`, keys and agent, and asks before it connects, runs a command or types, with rules per host and per command.
 
+**PowerShell on Windows, shared the same way.** With PowerShell on, the model can [work in PowerShell terminals on this computer](docs/USAGE.md#powershell), in a panel of their own beside the SSH panel. Each terminal starts with your profile in the conversation's working directory and stays open between turns. `run` returns a command's output and exit status. You type in the same terminal and can hold it; the model asks before it runs a command or types, under rules of their own.
+
 **You can see what the model will see.** [`/context`](https://dennis2lee.github.io/localcode/where-localcode-differs.html#prompt-inventory) reports the next request piece by piece (source, trust class, token estimate) without a model call. Another conversation reaches this one only through [`#name`](https://dennis2lee.github.io/localcode/where-localcode-differs.html#reference), as a tool result the model asked for, never spliced into your prompt.
 
 ## On the same model

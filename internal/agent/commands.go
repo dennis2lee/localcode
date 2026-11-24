@@ -217,6 +217,7 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeSmartAgent(sessionID, text) },
 		func() (bool, error) { return l.routeBrowser(sessionID, text) },
 		func() (bool, error) { return l.routeSSH(sessionID, text) },
+		func() (bool, error) { return l.routePowerShell(sessionID, text) },
 		func() (bool, error) { return l.routeOrchestrate(sessionID, text) },
 		func() (bool, error) { return l.routeWorkflow(ctx, sessionID, text) },
 		func() (bool, error) { return l.routeAutoDelegate(sessionID, text) },

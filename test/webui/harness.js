@@ -512,15 +512,24 @@ async function load(opts = {}) {
   });
 }
 
-// labelText is the text of the <label for="id"> in the shipped index.html,
-// on one line. The settings sentences beside the checkboxes are static
-// markup rather than something js/*.js writes, so a test that wants to hold
-// one to what the code does has to read it from the page source.
-function labelText(id) {
+// descText is the line under a setting's name: the <p class="setting-desc">
+// in the same row as the control with this id, on one line, with any
+// control inside it (the repeat guard's number) left out. It is the
+// sentence that says what the switch reaches. It is static markup rather
+// than something js/*.js writes, so a test that wants to hold it to what
+// the code does has to read it from the page source.
+function descText(id) {
   const html = fs.readFileSync(path.join(STATIC_DIR, 'index.html'), 'utf8');
-  const m = new RegExp(`<label for="${id}">([\\s\\S]*?)</label>`).exec(html);
-  if (!m) throw new Error(`index.html has no <label for="${id}">`);
-  return m[1].replace(/\s+/g, ' ').trim();
+  const label = new RegExp(`<label\\b[^>]*\\bfor="${id}"[^>]*>`).exec(html);
+  if (!label) throw new Error(`index.html has no <label for="${id}">`);
+  const re = /<p class="setting-desc">([\s\S]*?)<\/p>/g;
+  re.lastIndex = label.index;
+  const m = re.exec(html);
+  const control = html.indexOf(`id="${id}"`, label.index);
+  if (!m || control < 0 || m.index > control) {
+    throw new Error(`index.html has no <p class="setting-desc"> in the row of ${id}`);
+  }
+  return m[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 }
 
-module.exports = { load, settle, defaultRoutes, labelText };
+module.exports = { load, settle, defaultRoutes, descText };

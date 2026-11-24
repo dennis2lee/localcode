@@ -2,8 +2,8 @@
 
 // The "Commands the model may run" switch in the settings window.
 //
-// The third switch on the Agents tab and the only one that had no test of
-// its own. What it has to get right is the same as the other two: the box
+// The second switch in the Tools tab's "Other agents and commands" group,
+// and once the only one that had no test of its own. What it has to get right is the same as the other two: the box
 // shows what the daemon says, a refused change puts it back, and the note
 // beside it says what turning it on reaches, because the switch alone
 // names nothing and the list lives in config.json and in each command's
@@ -27,12 +27,15 @@ async function openSettings(app) {
   await app.settle();
 }
 
-test('off, the note says commands run only when typed, and nothing changed', async () => {
+// Off, commands run only when typed, which the switch says by being off.
+// The note used to say it again ("Off. Commands run only when you type
+// them.") and now says nothing.
+test('off, the note is empty, and nothing changed', async () => {
   const app = await load({ routes: { 'GET /api/settings': SETTINGS } });
   await openSettings(app);
 
   assert.equal(app.el('model-invocable-checkbox').checked, false);
-  assert.match(app.el('model-invocable-note').textContent, /^Off\. Commands run only when you type them\.$/);
+  assert.equal(app.el('model-invocable-note').textContent, '');
   assert.equal(app.callsTo('POST', '/api/settings/model-invocable').length, 0,
     'opening the panel changed a setting');
 });
@@ -47,7 +50,7 @@ test('on with nothing opted in, the note says where to opt a command in', async 
 
   assert.equal(app.el('model-invocable-checkbox').checked, true);
   const note = app.el('model-invocable-note').textContent;
-  assert.match(note, /^On, but nothing is opted in\./);
+  assert.match(note, /^Nothing is opted in\./);
   assert.match(note, /"model_commands" in config\.json/);
   assert.match(note, /"model_invocable: true"/);
 });
@@ -61,8 +64,7 @@ test('on, the note lists what the model may run and that anything it reads can r
   await openSettings(app);
 
   const note = app.el('model-invocable-note').textContent;
-  assert.match(note, /^On\./);
-  assert.match(note, /May run: \/compact, \/usage\./);
+  assert.match(note, /^May run: \/compact, \/usage\./);
   assert.match(note, /Reachable from anything the model reads\./);
 });
 

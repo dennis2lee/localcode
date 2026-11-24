@@ -34,18 +34,28 @@ func TestSettingsWindowGroupsSectionsIntoTabs(t *testing.T) {
 
 	for _, want := range []string{
 		`role="tablist"`,
-		`id="settings-tab-agents"`,
-		`id="settings-tab-turns"`,
+		`id="settings-tab-tools"`,
+		`id="settings-tab-behavior"`,
+		`id="settings-tab-appearance"`,
 		`id="settings-tab-updates"`,
-		`id="settings-tab-typography"`,
-		`id="settings-panel-agents"`,
-		`id="settings-panel-turns"`,
+		`id="settings-panel-tools"`,
+		`id="settings-panel-behavior"`,
+		`id="settings-panel-appearance"`,
 		`id="settings-panel-updates"`,
-		`id="settings-panel-typography"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("served page has no %s: the settings sections are not tabbed", want)
 		}
+	}
+
+	// In this order. The first is where the window opens.
+	last := -1
+	for _, tab := range []string{"tools", "behavior", "appearance", "updates"} {
+		at := strings.Index(page, `id="settings-tab-`+tab+`"`)
+		if at >= 0 && at < last {
+			t.Errorf("served page has the %s tab out of order: want Tools, Behavior, Appearance, Updates", tab)
+		}
+		last = at
 	}
 }
 

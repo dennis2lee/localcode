@@ -202,6 +202,24 @@ func GrantSegments(command string) ([]string, bool) {
 	return grantSegmentsUnder(command, shell.IsPOSIX())
 }
 
+// GrantSegmentsFor is GrantSegments for a line of toolName's shell, which
+// is not always localcode's own: an ssh line is for the terminal's shell,
+// POSIX only as WithRemoteShell says, and a powershell line is never
+// POSIX. Splitting either by the host's shell let a grant cover what the
+// line's shell runs as two commands: under a POSIX host, "echo a\;
+// Remove-Item x" is one command to the split and two to PowerShell, whose
+// backslash escapes nothing.
+func GrantSegmentsFor(ctx context.Context, toolName, command string) ([]string, bool) {
+	switch toolName {
+	case SSHToolName:
+		posix, _ := ctx.Value(remoteShellKey{}).(bool)
+		return grantSegmentsUnder(command, posix)
+	case PowerShellToolName:
+		return grantSegmentsUnder(command, false)
+	}
+	return GrantSegments(command)
+}
+
 func grantSegmentsUnder(command string, posix bool) ([]string, bool) {
 	if hasUnsafeShellConstruct(command) || lineRunsGitCommand(command) {
 		return nil, false
