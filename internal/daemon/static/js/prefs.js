@@ -18,7 +18,14 @@ const OWN = /^(?:localcode\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}|archiveOpen)$/;
 
 // A request small enough to be finished by the browser after the page is
 // gone, which is what a change made just before the window closes needs.
+// The browser's limit is 64 KiB of body, counted in bytes, and it refuses
+// a larger one outright rather than sending it without the promise. One
+// unit of a JavaScript string is at most three bytes when it is sent,
+// which is the bound used: counting units alone let a body of Korean
+// group names through at a third of its real size, and every retry was
+// refused.
 const KEEPALIVE_MAX = 60000;
+const BYTES_PER_CHAR = 3;
 
 // How many times a write that failed is sent before it is left for the
 // next change: six, with the waits doubling from 0.3 s, is 9.3 s in all.
@@ -76,20 +83,29 @@ async function send() {
   sending = true;
   try {
     let failed = 0;
+    // Whether a request may ask to outlive the page. Given up for the
+    // rest of this run once a request that asked was not sent at all:
+    // the limit is shared with every other such request of the page.
+    let outlive = true;
     while (waiting.size > 0) {
       const batch = new Map(waiting);
       waiting.clear();
       const body = JSON.stringify(Object.fromEntries(batch));
+      const keepalive = outlive && body.length * BYTES_PER_CHAR <= KEEPALIVE_MAX;
       let done = false;
       try {
         const res = await fetch('/api/window/state', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body,
-          keepalive: body.length <= KEEPALIVE_MAX,
+          keepalive,
         });
         done = res.ok || (res.status >= 400 && res.status < 500);
-      } catch { /* the daemon is not answering: tried again below */ }
+      } catch {
+        // The daemon is not answering, or the browser would not send
+        // it: tried again below, and plainly the next time.
+        if (keepalive) outlive = false;
+      }
       if (done) {
         failed = 0;
         continue;

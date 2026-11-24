@@ -278,7 +278,11 @@ async function load(opts = {}) {
     // a route that cannot see it can only answer one thing for every
     // session, which is precisely the confusion under test.
     const query = new URLSearchParams(search);
-    harness.calls.push({ method, path: urlPath, body, query });
+    const call = { method, path: urlPath, body, query };
+    // Whether the request asked to outlive the page. Recorded only when
+    // it did, so the calls of every other test read as they always have.
+    if (init.keepalive) call.keepalive = true;
+    harness.calls.push(call);
     const route = matchRoute(routes, method, urlPath);
     if (route === undefined) {
       throw new Error(`harness: no route for ${method} ${urlPath} (add one via load({routes}))`);

@@ -241,7 +241,25 @@ async function applyRepeatLimit() {
 // where the turn log is, which is the one thing it adds that a person
 // goes looking for.
 
-function renderSmartAgent(warning) {
+// A change the daemon applied and could not write to config.json is told
+// under its switch, and stays told until that switch is saved.
+//
+// Each of the five draws below is called two ways: with the outcome of a
+// save (a warning, or '' for a save that reached the file), and with
+// nothing, to draw again because something else changed: another
+// setting, another window, the settings arriving. Drawn again with
+// nothing, a warning used to go: turn Smart Agent on with a config that
+// could not be written, then turn SSH on, and the first warning was gone
+// while the switch it was about was still not saved.
+const unsaved = {};
+
+function unsavedWarning(name, outcome) {
+  if (outcome !== undefined) unsaved[name] = outcome || '';
+  return unsaved[name] || '';
+}
+
+function renderSmartAgent(outcome) {
+  const warning = unsavedWarning('smart_agent', outcome);
   smartAgentCheckbox.checked = !!app.smartAgent;
   smartAgentWarnEl.textContent = warning || '';
   smartAgentWarnEl.hidden = !warning;
@@ -267,7 +285,8 @@ export function importNote(rep) {
   return `Last copied from ${rep.from}.${skipped}`;
 }
 
-function renderBrowserSetting(warning) {
+function renderBrowserSetting(outcome) {
+  let warning = unsavedWarning('browser', outcome);
   browserSettingsEl.hidden = !inGUI();
   browserCheckbox.checked = !!app.browser;
   browserImportBtn.hidden = !app.browser;
@@ -328,7 +347,8 @@ async function importBrowserProfile() {
 
 const sshEl = (id) => document.getElementById(id);
 
-function renderSSHSetting(warning) {
+function renderSSHSetting(outcome) {
+  const warning = unsavedWarning('ssh', outcome);
   const box = sshEl('ssh-checkbox');
   if (!box) return;
   box.checked = !!app.ssh;
@@ -432,7 +452,8 @@ async function toggleSSH() {
 // TestTheSettingsNoteCeilingsAreTheRealOnes reads this function, so
 // changing one side alone fails the build.
 
-function renderOrchestrate(warning) {
+function renderOrchestrate(outcome) {
+  const warning = unsavedWarning('orchestrate', outcome);
   orchestrateCheckbox.checked = !!app.orchestrate;
   orchestrateWarnEl.textContent = warning || '';
   orchestrateWarnEl.hidden = !warning;
@@ -452,7 +473,8 @@ function renderOrchestrate(warning) {
 // what it reaches: the opt-ins live in config.json and in each command's
 // own frontmatter, and somebody turning this on without seeing them has
 // turned on something they cannot name.
-function renderModelInvocable(warning) {
+function renderModelInvocable(outcome) {
+  const warning = unsavedWarning('model_invocable', outcome);
   modelInvocableCheckbox.checked = !!app.modelInvocable;
   modelInvocableWarnEl.textContent = warning || '';
   modelInvocableWarnEl.hidden = !warning;

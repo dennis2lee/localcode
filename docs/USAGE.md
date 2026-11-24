@@ -2247,6 +2247,14 @@ The desktop window keeps these in the same file, for the same reason: the [zoom]
 
 Deleting `window-state.json` while the window is closed does not reset these settings when the window comes back on the same port: the page writes the file again from its own storage. To reset them, put each back to its default in the window.
 
+Limits of the desktop window's file:
+
+* Two windows open at once share it. Each setting is kept under its own name, so two windows changing different settings do not undo each other. The panel widths, the panels each conversation shows, and the folded groups are one value each: when both windows change the same one, the value written last is kept.
+* A change is written as it is made, one request at a time. A second change made while the first is still being written, with the window ended in that same moment, is not written.
+* The window asks for the file three times when its page starts. With no answer, the page writes nothing to the file while it stays open, and the settings changed in it are not there the next time.
+
+A switch on the Agents tab that the daemon applied and could not write to `config.json` says so under the switch. The warning stays until that switch is saved, and the setting lasts only until the daemon restarts.
+
 Typography is per person, not per daemon. The faces and the size apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
 
 Text size is the type only: one overall size from 87.5% to 140% of the nine-step scale, plus a trim per group over the same range. Reading trims the transcript, the model's questions to you, thinking and review blocks, and headings. Interface trims controls, panels, status, notes (except the model's questions), and the ids shown in those rows. Code trims code set in monospace. A trim reaches steps, not faces: an id set in monospace inside an interface row, like the session id, follows the interface trim. The trims compose with the overall size: each step is its pixel value times the overall size times its trim, so making everything bigger and then bringing the code down a notch is two choices. [Zoom](#zoom-and-what-a-reload-keeps) is separate: ctrl+wheel scales the whole page, spacing included. The two compose: zoom multiplies everything, text size multiplies only the type.

@@ -326,6 +326,47 @@ test('a change made while a failing write is on its way is the one that is sent 
   assert.deepEqual(calls[1].body, { 'localcode.zoom': '1.5', 'localcode.textScale': '1.125' });
 });
 
+test('a small write asks to outlive the page, and one too large for that is sent plainly', async () => {
+  // The browser finishes a keepalive request after the page has gone,
+  // which is what a change made just before the window closes needs. It
+  // refuses one over 64 KiB of body outright, counted in bytes: 21,000
+  // Korean characters are 21,000 units of a string and 63,000 bytes.
+  const app = await inWindow();
+  const loaded = writes(app).length;
+  app.writePref('localcode.zoom', '1.5');
+  await app.settle();
+  app.writePref('localcode.collapsedGroups', JSON.stringify(['가'.repeat(21000)]));
+  await app.settle();
+  app.writePref('localcode.face.doc', 'x'.repeat(19000));
+  await app.settle();
+  const calls = writes(app).slice(loaded);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].keepalive, true, 'an ordinary change did not ask to outlive the page');
+  assert.equal(calls[1].keepalive, undefined, 'a body over the limit in bytes asked for what the browser refuses');
+  assert.equal(calls[2].keepalive, true, 'a body under the limit even at three bytes a unit was sent plainly');
+});
+
+test('a write the browser would not send as one that outlives the page is sent plainly', async () => {
+  // The limit is shared by every such request of the page, so one can be
+  // refused whatever its own size. The fetch then throws without sending.
+  const app = await inWindow('read', { globals: instantTimers() });
+  const loaded = writes(app).length;
+  const real = app.routes[`PUT ${ROUTE}`];
+  let refused = 0;
+  app.routes[`PUT ${ROUTE}`] = (body) => {
+    const call = app.calls[app.calls.length - 1];
+    if (call.keepalive) { refused += 1; return { networkError: 'TypeError: Failed to fetch' }; }
+    return real;
+  };
+  app.writePref('localcode.zoom', '1.5');
+  await app.settle();
+  const calls = writes(app).slice(loaded);
+  assert.equal(refused, 1, 'asked to outlive the page again after being refused');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].keepalive, undefined);
+  assert.deepEqual(calls[1].body, { 'localcode.zoom': '1.5' });
+});
+
 test('a name that is not the page\'s own is kept in the page and not sent', async () => {
   const app = await inWindow();
   const before = writes(app).length;
@@ -455,6 +496,31 @@ test('kept.js changes nothing when the daemon gives it no answer it can use', ()
     assert.deepEqual(r.stored, initial, `${name}: the page's storage was changed`);
     assert.equal(r.kept, undefined, `${name}: the page was told the file had been read`);
   }
+});
+
+test('kept.js asks again when the daemon does not answer the first time', () => {
+  // One answer that did not come would leave the page writing nothing to
+  // the file for as long as it is open.
+  let n = 0;
+  const r = runKept({
+    initial: { 'localcode.textScale': '1.4' },
+    answer: (xhr) => {
+      n += 1;
+      if (n === 1) throw new Error('NetworkError');
+      if (n === 2) { xhr.status = 500; xhr.responseText = ''; return; }
+      xhr.status = 200;
+      xhr.responseText = JSON.stringify({ available: true, kept: { 'localcode.textScale': '1.125' } });
+    },
+  });
+  assert.equal(r.asked.length, 3);
+  assert.deepEqual(r.stored, { 'localcode.textScale': '1.125' });
+  assert.equal(r.kept, 'read');
+
+  // And stops at three.
+  const never = runKept({ initial: { 'localcode.textScale': '1.4' }, answer: 500 });
+  assert.equal(never.asked.length, 3);
+  assert.equal(never.kept, undefined);
+  assert.deepEqual(never.stored, { 'localcode.textScale': '1.4' });
 });
 
 test('kept.js takes only strings under the page\'s own names from the answer', () => {

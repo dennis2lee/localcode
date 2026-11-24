@@ -13,6 +13,7 @@ Settings made in the desktop window are still there after it is closed and opene
 * A key added to a `config.json` that has comments, at the end of the object with every comment left where it was: a switch turned on in the settings window no longer off again after a restart
 * The repeat guard on the settings window's Turns tab drawn when the window opens: no longer shown unticked and empty after a restart or a reload, whatever was saved
 * The settings window drawn again when the daemon's settings arrive, if it was opened before they did
+* The warning that a switch was applied and not saved to `config.json` kept under the switch until it is saved: no longer erased when another setting changes
 
 **Added**
 

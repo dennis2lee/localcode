@@ -26,12 +26,21 @@
   if (window.lcGUI !== true) return;
   // The page's own names, the same rule the daemon applies to a write.
   var own = /^(?:localcode\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}|archiveOpen)$/;
+  // Asked up to three times. One answer that did not come would leave
+  // this page writing nothing to the file for as long as it is open, and
+  // everything changed in it would be put back by the next page's read.
+  var text = null;
+  for (var attempt = 0; attempt < 3 && text === null; attempt++) {
+    try {
+      var ask = new XMLHttpRequest();
+      ask.open('GET', '/api/window/state', false);
+      ask.send(null);
+      if (ask.status === 200) text = ask.responseText;
+    } catch (e) { /* asked again */ }
+  }
+  if (text === null) return;
   try {
-    var ask = new XMLHttpRequest();
-    ask.open('GET', '/api/window/state', false);
-    ask.send(null);
-    if (ask.status !== 200) return;
-    var answer = JSON.parse(ask.responseText);
+    var answer = JSON.parse(text);
     if (!answer || answer.available !== true) return;
     var kept = answer.kept;
     if (!kept || typeof kept !== 'object') {

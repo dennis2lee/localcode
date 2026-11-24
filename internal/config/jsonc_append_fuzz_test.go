@@ -187,3 +187,59 @@ func randomCommentedConfig(r *rand.Rand) (string, []string) {
 	}
 	return b.String(), names
 }
+
+// The other half of one write: every value the file has is replaced while
+// two keys are added. The last member is always among the replaced, which
+// is the member the new keys are written after, so its replacement and
+// the comma that follows it land at one offset. Named shapes first (a key
+// written twice, a key spelled with an escape, an object with nothing in
+// it and comments on both sides), then the generated files above.
+//
+// From a review of the change that added the append; it found nothing,
+// and is kept so the next change has to pass it too.
+func TestEveryValueReplacedWhileKeysAreAdded(t *testing.T) {
+	cases := []string{
+		`/* before */ {} /* after */`,
+		"// before\r\n{\r\n\t// inside\r\n}\r\n// after\r\n",
+		`{"same": 1, /* duplicate */ "same": 2 /* tail */}`,
+		"{\r\n\t\"same\": 1,\r\n\t\"same\": {\"nested\": [1, 2,]}, // tail\r\n}\r\n",
+		`{"same": 1, "other": "} /*", "same": 2, /* tail */}`,
+		`{"same": 1, "same": 2 /* end */}`,
+		`{/* leading */ "same": {"nested": 1}, /* trailing */}`,
+		"{\n\"same\": true // tail\n// second tail\n}",
+	}
+	for seed := int64(1); seed <= 1500; seed++ {
+		src, _ := randomCommentedConfig(rand.New(rand.NewSource(seed)))
+		cases = append(cases, src)
+	}
+	for i, src := range cases {
+		var before map[string]json.RawMessage
+		if err := json.Unmarshal(stripComments([]byte(src)), &before); err != nil {
+			t.Fatalf("case %d: the input does not parse: %v\n%s", i, err, src)
+		}
+		after := make(map[string]json.RawMessage, len(before)+2)
+		for key := range before {
+			after[key] = json.RawMessage(`{"changed":[true,"x"]}`)
+		}
+		after["zz_added"] = json.RawMessage(`{"a":[1,2]}`)
+		after["aa_added"] = json.RawMessage(`true`)
+		out, ok := spliceKeys([]byte(src), before, after)
+		if !ok {
+			t.Fatalf("case %d was refused:\n%s", i, src)
+		}
+		var got, want map[string]any
+		if err := json.Unmarshal(stripComments(append([]byte(nil), out...)), &got); err != nil {
+			t.Fatalf("case %d: the written file does not parse: %v\nbefore:\n%s\nafter:\n%s", i, err, src, out)
+		}
+		encoded, _ := json.Marshal(after)
+		if err := json.Unmarshal(encoded, &want); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("case %d: the written file holds something else\nbefore:\n%s\nafter:\n%s", i, src, out)
+		}
+		if again, ok := spliceKeys(out, after, after); !ok || string(again) != string(out) {
+			t.Fatalf("case %d: writing the same values again changed the file\nfirst:\n%q\nsecond:\n%q", i, out, again)
+		}
+	}
+}

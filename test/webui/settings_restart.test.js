@@ -152,6 +152,152 @@ test('a window that is not open is not drawn by the first read of the settings',
   assert.equal(app.el('smart-agent-checkbox').checked, true);
 });
 
+// A switch the daemon applied and could not write to config.json says so
+// under it. That is the one sign that the setting will not be there after
+// a restart, so it has to outlast every redraw that is not a save of
+// that switch.
+const UNSAVED = /Applied, but not saved to config\.json/;
+
+// announce sends what the daemon sends every window when a setting
+// changes, on the conversation's own stream. Not app.sse: once the SSH
+// switch is on, the page has a second stream open for the SSH panel, and
+// an event sent there is one the page never reads as a setting.
+function announce(app, data) {
+  const stream = app.streams.find((s) => !s.closed && /\/events(\?|$)/.test(s.url));
+  assert.ok(stream, 'the page has no conversation stream open');
+  stream.emit({ type: 'settings.changed', data });
+}
+
+test('a warning that a switch was not saved stays through other redraws, until it is saved', async () => {
+  let persisted = false;
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      'POST /api/settings/smart-agent': (body) => (persisted
+        ? { smart_agent: body.enabled, applied: true, persisted: true }
+        : { smart_agent: body.enabled, applied: true, persisted: false, error: 'config.json is read-only' }),
+      'POST /api/settings/ssh': (body) => ({ ssh: body.enabled, applied: true, persisted: true }),
+    },
+  });
+  await open(app);
+  const box = app.el('smart-agent-checkbox');
+  const warn = app.el('smart-agent-warn');
+  box.checked = true;
+  box.fire('change');
+  await app.settle();
+  assert.match(warn.textContent, UNSAVED);
+  assert.equal(warn.hidden, false);
+
+  // Another switch is saved, which redraws this one.
+  const ssh = app.el('ssh-checkbox');
+  ssh.checked = true;
+  ssh.fire('change');
+  await app.settle();
+  // And the daemon announces the change, as it does to every window.
+  announce(app, { smart_agent: true, ssh: true });
+  await app.settle();
+  assert.match(warn.textContent, UNSAVED, 'the warning went with a redraw that saved nothing');
+  // That announcement did redraw the switch: one that turns it off is
+  // shown, with the warning still under it.
+  announce(app, { smart_agent: false });
+  await app.settle();
+  assert.equal(box.checked, false, 'the announcement did not reach the settings window');
+  assert.match(warn.textContent, UNSAVED);
+  announce(app, { smart_agent: true });
+  await app.settle();
+  assert.equal(warn.hidden, false);
+  assert.equal(app.el('ssh-warn').hidden, true, 'a switch that was saved shows a warning');
+
+  // The window closed and opened again: still not saved, still said.
+  app.el('settings-close').click();
+  await open(app);
+  assert.match(warn.textContent, UNSAVED, 'the warning went when the window was opened again');
+
+  // Saved: gone.
+  persisted = true;
+  box.checked = false;
+  box.fire('change');
+  await app.settle();
+  assert.equal(warn.textContent, '');
+  assert.equal(warn.hidden, true);
+});
+
+test('each of the five switches that answer with whether they were saved keeps its own warning', async () => {
+  // Each with its own reason, and one of them saved, so a warning kept
+  // under the wrong switch shows.
+  const reply = (key, error) => (body) => (error
+    ? { [key]: body.enabled, applied: true, persisted: false, error }
+    : { [key]: body.enabled, applied: true, persisted: true });
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      'POST /api/settings/smart-agent': reply('smart_agent', 'reason one'),
+      'POST /api/settings/browser': reply('browser', 'reason two'),
+      'POST /api/settings/ssh': reply('ssh', 'reason three'),
+      'POST /api/settings/orchestrate': reply('orchestrate', ''),
+      'POST /api/settings/model-invocable': reply('model_invocable', 'reason five'),
+    },
+  });
+  await open(app);
+  const switches = [
+    ['smart-agent-checkbox', 'smart-agent-warn', 'reason one'],
+    ['browser-checkbox', 'browser-warn', 'reason two'],
+    ['ssh-checkbox', 'ssh-warn', 'reason three'],
+    ['orchestrate-checkbox', 'orchestrate-warn', ''],
+    ['model-invocable-checkbox', 'model-invocable-warn', 'reason five'],
+  ];
+  for (const [boxId] of switches) {
+    const box = app.el(boxId);
+    box.checked = true;
+    box.fire('change');
+    await app.settle();
+  }
+  // Every one drawn again, as a change anywhere does.
+  announce(app, { smart_agent: false, orchestrate: false, model_invocable: false });
+  await app.settle();
+  assert.equal(app.el('smart-agent-checkbox').checked, false, 'the announcement did not reach the settings window');
+  announce(app, { smart_agent: true, ssh: true, browser: true, orchestrate: true, model_invocable: true });
+  await app.settle();
+  for (const [, warnId, reason] of switches) {
+    const warn = app.el(warnId);
+    if (!reason) {
+      assert.equal(warn.textContent, '', `${warnId} shows a warning for a switch that was saved`);
+      assert.equal(warn.hidden, true);
+      continue;
+    }
+    assert.match(warn.textContent, UNSAVED, `${warnId} lost its warning`);
+    assert.ok(warn.textContent.includes(reason), `${warnId} shows another switch's reason: ${warn.textContent}`);
+  }
+});
+
+test('the redraw when the settings arrive leaves a warning that was shown before they did', async () => {
+  // The window opened, and a switch turned, while another of the page's
+  // first requests was still on its way.
+  let late;
+  const pending = new Promise((resolve) => { late = resolve; });
+  const app = await load({
+    init: false,
+    globals: { lcGUI: true },
+    routes: {
+      'GET /api/version': () => pending,
+      'POST /api/settings/smart-agent': (body) => ({ smart_agent: body.enabled, applied: true, persisted: false, error: 'disk full' }),
+    },
+  });
+  await app.settle();
+  await open(app);
+  const box = app.el('smart-agent-checkbox');
+  box.checked = true;
+  box.fire('change');
+  await app.settle();
+  assert.match(app.el('smart-agent-warn').textContent, UNSAVED);
+
+  late({ version: 'test' });
+  await app.ready;
+  await app.settle();
+  assert.match(app.el('smart-agent-warn').textContent, UNSAVED, 'the page\'s own startup redraw took the warning');
+  assert.equal(box.checked, true);
+});
+
 test('every control in the settings window is one of the above', () => {
   // A control added to a tab and to neither list is a control nobody
   // opened the window against.
