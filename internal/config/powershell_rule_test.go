@@ -85,6 +85,10 @@ func TestAPowerShellDenyIsFoundWherePowerShellStartsACommand(t *testing.T) {
 		`powershell -EncodedCommand ` + encodedForTest("return\tNew-Item marker"),
 		`Write-Output 'New-Item marker' | iex`,
 		"Write-Output \u201ca\u201d; New-Item marker",
+		`ni marker`,
+		`NI marker`,
+		`mkdir marker`,
+		`md marker`,
 	} {
 		if got := c.ResolvePermission(PowerShellToolName, line, true); got != DecisionDeny {
 			t.Errorf("%q: %s, want deny", line, got)
@@ -205,6 +209,9 @@ func TestAPlainPowerShellCommand(t *testing.T) {
 		". .\\x.ps1":                      false,
 		`'Get-Date'`:                      false,
 		"Set-Alias d Get-Date":            false,
+		"Import-Alias a.csv":              false,
+		"r 5":                             false,
+		"Get-ChildItem @args":             false,
 		"New-Item function:x -Value y":    false,
 		"$x":                              false,
 		"Get-Date | Out-File x":           false,
@@ -214,5 +221,30 @@ func TestAPlainPowerShellCommand(t *testing.T) {
 		if got := powershellSimple(line); got != want {
 			t.Errorf("powershellSimple(%q) = %v, want %v", line, got, want)
 		}
+	}
+}
+
+// A deny rule for every tool ("*") is read for a piece too, in any case.
+func TestADenyForEveryToolIsReadForAPowerShellPiece(t *testing.T) {
+	c := &Config{Permissions: map[string]ToolPermission{
+		"*": {Rules: []PermissionRule{{Match: "New-Item *", Decision: DecisionDeny}}},
+	}}
+	for _, line := range []string{"new-item marker", "ni marker", "Write-Output (New-Item marker)"} {
+		if got := c.ResolvePermission(PowerShellToolName, line, true); got != DecisionDeny {
+			t.Errorf("%q: %s, want deny", line, got)
+		}
+	}
+	if !c.PowerShellNeedsAPerson(context.Background(), "Write-Output a; Get-Date") {
+		t.Error("a deny for every tool is a deny for powershell")
+	}
+}
+
+// A name that is no command is run as Get- and the name.
+func TestAPowerShellNameIsReadWithGet(t *testing.T) {
+	c := &Config{Permissions: map[string]ToolPermission{
+		PowerShellToolName: {Rules: []PermissionRule{{Match: "Get-Content *", Decision: DecisionDeny}}},
+	}}
+	if got := c.ResolvePermission(PowerShellToolName, "content secret.txt", true); got != DecisionDeny {
+		t.Errorf("content secret.txt: %s, want deny", got)
 	}
 }

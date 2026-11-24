@@ -375,3 +375,22 @@ func TestSkippedPromptsStillAskForAPowerShellLineTheRulesCannotHold(t *testing.T
 		}
 	}
 }
+
+// That question is asked every time: it offers no answer for the
+// session, which would stand for lines nobody read.
+func TestAPowerShellLineTheRulesCannotHoldIsAskedOnce(t *testing.T) {
+	var asks []tools.Ask
+	loop, _ := psLoop(t, func(a tools.Ask) bool { asks = append(asks, a); return true })
+	loop.Config.SetPowerShellRuntime(true)
+	loop.Config.SetSkipPermissionsRuntime(true)
+	loop.Config.Permissions = map[string]config.ToolPermission{
+		config.PowerShellToolName: {Rules: []config.PermissionRule{{Match: "Remove-Item *", Decision: config.DecisionDeny}}},
+	}
+	if res := execPS(t, loop, map[string]any{"action": "open"}); res.IsError {
+		t.Fatalf("open: %+v", res)
+	}
+	execPS(t, loop, map[string]any{"action": "run", "command": "Set-Alias d Get-Date"})
+	if len(asks) != 1 || !asks[0].Once {
+		t.Fatalf("asks: %+v", asks)
+	}
+}

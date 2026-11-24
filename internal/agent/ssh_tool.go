@@ -385,12 +385,15 @@ func (t termTool) run(ctx context.Context, term *sshterm.Terminal, in sshInput) 
 	if t.kind.tool == config.SSHToolName {
 		describe += "\nA grant for this command covers it on every host."
 	}
+	once := false
 	if t.kind.tool == config.PowerShellToolName && t.loop.Config.PowerShellNeedsAPerson(ctx, in.Command) {
-		// Asked even with skip_permissions on: see PowerShellNeedsAPerson.
-		ctx = tools.WithFirmAsk(ctx)
-		describe += "\nAsked although permission prompts are skipped: a deny rule is set for powershell, and this line is more than one plain command."
+		// Asked even with skip_permissions on (see PowerShellNeedsAPerson),
+		// and every time: an answer "for this session" would stand for
+		// lines nobody read, which is what the question is for.
+		ctx, once = tools.WithFirmAsk(ctx), true
+		describe += "\nAsked although permission prompts are skipped, and every time: a deny rule is set for powershell, and this line is more than one plain command."
 	}
-	ok, why := t.loop.Tools.PermitNamed(config.WithRemoteShell(ctx, t.kind.posix(info)), t.kind.tool, in.Command, describe, false)
+	ok, why := t.loop.Tools.PermitNamed(config.WithRemoteShell(ctx, t.kind.posix(info)), t.kind.tool, in.Command, describe, once)
 	if !ok {
 		return tools.Result{Content: why, IsError: true, Refused: true}
 	}

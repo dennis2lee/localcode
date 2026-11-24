@@ -1,15 +1,13 @@
 package sshterm
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
-	"slices"
-	"sort"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -436,40 +434,31 @@ func (t *Terminal) localOutput(w *runWait) string {
 	return out
 }
 
-// clearSequences are what clears a screen: erase it all, home and erase
-// to its end, and reset.
-var clearSequences = [][]byte{
-	[]byte("\x1b[2J"),
-	[]byte("\x1b[H\x1b[J"), []byte("\x1b[H\x1b[0J"),
-	[]byte("\x1b[1;1H\x1b[J"), []byte("\x1b[1;1H\x1b[0J"),
-	[]byte("\x1b[;H\x1b[J"), []byte("\x1b[;H\x1b[0J"),
-	[]byte("\x1bc"),
-}
+// clearPattern is what clears a screen: erase it all (ESC[2J), erase the
+// scrollback (ESC[3J), which is how a Windows pseudo console says it,
+// reset (ESC c), and the cursor sent home (ESC[H, ESC[1;1f and their
+// spellings) and the screen erased from there (ESC[J), with other
+// sequences that do not move the cursor between. Measured under ConPTY on
+// Windows Server 2025, both PowerShells: Clear-Host, cls and
+// [Console]::Clear() each send the cursor home, every row erased with
+// ESC[K, ESC[3J, and every row erased again, and no ESC[2J.
+var clearPattern = regexp.MustCompile(`\x1b\[[23]J|\x1bc|\x1b\[(?:[01]?(?:;[01]?)?)?[Hf](?:\x1b\[[0-9;?]*[A-GI-Za-eg-z])*\x1b\[0?J`)
 
 // clearTailLen is how much of the output is kept to find a clear whose
 // sequence began in an earlier read.
-const clearTailLen = 16
+const clearTailLen = 64
 
-// clearEnds are the offsets in b just after each clear sequence that ends
-// in b, tail being the output before it.
+// clearEnds are the offsets in b just after each clear that ends in b,
+// tail being the output before it.
 func clearEnds(tail, b []byte) []int {
 	joined := append(append([]byte{}, tail...), b...)
 	var ends []int
-	for _, seq := range clearSequences {
-		for i := 0; ; {
-			j := bytes.Index(joined[i:], seq)
-			if j < 0 {
-				break
-			}
-			end := i + j + len(seq) - len(tail)
-			if end > 0 {
-				ends = append(ends, end)
-			}
-			i += j + 1
+	for _, m := range clearPattern.FindAllIndex(joined, -1) {
+		if end := m[1] - len(tail); end > 0 {
+			ends = append(ends, end)
 		}
 	}
-	sort.Ints(ends)
-	return slices.Compact(ends)
+	return ends
 }
 
 // clearTailOf is the tail to keep after b.
@@ -488,8 +477,11 @@ func clearTailOf(tail, b []byte) []byte {
 func (t *Terminal) pendingWrap(pos uv.Position) bool {
 	cols := t.emu.Width()
 	if t.lastPrompt != "" {
+		// Its last row as the terminal wrapped it: a wide character that
+		// did not fit started the row.
 		lines := strings.Split(t.lastPrompt, "\n")
-		if w := ansi.StringWidth(lines[len(lines)-1]); w > 0 && w%cols == 0 {
+		rows := wrapRows(lines[len(lines)-1], 0, cols)
+		if last := rows[len(rows)-1]; last != "" && ansi.StringWidth(last) == cols {
 			return true
 		}
 	}

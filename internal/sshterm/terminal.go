@@ -618,8 +618,12 @@ func (t *Terminal) draw(b []byte) (err error) {
 		for _, end := range ends {
 			_, _ = t.emu.Write(b[done:end])
 			t.drainScrollback()
-			t.clears++
-			t.clearTop = t.absRow(0)
+			// A clear of the alternate screen (a full-screen program's)
+			// leaves the main screen as it was.
+			if !t.emu.IsAltScreen() {
+				t.clears++
+				t.clearTop = t.absRow(0)
+			}
 			done = end
 		}
 		b = b[done:]

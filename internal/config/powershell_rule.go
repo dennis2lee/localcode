@@ -147,12 +147,52 @@ func powershellReadings(piece string) []string {
 	add(unquoted)
 	plain := strings.ReplaceAll(unquoted, "`", "")
 	add(plain)
-	if word, rest, ok := strings.Cut(strings.TrimSpace(plain), " "); ok {
-		add(programBase(word) + " " + rest)
-	} else {
-		add(programBase(word))
+	word, rest, _ := strings.Cut(strings.TrimSpace(plain), " ")
+	base := programBase(word)
+	add(strings.TrimSpace(base + " " + rest))
+	// A built-in alias is the command it names: "ni marker" is New-Item.
+	if cmdlet, ok := powershellAliases[strings.ToLower(base)]; ok {
+		add(strings.TrimSpace(cmdlet + " " + rest))
+	}
+	// A name that is no command is looked for again with Get- before it:
+	// "content x" runs Get-Content.
+	if base != "" && !strings.Contains(base, "-") {
+		add(strings.TrimSpace("Get-" + base + " " + rest))
 	}
 	return out
+}
+
+// powershellAliases are the aliases Windows PowerShell 5.1 and PowerShell
+// 7 define for their own commands, and the functions that are a command
+// with arguments (mkdir is New-Item). One defined later (Set-Alias) is a
+// line that is not a plain command, asked about under skip_permissions.
+var powershellAliases = map[string]string{
+	"%": "ForEach-Object", "?": "Where-Object", "ac": "Add-Content", "cat": "Get-Content",
+	"cd": "Set-Location", "chdir": "Set-Location", "clc": "Clear-Content", "clear": "Clear-Host",
+	"cli": "Clear-Item", "clp": "Clear-ItemProperty", "cls": "Clear-Host", "clv": "Clear-Variable",
+	"compare": "Compare-Object", "copy": "Copy-Item", "cp": "Copy-Item", "cpi": "Copy-Item",
+	"cpp": "Copy-ItemProperty", "curl": "Invoke-WebRequest", "del": "Remove-Item", "diff": "Compare-Object",
+	"dir": "Get-ChildItem", "echo": "Write-Output", "epal": "Export-Alias", "epcsv": "Export-Csv",
+	"erase": "Remove-Item", "foreach": "ForEach-Object", "gc": "Get-Content", "gci": "Get-ChildItem",
+	"gcm": "Get-Command", "gi": "Get-Item", "gl": "Get-Location", "gp": "Get-ItemProperty",
+	"gps": "Get-Process", "gsv": "Get-Service", "gv": "Get-Variable", "gwmi": "Get-WmiObject",
+	"icm": "Invoke-Command", "iex": "Invoke-Expression", "ihy": "Invoke-History", "ii": "Invoke-Item",
+	"ipal": "Import-Alias", "ipcsv": "Import-Csv", "ipmo": "Import-Module", "irm": "Invoke-RestMethod",
+	"iwmi": "Invoke-WmiMethod", "iwr": "Invoke-WebRequest", "kill": "Stop-Process", "ls": "Get-ChildItem",
+	"md": "New-Item -ItemType Directory", "mkdir": "New-Item -ItemType Directory",
+	"mi": "Move-Item", "mount": "New-PSDrive", "move": "Move-Item", "mp": "Move-ItemProperty",
+	"mv": "Move-Item", "nal": "New-Alias", "ndr": "New-PSDrive", "ni": "New-Item", "nmo": "New-Module",
+	"nv": "New-Variable", "popd": "Pop-Location", "ps": "Get-Process", "pushd": "Push-Location",
+	"pwd": "Get-Location", "r": "Invoke-History", "rd": "Remove-Item", "rdr": "Remove-PSDrive",
+	"ren": "Rename-Item", "ri": "Remove-Item", "rm": "Remove-Item", "rmdir": "Remove-Item",
+	"rni": "Rename-Item", "rnp": "Rename-ItemProperty", "rp": "Remove-ItemProperty", "rv": "Remove-Variable",
+	"rvpa": "Resolve-Path", "rwmi": "Remove-WmiObject", "sajb": "Start-Job", "sal": "Set-Alias",
+	"saps": "Start-Process", "sasv": "Start-Service", "sc": "Set-Content", "select": "Select-Object",
+	"set": "Set-Variable", "si": "Set-Item", "sl": "Set-Location", "sleep": "Start-Sleep",
+	"sls": "Select-String", "sort": "Sort-Object", "sp": "Set-ItemProperty", "spps": "Stop-Process",
+	"spsv": "Stop-Service", "start": "Start-Process", "sv": "Set-Variable", "swmi": "Set-WmiInstance",
+	"tee": "Tee-Object", "type": "Get-Content", "wget": "Invoke-WebRequest", "where": "Where-Object",
+	"write": "Write-Output",
 }
 
 // programBase is a program's name without its module or directory and
@@ -265,14 +305,26 @@ func isInvokeExpression(word string) bool {
 func (c *Config) powershellNamedDeny(ctx context.Context, text string) bool {
 	c.permMu.RLock()
 	defer c.permMu.RUnlock()
+	// The tool's own rules, then those for every tool ("*"), as
+	// resolveRules reads them, each in any case.
+	decide := func(perms map[string]ToolPermission) (Decision, bool) {
+		for _, key := range []string{PowerShellToolName, "*"} {
+			if tp, ok := perms[key]; ok {
+				if d, matched := namedRules(tp, text); matched {
+					return d, true
+				}
+			}
+		}
+		return "", false
+	}
 	if name := c.AgentFor(ctx); name != "" && c.Agents != nil {
 		if agent, ok := c.Agents[name]; ok {
-			if d, matched := namedRules(agent.Permission[PowerShellToolName], text); matched {
+			if d, matched := decide(agent.Permission); matched {
 				return d == DecisionDeny
 			}
 		}
 	}
-	d, matched := namedRules(c.Permissions[PowerShellToolName], text)
+	d, matched := decide(c.Permissions)
 	return matched && d == DecisionDeny
 }
 
@@ -350,6 +402,8 @@ var powershellRunsOthers = map[string]bool{
 	"start": true, "start-job": true, "sajb": true, "invoke-item": true, "ii": true,
 	"source": true, "import-module": true, "ipmo": true,
 	"set-alias": true, "sal": true, "new-alias": true, "nal": true,
+	"import-alias": true, "ipal": true, "new-module": true, "nmo": true,
+	"invoke-history": true, "ihy": true, "r": true,
 	"sh": true, "bash": true, "zsh": true, "wsl": true, "python": true, "python3": true,
 	"py": true, "node": true, "perl": true, "ruby": true, "wscript": true, "cscript": true,
 	"mshta": true, "rundll32": true, "regsvr32": true, "schtasks": true, "forfiles": true,
@@ -360,8 +414,14 @@ var powershellRunsOthers = map[string]bool{
 // digits, spaces and the characters no shell reads as an operator, an
 // escape, a substitution or a grouping (plainShellRunes); a program that
 // is a name, not a path, a script or a call operator, and is not one of
-// powershellRunsOthers; and no function: or alias: path, through which
-// a plain command defines another.
+// powershellRunsOthers; no function: or alias: path, through which a
+// plain command defines another; and no splatted variable (@args).
+//
+// It holds the line, not what a plain command arranges for a later one:
+// a script written and put on PATH, a drive of the Alias or Function
+// provider under another name, a profile the next terminal loads, or a
+// program that starts another (WMI, conhost, git's configured hooks).
+// docs/USAGE.md says so.
 func powershellSimple(line string) bool {
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -375,6 +435,12 @@ func powershellSimple(line string) bool {
 	lower := strings.ToLower(line)
 	if strings.Contains(lower, "function:") || strings.Contains(lower, "alias:") {
 		return false
+	}
+	for _, w := range strings.Fields(line) {
+		if strings.HasPrefix(w, "@") {
+			// Splatting: the arguments are a variable's.
+			return false
+		}
 	}
 	words := powershellWords(line)
 	if len(words) == 0 {
