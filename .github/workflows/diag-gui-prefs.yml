@@ -19,12 +19,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - ref: main
-            only: ''
-            n: 1
           - ref: diag/gui-prefs-fix
             only: ''
-            n: 2
+            n: 1
     steps:
       - uses: actions/checkout@v4
         with:
