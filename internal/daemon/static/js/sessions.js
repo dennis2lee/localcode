@@ -160,17 +160,17 @@ export function writeCollapsedGroups(collapsed) {
   writePref(GROUP_COLLAPSE_KEY, JSON.stringify([...collapsed]));
 }
 
-// The names this page has been given as groups, at any time, and the
-// folds it found in the file for a group it has never been given. Both
-// are for the desktop window with a second window open, and both stay
-// empty of anything that matters in a browser tab.
+// The folds this page read from the file for a group that was not in its
+// list at the time. They are for the desktop window with a second window
+// open, and there are none in a browser tab.
 //
-// Each window has its own daemon, and a daemon hears of a group made
-// through another one only when it next starts. So a fold this page reads
-// from the file for a name it was never given is not a fold left behind
-// by a group that is gone. It is another window's fold of a group this
-// one cannot see, and dropping it would undo that window's change.
-const groupsListed = new Set();
+// Each window has its own daemon, and a daemon does not hear what is done
+// to the groups through another: a group made there is not listed here,
+// and one deleted or renamed here is still listed there. So a fold that
+// arrives from the file for a name this page does not list is not a fold
+// left behind by a group that is gone. This page drops those when it sees
+// the group go. It is another window's fold of a group this one cannot
+// see, and dropping it would undo that window's change.
 const foldedElsewhere = new Set();
 
 // collapsedGroupsNow is the read that starts a change to the folds: one
@@ -179,13 +179,21 @@ const foldedElsewhere = new Set();
 // which in the desktop window is as the file has them and not as this
 // page read them when it started (readShared in js/prefs.js), so the
 // folds another window has made since are written back with the change.
-function collapsedGroupsNow() {
+// listed is the groups this page knows of as the change is made.
+//
+// The panel draws this page's copy, and a click on a group goes by that
+// copy. So when the read changed the copy, the panel is drawn again here,
+// before anything else can happen: a rename or a delete goes on to wait
+// for the session list, and a click made in that wait acted on folds the
+// panel was not showing.
+function collapsedGroupsNow(listed) {
   const mine = readCollapsedGroups();
   const now = readCollapsedGroups(readShared);
-  for (const name of app.sessionGroups || []) groupsListed.add(name);
+  const known = new Set(listed || []);
   for (const name of now) {
-    if (!mine.has(name) && !groupsListed.has(name)) foldedElsewhere.add(name);
+    if (!mine.has(name) && !known.has(name)) foldedElsewhere.add(name);
   }
+  if (now.size !== mine.size || [...now].some((name) => !mine.has(name))) renderSessionList();
   return now;
 }
 
@@ -198,16 +206,16 @@ function collapsedGroupsNow() {
 // looked for in the file whatever this page's own copy says.
 export function forgetCollapsedGroups(groups, deleted) {
   const live = new Set(groups || []);
-  for (const name of deleted === undefined ? live : [...live, deleted]) {
-    groupsListed.add(name);
-    foldedElsewhere.delete(name);
-  }
+  const listed = deleted === undefined ? [...live] : [...live, deleted];
+  // Once this page has been given the group, its fold is one this page
+  // can judge.
+  for (const name of listed) foldedElsewhere.delete(name);
   const gone = (collapsed) => [...collapsed].filter((name) => !live.has(name) && !foldedElsewhere.has(name));
   // This page's copy is asked first. This runs on every refresh of the
   // session list, and the file is only worth asking for when there is
   // something to drop.
   if (deleted === undefined && gone(readCollapsedGroups()).length === 0) return;
-  const collapsed = collapsedGroupsNow();
+  const collapsed = collapsedGroupsNow(listed);
   const dropped = gone(collapsed);
   if (dropped.length === 0) return;
   for (const name of dropped) collapsed.delete(name);
@@ -521,7 +529,7 @@ export function renderSessionList() {
       // folded since would open it there and change nothing here.
       const fold = !readCollapsedGroups().has(groupName);
       forgetCollapsedGroups(groups);
-      const cur = collapsedGroupsNow();
+      const cur = collapsedGroupsNow(groups);
       if (fold) cur.add(groupName);
       else cur.delete(groupName);
       writeCollapsedGroups(cur);
@@ -1087,6 +1095,11 @@ export async function promptCreateGroup() {
   try {
     await apiClient.setGroups(next);
     app.sessionGroups = next;
+    // A group made here is drawn as the folds are kept now. This page's
+    // copy can hold a fold under the same name that another window made
+    // for a group of its own and has dropped since, and the new group
+    // would start folded shut.
+    collapsedGroupsNow(next);
     renderSessionList();
   } catch (err) {
     appendError(`could not create group: ${err}`);
@@ -1111,7 +1124,7 @@ export async function promptRenameGroup(oldName) {
     // The fold belongs to the group, not to the name it had. Carrying it
     // across means renaming a folded group leaves it folded, and the old
     // name does not stay behind to fold a future group of that name.
-    const collapsed = collapsedGroupsNow();
+    const collapsed = collapsedGroupsNow(app.sessionGroups);
     if (collapsed.has(oldName)) {
       collapsed.delete(oldName);
       collapsed.add(trimmed);

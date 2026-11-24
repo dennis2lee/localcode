@@ -172,11 +172,19 @@ route.
 
 Three names hold several items each: `localcode.panelWidths`,
 `localcode.panelViews` and `localcode.collapsedGroups`. The page writes
-each whole. It calls `GET` again before it changes one item, and starts
-from the value the file has then, so the items a second open window wrote
-are sent back unchanged. The read and the write are two requests, and
-each window has its own daemon: two windows that change the same name
-within those two requests keep the value written last.
+each whole. It calls `GET` again before it changes one item and starts
+from the value the file has then. The items a second open window wrote
+are sent back unchanged.
+
+The page skips that `GET` and starts from its own copy in two cases:
+
+* A write of the same name from this page has not been answered with
+  `204` yet.
+* The `GET` gives no answer the page can read.
+
+The read and the write are two requests. Each window has its own daemon.
+Two windows that change the same name within those two requests keep the
+value written last.
 
 Both routes pass the SSH request guard (see SSH below) and answer `403`
 when it refuses.

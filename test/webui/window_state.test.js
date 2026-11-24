@@ -673,7 +673,7 @@ function sharedFile(initial = null) {
         }
         return load({
           localStorage: Object.fromEntries(st.map),
-          globals: { lcGUI: true, localcodeKept: r.kept, XMLHttpRequest: Ask },
+          globals: { lcGUI: true, localcodeKept: r.kept, XMLHttpRequest: Ask, ...(opts.globals || {}) },
           routes: { [`PUT ${ROUTE}`]: put, ...(opts.routes || {}) },
         }).then((app) => {
           // The page's storage is the harness's own Map from here on:
@@ -827,6 +827,25 @@ test('a conversation deleted in one window does not come back with another windo
   b.el('toggle-right').click();
   await b.settle();
   assert.deepEqual(viewsOf(daemon), { 'sess-1': ['right'] });
+});
+
+test('a conversation deleted in a window that never had its panels is forgotten in the file', async () => {
+  // Looked for in this page's copy, there was nothing to forget, and the
+  // choice the other window wrote stayed in the file for good.
+  const daemon = sharedFile();
+  const a = await daemon.window().open();
+  const b = await daemon.window().open();
+  await a.settle();
+  await b.settle();
+  open(a, 'sess-2');
+  a.el('toggle-right').click();
+  await a.settle();
+  assert.deepEqual(viewsOf(daemon)['sess-2'], ['right']);
+  assert.equal(b.storage.get('localcode.panelViews').includes('sess-2'), false, 'the second window holds the conversation; this test reads the wrong thing');
+
+  b.forgetPanels('sess-2');
+  await b.settle();
+  assert.deepEqual(Object.keys(viewsOf(daemon)), ['sess-1']);
 });
 
 test('at the limit the conversation forgotten is the oldest in the file, not the oldest a page knew', async () => {
@@ -1033,6 +1052,166 @@ test('dropping the fold of a group that is gone leaves the folds another window 
   assert.equal(third.asked.length, n, 'every refresh of the session list asked for the file');
 });
 
+// Answers the in-page dialog that a group action opens.
+async function answer(app, asking, text) {
+  await app.settle();
+  if (text !== undefined) app.el('prompt-input').value = text;
+  app.el('prompt-ok').click();
+  await asking;
+  await app.settle();
+}
+
+test('a fold another window makes for a group this window deleted or renamed is left alone', async () => {
+  // A daemon does not hear what is done to the groups through another:
+  // the group this window deleted or renamed is still listed in the
+  // other, which can fold it. That fold arrives here for a name this
+  // page once listed, and it is still not a fold left behind.
+  for (const [how, act, left] of [
+    ['deleted', (b) => answer(b, b.internals.promptDeleteGroup('work')), ['home']],
+    ['renamed', (b) => answer(b, b.internals.promptRenameGroup('work'), 'job'), ['job', 'home']],
+  ]) {
+    const daemon = sharedFile();
+    const a = await daemon.window(withGroups()).open();
+    const b = await daemon.window(withGroups()).open();
+    await a.settle();
+    await b.settle();
+    b.routes['GET /api/sessions/groups'] = { names: left };
+    await act(b);
+
+    header(a, 'work').fire('click');
+    await a.settle();
+    header(b, 'home').fire('click');
+    await b.settle();
+    assert.deepEqual(folds(daemon).sort(), ['home', 'work'], `${how}: the click dropped the other window's fold`);
+    await b.loadSessions();
+    await b.settle();
+    assert.deepEqual(folds(daemon).sort(), ['home', 'work'], `${how}: the list read again dropped the other window's fold`);
+  }
+});
+
+test('folds a delete or a rename brings in from another window are drawn at once', async () => {
+  // Both go on to wait for the session list. The panel draws this
+  // page's copy and a click goes by it, so a copy changed and not drawn
+  // made a click in that wait do the opposite of what the person saw.
+  for (const [how, act] of [
+    ['delete', (b) => b.internals.promptDeleteGroup('work')],
+    ['rename', (b) => b.internals.promptRenameGroup('work')],
+  ]) {
+    const daemon = sharedFile();
+    const a = await daemon.window(withGroups()).open();
+    let hold = false;
+    let release;
+    const b = await daemon.window({
+      routes: {
+        ...withGroups().routes,
+        'GET /api/sessions': () => (hold ? new Promise((resolve) => { release = () => resolve(GROUPED); }) : GROUPED),
+      },
+    }).open();
+    await a.settle();
+    await b.settle();
+    header(a, 'home').fire('click');
+    await a.settle();
+    assert.equal(shut(b, 'home'), false);
+
+    hold = true;
+    const asking = act(b);
+    await b.settle();
+    if (how === 'rename') b.el('prompt-input').value = 'job';
+    b.el('prompt-ok').click();
+    await b.settle();
+    assert.equal(typeof release, 'function', `${how}: the session list is not being waited for; this test reads the wrong thing`);
+    assert.equal(shut(b, 'home'), true, `${how}: the other window's fold is in this page's copy and not on its panel`);
+
+    // A click in that wait opens the group the panel shows folded.
+    header(b, 'home').fire('click');
+    await b.settle();
+    assert.equal(shut(b, 'home'), false, `${how}: the click did not do what the panel showed`);
+    hold = false;
+    release();
+    await asking;
+    await b.settle();
+    assert.equal(folds(daemon).includes('home'), false, `${how}: the group is open on the panel and folded in the file`);
+  }
+
+  // The same for a fold the other window took away: the panel shows the
+  // group folded until the copy that says otherwise is drawn.
+  const daemon = sharedFile({ 'localcode.collapsedGroups': JSON.stringify(['home']) });
+  const a = await daemon.window(withGroups()).open();
+  let hold = false;
+  let release;
+  const b = await daemon.window({
+    routes: {
+      ...withGroups().routes,
+      'GET /api/sessions': () => (hold ? new Promise((resolve) => { release = () => resolve(GROUPED); }) : GROUPED),
+    },
+  }).open();
+  await a.settle();
+  await b.settle();
+  assert.equal(shut(b, 'home'), true);
+  header(a, 'home').fire('click');
+  await a.settle();
+  hold = true;
+  const asking = b.internals.promptDeleteGroup('work');
+  await b.settle();
+  b.el('prompt-ok').click();
+  await b.settle();
+  assert.equal(shut(b, 'home'), false, 'a group the other window opened is still drawn folded');
+  hold = false;
+  release();
+  await asking;
+});
+
+test('a fold read from the file for a group this window lists is its own to drop, whatever read brought it', async () => {
+  // A rename reads the file too. The fold it brings in for another group
+  // this window lists is not another window's to keep: when that group
+  // goes from this window's list, the fold goes. Here the list cannot be
+  // read right after the rename, so nothing else has judged the fold.
+  const daemon = sharedFile();
+  const a = await daemon.window(withGroups(['work', 'home', 'extra'])).open();
+  const b = await daemon.window(withGroups(['work', 'home', 'extra'])).open();
+  await a.settle();
+  await b.settle();
+  a.app.sessionGroups = ['work', 'home', 'extra'];
+  a.internals.writeCollapsedGroups(new Set(['extra']));
+  await a.settle();
+  assert.deepEqual(folds(daemon), ['extra']);
+
+  b.routes['GET /api/sessions/groups'] = { networkError: 'connection refused' };
+  await answer(b, b.internals.promptRenameGroup('work'), 'job');
+  assert.equal(b.storage.get('localcode.collapsedGroups'), JSON.stringify(['extra']), 'the rename did not read the file; this test reads the wrong thing');
+
+  b.routes['GET /api/sessions/groups'] = { names: ['job', 'home'] };
+  await b.loadSessions();
+  await b.settle();
+  assert.deepEqual(folds(daemon), []);
+});
+
+test('a group made in a window starts as the folds are kept now, not as an older copy has them', async () => {
+  // The first window folds a group of its own and deletes it. The second
+  // took that fold into its copy with a change in between, and then makes
+  // a group of the same name.
+  const daemon = sharedFile();
+  const a = await daemon.window(withGroups(['work', 'home', 'temp'], [
+    ...GROUPED, { id: 'g-temp', title: 'for now', agent: 'general-purpose', workspace: '/tmp/workspace', group: 'temp' },
+  ])).open();
+  const b = await daemon.window(withGroups()).open();
+  await a.settle();
+  await b.settle();
+  header(a, 'temp').fire('click');
+  await a.settle();
+  header(b, 'home').fire('click');
+  await b.settle();
+  a.routes['GET /api/sessions/groups'] = { names: ['work', 'home'] };
+  await answer(a, a.internals.promptDeleteGroup('temp'));
+  assert.deepEqual(folds(daemon), ['home']);
+
+  b.routes['GET /api/sessions/groups'] = { names: ['work', 'home', 'temp'] };
+  await answer(b, b.internals.promptCreateGroup(), 'temp');
+  assert.equal(shut(b, 'temp'), false, 'a group made a moment ago was drawn folded shut');
+  assert.equal(shut(b, 'home'), true);
+  assert.deepEqual(folds(daemon), ['home']);
+});
+
 test('a group deleted or renamed in one window takes the fold another window made', async () => {
   const daemon = sharedFile();
   const a = await daemon.window(withGroups()).open();
@@ -1065,6 +1244,102 @@ test('a group deleted or renamed in one window takes the fold another window mad
   await renamed;
   await c.settle();
   assert.deepEqual(folds(daemon), ['job'], 'the fold did not go to the new name');
+});
+
+// The same claim, without choosing the cases: three windows, random
+// changes, one window at a time as one person makes them. After every
+// step, each item the step did not name is in the file as it was before
+// the step, and at the end a page that starts fresh holds what the file
+// holds. Before the page read the file again, every sequence failed this
+// within a few steps, on all three values.
+test('whatever three windows change, in any order, an item nobody changed stays as it was', async () => {
+  const GROUPS = ['work', 'home'];
+  const CONVS = ['sess-1', 'c-a', 'c-b', 'c-c'];
+  // The file as items: one a conversation, one a width or a flag, one a group.
+  const items = (keptNow) => {
+    const out = new Map();
+    const k = keptNow || {};
+    for (const [id, hidden] of JSON.parse(k['localcode.panelViews'] || '[]')) out.set(`view:${id}`, JSON.stringify([...hidden].sort()));
+    for (const [n, v] of Object.entries(JSON.parse(k['localcode.panelWidths'] || '{}'))) {
+      if (v !== null && v !== false) out.set(`width:${n}`, JSON.stringify(v));
+    }
+    for (const g of JSON.parse(k['localcode.collapsedGroups'] || '[]')) out.set(`fold:${g}`, 'true');
+    return out;
+  };
+  // Seeded, so a failure names a sequence that fails again.
+  const random = (seed) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+
+  for (let run = 0; run < 6; run++) {
+    const r = random(7000 + run);
+    const pick = (list) => list[Math.floor(r() * list.length)];
+    const daemon = sharedFile();
+    const wins = [];
+    for (let i = 0; i < 3; i++) {
+      const win = daemon.window(withGroups(GROUPS));
+      const app = await win.open();
+      await app.settle();
+      wins.push({ win, app, conv: 'sess-1' });
+    }
+    const steps = [];
+    for (let step = 0; step < 25; step++) {
+      const w = pick(wins);
+      const before = items(daemon.file.kept);
+      const named = new Set();
+      const kind = pick(['right', 'right', 'left', 'open', 'open', 'drag', 'reset', 'fold', 'fold', 'forget', 'reload']);
+      let what = kind;
+      if (kind === 'right' || kind === 'left') {
+        w.app.el(`toggle-${kind}`).click();
+        named.add(`width:${kind}Collapsed`).add(`view:${w.conv}`);
+      } else if (kind === 'open') {
+        w.conv = pick(CONVS);
+        what += ` ${w.conv}`;
+        open(w.app, w.conv);
+        named.add(`view:${w.conv}`).add('width:browserCollapsed').add('width:sshCollapsed').add('width:rightCollapsed');
+      } else if (kind === 'drag') {
+        if (w.app.el('left-panel').classList.contains('collapsed')) continue;
+        dragLeftTo400(w.app);
+        named.add('width:left');
+      } else if (kind === 'reset') {
+        w.app.el('resize-left').fire('dblclick');
+        named.add('width:left');
+      } else if (kind === 'fold') {
+        const g = pick(GROUPS);
+        what += ` ${g}`;
+        header(w.app, g).fire('click');
+        named.add(`fold:${g}`);
+      } else if (kind === 'forget') {
+        const c = pick(CONVS.filter((id) => id !== w.conv));
+        what += ` ${c}`;
+        w.app.forgetPanels(c);
+        named.add(`view:${c}`);
+      } else {
+        // The page loaded again, on the same address.
+        await w.app.settle();
+        w.win.sync();
+        w.app = await w.win.open();
+        w.conv = 'sess-1';
+        named.add('view:sess-1').add('width:browserCollapsed').add('width:sshCollapsed').add('width:rightCollapsed');
+      }
+      await w.app.settle();
+      steps.push(`window ${wins.indexOf(w)} ${what}`);
+      const after = items(daemon.file.kept);
+      for (const item of new Set([...before.keys(), ...after.keys()])) {
+        if (named.has(item)) continue;
+        assert.equal(after.get(item), before.get(item), `run ${run}: ${item} changed in a step that did not name it. Steps: ${steps.join(', ')}`);
+      }
+    }
+    const fresh = await daemon.window(withGroups(GROUPS)).open();
+    await fresh.settle();
+    assert.deepEqual([...items(Object.fromEntries(fresh.storage))].sort(), [...items(daemon.file.kept)].sort(), `run ${run}: a fresh page does not hold what the file holds`);
+  }
 });
 
 // ---- the read that starts such a change (readShared in js/prefs.js)
@@ -1140,8 +1415,10 @@ test('a change still on its way to the daemon is not undone by the file it has n
   await app.settle();
   assert.equal(held.length, 1);
   assert.equal(kept(daemon, 'localcode.panelWidths').rightCollapsed, undefined, 'the first change is not held back; this test reads the wrong thing');
+  const askedBefore = win.asked.length;
   dragLeftTo400(app);
   await app.settle();
+  assert.equal(win.asked.length, askedBefore, 'the file was asked for under a name this page is ahead of it on');
   // The first is taken and the second, made meanwhile, goes out and is
   // held in its turn. The file has the first only, so a third change
   // still starts from this page's copy.
@@ -1218,6 +1495,120 @@ test('what a page is handing over is not replaced by a file another window began
   assert.equal(widths.rightCollapsed, true);
 });
 
+test('a change the daemon stopped being asked to take is still the page\'s, and the file\'s again once taken', async () => {
+  // Six tries and the page stops. What was not taken waits for the next
+  // change, and until it is taken the file is the older of the two.
+  const daemon = sharedFile({ 'localcode.panelWidths': JSON.stringify({ left: 300 }) });
+  let down = false;
+  const win = daemon.window({
+    globals: instantTimers(),
+    routes: { [`PUT ${ROUTE}`]: (body) => (down ? { status: 500, body: { error: 'could not write' } } : daemon.put(body)) },
+  });
+  const app = await win.open();
+  await app.settle();
+  down = true;
+  const before = writes(app).length;
+  app.el('toggle-right').click();
+  await app.settle();
+  assert.ok(writes(app).length - before >= 6, 'the write was not tried to the end; this test reads the wrong thing');
+  assert.equal(kept(daemon, 'localcode.panelWidths').rightCollapsed, undefined);
+
+  // Another window writes meanwhile. This page's next change still starts
+  // from its own copy, which has the change the daemon never took.
+  daemon.put({ 'localcode.panelWidths': JSON.stringify({ left: 300, ssh: 500 }) });
+  down = false;
+  dragLeftTo400(app);
+  await app.settle();
+  let widths = kept(daemon, 'localcode.panelWidths');
+  assert.equal(widths.rightCollapsed, true, 'the change that was never taken was dropped by the one after it');
+  assert.equal(widths.left, 400);
+
+  // Taken now, so the next change starts from the file.
+  daemon.put({ 'localcode.panelWidths': JSON.stringify({ ...widths, ssh: 500 }) });
+  app.el('toggle-left').click();
+  await app.settle();
+  widths = kept(daemon, 'localcode.panelWidths');
+  assert.equal(widths.ssh, 500, 'the page went on from its own copy after its change was taken');
+  assert.equal(widths.leftCollapsed, true);
+});
+
+test('a change sent plainly after the browser refused it, or taken after a refusal, is the file\'s again', async () => {
+  for (const how of ['the browser would not send it to outlive the page', 'the daemon refused it once']) {
+    const daemon = sharedFile({ 'localcode.panelWidths': JSON.stringify({ left: 300 }) });
+    let trouble = false;
+    const win = daemon.window({
+      globals: instantTimers(),
+      routes: {
+        [`PUT ${ROUTE}`]: (body) => {
+          if (!trouble) return daemon.put(body);
+          if (how.startsWith('the daemon')) { trouble = false; return { status: 413, body: { error: 'too large' } }; }
+          const call = win.app.calls[win.app.calls.length - 1];
+          return call.keepalive ? { networkError: 'TypeError: Failed to fetch' } : daemon.put(body);
+        },
+      },
+    });
+    win.app = await win.open();
+    const app = win.app;
+    await app.settle();
+    trouble = true;
+    app.el('toggle-right').click();
+    await app.settle();
+    if (how.startsWith('the daemon')) {
+      // Refused, so the file does not have it. The next change is taken.
+      assert.equal(kept(daemon, 'localcode.panelWidths').rightCollapsed, undefined, how);
+      app.el('toggle-right').click();
+      await app.settle();
+    }
+    trouble = false;
+    const mine = kept(daemon, 'localcode.panelWidths');
+    daemon.put({ 'localcode.panelWidths': JSON.stringify({ ...mine, ssh: 500 }) });
+    dragLeftTo400(app);
+    await app.settle();
+    assert.equal(kept(daemon, 'localcode.panelWidths').ssh, 500, `${how}: the page went on from its own copy after its change was taken`);
+    assert.equal(kept(daemon, 'localcode.panelWidths').left, 400, how);
+  }
+});
+
+test('with storage that refuses writes, a change back to the value it still holds reaches the file', async () => {
+  // The storage answers with what it held before it began refusing. A
+  // change to that same value was compared with it, taken for no change,
+  // and never sent, though the file had moved on.
+  const daemon = sharedFile({ 'localcode.panelWidths': JSON.stringify({ left: 400 }) });
+  const a = await daemon.window().open();
+  const b = await daemon.window().open();
+  await a.settle();
+  await b.settle();
+  b.storage.set = () => { throw new Error('QuotaExceededError'); };
+
+  a.el('resize-left').fire('dblclick');
+  await a.settle();
+  assert.equal(kept(daemon, 'localcode.panelWidths').left, null);
+  dragLeftTo400(b);
+  await b.settle();
+  assert.equal(kept(daemon, 'localcode.panelWidths').left, 400);
+});
+
+test('with storage that refuses writes, two changes in one turn still keep another window\'s item', async () => {
+  // The click drops the fold of a group that is gone and then folds the
+  // group clicked: two writes of one value. The second goes on from what
+  // the first sent, not from what the storage would not take.
+  const daemon = sharedFile({ 'localcode.collapsedGroups': JSON.stringify(['old']) });
+  const a = await daemon.window(withGroups(['work', 'home', 'old'])).open();
+  const b = await daemon.window(withGroups(['work', 'home', 'old'])).open();
+  await a.settle();
+  await b.settle();
+  header(a, 'work').fire('click');
+  await a.settle();
+
+  b.routes['GET /api/sessions/groups'] = { names: ['work', 'home'] };
+  b.storage.set = () => { throw new Error('QuotaExceededError'); };
+  b.app.sessionGroups = ['work', 'home'];
+  b.renderSessionList();
+  header(b, 'home').fire('click');
+  await b.settle();
+  assert.deepEqual(folds(daemon).sort(), ['home', 'work']);
+});
+
 test('with no answer from the daemon a change is made from what the page holds, and still written', async () => {
   for (const [name, answer] of Object.entries({
     'a request that throws': () => { throw new Error('NetworkError'); },
@@ -1233,6 +1624,9 @@ test('with no answer from the daemon a change is made from what the page holds, 
     },
     'a file not written yet': { available: true, kept: null },
     'an array': { available: true, kept: ['localcode.panelWidths'] },
+    'a number': { available: true, kept: 42 },
+    'a string': { available: true, kept: 'oops' },
+    'true': { available: true, kept: true },
     'a value that is not a string': { available: true, kept: { 'localcode.panelWidths': { left: 1 }, 'localcode.panelViews': 7 } },
   })) {
     const daemon = sharedFile({ 'localcode.panelWidths': JSON.stringify({ left: 300 }) });
@@ -1275,6 +1669,13 @@ test('the read that starts a change takes the file\'s value even when storage re
   const win = daemon.window();
   const app = await win.open();
   await app.settle();
+  // With storage that takes it, the page's copy is the file's afterwards:
+  // it is what the panel draws.
+  daemon.put({ 'localcode.collapsedGroups': JSON.stringify(['home']) });
+  assert.equal(app.readShared('localcode.collapsedGroups'), JSON.stringify(['home']));
+  assert.equal(app.storage.get('localcode.collapsedGroups'), JSON.stringify(['home']));
+  await app.settle();
+
   daemon.put({ 'localcode.collapsedGroups': JSON.stringify(['work', 'home']) });
   app.storage.set = () => { throw new Error('QuotaExceededError'); };
   assert.equal(app.readShared('localcode.collapsedGroups'), JSON.stringify(['work', 'home']));

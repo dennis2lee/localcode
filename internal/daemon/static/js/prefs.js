@@ -58,7 +58,11 @@ export function writePref(key, value) {
   } catch { /* storage refused: this page keeps the choice, the next starts without it */ }
   // Nothing changed, so there is nothing to send: several of these are
   // written again on every page load with the value they already have.
-  if (was === v) return;
+  // Changed from what the file is known to have, where that is known,
+  // which is only ever in the desktop window: storage that refuses a
+  // write still answers with its older value, and a change back to that
+  // value was taken for no change and never sent.
+  if ((latest.has(key) ? latest.get(key) : was) === v) return;
   keep(key, v);
 }
 
@@ -88,7 +92,10 @@ export function writePref(key, value) {
 // is then made from what the page holds, as every change was before.
 export function readShared(key) {
   const mine = readPref(key);
-  if (!keeping() || !OWN.test(key) || ahead.has(key)) return mine;
+  if (!keeping() || !OWN.test(key)) return mine;
+  // What this page sent, not what its storage answers with: storage that
+  // refused the write still holds the value from before it.
+  if (ahead.has(key)) return latest.has(key) ? latest.get(key) : mine;
   const kept = fileNow();
   if (kept === null) return mine;
   const has = Object.prototype.hasOwnProperty.call(kept, key);
@@ -102,6 +109,7 @@ export function readShared(key) {
       else localStorage.setItem(key, theirs);
     } catch { /* storage refused: the change still starts from the file's */ }
   }
+  latest.set(key, theirs);
   return theirs;
 }
 
@@ -141,6 +149,12 @@ const waiting = new Map();
 // one in the request on its way, and one the daemon refused. readShared
 // leaves these as the page has them.
 const ahead = new Set();
+// What this page last read from the file or sent to it, by name. With
+// storage that takes writes it is what localStorage holds, and nothing is
+// decided differently for having it. With storage that refuses them,
+// localStorage goes on answering with an older value, and this is the
+// value the page goes on from.
+const latest = new Map();
 let sending = false;
 // Whether a change was made while a request was on its way.
 let arrived = false;
@@ -149,6 +163,7 @@ function keep(key, value) {
   if (!keeping() || !OWN.test(key)) return;
   waiting.set(key, value);
   ahead.add(key);
+  latest.set(key, value);
   arrived = true;
   send();
 }
@@ -230,6 +245,7 @@ function handOver() {
       if (value !== null && value !== '') {
         waiting.set(key, value);
         ahead.add(key);
+        latest.set(key, value);
       }
     }
   } catch { /* storage refused: nothing to hand over */ }

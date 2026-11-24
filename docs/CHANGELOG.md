@@ -11,7 +11,9 @@ Two desktop windows open at once no longer undo each other's panel and group cha
 * A conversation opened in a second window shown with the panels the first window left it, and no longer written down as opened for the first time
 * The conversation forgotten at the limit of 200 now the oldest in the file, not the oldest the window had read
 * The fold of a group deleted or renamed in one window dropped or carried when another window made it
+* The fold another window makes for a group that is not in this window's list left alone
 * A click on a group's header folding or opening it as that window shows it
+* A setting changed back to a value the window's storage still held, with storage that refuses writes, now written to the file
 
 ## v0.179.0
 
