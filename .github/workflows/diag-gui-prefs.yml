@@ -18,7 +18,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ref: [main]
+        include:
+          - ref: main
+            only: 'port-reserved reopen-while-closing config-with-comment'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,7 +50,7 @@ jobs:
       - name: Settings across a restart
         timeout-minutes: 22
         shell: pwsh
-        run: ./harness/diag/prefs/run.ps1 -Exe src/localcode-gui.exe -Ref "${{ matrix.ref }}" -Only "${{ vars.DIAG_PREFS_ONLY }}"
+        run: ./harness/diag/prefs/run.ps1 -Exe src/localcode-gui.exe -Ref "${{ matrix.ref }}" -Only "${{ matrix.only }}"
 
       - name: Keep the screenshots
         if: always()

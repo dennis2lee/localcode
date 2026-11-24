@@ -28,6 +28,11 @@ public static class W {
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int hgt, bool repaint);
+  // What Hyper-V, WSL and Docker call at boot to take ranges of the
+  // dynamic ports for themselves. The port is in network byte order.
+  [DllImport("iphlpapi.dll")] public static extern uint CreatePersistentTcpPortReservation(ushort startPort, ushort count, out ulong token);
+  [DllImport("iphlpapi.dll")] public static extern uint DeletePersistentTcpPortReservation(ushort startPort, ushort count);
+  public static ushort Net(int port) { return (ushort)(((port & 0xff) << 8) | ((port >> 8) & 0xff)); }
   public static void Click(int x, int y) {
     SetCursorPos(x, y);
     System.Threading.Thread.Sleep(150);
@@ -90,7 +95,7 @@ function Reset-State([switch]$Comments) {
   foreach ($d in (Get-ChildItem $env:APPDATA -Directory | Where-Object { $_.Name -like 'localcode-gui*' -or $_.Name -like 'lc-renamed*' })) {
     Remove-Item -Recurse -Force $d.FullName -ErrorAction SilentlyContinue
   }
-  foreach ($f in 'window-port', 'window-prefs.json', 'window.json') {
+  foreach ($f in 'window-port', 'window-state.json') {
     Remove-Item -Force (Join-Path $LC $f) -ErrorAction SilentlyContinue
   }
   Remove-Item -Recurse -Force (Join-Path $LC 'sessions') -ErrorAction SilentlyContinue
@@ -234,7 +239,9 @@ function Set-All($app) {
   if (-not (Open-Settings $app)) { return 'settings did not open' }
   $smart = Check $app 'smart-agent-checkbox'
   $ssh = Check $app 'ssh-checkbox'
+  Start-Sleep -Milliseconds 1200
   $warn = ((Text-Of $app 'smart-agent-warn') + ' ' + (Text-Of $app 'ssh-warn')).Trim()
+  if ($script:ShotAgents) { Shot $script:ShotAgents }
   $text = '?'
   if (Open-Typography $app) {
     $sel = El $app 'typo-size-select'
@@ -336,11 +343,9 @@ function Storage($exe = $Exe) {
 }
 
 function Prefs-File {
-  foreach ($f in 'window-prefs.json', 'window.json') {
-    $p = Join-Path $LC $f
-    if (Test-Path $p) { return "${f}: " + ((Get-Content $p -Raw) -replace '\s+', ' ').Trim() }
-  }
-  return 'no prefs file'
+  $p = Join-Path $LC 'window-state.json'
+  if (Test-Path $p) { return "window-state.json: " + ((Get-Content $p -Raw) -replace '\s+', ' ').Trim() }
+  return 'no window-state.json'
 }
 
 function Wanted($name) {
@@ -349,6 +354,8 @@ function Wanted($name) {
 }
 
 function Result($name, $line) { "RESULT $name ($Ref) :: $line" }
+
+$script:ShotAgents = $null
 
 # ---- what this machine is
 
@@ -413,22 +420,57 @@ if (Wanted 'port-taken') {
   Result 'port-taken' "another program on port $($a.Port) :: port $($a.Port) -> $($b.Port) -> $($c.Port) (window-port $(Port-File)) :: set $set :: after restart $got :: once the port is free again $again :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
 }
 
-# The same, the way Windows itself does it: Hyper-V, WSL and Docker
-# reserve ranges of the dynamic ports at boot, a different set each time.
-if (Wanted 'port-excluded') {
-  "--- port-excluded"
+# The same, the way Windows itself does it. Hyper-V, WSL and Docker take
+# ranges of the dynamic ports at boot, a different set each time, and a
+# port in one of them cannot be bound by anybody else. The reservation
+# here is made with the call they use. (An exclusion added with netsh is a
+# different thing: it only keeps the port out of the ones handed out, and
+# the first run of this found the window binding straight through it.)
+if (Wanted 'port-reserved') {
+  "--- port-reserved"
   Reset-State
   $a = Start-App
   $set = Set-All $a
   Start-Sleep 15
   Close-App $a
-  $add = (netsh int ipv4 add excludedportrange protocol=tcp startport=$($a.Port) numberofports=1 store=active) -join ' '
+  $token = [uint64]0
+  $made = [W]::CreatePersistentTcpPortReservation([W]::Net([int]$a.Port), 1, [ref]$token)
+  $bind = 'bound'
+  try { $t = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, [int]$a.Port); $t.Start(); $t.Stop() } catch { $bind = "refused: $($_.Exception.InnerException.Message)" }
   $b = Start-App
   $got = Read-All $b
-  Shot 'port-excluded-after'
+  Shot 'port-reserved-after'
   Close-App $b
-  $del = (netsh int ipv4 delete excludedportrange protocol=tcp startport=$($a.Port) numberofports=1 store=active) -join ' '
-  Result 'port-excluded' "port $($a.Port) reserved by the system ($add) :: port $($a.Port) -> $($b.Port) (window-port $(Port-File)) :: set $set :: after restart $got :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
+  $gone = [W]::DeletePersistentTcpPortReservation([W]::Net([int]$a.Port), 1)
+  Result 'port-reserved' "port $($a.Port) reserved by the system (create=$made, delete=$gone; another program binding it: $bind) :: port $($a.Port) -> $($b.Port) (window-port $(Port-File)) :: set $set :: after restart $got :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
+}
+
+# Opened again while the last one is still going away.
+if (Wanted 'reopen-while-closing') {
+  "--- reopen-while-closing"
+  Reset-State
+  $a = Start-App
+  $set = Set-All $a
+  Start-Sleep 8
+  $win = Win $a
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+  [W]::PostMessage([IntPtr]$win.Current.NativeWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+  $p2 = Start-Process $Exe -PassThru
+  $aliveAtStart = -not $a.Proc.HasExited
+  [void]$a.Proc.WaitForExit(20000)
+  $exitMs = $sw.ElapsedMilliseconds
+  $port = $null
+  for ($i = 0; $i -lt 120 -and -not $port; $i++) {
+    $ports = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $p2.Id } | ForEach-Object { $_.LocalPort }
+    foreach ($c in $ports) { try { Invoke-RestMethod "http://127.0.0.1:$c/api/version" -TimeoutSec 2 | Out-Null; $port = $c; break } catch {} }
+    if (-not $port) { Start-Sleep -Milliseconds 500 }
+  }
+  $bindMs = $sw.ElapsedMilliseconds
+  $b = [pscustomobject]@{ Proc = $p2; Port = $port; Base = "http://127.0.0.1:$port"; Exe = $Exe }
+  [void](El $b 'settings-btn' 80)
+  $got = Read-All $b
+  Close-App $b
+  Result 'reopen-while-closing' "started again as the first was asked to close (first still running then: $aliveAtStart; it was gone after ${exitMs}ms; the second was serving within ${bindMs}ms) :: port $($a.Port) -> $($b.Port) (window-port $(Port-File)) :: set $set :: after restart $got :: config $(Config-Keys) :: storage [$(Storage)] :: $(Prefs-File)"
 }
 
 # Two windows at once, then one.
@@ -454,14 +496,17 @@ if (Wanted 'config-with-comment') {
   "--- config-with-comment"
   Reset-State -Comments
   $a = Start-App
+  $script:ShotAgents = 'config-with-comment-agents'
   $set = Set-All $a
+  $script:ShotAgents = $null
   Shot 'config-with-comment-set'
   Start-Sleep 15
   Close-App $a
   $b = Start-App
   $got = Read-All $b
   Close-App $b
-  Result 'config-with-comment' "port $($a.Port) -> $($b.Port) :: set $set :: after restart $got :: config $(Config-Keys) :: $(Prefs-File)"
+  $kept = if ((Get-Content (Join-Path $LC 'config.json') -Raw) -match 'my notes about this machine') { 'still there' } else { 'GONE' }
+  Result 'config-with-comment' "port $($a.Port) -> $($b.Port) :: set $set :: after restart $got :: config $(Config-Keys), the note in it is $kept :: $(Prefs-File)"
 }
 
 # The program under another file name, as a copy kept beside an older one.
