@@ -152,10 +152,15 @@ type Terminal struct {
 	// The mark comes before the prompt, which a shell can take a while to
 	// work out (a status line from git, a prompt command of the person's):
 	// while the cursor is where the mark left it, no prompt has been drawn.
+	// markLeft, markRest and markNext are the line as the mark left it,
+	// which is the line an empty prompt leaves.
 	markAt      time.Time
 	markX       int
 	markY       int
 	markPending bool
+	markLeft    string
+	markRest    string
+	markNext    string
 	// personTyped and modelTyped are the person, or the model, having
 	// typed on the prompt's line since the prompt: what they typed may
 	// still be there, unsent. promptLeft, promptRest and promptNext are the
@@ -168,18 +173,26 @@ type Terminal struct {
 	// on the screen waited for it: the terminal keeps it, and it is on the
 	// next prompt's line when the command ends.
 	typedAhead bool
-	// modelInterrupt is when the model pressed Ctrl+C at the prompt, until
-	// the next prompt: run waits for that prompt, which says the shell took
-	// the key and dropped the line.
-	modelInterrupt time.Time
-	promptLeft     string
-	promptRest     string
-	promptNext     string
-	personGen      uint64
-	integrating    bool
-	lastPerson     time.Time
-	hold           bool
-	lastOutput     time.Time
+	// modelInterrupts are the model's Ctrl+C presses at the prompt that no
+	// prompt has answered yet: run waits for the prompt that answers the
+	// last, which says the shell took the key and dropped the line.
+	// modelInterrupt is when it last pressed one, until that prompt, and
+	// typedAfter its having typed since: the key drops what came before
+	// it, and that text is on the line of the prompt it brings.
+	modelInterrupts interrupts
+	modelInterrupt  time.Time
+	typedAfter      bool
+	// personInterrupts and personAfter are the same for the person.
+	personInterrupts interrupts
+	personAfter      bool
+	promptLeft       string
+	promptRest       string
+	promptNext       string
+	personGen        uint64
+	integrating      bool
+	lastPerson       time.Time
+	hold             bool
+	lastOutput       time.Time
 	// outputs counts the reads of the shell's output, so a run can tell
 	// output that came after it typed its command from output before,
 	// whatever the clock's resolution.
@@ -208,6 +221,42 @@ type Terminal struct {
 	// the size current when it runs: requests sent one per goroutine
 	// arrived out of order.
 	resized chan struct{}
+}
+
+// interrupts counts Ctrl+C presses at the prompt that no prompt has
+// answered yet. Each press that the shell takes brings one prompt, so a
+// second press while the first prompt is still on its way is answered by
+// the second prompt, not the first.
+type interrupts struct {
+	n    int
+	last time.Time
+}
+
+// press notes one.
+func (i *interrupts) press() {
+	if !i.pending() {
+		i.n = 0
+	}
+	i.n++
+	i.last = time.Now()
+}
+
+// pending reports a press still to be answered. One that has gone
+// interruptWait with no prompt was not taken as an interrupt.
+func (i *interrupts) pending() bool {
+	if i.n > 0 && time.Since(i.last) >= interruptWait {
+		i.n = 0
+	}
+	return i.n > 0
+}
+
+// answered takes a prompt as the answer to one press, and reports whether
+// none is left to be answered.
+func (i *interrupts) answered() bool {
+	if i.pending() {
+		i.n--
+	}
+	return i.n == 0
 }
 
 // runWait is the model's run, waiting for its command to finish.
@@ -393,8 +442,7 @@ func (t *Terminal) feed(p []byte) error {
 			return err
 		}
 		t.mu.Lock()
-		pos := t.emu.CursorPosition()
-		t.markX, t.markY, t.markPending = pos.X, pos.Y, false
+		t.markHere()
 		t.mu.Unlock()
 		p = p[mark:]
 	}
@@ -413,6 +461,21 @@ func (t *Terminal) feed(p []byte) error {
 	}
 	t.notify()
 	return nil
+}
+
+// markHere records the cursor, and the line around it, as the end of a
+// command leaves them. Called with mu held.
+func (t *Terminal) markHere() {
+	pos := t.emu.CursorPosition()
+	t.markX, t.markY, t.markPending = pos.X, pos.Y, false
+	t.markLeft, t.markRest, t.markNext = t.aroundCursor()
+}
+
+// atMark reports the cursor where the end of the last command left it:
+// nothing has been drawn since. Called with mu held.
+func (t *Terminal) atMark() bool {
+	pos := t.emu.CursorPosition()
+	return !t.markPending && pos.X == t.markX && pos.Y == t.markY
 }
 
 // show draws output on the screen, a chunk at a time.
@@ -483,11 +546,23 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 			t.markAt, t.markPending = time.Now(), true
 			mark = ev.end
 			t.integrated = true
-			t.personTyped = false
-			// What the model typed ahead is on this prompt's line.
-			t.modelTyped = t.typedAhead
-			t.typedAhead = false
-			t.modelInterrupt = time.Time{}
+			// What was typed ahead of this prompt is on its line: by the
+			// model while the command ran, by either after a Ctrl+C of
+			// their own that this prompt answers. With another Ctrl+C of
+			// theirs still to be answered, the prompt that answers that one
+			// is the one to judge by. A Ctrl+C that went unanswered was no
+			// interrupt, and what followed it was typed on the old line.
+			after := t.personInterrupts.pending() && t.personAfter
+			if t.personInterrupts.answered() {
+				t.personAfter = false
+			}
+			t.personTyped = after
+			after = t.modelInterrupts.pending() && t.typedAfter
+			if t.modelInterrupts.answered() {
+				t.modelTyped = t.typedAhead || after
+				t.typedAhead, t.typedAfter = false, false
+				t.modelInterrupt = time.Time{}
+			}
 		}
 		from = ev.end
 	}
@@ -545,7 +620,6 @@ func (t *Terminal) settled() {
 	if t.state == StateEnded || t.running || t.personTyped || t.modelTyped || !t.integrated || time.Since(t.lastOutput) < promptSettle {
 		return
 	}
-	pos := t.emu.CursorPosition()
 	// Quiet after the end of a command is not a prompt yet. The mark comes
 	// first and the prompt after whatever the shell does to work it out,
 	// which was taken for the prompt when it took longer than promptSettle:
@@ -553,10 +627,11 @@ func (t *Terminal) settled() {
 	// and a run typed its command before the prompt it was meant for. A
 	// prompt moves the cursor. One that does not (an empty one) is taken as
 	// drawn after promptWait.
-	if left := promptWait - time.Since(t.markAt); left > 0 && (t.markPending || pos.X == t.markX && pos.Y == t.markY) {
+	if left := promptWait - time.Since(t.markAt); left > 0 && (t.markPending || t.atMark()) {
 		t.armSettle(left)
 		return
 	}
+	pos := t.emu.CursorPosition()
 	t.promptX, t.promptY, t.promptKnown = pos.X, pos.Y, true
 	t.promptLeft, t.promptRest, t.promptNext = t.aroundCursor()
 	t.notify()
@@ -1162,10 +1237,15 @@ func (t *Terminal) modelMayAct() error {
 // right of it or under it. Where the prompt is on the screen does not
 // matter (Ctrl+L draws it at the top). Called with mu held.
 func (t *Terminal) lineEmpty() bool {
-	if !t.promptKnown {
-		return false
-	}
 	left, rest, next := t.aroundCursor()
+	if !t.promptKnown {
+		// Typed on before any prompt was recorded, so none will be. One
+		// case can still be told: a prompt that draws nothing leaves the
+		// line as the end of the command did, and once promptWait has
+		// passed with the line like that again, it is empty.
+		return t.integrated && time.Since(t.markAt) >= promptWait && t.atMark() &&
+			left == t.markLeft && rest == t.markRest && next == t.markNext
+	}
 	return t.emu.CursorPosition().X == t.promptX && left == t.promptLeft && rest == t.promptRest && next == t.promptNext
 }
 
@@ -1382,8 +1462,7 @@ func (t *Terminal) Run(ctx context.Context, command string, timeout time.Duratio
 		// text that was no longer on the line. Not waited for once the
 		// answer cannot matter: the terminal ended or is held, or the person
 		// typed.
-		if t.state == StateConnected && !t.hold && t.personGen == gen &&
-			t.modelTyped && !t.modelInterrupt.IsZero() && time.Since(t.modelInterrupt) < interruptWait {
+		if t.state == StateConnected && !t.hold && t.personGen == gen && t.modelTyped && t.modelInterrupts.pending() {
 			ch := t.changed
 			t.mu.Unlock()
 			select {
@@ -1589,6 +1668,11 @@ func (t *Terminal) Type(text string, enter bool, gen uint64) error {
 			return ErrUseRun
 		}
 		t.modelTyped = true
+		// After its own Ctrl+C that no prompt has answered yet: the key
+		// drops what came before it, and this comes after.
+		if t.modelInterrupts.pending() {
+			t.typedAfter = true
+		}
 	} else if t.typeaheadOnly() {
 		if strings.Contains(text, "\r") {
 			return ErrTypeahead
@@ -1627,10 +1711,19 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 		t.modelTyped = true
 		// Ctrl+C discards the line where the shell takes it as an
 		// interrupt; the prompt that follows says so (its mark clears
-		// modelTyped and modelInterrupt). Nothing is taken for granted
-		// before it: with "stty intr undef" the key is only a character.
-		if last := evs[len(evs)-1]; last.Mod == uv.ModCtrl && last.Code == 'c' {
-			t.modelInterrupt = time.Now()
+		// modelInterrupt, and modelTyped unless something was typed after
+		// the key). Nothing is taken for granted before it: with "stty
+		// intr undef" the key is only a character. The key drops what was
+		// typed before it and nothing after: a key pressed after it, in
+		// this call or a later one, is on the line of the prompt it brings,
+		// where "ctrl+c r m" used to leave "rm" for the next run to finish.
+		for _, ev := range evs {
+			if ev.Mod == uv.ModCtrl && ev.Code == 'c' {
+				t.modelInterrupts.press()
+				t.modelInterrupt, t.typedAfter = time.Now(), false
+			} else if t.modelInterrupts.pending() {
+				t.typedAfter = true
+			}
 		}
 	} else if t.typeaheadOnly() {
 		for _, ev := range evs {
@@ -1770,15 +1863,24 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 	}
 	switch {
 	case enter:
-		t.personTyped = false
+		t.personTyped, t.personAfter = false, false
 		if t.integrated && !t.running {
 			t.running = true
 			t.runStarted = time.Now()
 		}
 	case clears:
-		t.personTyped = false
+		// The key drops what they typed before it. What they type after
+		// it, before the prompt it brings has arrived, is on that prompt's
+		// line.
+		t.personTyped, t.personAfter = false, false
+		if t.integrated && !t.running {
+			t.personInterrupts.press()
+		}
 	case !(t.integrated && t.running):
 		t.personTyped = true
+		if t.personInterrupts.pending() {
+			t.personAfter = true
+		}
 	}
 	t.notify()
 	return nil
@@ -1814,7 +1916,14 @@ func (t *Terminal) applySize() {
 		return
 	}
 	t.cols, t.rows = cols, rows
+	// A new size can move the cursor and what is around it. Where the
+	// cursor was still as the end of the last command left it, that is no
+	// prompt drawn: the mark moves with it.
+	atMark := t.atMark()
 	t.emu.Resize(cols, rows)
+	if atMark {
+		t.markHere()
+	}
 	select {
 	case t.resized <- struct{}{}:
 	default:

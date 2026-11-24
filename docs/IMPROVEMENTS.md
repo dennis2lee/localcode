@@ -9,7 +9,7 @@ Open and partial work remains in orchestration, client behavior, desktop window 
 | Orchestration | Child-session retention and concurrent permission display (item 36) |
 | Client behavior | The open UI ideas below |
 | Coverage | Links and drags in the macOS window are unverified (item 64) |
-| SSH terminals | Text sent ahead of a prompt is taken as gone, and runs with the model's next command (item 65) |
+| SSH terminals | Text you type while a command runs is taken as gone at the next prompt, and runs with the model's next command (item 65) |
 
 Original review: 2026-07-18. Item numbers and recorded version statuses are preserved.
 
@@ -601,14 +601,14 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Card and group drags were driven with a real mouse in WebView2 on a Windows runner, by a workflow on a `diag/` branch that is not part of the release checks, and in a Chromium pane. A request to drive the macOS window was declined, so no drag has been tried in WKWebView.
     * The Windows hook reads an unexported field of `webview_go` and calls COM through hand-built tables. `internal/gui/newwindow_test.go` pins the library version and checks every slot number against its header. Bumping the module means repeating a real click on Windows.
 
-65. **SSH terminal: text sent ahead of a prompt is taken as gone. Open.**
+65. **SSH terminal: text sent ahead of a prompt is taken as gone. Two of three fixed in v0.179.1, one open.**
 
-    * Found in v0.179.1 while fixing the opposite fault (a line taken as holding text it did not). Each case below ends with the model's `run` typed onto text nobody ran, so the shell runs one line made of both. Each was reproduced with a test.
-    * **Your text typed while a command runs.** Typed and not sent, it is on the next prompt's line when the command ends. The terminal does not count it: the mark for the end of the command clears what it knows of your typing. A `run` more than 10 seconds after your last key is typed onto it. Reproduced against bash through a real sshd.
-    * **Your text typed after your Ctrl+C, before the prompt that answers it arrives.** The same mark clears it. It takes a remote slower than your typing. Reproduced with the test server answering Ctrl+C after 0.5 seconds.
-    * **The model's text typed after its own `ctrl+c`, before that prompt arrives.** The same, for `type` and `key`. Reproduced the same way.
-    * Not decided: what counts as left on the line for the first case. A key a program reads (`q` in a pager, an answer to "press any key") is not on the next line, and the terminal cannot tell that from text the shell will read. Counting every key keeps the model out after each of those until your Enter or Ctrl+C.
-    * The prompt itself is still taken early in one case. A prompt drawn in parts with more than 150 milliseconds between them is recorded at the first part.
+    * Found in v0.179.1 while fixing the opposite fault (a line taken as holding text it did not). Each case ends with the model's `run` typed onto text nobody ran, so the shell runs one line made of both. Each was reproduced with a test.
+    * **Text typed after Ctrl+C at the prompt. Fixed in v0.179.1.** Ctrl+C drops what came before it. The mark of the prompt it brings cleared everything the terminal knew of typed text, the text after the key included. For the model that took one `key` call (`ctrl+c r m` left `rm` on the line). For `type`, and for your own typing after your Ctrl+C, it took a remote slow enough that the text was sent before the prompt arrived. Each Ctrl+C is now counted until a prompt answers it, and text sent meanwhile is kept as typed at that prompt (`interrupts` in `internal/sshterm/terminal.go`, tests in `ahead_test.go`). A Ctrl+C that no prompt answers within 10 seconds is taken as no interrupt.
+    * **Your text typed while a command runs. Open.** Typed and not sent, it is on the next prompt's line when the command ends. The terminal does not count it: the mark for the end of the command clears what it knows of your typing. A `run` more than 10 seconds after your last key is typed onto it. Reproduced against bash through a real sshd.
+    * Not decided for the open case: what counts as left on the line. A key a program reads (`q` in a pager, an answer to "press any key", a line typed into a REPL after Ctrl+C) is not on the next line, and the terminal cannot tell that from text the shell will read. Counting every key keeps the model out after each of those until your Enter or Ctrl+C.
+    * Related and open: a mark is taken as the end of whatever command is running. A `run` typed before the prompt that answers your Ctrl+C has arrived takes that prompt for its own end. Seen in a test with the 10 seconds a `run` leaves you after a key shortened. With them, it takes a remote more than 10 seconds behind.
+    * The prompt itself is still taken early in three cases, listed in USAGE under "Where the prompt is": nothing drawn for more than 2 seconds, a prompt drawn in parts, and output from something else before the prompt.
 
 ## UI ideas
 
