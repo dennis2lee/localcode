@@ -24,7 +24,8 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (!a.startsWith('--')) continue;
   const k = a.slice(2);
-  if (['headful', 'enter', 'fresh', 'ime', 'noshot', 'norec', 'pin', 'guard', 'dump'].includes(k)) opt[k] = true;
+  if (k === 'dump' && argv[i + 1] === 'first') opt.dump = argv[++i];
+  else if (['headful', 'enter', 'fresh', 'ime', 'noshot', 'norec', 'pin', 'guard', 'dump'].includes(k)) opt[k] = true;
   else if (k === 'pre') opt.pre.push(argv[++i]);
   else if (k === 'extra') opt.extra.push(argv[++i]);
   else opt[k] = argv[++i];
@@ -328,6 +329,7 @@ async function main() {
     await click();
     await sleep(200);
     result.focusAfterClick = await ev(`document.activeElement && document.activeElement.id`);
+    if (opt.eval) { result.eval = await ev(opt.eval); console.error('EVAL', JSON.stringify(result.eval)); }
     const keys = [];
     const typeChar = async (c) => {
       const k = keyOf(c);
@@ -410,7 +412,11 @@ async function main() {
     const d2 = prev2 ? diff(prev2, img, box) : { n: 0 };
     const tall = d1.box && d1.box[3] > 40 && d1.n < 2000;
     pix.push({ t: Math.round(shots[i].ts - origin), n: d1.n, box: d1.box, back2: d2.n, bands: tall ? d1.bands : undefined });
-    if (opt.dump && tall && dumped < 6) {
+    if (opt.dump === 'first' && d1.n > 0 && dumped < 5 && result.keys.length && shots[i].ts > result.keys[0].t) {
+      dumped++;
+      if (dumped === 1) fs.writeFileSync(path.join(OUT, `${NAME}-f${String(i - 1).padStart(3, '0')}.png`), Buffer.from(shots[i - 1].data, 'base64'));
+      fs.writeFileSync(path.join(OUT, `${NAME}-f${String(i).padStart(3, '0')}.png`), Buffer.from(shots[i].data, 'base64'));
+    } else if (opt.dump === true && tall && dumped < 6) {
       dumped++;
       fs.writeFileSync(path.join(OUT, `${NAME}-frame${i - 1}.png`), Buffer.from(shots[i - 1].data, 'base64'));
       fs.writeFileSync(path.join(OUT, `${NAME}-frame${i}.png`), Buffer.from(shots[i].data, 'base64'));
