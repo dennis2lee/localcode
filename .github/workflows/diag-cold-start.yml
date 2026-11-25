@@ -39,3 +39,41 @@ jobs:
           CGO_ENABLED: '0'
           LC_PROBE: '1'
         run: go test ./internal/browser/ -run 'TestZZColdStart$' -count=1 -timeout 18m -v | grep -v '^=== RUN' || echo "PROBE FAILED"
+
+  # The same first start, beside the load the gate and test-windows put on
+  # a runner: the suite twice, one of them under the race detector, without
+  # the packages that start a browser themselves (so this start is still
+  # the runner's first).
+  cold-loaded:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        shard: [1, 2, 3, 4]
+    name: loaded-${{ matrix.os }}-${{ matrix.shard }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: The first start beside the suite, and five more
+        shell: bash
+        timeout-minutes: 35
+        env:
+          LC_PROBE: '1'
+        run: |
+          CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/probe.exe" ./internal/browser/
+          pkgs=$(go list ./... | grep -v -E 'internal/(browser|daemon|agent)$|cmd/localcode$')
+          race=-race
+          [ "$RUNNER_OS" = "Windows" ] && race=
+          (go test $pkgs $race -count=1 -timeout 20m > "$RUNNER_TEMP/load1.log" 2>&1; echo "load 1 ended rc=$? at $(date -u +%T)") &
+          (CGO_ENABLED=0 go test $pkgs -count=1 -timeout 20m > "$RUNNER_TEMP/load2.log" 2>&1; echo "load 2 ended rc=$? at $(date -u +%T)") &
+          # Into the load: the suite is compiling and its first packages run.
+          sleep 50
+          echo "probe starts at $(date -u +%T)"
+          cd internal/browser
+          "$RUNNER_TEMP/probe.exe" -test.run 'TestZZColdStart$' -test.count=1 -test.timeout 18m -test.v | grep -v '^=== RUN' || echo "PROBE FAILED"
+          echo "probe ended at $(date -u +%T)"
+          wait
