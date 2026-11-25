@@ -213,12 +213,6 @@ type Terminal struct {
 	aheadMixed  bool
 	aheadSent   bool
 	aheadJudge  bool
-	// aheadBefore is text typed while the command ran before a key that
-	// signals it. The signal drops it, and the line editing after the key
-	// starts on an empty line; with `stty intr undef` no signal comes, and
-	// the shell draws it before what came after. It is read off the screen
-	// with that at the next prompt.
-	aheadBefore string
 	// aheadPasted is a bracketed paste among it, its marks sent: read as
 	// text only where the shell has bracketed paste on at its prompt. A
 	// shell that has not (bash 3.2) reads the marks as keys and draws some
@@ -629,12 +623,10 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 			// text the last prompt was never read for (a command the shell
 			// started from a line sent ahead came between), and the line is
 			// theirs until their Enter or Ctrl+C at a prompt.
-			if t.personAhead && t.aheadMixed || t.aheadJudge || !drawnAsTyped(t.aheadBefore) {
+			if t.personAhead && t.aheadMixed || t.aheadJudge {
 				t.personAfter = true
 			}
-			t.aheadText = t.aheadBefore + t.aheadText
-			t.aheadJudge = (t.personAhead || t.aheadBefore != "") && !t.personAfter
-			t.aheadBefore = ""
+			t.aheadJudge = t.personAhead && !t.personAfter
 			t.personTyped = t.personAfter || t.aheadJudge
 			t.modelTyped = t.typedAhead || t.typedAfter
 			t.typedAhead = false
@@ -2085,7 +2077,7 @@ func (t *Terminal) interrupt() {
 func (t *Terminal) sent() {
 	t.typedAfter, t.personAfter = false, false
 	t.dropAhead()
-	t.aheadSent, t.aheadJudge, t.aheadBefore = false, false, ""
+	t.aheadSent, t.aheadJudge = false, false
 	t.interrupts = interrupts{}
 }
 
@@ -2100,19 +2092,14 @@ func (t *Terminal) dropAhead() {
 // signalled notes a key the terminal turns into a signal for the command
 // that runs (either's), on the main screen: on the alternate screen a
 // full-screen program reads keys raw, and no signal comes of it. The
-// terminal drops what waits in it, what was typed while the command ran:
-// the keys, paste marks and line ends among it no longer count, and what
-// is typed after the key starts on an empty line. The text is kept to be
-// read off the screen at the next prompt (aheadBefore): with `stty intr
-// undef` the key is a character, nothing is dropped, and bash and zsh
-// draw the text (measured). A line the shell keeps the signal does not
-// drop, and a hold stays: the terminal cannot say whether text typed after
-// a line sent ahead waited behind that line or went with a line a command
-// read. Called with mu held.
+// terminal drops what waits in it, what was typed while the command ran,
+// and what is typed after the key starts on an empty line. A line the
+// shell keeps the signal does not drop, and a hold stays: the terminal
+// cannot say whether text typed after a line sent ahead waited behind
+// that line or went with a line a command read. Where the key is no
+// signal (`stty intr undef`), nothing is dropped and the terminal does
+// not follow it. Called with mu held.
 func (t *Terminal) signalled() {
-	if t.personAhead {
-		t.aheadBefore += t.aheadText
-	}
 	t.dropAhead()
 	t.aheadSent = false
 }
@@ -2135,7 +2122,7 @@ func (t *Terminal) aheadKey(ev uv.KeyPressEvent) {
 		// bash does nothing with it, zsh puts a line break in the line.)
 		// On the alternate screen the program reads it, as any key there.
 		t.dropAhead()
-		t.aheadSent, t.aheadBefore = !t.emu.IsAltScreen(), ""
+		t.aheadSent = !t.emu.IsAltScreen()
 	case ev.Text != "" && ev.Mod&^uv.ModShift == 0:
 		t.aheadTyped(ev.Text, false)
 	case t.emu.IsAltScreen():
@@ -2152,7 +2139,7 @@ func (t *Terminal) aheadKey(ev uv.KeyPressEvent) {
 		// Not in a local terminal: PowerShell leaves the line as it is.
 		// After a bracketed paste too: the terminal kills the paste with
 		// its marks.
-		t.aheadText = ""
+		t.aheadText, t.aheadPasted = "", false
 	case ctrl && ev.Code == 'd' && t.aheadText == "" && !t.aheadMixed && !t.aheadPasted:
 		// The end of input, at the start of a line: to whatever reads it
 		// (Ctrl+D to leave a REPL, or to end what cat reads). Read by the
@@ -2186,7 +2173,7 @@ func (t *Terminal) aheadTyped(s string, bracketed bool) {
 	}
 	if i := strings.LastIndex(s, "\r"); i >= 0 && !bracketed {
 		t.dropAhead()
-		t.aheadSent, t.aheadBefore = !t.emu.IsAltScreen(), ""
+		t.aheadSent = !t.emu.IsAltScreen()
 		s = s[i+1:]
 	}
 	if s == "" {

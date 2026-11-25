@@ -167,6 +167,12 @@ func TestTextTypedWhileACommandRanIsOnTheNextLine(t *testing.T) {
 		s.term.PersonInput(nil, "cd /tm\t", "")
 		s.ended("cd /tm", "cd /tmp/")
 		refusedForThem(t, s, "run onto a line the shell completed")
+		// One that completes nothing, the row ending as the prompt does.
+		s = playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "echo $\t", "")
+		s.ended("echo $", "echo $")
+		refusedForThem(t, s, "run onto a line with a Tab that completed nothing")
 	})
 	t.Run("a wide character erased", func(t *testing.T) {
 		// Where the terminal's line editing does not count UTF-8,
@@ -449,6 +455,18 @@ func TestACtrlCBeforeThePromptIsReadKeepsTheLineTheirs(t *testing.T) {
 	time.Sleep(interruptWait + 50*time.Millisecond)
 	s.quiet()
 	refusedForThem(t, s, "run onto a line with a Ctrl+C the shell read as a character")
+
+	// Text the command read, and a Ctrl+C the shell rang the bell for: the
+	// key is on its line, read or not, whatever the row shows.
+	s = playedFor(t, false)
+	s.commandRuns()
+	s.term.PersonInput(nil, "q", "")
+	s.term.output([]byte(s.promptText(0)))
+	s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+	s.term.output([]byte("\a"))
+	time.Sleep(interruptWait + 50*time.Millisecond)
+	s.quiet()
+	refusedForThem(t, s, "run onto a line with a Ctrl+C the shell rang the bell for")
 }
 
 // The model typing after the person while a command runs: the end of
@@ -474,8 +492,8 @@ func TestTheModelTypingAfterThePersonKeepsTheLineTheirs(t *testing.T) {
 	allowed(t, s, "run after the prompt the person's Ctrl+C brought")
 
 	for _, model := range []func(s *playedShell) error{
-		func(s *playedShell) error { return s.term.Type("x", false, s.term.PersonGen()) },
-		func(s *playedShell) error { return s.term.Keys("x", s.term.PersonGen()) },
+		func(s *playedShell) error { return s.term.Type("$", false, s.term.PersonGen()) },
+		func(s *playedShell) error { return s.term.Keys("$", s.term.PersonGen()) },
 	} {
 		s := playedFor(t, true)
 		s.commandRuns()
@@ -484,7 +502,7 @@ func TestTheModelTypingAfterThePersonKeepsTheLineTheirs(t *testing.T) {
 		if err := model(s); err != nil {
 			t.Fatal(err)
 		}
-		s.ended("lsx\r\n", "lsx")
+		s.ended("ls$\r\n", "ls$")
 		refusedForThem(t, s, "run onto what both typed, the model's to a question")
 		// They send it, and it runs. What they type then is a new line's.
 		s.term.PersonInput(&PersonKey{Key: "Enter"}, "", "")

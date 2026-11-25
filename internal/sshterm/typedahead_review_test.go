@@ -1098,16 +1098,35 @@ func TestAnEarlierCommandsTypingIsNothingToALaterOne(t *testing.T) {
 	})
 }
 
-// Ctrl+U after a bracketed paste kills it with its marks, where the shell
-// has bracketed paste on at its prompt.
+// Ctrl+U after a bracketed paste kills it with its marks: nothing of it
+// is left, at a prompt with bracketed paste on or off, and Ctrl+D after it
+// is at the start of a line.
 func TestCtrlUAfterABracketedPasteKillsIt(t *testing.T) {
-	s := playedFor(t, true)
-	s.commandRuns()
-	s.prints("\x1b[?2004h")
-	s.term.PersonInput(nil, "", "rm -rf x")
-	s.term.PersonInput(&PersonKey{Key: "u", Ctrl: true}, "", "")
-	s.ended("", "")
-	allowed(t, s, "run after Ctrl+U killed a bracketed paste")
+	for _, c := range []struct {
+		name  string
+		after func(s *playedShell)
+		off   bool
+	}{
+		{"bracketed paste on at the prompt", func(s *playedShell) {}, false},
+		{"bracketed paste off at the prompt", func(s *playedShell) {}, true},
+		{"Ctrl+D after it", func(s *playedShell) {
+			s.term.PersonInput(&PersonKey{Key: "d", Ctrl: true}, "", "")
+		}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.prints("\x1b[?2004h")
+			s.term.PersonInput(nil, "", "rm -rf x")
+			s.term.PersonInput(&PersonKey{Key: "u", Ctrl: true}, "", "")
+			c.after(s)
+			if c.off {
+				s.prints("\x1b[?2004l")
+			}
+			s.ended("", "")
+			allowed(t, s, "run after Ctrl+U killed a bracketed paste ("+c.name+")")
+		})
+	}
 }
 
 // From the sixth review.
@@ -1191,43 +1210,29 @@ func TestAPasteOfNothingSendsNothing(t *testing.T) {
 	allowed(t, s, "run after a paste of nothing")
 }
 
-// With `stty intr undef` the terminal turns Ctrl+C into no signal: the key
-// is a character, nothing is dropped, and at the next prompt bash and zsh
-// draw the text and ring the bell for the key (measured). The text is
-// read off the screen as any.
-func TestASignalKeyNoSignalComesOfLeavesTheTextToBeRead(t *testing.T) {
-	for _, who := range []string{"person", "model"} {
-		t.Run(who, func(t *testing.T) {
+// A signal drops what waits in the terminal: text, a bracketed paste with
+// its marks, and text that is not drawn as typed (a pasted Tab, several
+// pasted lines). The line after it is read as empty. (With `stty intr
+// undef` the key is no signal and drops nothing; the terminal does not
+// follow that.)
+func TestASignalDropsWhatWasTyped(t *testing.T) {
+	for _, c := range []struct{ name, text, paste string }{
+		{"text", "rm -rf x", ""},
+		{"a paste with a Tab", "", "cd /tm\t"},
+		{"several pasted lines", "", "echo a\recho b"},
+		{"a combining accent", "rm cafe\u0301", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
 			s := playedFor(t, true)
 			s.commandRuns()
-			s.term.PersonInput(nil, "rm -rf x", "")
-			if who == "person" {
-				s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
-			} else if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
-				t.Fatal(err)
-			}
-			// The terminal's echo while the command ran, then the prompt.
-			s.ended("rm -rf x^C", "rm -rf x\a")
-			refusedForThem(t, s, "run onto text a Ctrl+C read as a character left ("+who+")")
+			s.prints("\x1b[?2004h")
+			s.term.PersonInput(nil, c.text, c.paste)
+			s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+			s.prints("\x1b[?2004l")
+			s.ended("^C\r\n", "")
+			allowed(t, s, "run after a Ctrl+C dropped "+c.name)
 		})
 	}
-	// A bracketed paste the signal dropped, at a prompt with bracketed
-	// paste off: nothing of it, its marks included, is there.
-	s := playedFor(t, true)
-	s.commandRuns()
-	s.prints("\x1b[?2004h")
-	s.term.PersonInput(nil, "", "rm -rf x")
-	s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
-	s.prints("\x1b[?2004l")
-	s.ended("^C\r\n", "")
-	allowed(t, s, "run after a Ctrl+C dropped a bracketed paste")
-	// Where the key is a signal, what it dropped is not there.
-	s = playedFor(t, true)
-	s.commandRuns()
-	s.term.PersonInput(nil, "rm -rf x", "")
-	s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
-	s.ended("^C\r\n", "")
-	allowed(t, s, "run after a Ctrl+C dropped what was typed")
 }
 
 // None of the text on the line is the command having read it only where
@@ -1319,46 +1324,6 @@ func TestWhatIsTypedAfterASignalStartsOnAnEmptyLine(t *testing.T) {
 		s.ended("y\r\n", "")
 		allowed(t, s, "run after Ctrl+C dropped the person's text and the model answered")
 	})
-}
-
-// With `stty intr undef` what was typed before the key reaches the shell,
-// whatever came after the key: Backspace takes the key off the line, not
-// the text, and text not drawn as typed holds the line.
-func TestWithNoSignalTheTextBeforeTheKeyIsRead(t *testing.T) {
-	signal := func(t *testing.T, s *playedShell, who string) {
-		t.Helper()
-		if who == "person" {
-			s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
-		} else if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, who := range []string{"person", "model"} {
-		t.Run(who+"/Backspace after the key", func(t *testing.T) {
-			s := playedFor(t, false)
-			s.commandRuns()
-			s.term.PersonInput(nil, "rm -rf $", "")
-			signal(t, s, who)
-			s.term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
-			s.ended("rm -rf $^C\b\b  \b\b", "rm -rf $")
-			refusedForThem(t, s, "run onto text left after the "+who+"'s Ctrl+C and Backspace")
-		})
-		for _, c := range []struct{ name, typed, drawn string }{
-			{"U+200B, zsh", "rm -rf x\u200b", "rm -rf x\x1b[7m<200b>\x1b[27m\a"},
-			{"a combining accent, zsh", "rm cafe\u0301", "rm cafe\x1b[7m<0301>\x1b[27m\a"},
-		} {
-			t.Run(who+"/"+c.name+", a prompt ending in >", func(t *testing.T) {
-				s := playedFor(t, false)
-				mark := "\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07"
-				s.prints("\r\n" + mark + "> ")
-				s.commandRuns()
-				s.term.PersonInput(nil, c.typed, "")
-				signal(t, s, who)
-				s.prints(mark + "> " + c.drawn)
-				refusedForThem(t, s, "run onto "+c.name+" left after the "+who+"'s Ctrl+C")
-			})
-		}
-	}
 }
 
 // A line that reaches the left edge when it is read records no prompt, so
