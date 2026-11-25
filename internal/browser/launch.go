@@ -285,25 +285,9 @@ func readPortFile(path string) (string, bool) {
 // it next would have found it free.
 const killedExitWait = 30 * time.Second
 
-// diagf appends one line to the file LC_DIAG_LOG names. Diagnostic branch
-// only.
-func diagf(format string, args ...any) {
-	path := os.Getenv("LC_DIAG_LOG")
-	if path == "" {
-		return
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	fmt.Fprintf(f, "%s [%d] %s\n", time.Now().Format("15:04:05.000"), os.Getpid(), fmt.Sprintf(format, args...))
-	f.Close()
-}
-
 // close asks the browser to quit, kills it if it has not within a few
 // seconds, and returns when it has exited.
 func (p *process) close() {
-	t0 := time.Now()
 	if p.conn != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		_ = p.conn.Call(ctx, "", "Browser.close", nil, nil)
@@ -312,9 +296,7 @@ func (p *process) close() {
 	}
 	select {
 	case <-p.exited:
-		diagf("CLOSE exited-after=%v dir=%s", time.Since(t0).Round(time.Millisecond), p.dataDir)
 	case <-time.After(3 * time.Second):
-		diagf("CLOSE NOT-EXITED-AFTER-3s dir=%s", p.dataDir)
 		p.kill()
 	}
 }
@@ -322,13 +304,10 @@ func (p *process) close() {
 // kill ends the browser and every process it started, and returns when
 // the browser has exited, or after killedExitWait if it never does.
 func (p *process) kill() {
-	t0 := time.Now()
-	err := childproc.KillGroup(p.cmd)
+	_ = childproc.KillGroup(p.cmd)
 	select {
 	case <-p.exited:
-		diagf("KILL err=%v exited-after=%v dir=%s", err, time.Since(t0).Round(time.Millisecond), p.dataDir)
 	case <-time.After(killedExitWait):
-		diagf("KILL err=%v STILL-NOT-EXITED-AFTER-%v dir=%s", err, killedExitWait, p.dataDir)
 	}
 }
 

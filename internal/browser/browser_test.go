@@ -3,9 +3,7 @@ package browser
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -69,29 +67,10 @@ func profileDir(t *testing.T) string {
 // removeWithin removes dir and all that is in it, trying again until it is
 // gone or wait has passed. The error is the last try's.
 func removeWithin(dir string, wait time.Duration) error {
-	start := time.Now()
-	deadline := start.Add(wait)
-	tries := 0
+	deadline := time.Now().Add(wait)
 	for {
 		err := os.RemoveAll(dir)
-		tries++
-		if err == nil {
-			if tries > 1 {
-				diagf("REMOVED after=%v tries=%d dir=%s", time.Since(start).Round(time.Millisecond), tries, dir)
-			}
-			return nil
-		}
-		if tries == 1 {
-			// Diagnostic branch only.
-			file := dir
-			var pe *fs.PathError
-			if errors.As(err, &pe) {
-				file = pe.Path
-			}
-			diagf("REMOVE-REFUSED err=%q holders=%s browsers=%s", err.Error(), holders(file), processTable())
-		}
-		if !time.Now().Before(deadline) {
-			diagf("REMOVE-GAVE-UP after=%v err=%q dir=%s", time.Since(start).Round(time.Millisecond), err.Error(), dir)
+		if err == nil || !time.Now().Before(deadline) {
 			return err
 		}
 		time.Sleep(50 * time.Millisecond)

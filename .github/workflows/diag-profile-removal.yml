@@ -1,7 +1,6 @@
-# Measurement only: the browser tests on Windows with the fix, several
-# times over, with a line for every stop that had to kill and every
-# profile whose removal was refused. Lives on diag/profile-removal, never
-# on main.
+# Measurement only: the browser tests on Windows, several times over, on
+# the fix as it is committed (df5014c), with nothing added but this file.
+# Lives on diag/profile-removal, never on main.
 name: diag-profile-removal
 
 on:
