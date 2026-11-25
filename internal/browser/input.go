@@ -110,8 +110,8 @@ func (t *Tab) ClickRef(ctx context.Context, ref int) error {
 
 // Click moves the mouse to x, y and clicks count times.
 func (t *Tab) Click(ctx context.Context, x, y float64, count int) error {
-	if x < 0 || y < 0 || x > ViewportWidth || y > ViewportHeight {
-		return fmt.Errorf("(%v, %v) is outside the %dx%d page", x, y, ViewportWidth, ViewportHeight)
+	if h := t.Height(); x < 0 || y < 0 || x > ViewportWidth || y > float64(h) {
+		return fmt.Errorf("(%v, %v) is outside the %dx%d page", x, y, ViewportWidth, h)
 	}
 	if err := t.Mouse(ctx, MouseEvent{Type: "mouseMoved", X: x, Y: y}); err != nil {
 		return err

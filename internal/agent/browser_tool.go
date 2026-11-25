@@ -53,7 +53,7 @@ func NewBrowserTool(loop *Loop, manager *browser.Manager) BrowserTool {
 func (BrowserTool) Name() string { return BrowserToolName }
 
 func (BrowserTool) Description() string {
-	return fmt.Sprintf(`Use a web browser the way a person does. It is shown to the user in a panel of the app beside the conversation, and they can click and type in it too. The page is %dx%d pixels.
+	return fmt.Sprintf(`Use a web browser the way a person does. It is shown to the user in a panel of the app beside the conversation, and they can click and type in it too. The page is %d pixels wide; its height is what fills the panel, from %d to %d pixels, and changes when the user resizes the panel (a screenshot says it).
 
 Actions:
 - navigate {url}: open a URL.
@@ -66,7 +66,7 @@ Actions:
 - scroll {direction, amount?, ref?}: scroll up, down, left or right by amount steps (default 3), over element [ref] or the middle of the page.
 - wait {seconds}: wait up to 10 seconds for the page to change.
 
-Work in small steps and look again after each one: read (or screenshot) to see the result before deciding the next action.`, browser.ViewportWidth, browser.ViewportHeight)
+Work in small steps and look again after each one: read (or screenshot) to see the result before deciding the next action.`, browser.ViewportWidth, browser.MinViewportHeight, browser.MaxViewportHeight)
 }
 
 func (BrowserTool) InputSchema() json.RawMessage {
@@ -301,7 +301,7 @@ func (t BrowserTool) act(ctx context.Context, tab *browser.Tab, in browserInput)
 		default:
 			return tools.Result{}, fmt.Errorf("direction is up, down, left or right")
 		}
-		x, y := float64(browser.ViewportWidth)/2, float64(browser.ViewportHeight)/2
+		x, y := float64(browser.ViewportWidth)/2, float64(tab.Height())/2
 		if in.Ref > 0 {
 			px, py, err := tab.RefPoint(ctx, in.Ref)
 			if err != nil {

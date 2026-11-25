@@ -273,6 +273,64 @@ func TestThePanelRoutesRefuseWithTheSettingOff(t *testing.T) {
 	}
 }
 
+// The panel's frame sets the height of the conversation's pages: the
+// answer and the panel's poll say it, and it starts no browser for a
+// conversation with no tab. A size that is not one is refused.
+func TestThePanelsFrameSetsThePagesHeight(t *testing.T) {
+	d, srv, id := browserDaemon(t)
+	base := srv.URL + "/api/sessions/" + id + "/browser"
+	state := func() (st struct {
+		HasTab        bool `json:"has_tab"`
+		Width, Height int
+	}) {
+		t.Helper()
+		resp, err := http.Get(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	if st := state(); st.Width != browser.ViewportWidth || st.Height != browser.ViewportHeight {
+		t.Fatalf("before the panel says: %+v", st)
+	}
+	resp := postBrowserJSON(t, base+"/size", map[string]float64{"width": 574, "height": 780})
+	var got struct{ Width, Height int }
+	json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || got.Width != browser.ViewportWidth || got.Height != 1739 {
+		t.Fatalf("size: %d %+v, want 200 and 1280x1739", resp.StatusCode, got)
+	}
+	if st := state(); st.HasTab || st.Height != 1739 {
+		t.Errorf("after the panel says: %+v, want no tab and 1739", st)
+	}
+	if d.Browser.Existing(id) != nil {
+		t.Error("a size opened a tab")
+	}
+	for _, body := range []any{
+		map[string]float64{"width": 0, "height": 780},
+		map[string]float64{"width": 574},
+		map[string]string{"width": "wide"},
+	} {
+		resp := postBrowserJSON(t, base+"/size", body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("size %v = %d, want 400", body, resp.StatusCode)
+		}
+	}
+	if h := d.Browser.Height(id); h != 1739 {
+		t.Errorf("a refused size changed the height to %d", h)
+	}
+	resp = postBrowserJSON(t, srv.URL+"/api/sessions/nope/browser/size", map[string]float64{"width": 574, "height": 780})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("size for no such conversation = %d, want 404", resp.StatusCode)
+	}
+}
+
 // Nothing the model's browser sends gets an answer: not a page it opened,
 // not a script on one, on any route.
 func TestTheDaemonRefusesItsOwnBrowser(t *testing.T) {

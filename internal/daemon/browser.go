@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -212,8 +213,9 @@ func (d *Daemon) handleBrowserState(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	out := map[string]any{"has_tab": false, "width": browser.ViewportWidth, "height": browser.ViewportHeight}
+	out := map[string]any{"has_tab": false, "width": browser.ViewportWidth, "height": d.Browser.Height(id)}
 	if tab := d.Browser.Existing(id); tab != nil {
+		out["height"] = tab.Height()
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		out["has_tab"] = true
@@ -311,6 +313,37 @@ func (d *Daemon) handleBrowserCloseTab(w http.ResponseWriter, r *http.Request) {
 	listCtx, cancelList := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancelList()
 	writeJSON(w, http.StatusOK, map[string]any{"tabs": tabList(d.Browser.Tabs(listCtx, id))})
+}
+
+// handleBrowserSize makes the conversation's page as tall as fills the
+// panel's frame at the page's width: the panel sends the frame's size
+// when it starts showing the conversation and when the frame is resized
+// (the window, the panel, or the panels around it). Answers the page's
+// size. Starts no browser: a conversation with no tab yet opens its first
+// one at this height.
+func (d *Daemon) handleBrowserSize(w http.ResponseWriter, r *http.Request) {
+	id, ok := d.browserFor(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Width  float64 `json:"width"`
+		Height float64 `json:"height"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !(req.Width > 0) || !(req.Height > 0) || math.IsInf(req.Width, 0) || math.IsInf(req.Height, 0) {
+		writeError(w, http.StatusBadRequest, errors.New("width and height are the frame's size, both above 0"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	// A tab that could not be told (its browser went away) is shown at
+	// the height it has; the next one opens at this.
+	h, _ := d.Browser.SetHeight(ctx, id, browser.HeightFor(req.Width, req.Height))
+	writeJSON(w, http.StatusOK, map[string]any{"width": browser.ViewportWidth, "height": h})
 }
 
 // handleBrowserNavigate is the panel's address bar and its back, forward

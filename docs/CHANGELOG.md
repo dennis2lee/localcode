@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.180.2
+
+The browser panel's page as tall as the panel.
+
+**Changed**
+
+* The page in the browser panel as tall as the panel below its address bar, following the window and the panel as they are resized, from 320 to 2,560 pixels; still 1280 pixels wide
+* A conversation's new tabs, and a tab a link opens, at its panel's height
+* The `browser` tool's description, its click bounds and its screenshots at the page's height
+* `POST /api/sessions/{id}/browser/size`: the panel's room for the page
+
+**Fixed**
+
+* A page taller than 800 pixels no longer reaching the panel at half its width
+
 ## v0.180.1
 
 A background task's window shows its replies as markdown, set apart from the workings around them, with its result marked.

@@ -1,11 +1,13 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"net/url"
 	"strconv"
 	"strings"
@@ -28,8 +30,12 @@ type Tab struct {
 	casting bool
 	frame   []byte // the latest screencast frame, JPEG
 	opener  string // the target that opened this tab with a link, or ""
+	height  int    // the page's height, as the browser was last told it
 
 	castMu sync.Mutex // orders screencast starts and stops; see Watch
+
+	want   atomic.Int64 // the height the page is to have; see fitHeight
+	sizeMu sync.Mutex   // orders height changes; see fitHeight
 
 	opens atomic.Int64 // see opening
 }
@@ -47,8 +53,9 @@ const blankPage = "about:blank"
 // one behind with no frames at all.
 //
 // made, if not nil, is called once the browser has made the page and its
-// window, before the page is attached: see Manager.land.
-func openTab(ctx context.Context, conn *cdp.Conn, made func()) (*Tab, error) {
+// window, before the page is attached: see Manager.land. height is the
+// page's height (see ViewportHeight).
+func openTab(ctx context.Context, conn *cdp.Conn, made func(), height int) (*Tab, error) {
 	// The browser makes the page whether or not the caller still waits
 	// for it. Asked for apart from the caller, it is closed once it is
 	// there when the caller stopped waiting, rather than left open with
@@ -84,7 +91,7 @@ func openTab(ctx context.Context, conn *cdp.Conn, made func()) (*Tab, error) {
 	if made != nil {
 		made()
 	}
-	t, err := attachTab(ctx, conn, page.id)
+	t, err := attachTab(ctx, conn, page.id, height)
 	if err != nil {
 		// The page is there whether or not it could be attached: closed,
 		// or it stays open in the browser and in no list.
@@ -121,15 +128,17 @@ func (t *Tab) discard() {
 	closeTarget(t.conn, t.targetID)
 }
 
-// attachTab attaches to an existing page, such as one a link opened.
-func attachTab(ctx context.Context, conn *cdp.Conn, targetID string) (*Tab, error) {
+// attachTab attaches to an existing page, such as one a link opened, and
+// makes it height tall.
+func attachTab(ctx context.Context, conn *cdp.Conn, targetID string, height int) (*Tab, error) {
 	var attached struct {
 		SessionID string `json:"sessionId"`
 	}
 	if err := conn.Call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, &attached); err != nil {
 		return nil, err
 	}
-	t := &Tab{conn: conn, targetID: targetID, session: attached.SessionID, viewers: map[chan []byte]bool{}}
+	t := &Tab{conn: conn, targetID: targetID, session: attached.SessionID, viewers: map[chan []byte]bool{}, height: height}
+	t.want.Store(int64(height))
 	conn.On(t.session, "Page.javascriptDialogOpening", func(p json.RawMessage) {
 		var d struct {
 			Type    string `json:"type"`
@@ -182,13 +191,51 @@ func attachTab(ctx context.Context, conn *cdp.Conn, targetID string) (*Tab, erro
 			return nil, err
 		}
 	}
-	if err := conn.Call(ctx, t.session, "Emulation.setDeviceMetricsOverride", map[string]any{
-		"width": ViewportWidth, "height": ViewportHeight, "deviceScaleFactor": 1, "mobile": false,
-	}, nil); err != nil {
+	if err := setViewport(ctx, conn, t.session, height); err != nil {
 		conn.Forget(t.session)
 		return nil, err
 	}
 	return t, nil
+}
+
+// setViewport makes the page session is attached to ViewportWidth by
+// height CSS pixels, at one device pixel to each: the size it is laid
+// out at, captured at and streamed at. Measured with Chrome 158 headless:
+// a height past the window the browser was started with (--window-size)
+// is laid out, captured and streamed whole.
+func setViewport(ctx context.Context, conn *cdp.Conn, session string, height int) error {
+	return conn.Call(ctx, session, "Emulation.setDeviceMetricsOverride", map[string]any{
+		"width": ViewportWidth, "height": height, "deviceScaleFactor": 1, "mobile": false,
+	}, nil)
+}
+
+// Height is the page's height in CSS pixels, as the browser was last told
+// it. Its width is ViewportWidth.
+func (t *Tab) Height() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.height
+}
+
+// fitHeight tells the browser the height the page is to have (want), if
+// that is not the one it has. Held from reading want to the browser's
+// answer: want is set where the height is decided (Manager.SetHeight, a
+// tab joining its conversation), so of two calls the one that runs second
+// tells the browser the later decision, whichever was decided first.
+func (t *Tab) fitHeight(ctx context.Context) error {
+	t.sizeMu.Lock()
+	defer t.sizeMu.Unlock()
+	h := int(t.want.Load())
+	if h <= 0 || h == t.Height() {
+		return nil
+	}
+	if err := setViewport(ctx, t.conn, t.session, h); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	t.height = h
+	t.mu.Unlock()
+	return nil
 }
 
 // whereIs asks a page where the browser put it.
@@ -441,7 +488,7 @@ type Captured struct {
 // Capture takes a PNG of the page as s asks.
 func (t *Tab) Capture(ctx context.Context, s Shot) (Captured, error) {
 	params := map[string]any{"format": "png"}
-	out := Captured{Width: ViewportWidth, Height: ViewportHeight}
+	out := Captured{Width: ViewportWidth, Height: t.Height()}
 	switch {
 	case s.Ref > 0:
 		var r *struct{ X, Y, W, H float64 }
@@ -486,7 +533,7 @@ func (t *Tab) Capture(ctx context.Context, s Shot) (Captured, error) {
 			w = ViewportWidth
 		}
 		if h < 1 {
-			h = ViewportHeight
+			h = float64(t.Height())
 		}
 		if h > MaxShotHeight {
 			h, out.Cut = MaxShotHeight, true
@@ -501,8 +548,15 @@ func (t *Tab) Capture(ctx context.Context, s Shot) (Captured, error) {
 	if err := t.conn.Call(ctx, t.session, "Page.captureScreenshot", params, &res); err != nil {
 		return out, err
 	}
-	png, err := base64.StdEncoding.DecodeString(res.Data)
-	out.PNG = png
+	data, err := base64.StdEncoding.DecodeString(res.Data)
+	out.PNG = data
+	if err == nil && s.Ref == 0 && !s.FullPage {
+		// The page as it was when it was taken: the panel may have changed
+		// its height since Height was read above.
+		if c, cerr := png.DecodeConfig(bytes.NewReader(data)); cerr == nil {
+			out.Width, out.Height = c.Width, c.Height
+		}
+	}
 	return out, err
 }
 
@@ -572,7 +626,11 @@ func (t *Tab) Watch(ctx context.Context) (frames <-chan []byte, stop func(), err
 		// "already active" is a screencast a viewer that just left has
 		// not stopped yet: it is running, which is what was asked for.
 		if err := t.conn.Call(ctx, t.session, "Page.startScreencast", map[string]any{
-			"format": "jpeg", "quality": 70, "maxWidth": ViewportWidth, "maxHeight": ViewportHeight,
+			// Never smaller than the page: a frame past these is scaled down
+			// to fit them, and a page taller than they allowed came to the
+			// panel at less than half its width (measured: 1280x1700 sent
+			// as 602x800).
+			"format": "jpeg", "quality": 70, "maxWidth": ViewportWidth, "maxHeight": MaxViewportHeight,
 		}, nil); err != nil && !strings.Contains(err.Error(), "already active") {
 			t.mu.Lock()
 			delete(t.viewers, ch)

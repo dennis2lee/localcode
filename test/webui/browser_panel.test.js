@@ -592,6 +592,114 @@ test('pagePoint scales to the page and keeps a point on it', async () => {
   const { pagePoint } = app.internals;
   assert.deepEqual({ ...pagePoint(320, 200, 640, 400) }, { x: 640, y: 400 });
   assert.deepEqual({ ...pagePoint(-5, 900, 640, 400) }, { x: 0, y: 800 });
+  // A page as tall as its frame: the width's scale serves both axes, and
+  // the bottom is as far down as the image reaches at it.
+  assert.deepEqual({ ...pagePoint(320, 800, 640, 1000) }, { x: 640, y: 1600 });
+  assert.deepEqual({ ...pagePoint(700, 1200, 640, 1000) }, { x: 1280, y: 2000 });
+});
+
+// The frame the page is shown in, as the stylesheet sizes it: what the
+// panel has below its tabs and address bar. Its border is the view's.
+function frameSized(app, width, height) {
+  const frame = app.el('browser-frame');
+  frame.clientWidth = width;
+  frame.clientHeight = height;
+  app.el('browser-view').clientLeft = 1;
+}
+
+test('the panel tells the daemon how big its frame is, once for each size', async () => {
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: { ...settingsWith({ browser: true }), 'POST /api/sessions/*/browser/size': { width: 1280, height: 1739 } },
+  });
+  await app.settle();
+  const sizes = () => app.callsTo('POST', '/api/sessions/sess-1/browser/size').map((c) => c.body);
+  assert.deepEqual(sizes(), [], 'a frame with no room (the panel not laid out) was sent');
+
+  frameSized(app, 576, 782);
+  app.fireWindow('resize');
+  await app.wait(200);
+  await app.settle();
+  assert.deepEqual(sizes(), [{ width: 574, height: 780 }], 'the frame less the view\'s border');
+
+  // The same size again is not sent again; a new one is, once it stops
+  // changing.
+  app.fireWindow('resize');
+  await app.wait(200);
+  frameSized(app, 576, 600);
+  app.fireWindow('resize');
+  frameSized(app, 576, 902);
+  app.fireWindow('resize');
+  await app.wait(200);
+  await app.settle();
+  assert.deepEqual(sizes(), [{ width: 574, height: 780 }, { width: 574, height: 900 }]);
+
+  // Another conversation is told the frame's size too: its pages are its own.
+  app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/sess-2/browser/size').map((c) => c.body), [{ width: 574, height: 900 }]);
+});
+
+test('a size that changes while one is on its way is sent once it is answered', async () => {
+  let answer;
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      ...settingsWith({ browser: true }),
+      'POST /api/sessions/*/browser/size': () => new Promise((r) => { answer = r; }),
+    },
+  });
+  frameSized(app, 576, 782);
+  app.fireWindow('resize');
+  await app.wait(200);
+  frameSized(app, 576, 502);
+  app.fireWindow('resize');
+  await app.wait(200);
+  await app.settle();
+  const sizes = () => app.callsTo('POST', '/api/sessions/sess-1/browser/size').map((c) => c.body);
+  assert.deepEqual(sizes(), [{ width: 574, height: 780 }], 'two sizes were out at once, and could be answered out of order');
+  answer({ width: 1280, height: 1739 });
+  await app.settle();
+  assert.deepEqual(sizes(), [{ width: 574, height: 780 }, { width: 574, height: 500 }]);
+});
+
+test('a stream opened again tells the daemon the size again, since a new daemon knows none', async () => {
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: { ...settingsWith({ browser: true }), 'POST /api/sessions/*/browser/size': { width: 1280, height: 1739 } },
+  });
+  frameSized(app, 576, 782);
+  app.fireWindow('resize');
+  await app.wait(200);
+  await app.settle();
+  // The daemon went away: the stream breaks, and is opened again after a
+  // pause.
+  app.el('browser-view').fire('error');
+  await app.wait(2100);
+  await app.settle();
+  const sizes = app.callsTo('POST', '/api/sessions/sess-1/browser/size').map((c) => c.body);
+  assert.deepEqual(sizes, [{ width: 574, height: 780 }, { width: 574, height: 780 }]);
+});
+
+test('a size the daemon did not take is sent again by the next poll', async () => {
+  let fail = true;
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      ...settingsWith({ browser: true }),
+      'POST /api/sessions/*/browser/size': () => (fail ? Promise.reject(new Error('daemon restarting')) : { width: 1280, height: 1739 }),
+    },
+  });
+  frameSized(app, 576, 782);
+  app.fireWindow('resize');
+  await app.wait(200);
+  await app.settle();
+  fail = false;
+  // The location poll, every two seconds.
+  await app.wait(2100);
+  await app.settle();
+  const sizes = app.callsTo('POST', '/api/sessions/sess-1/browser/size').map((c) => c.body);
+  assert.deepEqual(sizes, [{ width: 574, height: 780 }, { width: 574, height: 780 }]);
 });
 
 test('a key types its character, and a shortcut does not', async () => {

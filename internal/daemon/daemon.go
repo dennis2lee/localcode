@@ -299,6 +299,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/browser/import", d.handleBrowserImport)
 	d.mux.HandleFunc("GET /api/sessions/{id}/browser", d.handleBrowserState)
 	d.mux.HandleFunc("GET /api/sessions/{id}/browser/stream", d.handleBrowserStream)
+	d.mux.HandleFunc("POST /api/sessions/{id}/browser/size", d.handleBrowserSize)
 	d.mux.HandleFunc("POST /api/sessions/{id}/browser/navigate", d.handleBrowserNavigate)
 	d.mux.HandleFunc("POST /api/sessions/{id}/browser/input", d.handleBrowserInput)
 	d.mux.HandleFunc("POST /api/sessions/{id}/browser/tabs", d.handleBrowserNewTab)

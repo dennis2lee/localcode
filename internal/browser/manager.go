@@ -94,6 +94,10 @@ type Manager struct {
 	// land.
 	popups   bool
 	landings map[string]int
+
+	// heights is the page height each conversation's panel last asked
+	// for (SetHeight): its tabs have it, and so does every tab it opens.
+	heights map[string]int
 }
 
 // ask is one link a page asked the browser to open in a tab or a window
@@ -445,6 +449,7 @@ func NewManager(opts Options) *Manager {
 		gone:     map[string]time.Time{},
 		born:     map[string]string{},
 		landings: map[string]int{},
+		heights:  map[string]int{},
 	}
 }
 
@@ -495,17 +500,26 @@ func (m *Manager) Tab(ctx context.Context, conv string) (*Tab, error) {
 	if t := m.Existing(conv); t != nil {
 		return t, nil
 	}
-	t, err := m.openFor(ctx)
+	t, err := m.openFor(ctx, m.Height(conv))
 	if err != nil {
 		return nil, err
 	}
-	defer m.mu.Unlock()
+	m.publish(ctx, conv, t)
+	return t, nil
+}
+
+// publish adds t, just opened, to conv's tabs as the one it works in. Called
+// with m.mu held, which it lets go. The tab was opened at conv's height;
+// one its panel asked for while it opened is told to it here.
+func (m *Manager) publish(ctx context.Context, conv string, t *Tab) {
 	if c := m.convs[conv]; c != nil {
 		c.add(t)
 	} else {
 		m.convs[conv] = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
 	}
-	return t, nil
+	t.want.Store(int64(m.heightLocked(conv)))
+	m.mu.Unlock()
+	_ = t.fitHeight(ctx)
 }
 
 // openFor opens a tab on the running browser, starting it if it is not,
@@ -516,7 +530,7 @@ func (m *Manager) Tab(ctx context.Context, conv string) (*Tab, error) {
 // On success it returns with m.mu held, for the caller to publish the tab
 // and let it go. On failure m.mu is not held and the tab, if one opened,
 // is closed.
-func (m *Manager) openFor(ctx context.Context) (*Tab, error) {
+func (m *Manager) openFor(ctx context.Context, height int) (*Tab, error) {
 	// A caller that stopped waiting while queued opens nothing.
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -524,7 +538,7 @@ func (m *Manager) openFor(ctx context.Context) (*Tab, error) {
 	p, err := m.running(ctx)
 	var t *Tab
 	if err == nil {
-		t, err = openTab(ctx, p.conn, func() { m.landAfter(p) })
+		t, err = openTab(ctx, p.conn, func() { m.landAfter(p) }, height)
 	}
 	m.mu.Lock()
 	switch {
@@ -585,17 +599,54 @@ func (m *Manager) NewTab(ctx context.Context, conv string) (*Tab, error) {
 		return nil, err
 	}
 	defer release()
-	t, err := m.openFor(ctx)
+	t, err := m.openFor(ctx, m.Height(conv))
 	if err != nil {
 		return nil, err
 	}
-	defer m.mu.Unlock()
-	if c := m.convs[conv]; c != nil {
-		c.add(t)
-	} else {
-		m.convs[conv] = &convTabs{tabs: []*Tab{t}, changed: make(chan struct{})}
-	}
+	m.publish(ctx, conv, t)
 	return t, nil
+}
+
+// Height is the page height conv's tabs have, or are about to: the one
+// its panel last asked for, or ViewportHeight before any did.
+func (m *Manager) Height(conv string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.heightLocked(conv)
+}
+
+func (m *Manager) heightLocked(conv string) int {
+	if h := m.heights[conv]; h > 0 {
+		return h
+	}
+	return ViewportHeight
+}
+
+// SetHeight makes conv's tabs h CSS pixels tall, held to
+// MinViewportHeight and MaxViewportHeight, and every tab it opens after
+// them: the panel asks for the height that fills its frame (HeightFor).
+// It returns the height they were given and why a tab was not, if one
+// was not. Not in the conversation's turn: a resize is not held up behind
+// a page the model waits on, and fitHeight orders it with any other.
+func (m *Manager) SetHeight(ctx context.Context, conv string, h int) (int, error) {
+	h = clampHeight(float64(h))
+	m.mu.Lock()
+	m.heights[conv] = h
+	var tabs []*Tab
+	if c := m.convs[conv]; c != nil {
+		tabs = append(tabs, c.tabs...)
+	}
+	for _, t := range tabs {
+		t.want.Store(int64(h))
+	}
+	m.mu.Unlock()
+	var errs []error
+	for _, t := range tabs {
+		if err := t.fitHeight(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return h, errors.Join(errs...)
 }
 
 // ActivateTab makes conv's tab id the one it works in.
@@ -1267,7 +1318,7 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	t, err := attachTab(ctx, p.conn, targetID)
+	t, err := attachTab(ctx, p.conn, targetID, m.Height(conv))
 	// Where the browser put it is what it said as it started, if it said:
 	// where it is by now is something else, since a page opened after it
 	// may have covered it, or this manager put another in front. Looked
@@ -1331,7 +1382,9 @@ func (m *Manager) adopt(p *process, conv string, q *queue, tk uint64, openerID, 
 		// been brought forward and has painted, not now.
 		c.addUntold(t)
 	}
+	t.want.Store(int64(m.heightLocked(conv)))
 	m.mu.Unlock()
+	_ = t.fitHeight(ctx)
 	after := m.settle(conv)
 	release()
 	after()

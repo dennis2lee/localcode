@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,13 +21,34 @@ import (
 	"localcode/internal/childproc"
 )
 
-// Viewport is the page size every tab renders at. Fixed, so a screenshot,
+// The page size tabs render at. The width is fixed, so a page is laid out
+// the same at any panel size, and a point the model read off a screenshot
+// is where it was after the panel is resized. The height follows the
+// panel: a conversation's tabs are as tall as fills its panel's frame at
+// that width (Manager.SetHeight), from MinViewportHeight to
+// MaxViewportHeight, and ViewportHeight until a panel says. A screenshot,
 // the coordinates the model clicks at and the frames the panel shows are
-// all in one frame of reference.
+// all in the page's own CSS pixels.
 const (
-	ViewportWidth  = 1280
-	ViewportHeight = 800
+	ViewportWidth     = 1280
+	ViewportHeight    = 800
+	MinViewportHeight = 320
+	MaxViewportHeight = 2560
 )
+
+// HeightFor is the page height that fills a box w wide and h tall (in
+// any one unit) at ViewportWidth, held to MinViewportHeight and
+// MaxViewportHeight. ViewportHeight for a box with no size.
+func HeightFor(w, h float64) int {
+	if !(w > 0) || !(h > 0) || math.IsInf(w, 0) || math.IsInf(h, 0) {
+		return ViewportHeight
+	}
+	return clampHeight(math.Round(ViewportWidth * h / w))
+}
+
+func clampHeight(h float64) int {
+	return int(math.Max(MinViewportHeight, math.Min(MaxViewportHeight, h)))
+}
 
 // process is one running browser and the connection to it.
 type process struct {

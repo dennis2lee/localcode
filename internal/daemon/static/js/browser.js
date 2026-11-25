@@ -18,8 +18,12 @@ import { app, session } from './state.js';
 import { api } from './api.js';
 import { zoomKey, zoomWheel } from './zoom.js';
 
-// The page size the daemon renders every tab at (browser.ViewportWidth and
-// ViewportHeight), which is the frame of every coordinate sent back.
+// The page's width, which the daemon renders every tab at
+// (browser.ViewportWidth), and the height a tab has until the panel says
+// how tall its frame is (browser.ViewportHeight). The page is as tall as
+// fills the frame at that width: the panel sends the frame's size
+// (sendSize) and the daemon makes the conversation's tabs that tall
+// (browser.HeightFor). Every coordinate sent back is in the page's pixels.
 export const PAGE_WIDTH = 1280;
 export const PAGE_HEIGHT = 800;
 
@@ -39,6 +43,11 @@ let navAnswers = 0;      // address bar answers used, so a poll asked before one
 let tabsDrawn = '';      // the tab strip as last drawn, so a poll that changes nothing redraws nothing
 let activeTab = '';      // the id of the tab the view shows
 let tabSeq = 0;          // tab strip clicks made, so only the newest one's answer is used
+let pageHeight = PAGE_HEIGHT; // the shown page's height, as the daemon last said it
+let sizeSent = '';       // the conversation and frame size last sent, so one that has not changed is not sent again
+let sizeOut = false;     // a size request is on its way
+let sizeAgain = false;   // the frame changed while it was: sent once it is answered
+let sizeTimer = null;
 
 // visit counts the panel's showings of a conversation: it moves on when
 // the stream is pointed at a conversation and when the panel is hidden.
@@ -73,14 +82,77 @@ export function browserShown() {
 }
 
 // pagePoint maps a point in the shown image to the page's own pixels.
-// The image keeps the page's proportions (CSS aspect-ratio), so one scale
-// serves both axes; clamped, so a drag that leaves the image still lands
-// on the page.
+// The image is the frame at its own proportions, scaled down to fit (the
+// stylesheet's #browser-view), so the scale of its width serves both axes
+// and the page is as tall as the image at that scale, whatever height the
+// page has just been given; clamped, so a drag that leaves the image still
+// lands on the page.
 export function pagePoint(offsetX, offsetY, shownWidth, shownHeight) {
-  const sx = shownWidth > 0 ? PAGE_WIDTH / shownWidth : 1;
-  const sy = shownHeight > 0 ? PAGE_HEIGHT / shownHeight : 1;
+  const s = shownWidth > 0 ? PAGE_WIDTH / shownWidth : 1;
   const clamp = (v, max) => Math.max(0, Math.min(max, v));
-  return { x: Math.round(clamp(offsetX * sx, PAGE_WIDTH)), y: Math.round(clamp(offsetY * sy, PAGE_HEIGHT)) };
+  return { x: Math.round(clamp(offsetX * s, PAGE_WIDTH)), y: Math.round(clamp(offsetY * s, shownHeight * s)) };
+}
+
+// frameBox is the room the page has in the panel: the frame less the
+// view's border, in layout pixels (a zoom of the window scales both sides
+// alike, and the daemon takes only their ratio). Null while the frame has
+// no room to speak of: the panel hidden or collapsed.
+export function frameBox() {
+  const frame = el('browser-frame');
+  const view = el('browser-view');
+  if (!frame || !view) return null;
+  const border = view.clientLeft || 0;
+  const width = (frame.clientWidth || 0) - 2 * border;
+  const height = (frame.clientHeight || 0) - 2 * border;
+  if (width < 40 || height < 40) return null;
+  return { width, height };
+}
+
+// sendSize tells the daemon the frame's size, for the conversation's page
+// to be as tall as fills it. Only a size it has not been told for this
+// conversation, and one request at a time: a frame resized while one is
+// out is sent once it is answered, so the last size sent is the last one
+// the daemon applies. One that failed is sent again by the next location
+// poll, which calls this too.
+function sendSize() {
+  if (sizeTimer) {
+    clearTimeout(sizeTimer);
+    sizeTimer = null;
+  }
+  if (!browserShown() || !streamFor) return;
+  const box = frameBox();
+  if (!box) return;
+  const id = streamFor;
+  const key = `${id} ${box.width}x${box.height}`;
+  if (key === sizeSent) return;
+  if (sizeOut) {
+    sizeAgain = true;
+    return;
+  }
+  sizeSent = key;
+  sizeOut = true;
+  const asked = visit;
+  api('POST', `/api/sessions/${id}/browser/size`, box)
+    .then((res) => {
+      if (asked === visit && res && res.height > 0) pageHeight = res.height;
+    })
+    .catch(() => {
+      if (sizeSent === key) sizeSent = '';
+    })
+    .finally(() => {
+      sizeOut = false;
+      if (sizeAgain) {
+        sizeAgain = false;
+        sendSize();
+      }
+    });
+}
+
+// sizeSoon sends the frame's size once it has stopped changing for a
+// moment: a drag of the panel's edge resizes it many times a second.
+function sizeSoon() {
+  if (sizeTimer) clearTimeout(sizeTimer);
+  sizeTimer = setTimeout(sendSize, 120);
 }
 
 // modifierBits are a DOM event's modifier keys as the DevTools protocol
@@ -216,6 +288,10 @@ function reconnect(delay) {
     const view = el('browser-view');
     if (asked !== visit || !view || !browserShown() || streamFor !== session.sessionID) return;
     view.setAttribute('src', `/api/sessions/${streamFor}/browser/stream?r=${Date.now()}`);
+    // A stream breaks when the daemon stops, and one started in its place
+    // (a restart, an update) knows no panel's size: told again.
+    sizeSent = '';
+    sendSize();
   }, delay);
 }
 
@@ -308,6 +384,8 @@ async function refreshLocation() {
       reconnect(0);
     }
     showEmpty(!!st.has_tab);
+    if (st.height > 0) pageHeight = st.height;
+    sendSize();
     const tabs = st.has_tab && Array.isArray(st.tabs) ? st.tabs : [];
     drawTabs(tabs);
     const active = (tabs.find((t) => t.active) || {}).id || '';
@@ -413,7 +491,11 @@ export function renderBrowserPanel() {
     if (url) url.value = '';
     restoreEmptyText();
     showEmpty(false);
+    pageHeight = PAGE_HEIGHT;
   }
+  // The frame's size, for this conversation's page to fill it from its
+  // first frame. A size already sent for it is not sent again.
+  sendSize();
   if (!pollTimer) pollTimer = setInterval(refreshLocation, 2000);
   refreshLocation();
 }
@@ -473,6 +555,12 @@ export function initBrowserPanel() {
   });
   el('browser-forward')?.addEventListener('click', () => navigate({ action: 'forward' }));
   el('browser-reload')?.addEventListener('click', () => navigate({ action: 'reload' }));
+
+  // The frame follows the window's height and the panel's width: the page
+  // is made as tall as fills it each time it changes.
+  const frame = el('browser-frame');
+  if (frame && typeof ResizeObserver === 'function') new ResizeObserver(sizeSoon).observe(frame);
+  window.addEventListener('resize', sizeSoon);
 
   // A point on the view, in the page's pixels. From the pointer's place in
   // the window where the view can say where it is, so a drag that leaves
@@ -549,7 +637,7 @@ export function initBrowserPanel() {
     e.preventDefault();
     const p = point(e);
     // A wheel that counts in lines or pages, as a page counts pixels.
-    const unit = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? PAGE_HEIGHT : 1);
+    const unit = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? pageHeight : 1);
     sendInput({ mouse: { type: 'mouseWheel', x: p.x, y: p.y, deltaX: e.deltaX * unit, deltaY: e.deltaY * unit, modifiers: modifierBits(e) } });
   }, { passive: false });
   // A stream that broke is opened again, after a pause so a daemon that
