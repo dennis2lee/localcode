@@ -3,13 +3,9 @@
 package childproc
 
 import (
-	"fmt"
-	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"syscall"
-	"time"
 )
 
 // createNewProcessGroup starts the child as the root of a new process
@@ -46,15 +42,7 @@ func KillGroup(cmd *exec.Cmd) error {
 	}
 	kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid))
 	Hide(kill)
-	out, err := kill.CombinedOutput()
-	if path := os.Getenv("LC_DIAG_LOG"); path != "" {
-		// Diagnostic branch only.
-		if f, ferr := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr == nil {
-			fmt.Fprintf(f, "%s [%d] TASKKILL pid=%d err=%v out=%q\n", time.Now().Format("15:04:05.000"), os.Getpid(), cmd.Process.Pid, err, strings.TrimSpace(string(out)))
-			f.Close()
-		}
-	}
-	if err != nil {
+	if err := kill.Run(); err != nil {
 		// taskkill missing, or the tree already gone. Killing just the
 		// child is strictly better than doing nothing.
 		return cmd.Process.Kill()

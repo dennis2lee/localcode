@@ -3,7 +3,9 @@ package browser
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,6 +32,96 @@ func testManager(t *testing.T) *Manager {
 	m := NewManager(Options{DataDir: dir})
 	t.Cleanup(m.Close)
 	return m
+}
+
+// profileRemovalWait is how long a test goes on trying to remove its
+// browser's profile.
+const profileRemovalWait = 30 * time.Second
+
+// profileDir is a directory for a test's browser profile, removed when the
+// test is over. Ask for it before the browser's Close is made a cleanup:
+// cleanups run last in, first out, so the browser is then closed, and
+// waited for, before its profile is removed.
+//
+// Not t.TempDir, whose removal gives up after two seconds on Windows, where
+// a file some process has open cannot be removed. Close waits for the
+// browser, and the browser's helpers are not the browser: its network
+// service has the profile's Network files open, and one killed with its
+// browser was still there, holding one, after the browser had exited
+// (measured on the Windows CI runner: the directory came free half a
+// second later). A helper is killed the way the browser is and may take as
+// long to go, so the removal is tried again for profileRemovalWait, and
+// what the test fails with is the last refusal.
+func profileDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "localcode-browser-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := removeWithin(dir, profileRemovalWait); err != nil {
+			t.Errorf("the browser's profile could not be removed: %v", err)
+		}
+	})
+	return dir
+}
+
+// removeWithin removes dir and all that is in it, trying again until it is
+// gone or wait has passed. The error is the last try's.
+func removeWithin(dir string, wait time.Duration) error {
+	start := time.Now()
+	deadline := start.Add(wait)
+	tries := 0
+	for {
+		err := os.RemoveAll(dir)
+		tries++
+		if err == nil {
+			if tries > 1 {
+				diagf("REMOVED after=%v tries=%d dir=%s", time.Since(start).Round(time.Millisecond), tries, dir)
+			}
+			return nil
+		}
+		if tries == 1 {
+			// Diagnostic branch only.
+			file := dir
+			var pe *fs.PathError
+			if errors.As(err, &pe) {
+				file = pe.Path
+			}
+			diagf("REMOVE-REFUSED err=%q holders=%s browsers=%s", err.Error(), holders(file), processTable())
+		}
+		if !time.Now().Before(deadline) {
+			diagf("REMOVE-GAVE-UP after=%v err=%q dir=%s", time.Since(start).Round(time.Millisecond), err.Error(), dir)
+			return err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A browser that was killed is waited for until it has exited, past the
+// three seconds a stop used to give it: on Windows a killed browser holds
+// its profile's files until the system has finished ending it.
+func TestAKilledBrowserIsWaitedForUntilItHasExited(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits past three seconds")
+	}
+	p := &process{exited: make(chan struct{})}
+	returned := make(chan struct{})
+	go func() {
+		p.kill()
+		close(returned)
+	}()
+	select {
+	case <-returned:
+		t.Fatal("kill returned and the browser has not exited")
+	case <-time.After(3500 * time.Millisecond):
+	}
+	close(p.exited)
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("kill went on waiting after the browser exited")
+	}
 }
 
 const formPage = `<!doctype html><title>Form</title>

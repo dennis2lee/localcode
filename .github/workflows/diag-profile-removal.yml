@@ -1,5 +1,6 @@
-# Measurement only: what still holds a test's browser profile when the
-# test removes it, and for how long. Lives on diag/profile-removal, never
+# Measurement only: the browser tests on Windows with the fix, several
+# times over, with a line for every stop that had to kill and every
+# profile whose removal was refused. Lives on diag/profile-removal, never
 # on main.
 name: diag-profile-removal
 
@@ -20,6 +21,8 @@ jobs:
           - {name: suite-2, what: suite}
           - {name: suite-3, what: suite}
           - {name: suite-4, what: suite}
+          - {name: suite-5, what: suite}
+          - {name: suite-6, what: suite}
           - {name: package-1, what: package}
           - {name: package-2, what: package}
     name: ${{ matrix.name }}

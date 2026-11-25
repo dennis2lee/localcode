@@ -189,7 +189,6 @@ func start(ctx context.Context, path, dataDir, profile string, imported bool) (*
 		return nil, fmt.Errorf("connect to the browser: %w", err)
 	}
 	p.conn = conn
-	diagf("START pid=%d dir=%s", cmd.Process.Pid, dataDir)
 	_ = os.WriteFile(filepath.Join(dataDir, ownerFile), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
 	return p, nil
 }
@@ -272,6 +271,20 @@ func readPortFile(path string) (string, bool) {
 	return "ws://127.0.0.1:" + lines[0] + lines[1], true
 }
 
+// killedExitWait is how long a browser that was killed is waited for.
+//
+// A process that is killed is not gone at once on Windows. It keeps every
+// file it had open until the system has finished ending it, the profile's
+// databases among them, and on a busy machine that takes seconds. Measured
+// on the Windows CI runner with every package's tests running beside this
+// one's: of 22 browsers killed, four had not exited three seconds later,
+// and one still held a file of its profile eleven seconds after. Three
+// seconds is what this waited before, and a stop that gave up then
+// returned with the profile still in use: its directory could not be
+// removed, and neither a profile copied over it nor a browser started on
+// it next would have found it free.
+const killedExitWait = 30 * time.Second
+
 // diagf appends one line to the file LC_DIAG_LOG names. Diagnostic branch
 // only.
 func diagf(format string, args ...any) {
@@ -287,38 +300,35 @@ func diagf(format string, args ...any) {
 	f.Close()
 }
 
-// close asks the browser to quit and kills it if it has not within a few
-// seconds.
+// close asks the browser to quit, kills it if it has not within a few
+// seconds, and returns when it has exited.
 func (p *process) close() {
 	t0 := time.Now()
-	pid := p.cmd.Process.Pid
-	var callErr error
 	if p.conn != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		callErr = p.conn.Call(ctx, "", "Browser.close", nil, nil)
+		_ = p.conn.Call(ctx, "", "Browser.close", nil, nil)
 		cancel()
 		_ = p.conn.Close()
 	}
-	called := time.Since(t0)
 	select {
 	case <-p.exited:
-		diagf("CLOSE pid=%d call=%v callErr=%v exited-after=%v dir=%s", pid, called.Round(time.Millisecond), callErr, time.Since(t0).Round(time.Millisecond), p.dataDir)
+		diagf("CLOSE exited-after=%v dir=%s", time.Since(t0).Round(time.Millisecond), p.dataDir)
 	case <-time.After(3 * time.Second):
-		diagf("CLOSE pid=%d call=%v callErr=%v NOT-EXITED-AFTER-3s dir=%s", pid, called.Round(time.Millisecond), callErr, p.dataDir)
+		diagf("CLOSE NOT-EXITED-AFTER-3s dir=%s", p.dataDir)
 		p.kill()
 	}
 }
 
+// kill ends the browser and every process it started, and returns when
+// the browser has exited, or after killedExitWait if it never does.
 func (p *process) kill() {
 	t0 := time.Now()
-	pid := p.cmd.Process.Pid
 	err := childproc.KillGroup(p.cmd)
-	killed := time.Since(t0)
 	select {
 	case <-p.exited:
-		diagf("KILL pid=%d killgroup=%v err=%v exited-after=%v dir=%s", pid, killed.Round(time.Millisecond), err, time.Since(t0).Round(time.Millisecond), p.dataDir)
-	case <-time.After(3 * time.Second):
-		diagf("KILL pid=%d killgroup=%v err=%v STILL-NOT-EXITED-AFTER-3s dir=%s", pid, killed.Round(time.Millisecond), err, p.dataDir)
+		diagf("KILL err=%v exited-after=%v dir=%s", err, time.Since(t0).Round(time.Millisecond), p.dataDir)
+	case <-time.After(killedExitWait):
+		diagf("KILL err=%v STILL-NOT-EXITED-AFTER-%v dir=%s", err, killedExitWait, p.dataDir)
 	}
 }
 
