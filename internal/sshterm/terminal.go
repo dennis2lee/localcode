@@ -158,6 +158,10 @@ type Terminal struct {
 	markX       int
 	markY       int
 	markPending bool
+	// markAbs is markY counted from the terminal's first line: a prompt
+	// drawn on the row after the mark, with the screen scrolled by one,
+	// can leave the cursor at markX and markY.
+	markAbs int
 	// A local terminal's screen clears (see clearEnds): how many there
 	// have been, the row the screen started at after the last, the tail of
 	// the output before, in which a clear's sequence may have begun, and
@@ -519,13 +523,14 @@ func (t *Terminal) feed(p []byte) error {
 func (t *Terminal) markHere() {
 	pos := t.emu.CursorPosition()
 	t.markX, t.markY, t.markPending = pos.X, pos.Y, false
+	t.markAbs = t.absRow(pos.Y)
 }
 
 // atMark reports the cursor where the end of the last command left it:
 // nothing has been drawn since. Called with mu held.
 func (t *Terminal) atMark() bool {
 	pos := t.emu.CursorPosition()
-	return !t.markPending && pos.X == t.markX && pos.Y == t.markY
+	return !t.markPending && pos.X == t.markX && pos.Y == t.markY && t.absRow(pos.Y) == t.markAbs
 }
 
 // show draws output on the screen, a chunk at a time.
@@ -770,22 +775,27 @@ func (t *Terminal) recordPrompt(x int) {
 // nothing a command line runs) not reaching the left edge, and the command
 // read it. Matched to the left edge, the text can go on in the row above,
 // and the prompt is taken to end at the edge, which lineEmpty does not
-// read as empty. It cannot say with the cursor where the mark left it (no
-// prompt drawn, however long that has been), in the last column (the
-// cursor sits there on the last character written or over a blank cell,
-// and the screen does not say which), or after a bracketed paste where the
-// shell has bracketed paste off at its prompt. Called with mu held, where a
+// read as empty; the text is theirs either way. It cannot say with the
+// cursor where the mark left it (no prompt drawn, however long that has
+// been), at the left edge (nothing left of the cursor to read: a line that
+// filled the row above, or a prompt that leaves nothing on its row), in
+// the last column (the cursor sits there on the last character written or
+// over a blank cell, and the screen does not say which), or after a
+// bracketed paste where the shell has bracketed paste off at its prompt. Called with mu held, where a
 // prompt would be recorded.
 func (t *Terminal) judgeAhead() bool {
 	pos := t.emu.CursorPosition()
-	if t.atMark() || pos.X == t.emu.Width()-1 || t.aheadPasted && !t.emu.BracketedPaste() {
+	if t.atMark() || pos.X == 0 || pos.X == t.emu.Width()-1 || t.aheadPasted && !t.emu.BracketedPaste() {
 		return false
 	}
 	from, spaces := t.aheadShownFrom(pos.X, pos.Y)
 	if from == pos.X || (spaces && from > 0) {
 		t.recordPrompt(pos.X)
 	} else {
+		// Theirs on the line, as if typed at it: until their Enter or
+		// Ctrl+C, past a command the shell starts on its own too.
 		t.recordPrompt(from)
+		t.personAfter = true
 	}
 	return true
 }
@@ -2069,28 +2079,32 @@ func (t *Terminal) aheadKey(ev uv.KeyPressEvent) {
 		// the prompt after the shell runs it. (Ctrl+O ends no line in the
 		// terminal. With Alt, the shell reads Escape and the key as one:
 		// bash does nothing with it, zsh puts a line break in the line.)
+		// On the alternate screen the program reads it, as any key there.
 		t.dropAhead()
-		t.aheadSent = true
+		t.aheadSent = !t.emu.IsAltScreen()
 	case ev.Text != "" && ev.Mod&^uv.ModShift == 0:
 		t.aheadTyped(ev.Text, false)
 	case t.emu.IsAltScreen():
 		// A full-screen program's: it reads every key. (Text is read off
 		// the screen at the prompt, as anywhere: what it read is not there.)
-	case !t.aheadMixed && ev.Mod == 0 && ev.Code == uv.KeyBackspace && aheadErasable(t.aheadText):
+	case !t.aheadMixed && !t.aheadPasted && ev.Mod == 0 && ev.Code == uv.KeyBackspace && aheadErasable(t.aheadText):
 		// The terminal's line editing, where a command reads whole lines,
 		// and the shell's: one character less. A program that reads keys
-		// took it all.
+		// took it all. (After a bracketed paste the terminal erases the
+		// paste's closing mark, not the text.)
 		_, n := utf8.DecodeLastRuneInString(t.aheadText)
 		t.aheadText = t.aheadText[:len(t.aheadText)-n]
 	case !t.aheadMixed && ctrl && ev.Code == 'u' && !t.isLocal():
 		// Not in a local terminal: PowerShell leaves the line as it is.
+		// After a bracketed paste too: the terminal kills the paste with
+		// its marks.
 		t.aheadText = ""
-	case ctrl && ev.Code == 'd':
-		// The end of input: what is on the line goes to whatever reads it
+	case ctrl && ev.Code == 'd' && t.aheadText == "" && !t.aheadMixed && !t.aheadPasted:
+		// The end of input, at the start of a line: to whatever reads it
 		// (Ctrl+D to leave a REPL, or to end what cat reads). Read by the
-		// shell, it ends the shell, or the shell says it will not, on an
-		// empty line, and does nothing to one with text on it, which stays
-		// drawn as typed.
+		// shell, it ends the shell, or the shell says it will not. After
+		// text, the terminal passes the text on as it is, beyond Backspace
+		// and Ctrl+U: that is a key like any other.
 	default:
 		// What the shell does with any other key (Up recalls a command,
 		// Escape waits for the next key, Ctrl+W ends a word differently in
@@ -2115,7 +2129,7 @@ func aheadErasable(s string) bool {
 func (t *Terminal) aheadTyped(s string, bracketed bool) {
 	if i := strings.LastIndex(s, "\r"); i >= 0 && !bracketed {
 		t.dropAhead()
-		t.aheadSent = true
+		t.aheadSent = !t.emu.IsAltScreen()
 		s = s[i+1:]
 	}
 	if s == "" {
