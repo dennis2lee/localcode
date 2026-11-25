@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -38,7 +39,10 @@ func TestZZColdStart(t *testing.T) {
 		if err := ownPreferences(filepath.Join(dir, "Default")); err != nil {
 			t.Fatal(err)
 		}
-		cmd := exec.Command(install.Path, launchArgs(dir, "Default", false)...)
+		// The browser's own log, in the profile directory: what it was
+		// doing, by its own clock, if the start turns out slow.
+		args := append([]string{"--enable-logging"}, launchArgs(dir, "Default", false)...)
+		cmd := exec.Command(install.Path, args...)
 		childproc.Hide(cmd)
 		childproc.NewGroup(cmd)
 		t0 := time.Now()
@@ -51,10 +55,22 @@ func TestZZColdStart(t *testing.T) {
 			close(exited)
 		}()
 		portMS, wsURL, gone := int64(-1), "", false
+		looked := false
 		for time.Since(t0) < 170*time.Second && !gone {
 			if url, ok := readPortFile(portFile); ok {
 				portMS, wsURL = time.Since(t0).Milliseconds(), url
 				break
+			}
+			if !looked && time.Since(t0) > 12*time.Second {
+				// Slow: who has the processor, while it still is.
+				looked = true
+				busy := exec.Command("sh", "-c", "ps aux --sort=-%cpu | head -20")
+				if runtime.GOOS == "windows" {
+					busy = exec.Command("powershell", "-NoProfile", "-Command",
+						"Get-Process | Sort-Object CPU -Descending | Select-Object -First 20 Name,Id,CPU,WS,StartTime | Format-Table -AutoSize | Out-String -Width 220")
+				}
+				out, _ := busy.CombinedOutput()
+				fmt.Printf("RESULT i=%d slow: no port after 12s; the busiest processes:\n%s\n", i, out)
 			}
 			select {
 			case <-exited:
@@ -86,6 +102,13 @@ func TestZZColdStart(t *testing.T) {
 		}
 		fmt.Printf("RESULT i=%d port_ms=%d dial_ms=%d target_ms=%d exited_early=%v total_ms=%d started_at=%s\n",
 			i, portMS, dialMS, targetMS, gone, time.Since(t0).Milliseconds(), t0.UTC().Format("15:04:05.000"))
+		if portMS < 0 || portMS > 12000 {
+			log, _ := os.ReadFile(filepath.Join(dir, "chrome_debug.log"))
+			if len(log) > 20000 {
+				log = log[:20000]
+			}
+			fmt.Printf("RESULT i=%d slow: the browser's log:\n%s\n", i, log)
+		}
 		if conn != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			_ = conn.Call(ctx, "", "Browser.close", nil, nil)
