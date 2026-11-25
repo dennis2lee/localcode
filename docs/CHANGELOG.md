@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Fixed**
+
+* A browser slow to start no longer stopped after 30 seconds and started again at the next click: the start runs up to 3 minutes, and a request that cannot wait for it is told the browser is still starting
+
 ## v0.180.2
 
 The browser panel's page as tall as the panel.

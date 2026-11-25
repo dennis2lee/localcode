@@ -139,7 +139,11 @@ func (e ErrInUse) Error() string {
 	return fmt.Sprintf("the browser is in use by another localcode (process %d); close that window, or use the browser there", e.PID)
 }
 
-// start launches the browser at path on dataDir and connects to it.
+// errStartStopped is a start called off by a close or a profile copy.
+var errStartStopped = errors.New("the browser was closed while it started")
+
+// start launches the browser at path on dataDir and connects to it, by
+// ctx's deadline (see startFor).
 func start(ctx context.Context, path, dataDir, profile string, imported bool) (*process, error) {
 	portFile := filepath.Join(dataDir, "DevToolsActivePort")
 	// A browser on this profile that a live localcode is using is that
@@ -183,7 +187,13 @@ func start(ctx context.Context, path, dataDir, profile string, imported bool) (*
 		p.kill()
 		return nil, err
 	}
-	conn, err := cdp.Dial(wsURL)
+	// By the start's own deadline: a first start measured up to 7.9s
+	// here, against the 10s an ordinary dial allows.
+	within := cdp.DialTimeoutDefault
+	if deadline, ok := ctx.Deadline(); ok {
+		within = max(time.Until(deadline), time.Second)
+	}
+	conn, err := cdp.DialTimeout(wsURL, within)
 	if err != nil {
 		p.kill()
 		return nil, fmt.Errorf("connect to the browser: %w", err)
@@ -194,10 +204,9 @@ func start(ctx context.Context, path, dataDir, profile string, imported bool) (*
 }
 
 // waitForPort waits for the browser to write DevToolsActivePort: the port
-// on its first line, the browser's endpoint path on its second.
+// on its first line, the browser's endpoint path on its second. Until
+// ctx ends, which is the start's own bound (startFor), not a caller's.
 func waitForPort(ctx context.Context, portFile string, exited <-chan struct{}) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -210,7 +219,10 @@ func waitForPort(ctx context.Context, portFile string, exited <-chan struct{}) (
 			// this profile open, and the new one handed itself over to it.
 			return "", errors.New("the browser exited at once; if another browser is running on ~/.localcode/browser, close it and try again")
 		case <-ctx.Done():
-			return "", errors.New("the browser did not open its debugging port within 30s")
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return "", fmt.Errorf("the browser did not open its debugging port within %s", startFor)
+			}
+			return "", errStartStopped
 		case <-tick.C:
 		}
 	}

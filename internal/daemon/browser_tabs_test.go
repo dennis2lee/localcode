@@ -48,8 +48,10 @@ func TestThePanelOpensSwitchesAndClosesTabs(t *testing.T) {
 		return resp
 	}
 
-	if resp := call(http.MethodPost, base+"/tabs"); resp.StatusCode != http.StatusOK {
-		t.Fatalf("new tab = %d", resp.StatusCode)
+	// The first new tab starts the browser.
+	if resp := whenStarted(t, func() *http.Response { return call(http.MethodPost, base+"/tabs") }); resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("new tab = %d: %s", resp.StatusCode, body)
 	} else if got := tabsOf(resp); len(got) != 1 || !got[0].Active {
 		t.Fatalf("after the first new tab: %+v", got)
 	}
@@ -98,20 +100,27 @@ func TestArchivingAConversationClosesItsTabs(t *testing.T) {
 	}
 	d, srv, id := browserDaemon(t)
 	base := srv.URL + "/api/sessions/" + id
-	var body string
 	post := func(url string) int {
 		t.Helper()
 		resp, err := http.Post(url, "application/json", strings.NewReader("{}"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		data, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		body = strings.TrimSpace(string(data))
 		return resp.StatusCode
 	}
-	if code := post(base + "/browser/tabs"); code != http.StatusOK {
-		t.Fatalf("new tab = %d: %s", code, body)
+	// The first new tab starts the browser.
+	first := whenStarted(t, func() *http.Response {
+		resp, err := http.Post(base+"/browser/tabs", "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	})
+	data, _ := io.ReadAll(first.Body)
+	first.Body.Close()
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("new tab = %d: %s", first.StatusCode, data)
 	}
 	if d.Browser.Existing(id) == nil {
 		t.Fatal("no tab to archive with")

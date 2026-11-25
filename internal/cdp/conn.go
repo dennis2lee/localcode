@@ -44,9 +44,19 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s (%d)", e.Method, e.Message, e.Code)
 }
 
+// DialTimeoutDefault is how long Dial allows for the connection and its
+// handshake.
+const DialTimeoutDefault = 10 * time.Second
+
 // Dial connects to a browser's DevTools WebSocket URL.
 func Dial(wsURL string) (*Conn, error) {
-	ws, err := dialWS(wsURL, 10*time.Second)
+	return DialTimeout(wsURL, DialTimeoutDefault)
+}
+
+// DialTimeout is Dial with timeout for the connection and its handshake:
+// a browser that is still starting can take longer than Dial allows.
+func DialTimeout(wsURL string, timeout time.Duration) (*Conn, error) {
+	ws, err := dialWS(wsURL, timeout)
 	if err != nil {
 		return nil, err
 	}
