@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"localcode/internal/browser/browsertest"
 )
 
 // zoomPage has a field well away from the corner, so a click that is off
@@ -49,10 +51,7 @@ func TestAZoomedProfilesPagesAreAtFullSize(t *testing.T) {
 	if _, err := Find(""); err != nil {
 		t.Skip("no Chrome or Edge here")
 	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, profileNameFile), []byte("Default\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	dir := browsertest.ProfileDir(t)
 	// 1.2 to the power of the level: 125% for every page, 150% for the
 	// test site's host.
 	prefs := `{"partition":{"default_zoom_level":{"x":1.2239010857415449},` +
