@@ -189,6 +189,7 @@ func start(ctx context.Context, path, dataDir, profile string, imported bool) (*
 		return nil, fmt.Errorf("connect to the browser: %w", err)
 	}
 	p.conn = conn
+	diagf("START pid=%d dir=%s", cmd.Process.Pid, dataDir)
 	_ = os.WriteFile(filepath.Join(dataDir, ownerFile), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
 	return p, nil
 }
@@ -271,27 +272,53 @@ func readPortFile(path string) (string, bool) {
 	return "ws://127.0.0.1:" + lines[0] + lines[1], true
 }
 
+// diagf appends one line to the file LC_DIAG_LOG names. Diagnostic branch
+// only.
+func diagf(format string, args ...any) {
+	path := os.Getenv("LC_DIAG_LOG")
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(f, "%s [%d] %s\n", time.Now().Format("15:04:05.000"), os.Getpid(), fmt.Sprintf(format, args...))
+	f.Close()
+}
+
 // close asks the browser to quit and kills it if it has not within a few
 // seconds.
 func (p *process) close() {
+	t0 := time.Now()
+	pid := p.cmd.Process.Pid
+	var callErr error
 	if p.conn != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = p.conn.Call(ctx, "", "Browser.close", nil, nil)
+		callErr = p.conn.Call(ctx, "", "Browser.close", nil, nil)
 		cancel()
 		_ = p.conn.Close()
 	}
+	called := time.Since(t0)
 	select {
 	case <-p.exited:
+		diagf("CLOSE pid=%d call=%v callErr=%v exited-after=%v dir=%s", pid, called.Round(time.Millisecond), callErr, time.Since(t0).Round(time.Millisecond), p.dataDir)
 	case <-time.After(3 * time.Second):
+		diagf("CLOSE pid=%d call=%v callErr=%v NOT-EXITED-AFTER-3s dir=%s", pid, called.Round(time.Millisecond), callErr, p.dataDir)
 		p.kill()
 	}
 }
 
 func (p *process) kill() {
-	_ = childproc.KillGroup(p.cmd)
+	t0 := time.Now()
+	pid := p.cmd.Process.Pid
+	err := childproc.KillGroup(p.cmd)
+	killed := time.Since(t0)
 	select {
 	case <-p.exited:
+		diagf("KILL pid=%d killgroup=%v err=%v exited-after=%v dir=%s", pid, killed.Round(time.Millisecond), err, time.Since(t0).Round(time.Millisecond), p.dataDir)
 	case <-time.After(3 * time.Second):
+		diagf("KILL pid=%d killgroup=%v err=%v STILL-NOT-EXITED-AFTER-3s dir=%s", pid, killed.Round(time.Millisecond), err, p.dataDir)
 	}
 }
 

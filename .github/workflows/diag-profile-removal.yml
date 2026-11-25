@@ -1,0 +1,68 @@
+# Measurement only: what still holds a test's browser profile when the
+# test removes it, and for how long. Lives on diag/profile-removal, never
+# on main.
+name: diag-profile-removal
+
+on:
+  push:
+    branches: ['diag/profile-removal']
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: suite-1, what: suite}
+          - {name: suite-2, what: suite}
+          - {name: suite-3, what: suite}
+          - {name: suite-4, what: suite}
+          - {name: package-1, what: package}
+          - {name: package-2, what: package}
+    name: ${{ matrix.name }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # The whole suite is what was running when the removal was refused:
+      # three other packages start browsers and shells beside this one.
+      - name: Run the tests, three times over
+        shell: bash
+        timeout-minutes: 40
+        env:
+          CGO_ENABLED: '0'
+          LC_DIAG_LOG: ${{ runner.temp }}\lc-diag.log
+          LC_WHAT: ${{ matrix.what }}
+        run: |
+          failed=0
+          for i in 1 2 3; do
+            if [ "$LC_WHAT" = suite ]; then
+              go test ./... -count=1 -timeout 8m > "run-$i.log" 2>&1 || failed=1
+            else
+              go test ./internal/browser/ -count=1 -timeout 8m > "run-$i.log" 2>&1 || failed=1
+            fi
+            echo "=== run $i"
+            grep -vE '^(ok|\?) ' "run-$i.log" | head -200 || true
+            grep -E 'internal/(browser|agent|daemon|sshterm)\s' "run-$i.log" || true
+          done
+          echo "=== diagnostic lines"
+          cat "$LC_DIAG_LOG" || true
+          exit $failed
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-${{ matrix.name }}
+          path: |
+            run-*.log
+            ${{ runner.temp }}\lc-diag.log
+          if-no-files-found: warn

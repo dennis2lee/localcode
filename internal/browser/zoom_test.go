@@ -49,7 +49,7 @@ func TestAZoomedProfilesPagesAreAtFullSize(t *testing.T) {
 	if _, err := Find(""); err != nil {
 		t.Skip("no Chrome or Edge here")
 	}
-	dir := t.TempDir()
+	dir := profileDir(t)
 	if err := os.WriteFile(filepath.Join(dir, profileNameFile), []byte("Default\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
