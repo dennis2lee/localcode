@@ -391,11 +391,7 @@ func TestAStartOutlastsTheCallerThatAskedForIt(t *testing.T) {
 	if err := os.WriteFile(slow, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, profileNameFile), []byte("Default\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	m := NewManager(Options{ChromePath: slow, DataDir: dir})
+	m := NewManager(Options{ChromePath: slow, DataDir: browsertest.ProfileDir(t)})
 	t.Cleanup(m.Close)
 
 	impatient, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)

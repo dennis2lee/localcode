@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.180.4
 
 Closing the browser on Windows leaves its profile free for the next start.
 
