@@ -624,6 +624,11 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 			// if the command did not read it. The screen says which, once
 			// the prompt is drawn; until then, it is there.
 			t.aheadJudge = t.personAhead && !t.personAfter
+			if !t.aheadJudge {
+				// A command the shell started on its own (the next line
+				// of a paste) left nothing of the person's to read.
+				t.dropAhead()
+			}
 			t.personAhead = false
 			t.typedAhead = false
 			t.interrupts.answered()
@@ -737,7 +742,9 @@ func (t *Terminal) settled() {
 	}
 	if judge {
 		t.aheadJudge = false
-		if !t.judgeAhead() {
+		recorded := t.judgeAhead()
+		t.dropAhead()
+		if !recorded {
 			t.notify()
 			return
 		}
@@ -757,6 +764,11 @@ func (t *Terminal) settled() {
 func (t *Terminal) recordPrompt(x int) {
 	pos := t.emu.CursorPosition()
 	_, rest, next := t.aroundCursor()
+	if x < pos.X {
+		// Once what is between x and the cursor is erased, it is blank
+		// there, and what is right of it (a right prompt) where it is.
+		rest = strings.TrimRight(strings.Repeat(" ", pos.X-x)+rest, " ")
+	}
 	t.promptX, t.promptY, t.promptKnown = x, pos.Y, true
 	t.promptLeft, t.promptRest, t.promptNext = t.cellText(pos.Y, 0, x), rest, next
 }
@@ -771,31 +783,40 @@ func (t *Terminal) recordPrompt(x int) {
 // held, where a prompt would be recorded.
 func (t *Terminal) judgeAhead() bool {
 	pos := t.emu.CursorPosition()
-	switch t.aheadKeys {
-	case aheadTextOnly:
-		t.recordPrompt(t.aheadShownFrom(pos.X, pos.Y))
+	left, rest, next := t.aroundCursor()
+	// The last prompt's record, kept by the mark: before any, a record of
+	// the left edge, which lineEmpty does not read as empty.
+	if t.aheadKeys != aheadUnknown && pos.X == t.promptX && left == t.promptLeft && rest == t.promptRest && next == t.promptNext {
+		t.recordPrompt(pos.X)
 		return true
-	case aheadShown:
-		left, rest, next := t.aroundCursor()
-		// The last prompt's record, kept by the mark: before any, a record
-		// of the left edge, which lineEmpty does not read as empty.
-		if pos.X == t.promptX && left == t.promptLeft && rest == t.promptRest && next == t.promptNext {
-			t.recordPrompt(pos.X)
-			return true
-		}
 	}
-	return false
+	if t.aheadKeys != aheadTextOnly {
+		return false
+	}
+	// A character in the last column leaves the cursor on it, not after
+	// it, until the next one wraps.
+	end := pos.X
+	if pos.X == t.emu.Width()-1 {
+		end = pos.X + 1
+	}
+	from := t.aheadShownFrom(end, pos.Y)
+	if from == end {
+		from = pos.X
+	}
+	t.recordPrompt(from)
+	return true
 }
 
 // aheadShownFrom is the column where the end of aheadText starts, as much
 // of it as is drawn right before column x of row y, or x when none is.
 // The longest end that matches: a shorter one would take part of the text
 // for the prompt, and the line would read as empty with that part still
-// on it. An end of spaces alone is none: spaces at the start of a command
-// line change nothing it runs. A wide character is one cell's content,
-// and the cell after it is skipped. Called with mu held.
+// on it. Matched to the left edge, the text can go on in the row above (a
+// line that wrapped), and the prompt is taken to end at the edge, which
+// lineEmpty does not read as empty. A wide character is one cell's
+// content, and the cell after it is skipped. Called with mu held.
 func (t *Terminal) aheadShownFrom(x, y int) int {
-	from, end, word := x, "", false
+	from, end := x, ""
 	for c := x - 1; c >= 0; c-- {
 		cell := t.emu.CellAt(c, y)
 		if cell == nil {
@@ -812,12 +833,7 @@ func (t *Terminal) aheadShownFrom(x, y int) int {
 		if !strings.HasSuffix(t.aheadText, end) {
 			break
 		}
-		if strings.TrimSpace(s) != "" {
-			word = true
-		}
-		if word {
-			from = c
-		}
+		from = c
 	}
 	return from
 }
@@ -2059,10 +2075,11 @@ func (t *Terminal) aheadKey(ev uv.KeyPressEvent) {
 	case t.signalKey(ev):
 		// The terminal turns it into a signal, and drops what waits.
 		t.dropAhead()
-	case endsLine(ev) && !(ctrl && ev.Code == 'o'):
+	case endsLine(ev) && ev.Mod&uv.ModAlt == 0 && !(ctrl && ev.Code == 'o'):
 		// The line goes to whatever reads it, the shell too: nothing typed
-		// before it is left waiting. Alt sends Escape ahead of it, which
-		// goes with the line. (Ctrl+O ends no line in the terminal.)
+		// before it is left waiting. (Ctrl+O ends no line in the terminal.
+		// With Alt, the shell reads Escape and the key as one: bash does
+		// nothing with it, zsh puts a line break in the line.)
 		t.dropAhead()
 	case ev.Text != "" && ev.Mod&^uv.ModShift == 0:
 		t.aheadTyped(ev.Text, false)
@@ -2074,7 +2091,8 @@ func (t *Terminal) aheadKey(ev uv.KeyPressEvent) {
 		// one character less. A program that reads keys took it all.
 		_, n := utf8.DecodeLastRuneInString(t.aheadText)
 		t.aheadText = t.aheadText[:len(t.aheadText)-n]
-	case t.aheadKeys == aheadTextOnly && ctrl && ev.Code == 'u':
+	case t.aheadKeys == aheadTextOnly && ctrl && ev.Code == 'u' && !t.isLocal():
+		// Not in a local terminal: PowerShell leaves the line as it is.
 		t.aheadText = ""
 	default:
 		// Ctrl+W among them: where the shell has the key (a prompt the mark
@@ -2099,10 +2117,7 @@ func aheadErasable(s string) bool {
 // aheadTyped notes text the person typed or pasted while a command ran.
 // A line end in it sends the line (unless the paste is bracketed, which
 // keeps it in the line): what came before it is not left waiting, and
-// what comes after is. A bracketed paste kept whole is on several rows
-// at the prompt, and the row the cursor is on starts at the left edge:
-// the line is theirs until they send it or press Ctrl+C (lineEmpty).
-// Called with mu held.
+// what comes after is. Called with mu held.
 func (t *Terminal) aheadTyped(s string, bracketed bool) {
 	if i := strings.LastIndex(s, "\r"); i >= 0 && !bracketed {
 		t.dropAhead()
@@ -2112,7 +2127,16 @@ func (t *Terminal) aheadTyped(s string, bracketed bool) {
 		return
 	}
 	t.personAhead = true
-	if strings.Contains(s, "\t") {
+	switch {
+	case t.emu.IsAltScreen():
+		// A full-screen program's (a paste into an editor): it reads it
+		// all, and what it read is not on the line at the prompt.
+	case strings.Contains(s, "\r"):
+		// A bracketed paste kept whole: on several rows at the prompt,
+		// after a continuation prompt in PowerShell, and Ctrl+U takes only
+		// the last of them.
+		t.aheadKeys = aheadUnknown
+	case strings.Contains(s, "\t"):
 		// Tab completes: what the shell draws is not what was typed.
 		t.aheadKeys = max(t.aheadKeys, aheadShown)
 	}
@@ -2401,6 +2425,9 @@ func (t *Terminal) applySize() {
 	// line that reads as empty now has nothing of theirs to cut.
 	if t.personTyped && !t.lineEmpty() && t.cutsLine(cols, rows) {
 		t.promptKnown = false
+		// Not read for what was typed while the command ran either: what
+		// the cut took is not on the screen to be read.
+		t.aheadJudge = false
 	}
 	t.emu.Resize(cols, rows)
 	if atMark {

@@ -139,12 +139,21 @@ func TestTextTypedWhileACommandRanIsOnTheNextLine(t *testing.T) {
 		allowed(t, s, "run after the prompt their Ctrl+C brought")
 	})
 	t.Run("spaces", func(t *testing.T) {
-		// Spaces before a command change nothing it runs.
-		s := playedFor(t, true)
-		s.commandRuns()
-		s.term.PersonInput(nil, "   ", "")
-		s.ended("   ", "   ")
-		allowed(t, s, "run after spaces typed while the command ran")
+		// Text like any other: a space that is no ASCII space (a no-break
+		// space, an ideographic one) is part of a command's name to the
+		// shell.
+		for _, sp := range []string{"   ", "\u00a0", "\u3000"} {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(nil, sp, "")
+			s.ended(sp, sp)
+			refusedForThem(t, s, "run after spaces typed while the command ran")
+			for range sp {
+				s.term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+			}
+			s.prints(strings.Repeat("\b", len([]rune(sp))*runeCells(sp)) + strings.Repeat(" ", len([]rune(sp))*runeCells(sp)) + strings.Repeat("\b", len([]rune(sp))*runeCells(sp)))
+			allowed(t, s, "run once the person erased them")
+		}
 	})
 	t.Run("completed by the shell", func(t *testing.T) {
 		// Tab: what the shell draws is not what was typed.
@@ -310,6 +319,23 @@ func TestKeysOnTheAlternateScreenDoNotCount(t *testing.T) {
 	allowed(t, s, "run after keys to a full-screen program")
 }
 
+// Text into a full-screen program, a paste with line ends and Tabs
+// included, is read by it: the line at the prompt after it is empty, at a
+// prompt that is not the last one's too (a status line that changed when
+// the editor saved a file).
+func TestTextIntoAFullScreenProgramIsItsOwn(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	s.prints("\x1b[?1049h\x1b[?2004h")
+	s.term.PersonInput(nil, "", "func main() {\r\treturn\r}\r")
+	s.term.PersonInput(nil, "\tx", "")
+	s.term.PersonInput(&PersonKey{Key: "Escape"}, "", "")
+	s.term.PersonInput(nil, "ZZ", "")
+	s.prints("\x1b[?2004l\x1b[?1049l")
+	s.prints(s.promptText(0)[:len(s.promptText(0))-2] + "~/x * $ ")
+	allowed(t, s, "run after a paste and Tabs into a full-screen program")
+}
+
 // What the person types at the new prompt before it is drawn makes the
 // line theirs as at any prompt: the screen is not read for what they typed
 // while the command ran, which would take what they typed since for the
@@ -425,4 +451,13 @@ func TestARunWaitsForTheLineToBeRead(t *testing.T) {
 	if _, err := s.term.Run(ctx, "echo ok", time.Millisecond, s.term.PersonGen()); err != nil {
 		t.Fatalf("run made as the prompt came: %v", err)
 	}
+}
+
+// runeCells is the cells each character of s takes: two for the
+// ideographic space, one for the others here.
+func runeCells(s string) int {
+	if strings.ContainsRune(s, '\u3000') {
+		return 2
+	}
+	return 1
 }
