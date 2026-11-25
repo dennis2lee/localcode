@@ -594,6 +594,13 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 				w.out = capture{max: captureLimit}
 				w.started = true
 			}
+			if !t.running {
+				// A command the shell started on its own (the next line of a
+				// paste, a line it read itself): the last prompt's line went
+				// with it, read or not.
+				t.aheadJudge = false
+				t.dropAhead()
+			}
 			t.running = true
 		case 'D':
 			if w != nil {
@@ -624,11 +631,6 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 			// if the command did not read it. The screen says which, once
 			// the prompt is drawn; until then, it is there.
 			t.aheadJudge = t.personAhead && !t.personAfter
-			if !t.aheadJudge {
-				// A command the shell started on its own (the next line
-				// of a paste) left nothing of the person's to read.
-				t.dropAhead()
-			}
 			t.personAhead = false
 			t.typedAhead = false
 			t.interrupts.answered()
@@ -742,14 +744,13 @@ func (t *Terminal) settled() {
 	}
 	if judge {
 		t.aheadJudge = false
-		recorded := t.judgeAhead()
-		t.dropAhead()
-		if !recorded {
+		if !t.judgeAhead() {
 			t.notify()
 			return
 		}
 	} else {
-		t.recordPrompt(t.emu.CursorPosition().X)
+		x := t.emu.CursorPosition().X
+		t.recordPrompt(x, x)
 	}
 	if w := t.run; w != nil && w.local && w.ended && t.promptDrawn(w) {
 		t.finishRun(w)
@@ -758,17 +759,15 @@ func (t *Terminal) settled() {
 }
 
 // recordPrompt takes the prompt as ending at column x of the cursor's
-// row: the line reads as empty with the cursor there, the row the same
-// left of it, and what is right of the cursor and under it as it is now.
+// row, with the columns from x up to to blank: the person's text is there,
+// and the line is empty once they erase it. The line then reads as empty
+// with the cursor at x, the row the same left of it, blank up to to, and
+// what is right of that (a right prompt) and under the row as it is now.
 // Called with mu held.
-func (t *Terminal) recordPrompt(x int) {
+func (t *Terminal) recordPrompt(x, to int) {
 	pos := t.emu.CursorPosition()
-	_, rest, next := t.aroundCursor()
-	if x < pos.X {
-		// Once what is between x and the cursor is erased, it is blank
-		// there, and what is right of it (a right prompt) where it is.
-		rest = strings.TrimRight(strings.Repeat(" ", pos.X-x)+rest, " ")
-	}
+	_, _, next := t.aroundCursor()
+	rest := strings.TrimRight(strings.Repeat(" ", to-x)+t.cellText(pos.Y, to, t.emu.Width()), " ")
 	t.promptX, t.promptY, t.promptKnown = x, pos.Y, true
 	t.promptLeft, t.promptRest, t.promptNext = t.cellText(pos.Y, 0, x), rest, next
 }
@@ -776,47 +775,65 @@ func (t *Terminal) recordPrompt(x int) {
 // judgeAhead records the prompt after a command the person typed during,
 // where the screen says it ends, and reports whether it could. Text: what
 // the shell drew of it is the end of what they typed, right before the
-// cursor, and the prompt ends where that starts (aheadShownFrom); with
-// none of it there, the command read it. Keys: the line is empty only when
-// it looks as the last prompt left it. Any other key: the line is theirs
-// until their Enter or Ctrl+C, and nothing is recorded. Called with mu
-// held, where a prompt would be recorded.
+// cursor, and the prompt ends where that starts (aheadShownFrom). None of
+// it there, or only ASCII spaces (which change nothing a command line
+// runs), and the command read it. Matched to the left edge, the text can go
+// on in the row above, and the prompt is taken to end at the edge, which
+// lineEmpty does not read as empty. Keys: the line is empty only when it
+// looks as the last prompt left it, with no row above it that it can go on
+// from. Any other key: the line is theirs until their Enter or Ctrl+C, and
+// nothing is recorded. Called with mu held, where a prompt would be
+// recorded.
 func (t *Terminal) judgeAhead() bool {
 	pos := t.emu.CursorPosition()
-	left, rest, next := t.aroundCursor()
-	// The last prompt's record, kept by the mark: before any, a record of
-	// the left edge, which lineEmpty does not read as empty.
-	if t.aheadKeys != aheadUnknown && pos.X == t.promptX && left == t.promptLeft && rest == t.promptRest && next == t.promptNext {
-		t.recordPrompt(pos.X)
-		return true
-	}
-	if t.aheadKeys != aheadTextOnly {
+	switch t.aheadKeys {
+	case aheadShown:
+		// The last prompt's record, kept by the mark: before any, a record
+		// of the left edge, which lineEmpty does not read as empty.
+		left, rest, next := t.aroundCursor()
+		if pos.X == t.promptX && left == t.promptLeft && rest == t.promptRest && next == t.promptNext && !t.wrapsInto(pos.Y) {
+			t.recordPrompt(pos.X, pos.X)
+			return true
+		}
+		return false
+	case aheadUnknown:
 		return false
 	}
 	// A character in the last column leaves the cursor on it, not after
-	// it, until the next one wraps.
+	// it, until the next one wraps: the cell under the cursor is read too.
 	end := pos.X
 	if pos.X == t.emu.Width()-1 {
 		end = pos.X + 1
 	}
-	from := t.aheadShownFrom(end, pos.Y)
-	if from == end {
-		from = pos.X
+	from, spaces := t.aheadShownFrom(end, pos.Y)
+	if from == end || (spaces && from > 0) {
+		t.recordPrompt(pos.X, pos.X)
+	} else {
+		t.recordPrompt(from, end)
 	}
-	t.recordPrompt(from)
 	return true
 }
 
+// wrapsInto reports row y possibly going on from the row above it, which
+// reaches the last column: the screen does not say whether a line wrapped
+// there. Called with mu held.
+func (t *Terminal) wrapsInto(y int) bool {
+	if y == 0 {
+		return false
+	}
+	c := t.emu.CellAt(t.emu.Width()-1, y-1)
+	return c != nil && (c.Content != "" && c.Content != " " || c.Content == "" && c.Width == 0)
+}
+
 // aheadShownFrom is the column where the end of aheadText starts, as much
-// of it as is drawn right before column x of row y, or x when none is.
-// The longest end that matches: a shorter one would take part of the text
-// for the prompt, and the line would read as empty with that part still
-// on it. Matched to the left edge, the text can go on in the row above (a
-// line that wrapped), and the prompt is taken to end at the edge, which
-// lineEmpty does not read as empty. A wide character is one cell's
-// content, and the cell after it is skipped. Called with mu held.
-func (t *Terminal) aheadShownFrom(x, y int) int {
-	from, end := x, ""
+// of it as is drawn right before column x of row y, or x when none is,
+// and whether that is ASCII spaces alone. The longest end that matches: a
+// shorter one would take part of the text for the prompt, and the line
+// would read as empty with that part still on it. A wide character is one
+// cell's content, and the cell after it is skipped. Called with mu held.
+func (t *Terminal) aheadShownFrom(x, y int) (from int, spaces bool) {
+	from, spaces = x, true
+	end := ""
 	for c := x - 1; c >= 0; c-- {
 		cell := t.emu.CellAt(c, y)
 		if cell == nil {
@@ -833,9 +850,9 @@ func (t *Terminal) aheadShownFrom(x, y int) int {
 		if !strings.HasSuffix(t.aheadText, end) {
 			break
 		}
-		from = c
+		from, spaces = c, spaces && s == " "
 	}
-	return from
+	return from, spaces
 }
 
 // drainScrollback moves the lines the emulator scrolled off the top into
@@ -2061,8 +2078,9 @@ func (t *Terminal) sent() {
 }
 
 // dropAhead forgets what the person typed while a command ran: a line end
-// or a signal took it, or a new command starts and nothing of the last
-// one's is still to be judged. Called with mu held.
+// or a signal took it, or a new command starts (a line sent, a command the
+// shell started on its own) and nothing of the last one's is still to be
+// read. Called with mu held.
 func (t *Terminal) dropAhead() {
 	t.personAhead, t.aheadText, t.aheadKeys = false, "", aheadTextOnly
 }
@@ -2128,9 +2146,6 @@ func (t *Terminal) aheadTyped(s string, bracketed bool) {
 	}
 	t.personAhead = true
 	switch {
-	case t.emu.IsAltScreen():
-		// A full-screen program's (a paste into an editor): it reads it
-		// all, and what it read is not on the line at the prompt.
 	case strings.Contains(s, "\r"):
 		// A bracketed paste kept whole: on several rows at the prompt,
 		// after a continuation prompt in PowerShell, and Ctrl+U takes only

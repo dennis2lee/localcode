@@ -4,7 +4,6 @@ package sshterm
 // command ran found, each reproduced before it was fixed.
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -212,21 +211,6 @@ func TestARightPromptStaysWhereItIsWhenTheTextIsErased(t *testing.T) {
 	allowed(t, s, "run once typed-ahead text is erased with a right prompt")
 }
 
-// When a command reads text whose end matches the end of the prompt,
-// aheadShownFrom walks into the prompt itself and records promptX too far left,
-// refusing runs on the empty line until Enter or Ctrl+C.
-func TestAPromptEndingAsTheTextTheCommandReadIsEmpty(t *testing.T) {
-	s := playedFor(t, true)
-	s.prints("\r\n\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07me@test$ ")
-	s.commandRuns()
-	// Person typed "$ " into a command that read it; nothing waits for the shell.
-	s.term.PersonInput(nil, "$ ", "")
-	s.prints("\r\n\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07me@test$ ")
-	if err := s.run(); err != nil && errors.Is(err, ErrLineNotEmpty) {
-		t.Fatalf("empty line refused because prompt ended with read text: %v", err)
-	}
-}
-
 // A command the shell starts on its own (zsh's sched, a line it read
 // itself) starts with nothing left over of what was typed for the last
 // prompt: read at that prompt, or never read there because the model
@@ -281,4 +265,98 @@ func TestAPromptToTheLastColumnWithNothingTypedOnIsEmpty(t *testing.T) {
 	s.term.PersonInput(nil, "q", "")
 	s.prints(s.promptText(0)[:len(s.promptText(0))-2] + strings.Repeat("p", DefaultCols-2) + "$ ")
 	allowed(t, s, "run at a prompt to the last column, after a key the command read")
+}
+
+// From the second review.
+
+// A line that wraps, whose last row reads as the last prompt did: the row
+// above it is the person's text too.
+func TestAWrappedLineWhoseLastRowIsThePromptIsTheirs(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	typed := "rm -rf x;" + strings.Repeat("a", DefaultCols-2-len("rm -rf x;")) + "$ "
+	s.term.PersonInput(nil, typed, "")
+	s.ended("", typed)
+	refusedForThem(t, s, "run onto a wrapped line whose second row reads as the prompt")
+
+	// The command made the prompt empty, and what was typed is "$ ".
+	s = playedFor(t, true)
+	s.commandRuns()
+	s.term.PersonInput(nil, "$ ", "")
+	s.prints("\r\n\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07$ ")
+	refusedForThem(t, s, "run onto text that reads as the last prompt at an empty one")
+}
+
+// Keys and pastes typed while a full-screen program had the screen can be
+// left for the shell (typed after the program's last read, before it gave
+// the screen back): Tab and a paste with line ends are judged as anywhere.
+func TestWhatTheShellReadsAfterAFullScreenProgramIsJudgedAsAnywhere(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	s.prints("\x1b[?1049h")
+	s.term.PersonInput(nil, "qcd /tm\t", "")
+	s.prints("\x1b[?1049l" + s.promptText(0) + "cd /tmp/")
+	refusedForThem(t, s, "run onto a line the shell completed after a full-screen program")
+
+	for _, drawn := range []string{"rm -rf x\r\n> ", "rm -rf x\r\n$ "} {
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.prints("\x1b[?1049h\x1b[?2004h")
+		s.term.PersonInput(nil, "", strings.ReplaceAll(strings.TrimSuffix(drawn, "> "), "\r\n", "\r"))
+		s.prints("\x1b[?2004l\x1b[?1049l" + s.promptText(0) + drawn)
+		refusedForThem(t, s, "run onto a paste over two lines after a full-screen program")
+	}
+}
+
+// The last column: the cursor stays on the last character there. Text in
+// it, one character or more, is the person's until erased.
+func TestTheLastColumnIsReadAndErased(t *testing.T) {
+	s := playedFor(t, true)
+	prompt := strings.Repeat("p", DefaultCols-3) + "$ "
+	s.prints("\r\n\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07" + prompt)
+	s.commandRuns()
+	s.term.PersonInput(nil, "x", "")
+	s.prints("\r\n\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07" + prompt + "x")
+	refusedForThem(t, s, "run onto one character in the last column")
+
+	s = playedFor(t, true)
+	s.commandRuns()
+	typed := strings.Repeat(" ", DefaultCols-3) + "x"
+	s.term.PersonInput(nil, typed, "")
+	s.ended("", typed)
+	s.term.PersonInput(&PersonKey{Key: "a", Ctrl: true}, "", "")
+	s.prints("\x1b[3G")
+	refusedForThem(t, s, "run onto text to the last column, the cursor moved to its start")
+
+	s = playedFor(t, true)
+	s.commandRuns()
+	typed = "rm -rf " + strings.Repeat("a", DefaultCols-2-len("rm -rf ")-1) + "b"
+	s.term.PersonInput(nil, typed, "")
+	s.ended("", typed)
+	refusedForThem(t, s, "run onto text to the last column")
+	s.term.PersonInput(&PersonKey{Key: "u", Ctrl: true}, "", "")
+	s.prints("\r$ \x1b[K")
+	allowed(t, s, "run once the person cleared it")
+}
+
+// ASCII spaces the command read, at a prompt that is not the last one's:
+// the spaces matched in the prompt are none.
+func TestSpacesTheCommandReadAtAChangedPromptAreNone(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	s.term.PersonInput(nil, "   ", "")
+	s.prints(s.promptText(0)[:len(s.promptText(0))-2] + "~/x * $ ")
+	allowed(t, s, "run after spaces the command read")
+}
+
+// A command the shell starts on its own before the last prompt was read.
+func TestACommandTheShellStartsBeforeTheLineIsRead(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	s.term.PersonInput(&PersonKey{Key: "Escape"}, "", "")
+	s.term.output([]byte(s.promptText(0)))
+	s.prints("\x1b]133;C;lc=" + s.term.marks.nonce + "\x07")
+	s.term.PersonInput(nil, "q", "")
+	s.ended("\r\n", "")
+	allowed(t, s, "run after a key the next command read")
 }

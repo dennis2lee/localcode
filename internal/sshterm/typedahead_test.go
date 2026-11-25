@@ -139,20 +139,25 @@ func TestTextTypedWhileACommandRanIsOnTheNextLine(t *testing.T) {
 		allowed(t, s, "run after the prompt their Ctrl+C brought")
 	})
 	t.Run("spaces", func(t *testing.T) {
-		// Text like any other: a space that is no ASCII space (a no-break
-		// space, an ideographic one) is part of a command's name to the
-		// shell.
-		for _, sp := range []string{"   ", "\u00a0", "\u3000"} {
+		// ASCII spaces alone change nothing a command line runs: drawn or
+		// not, the line reads as empty. A space that is no ASCII space (a
+		// no-break space, an ideographic one) is part of a command's name to
+		// the shell, and counts as text.
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "   ", "")
+		s.ended("   ", "   ")
+		allowed(t, s, "run after ASCII spaces typed while the command ran")
+		for _, sp := range []string{"\u00a0", "\u3000"} {
 			s := playedFor(t, true)
 			s.commandRuns()
 			s.term.PersonInput(nil, sp, "")
 			s.ended(sp, sp)
-			refusedForThem(t, s, "run after spaces typed while the command ran")
-			for range sp {
-				s.term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
-			}
-			s.prints(strings.Repeat("\b", len([]rune(sp))*runeCells(sp)) + strings.Repeat(" ", len([]rune(sp))*runeCells(sp)) + strings.Repeat("\b", len([]rune(sp))*runeCells(sp)))
-			allowed(t, s, "run once the person erased them")
+			refusedForThem(t, s, "run after a space that is no ASCII space")
+			s.term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+			n := runeCells(sp)
+			s.prints(strings.Repeat("\b", n) + strings.Repeat(" ", n) + strings.Repeat("\b", n))
+			allowed(t, s, "run once the person erased it")
 		}
 	})
 	t.Run("completed by the shell", func(t *testing.T) {
@@ -245,11 +250,22 @@ func TestKeysTypedWhileACommandRan(t *testing.T) {
 		refusedForThem(t, s, "run onto text with the cursor moved before it")
 	})
 	t.Run("a prompt that is not the last one's", func(t *testing.T) {
+		for _, prompt := range []string{"~/x $ ", "# "} {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(&PersonKey{Key: "ArrowLeft"}, "", "")
+			s.prints(s.promptText(0)[:len(s.promptText(0))-2] + prompt)
+			refusedForThem(t, s, "run after a key, at a prompt the screen cannot compare: "+prompt)
+		}
+	})
+	t.Run("a recalled line whose last row reads as the last prompt", func(t *testing.T) {
+		// Up recalled a long command, wrapped to a row that reads as the
+		// prompt: the row above reaches the last column.
 		s := playedFor(t, true)
 		s.commandRuns()
-		s.term.PersonInput(&PersonKey{Key: "ArrowLeft"}, "", "")
-		s.prints(s.promptText(0)[:len(s.promptText(0))-2] + "~/x $ ")
-		refusedForThem(t, s, "run after a key, at a prompt the screen cannot compare")
+		s.term.PersonInput(&PersonKey{Key: "ArrowUp"}, "", "")
+		s.ended("", strings.Repeat("a", DefaultCols-2)+"$ ")
+		refusedForThem(t, s, "run onto a recalled line that wrapped to a row like the prompt")
 	})
 	t.Run("Ctrl+O, which ends no line in the terminal", func(t *testing.T) {
 		// The terminal keeps the text before it for the shell (macOS takes
@@ -319,21 +335,31 @@ func TestKeysOnTheAlternateScreenDoNotCount(t *testing.T) {
 	allowed(t, s, "run after keys to a full-screen program")
 }
 
-// Text into a full-screen program, a paste with line ends and Tabs
-// included, is read by it: the line at the prompt after it is empty, at a
-// prompt that is not the last one's too (a status line that changed when
-// the editor saved a file).
+// Text typed into a full-screen program is read by it: the line at the
+// prompt after it is empty, at a prompt that is not the last one's too (a
+// status line that changed when the editor saved a file). A paste with
+// line ends into it is the line's until a line end: the one that ends the
+// editor's command takes it.
 func TestTextIntoAFullScreenProgramIsItsOwn(t *testing.T) {
 	s := playedFor(t, true)
 	s.commandRuns()
-	s.prints("\x1b[?1049h\x1b[?2004h")
-	s.term.PersonInput(nil, "", "func main() {\r\treturn\r}\r")
-	s.term.PersonInput(nil, "\tx", "")
+	s.prints("\x1b[?1049h")
+	s.term.PersonInput(nil, "ihello", "")
 	s.term.PersonInput(&PersonKey{Key: "Escape"}, "", "")
 	s.term.PersonInput(nil, "ZZ", "")
+	s.prints("\x1b[?1049l")
+	s.prints(s.promptText(0)[:len(s.promptText(0))-2] + "~/x * $ ")
+	allowed(t, s, "run after text into a full-screen program")
+
+	s = playedFor(t, true)
+	s.commandRuns()
+	s.prints("\x1b[?1049h\x1b[?2004h")
+	s.term.PersonInput(nil, "", "func main() {\r\treturn\r}\r")
+	s.term.PersonInput(&PersonKey{Key: "Escape"}, "", "")
+	s.term.PersonInput(nil, ":wq\r", "")
 	s.prints("\x1b[?2004l\x1b[?1049l")
 	s.prints(s.promptText(0)[:len(s.promptText(0))-2] + "~/x * $ ")
-	allowed(t, s, "run after a paste and Tabs into a full-screen program")
+	allowed(t, s, "run after a paste into a full-screen program and the line that ended it")
 }
 
 // What the person types at the new prompt before it is drawn makes the
