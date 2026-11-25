@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Closing the browser on Windows leaves its profile free for the next start.
+
+**Fixed**
+
+* A browser killed on closing waited for until it has exited (up to 30 seconds), so the next start or a profile import finds its profile free on Windows
+
 ## v0.180.2
 
 The browser panel's page as tall as the panel.

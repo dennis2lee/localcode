@@ -41,7 +41,7 @@ Project rules for agents working in this repo.
   the attempt's log, and a force-cancelled attempt may keep none at all.
   The 44-minute hang above is still undiagnosed for exactly this reason.
 * What it runs, and why each is in it rather than left to memory:
-  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 3,251 tests
+  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 3,252 tests
     and 1,458 subtests over 36 packages, two of the tests skipped on macOS.
     The same suite runs a second time without `-race`
     (`go test ./... -count=1 -timeout 10m`), because a test whose timing
@@ -80,11 +80,13 @@ Project rules for agents working in this repo.
   the profile name first, so nothing is copied from the person's own
   browser, and it removes the directory with a 30 second wait. Call it
   before the manager is made, so the browser's close runs before the
-  removal. On Windows `Manager.Close` can return while the browser or its
-  network service still holds a file in the profile, and `t.TempDir()`
-  fails the test after 2 seconds. Measured over 528 closes on the CI
-  runner: 7 ran into the kill, 2 left the profile held for 1.2 to 1.3
-  seconds, and helper processes lived up to 7.6 seconds. A directory
+  removal. On Windows `Manager.Close` waits for the browser's own process
+  (up to 30 seconds after a kill) and not for its other processes, which
+  can still hold a file in the profile. `t.TempDir()` fails the test
+  after 2 seconds. Measured over 528 closes on the CI runner, before the
+  close waited for a killed browser: 7 ran into the kill, 2 left the
+  profile held for 1.2 to 1.3 seconds, and helper processes lived up to
+  7.6 seconds. A directory
   still held after the wait fails the test and names the holding
   processes.
 * `third_party/vt` is a patched copy of `github.com/charmbracelet/x/vt`,

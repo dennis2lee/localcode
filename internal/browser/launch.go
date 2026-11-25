@@ -271,8 +271,22 @@ func readPortFile(path string) (string, bool) {
 	return "ws://127.0.0.1:" + lines[0] + lines[1], true
 }
 
-// close asks the browser to quit and kills it if it has not within a few
-// seconds.
+// killedExitWait is how long a browser that was killed is waited for.
+//
+// A process that is killed is not gone at once on Windows. It keeps every
+// file it had open until the system has finished ending it, the profile's
+// databases among them, and on a busy machine that takes seconds. Measured
+// on the Windows CI runner with every package's tests running beside this
+// one's: of 22 browsers killed, four had not exited three seconds later,
+// and one still held a file of its profile eleven seconds after. Three
+// seconds is what this waited before, and a stop that gave up then
+// returned with the profile still in use: its directory could not be
+// removed, and neither a profile copied over it nor a browser started on
+// it next would have found it free.
+const killedExitWait = 30 * time.Second
+
+// close asks the browser to quit, kills it if it has not within a few
+// seconds, and returns when it has exited.
 func (p *process) close() {
 	if p.conn != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -287,11 +301,13 @@ func (p *process) close() {
 	}
 }
 
+// kill ends the browser and every process it started, and returns when
+// the browser has exited, or after killedExitWait if it never does.
 func (p *process) kill() {
 	_ = childproc.KillGroup(p.cmd)
 	select {
 	case <-p.exited:
-	case <-time.After(3 * time.Second):
+	case <-time.After(killedExitWait):
 	}
 }
 

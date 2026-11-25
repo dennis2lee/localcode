@@ -51,6 +51,32 @@ func TestTheTestProfileIsNamedAsThisPackageReadsIt(t *testing.T) {
 	}
 }
 
+// A browser that was killed is waited for until it has exited, past the
+// three seconds a stop used to give it: on Windows a killed browser holds
+// its profile's files until the system has finished ending it.
+func TestAKilledBrowserIsWaitedForUntilItHasExited(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits past three seconds")
+	}
+	p := &process{exited: make(chan struct{})}
+	returned := make(chan struct{})
+	go func() {
+		p.kill()
+		close(returned)
+	}()
+	select {
+	case <-returned:
+		t.Fatal("kill returned and the browser has not exited")
+	case <-time.After(3500 * time.Millisecond):
+	}
+	close(p.exited)
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("kill went on waiting after the browser exited")
+	}
+}
+
 const formPage = `<!doctype html><title>Form</title>
 <input id=name placeholder="Your name">
 <input id=pw type=password placeholder="Password">

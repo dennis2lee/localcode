@@ -21,9 +21,9 @@ import (
 // profileNameFile, and a test there holds the two to one name.
 const ProfileNameFile = "localcode-profile"
 
-// removeBound is how long a profile directory is given to come free: four
-// times the longest a browser's processes were seen to outlive its close.
-// Only a test that is going to fail waits it out.
+// removeBound is how long a profile directory is given to come free:
+// about four times the longest a browser's other processes were seen to
+// outlive its close. Only a test that is going to fail waits it out.
 const removeBound = 30 * time.Second
 
 // ProfileDir makes the profile directory for a browser the test starts,
@@ -39,12 +39,14 @@ const removeBound = 30 * time.Second
 // Windows a file a process has open cannot be removed, and t.TempDir
 // fails the test when its directory is still held two seconds after the
 // test's own cleanups. A browser's close does not promise it is free by
-// then. The close asks the browser to quit, waits three seconds, kills
-// it, waits three more, and returns either way; and a browser is several
-// processes, of which the close waits for one.
+// then. The close waits for the browser's own process, for up to 30
+// seconds after a kill. A browser is several processes, and the close
+// does not wait for the others: they end when they notice the browser
+// has gone, each in its own time.
 //
 // Measured on the Windows CI runner, over twelve runs of the whole suite
-// (528 closes, 2026-11-25): seven closes ran into the kill. After one,
+// (528 closes, 2026-11-25, while the close still gave a killed browser
+// three seconds): seven closes ran into the kill. After one,
 // the browser itself was still running, and held a database in the
 // profile for 1.2s more. After another its network service was, and held
 // one for 1.3s. A browser's other processes were alive up to 7.6s after
