@@ -340,9 +340,13 @@ func (d *Daemon) handleBrowserSize(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	// A tab that could not be told (its browser went away) is shown at
-	// the height it has; the next one opens at this.
-	h, _ := d.Browser.SetHeight(ctx, id, browser.HeightFor(req.Width, req.Height))
+	h, err := d.Browser.SetHeight(ctx, id, browser.HeightFor(req.Width, req.Height))
+	if err != nil {
+		// A tab not told: the panel sends the size again at its next
+		// poll, rather than taking it as done.
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"width": browser.ViewportWidth, "height": h})
 }
 

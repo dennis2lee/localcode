@@ -31,6 +31,7 @@ type Tab struct {
 	frame   []byte // the latest screencast frame, JPEG
 	opener  string // the target that opened this tab with a link, or ""
 	height  int    // the page's height, as the browser was last told it
+	unsure  bool   // a height was sent whose answer never came; see fitHeight
 
 	castMu sync.Mutex // orders screencast starts and stops; see Watch
 
@@ -226,14 +227,24 @@ func (t *Tab) fitHeight(ctx context.Context) error {
 	t.sizeMu.Lock()
 	defer t.sizeMu.Unlock()
 	h := int(t.want.Load())
-	if h <= 0 || h == t.Height() {
+	t.mu.Lock()
+	have, unsure := t.height, t.unsure
+	t.mu.Unlock()
+	if h <= 0 || (h == have && !unsure) {
 		return nil
 	}
 	if err := setViewport(ctx, t.conn, t.session, h); err != nil {
+		// A call given up on is not called off: the browser may have
+		// taken this height all the same. Until a call is answered, the
+		// next one is sent whatever height it asks for, the one the tab
+		// last had included.
+		t.mu.Lock()
+		t.unsure = true
+		t.mu.Unlock()
 		return err
 	}
 	t.mu.Lock()
-	t.height = h
+	t.height, t.unsure = h, false
 	t.mu.Unlock()
 	return nil
 }

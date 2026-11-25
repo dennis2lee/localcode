@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -166,4 +167,51 @@ func TestAConversationsPagesAreAsTallAsItsPanelAsks(t *testing.T) {
 		t.Errorf("the link's tab says it is %d tall, want 1000", h)
 	}
 	innerHeight(t, ctx, linked, 1000)
+}
+
+// A height sent to a browser that never answered may have been taken all
+// the same: the next height is sent, even the one the tab had before, and
+// SetHeight says the tab was not told. From the review of d0425c6: a
+// resize back to the old height was skipped, and the page stayed at the
+// height whose answer never came.
+func TestAHeightWhoseAnswerNeverCameIsToldAgain(t *testing.T) {
+	var mu sync.Mutex
+	var told []int
+	conn := devTools(t, func(c command, answer func(map[string]any, string)) {
+		if c.Method != "Emulation.setDeviceMetricsOverride" {
+			answer(map[string]any{}, "")
+			return
+		}
+		mu.Lock()
+		told = append(told, int(c.Params["height"].(float64)))
+		first := len(told) == 1
+		mu.Unlock()
+		if !first {
+			answer(map[string]any{}, "")
+		}
+		// The first is taken, and never answered.
+	})
+	m := NewManager(Options{})
+	m.proc = &process{conn: conn, exited: make(chan struct{})}
+	tab := &Tab{conn: conn, targetID: "A", session: "sA", height: ViewportHeight}
+	m.convs["c1"] = &convTabs{tabs: []*Tab{tab}, changed: make(chan struct{})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := m.SetHeight(ctx, "c1", 1600); err == nil {
+		t.Fatal("SetHeight says the tab was told, and the browser never answered")
+	}
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel2()
+	if h, err := m.SetHeight(ctx2, "c1", ViewportHeight); h != ViewportHeight || err != nil {
+		t.Fatalf("SetHeight back = %d, %v", h, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(told) != 2 || told[1] != ViewportHeight {
+		t.Errorf("the browser was told %v, want 1600 and then %d", told, ViewportHeight)
+	}
+	if h := tab.Height(); h != ViewportHeight {
+		t.Errorf("the tab says it is %d tall, want %d", h, ViewportHeight)
+	}
 }

@@ -492,6 +492,10 @@ export function renderBrowserPanel() {
     restoreEmptyText();
     showEmpty(false);
     pageHeight = PAGE_HEIGHT;
+    // Told again at every new showing, whatever was sent before it: the
+    // daemon may have been replaced while the panel was hidden, and one
+    // started in its place knows no panel's size.
+    sizeSent = '';
   }
   // The frame's size, for this conversation's page to fill it from its
   // first frame. A size already sent for it is not sent again.

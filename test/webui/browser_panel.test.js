@@ -681,6 +681,38 @@ test('a stream opened again tells the daemon the size again, since a new daemon 
   assert.deepEqual(sizes, [{ width: 574, height: 780 }, { width: 574, height: 780 }]);
 });
 
+// From the review of d0425c6: the panel hidden, a daemon started in place
+// of the one it told, and the panel shown again at the same size.
+test('the panel shown again tells the daemon the size again, since a new daemon knows none', async () => {
+  let daemonHeight = 800;
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      ...settingsWith({ browser: true }),
+      'GET /api/sessions/*/browser': () => ({ has_tab: false, width: 1280, height: daemonHeight }),
+      'POST /api/sessions/*/browser/size': (box) => {
+        daemonHeight = Math.round(1280 * box.height / box.width);
+        return { width: 1280, height: daemonHeight };
+      },
+    },
+  });
+  frameSized(app, 642, 802);
+  app.internals.renderBrowserPanel();
+  await app.settle();
+  assert.equal(daemonHeight, 1600);
+  app.internals.applyEvent({ type: 'settings.changed', data: { browser: false } });
+  await app.settle();
+  // Restarted with nothing to tell the page about it: the new daemon has
+  // no height for the conversation.
+  daemonHeight = 800;
+  app.sse.fail();
+  app.sse.reopen();
+  await app.settle();
+  app.internals.applyEvent({ type: 'settings.changed', data: { browser: true } });
+  await app.settle();
+  assert.equal(daemonHeight, 1600, 'the panel kept the size it told the daemon before, and the new one opens tabs at 800');
+});
+
 test('a size the daemon did not take is sent again by the next poll', async () => {
   let fail = true;
   const app = await load({
