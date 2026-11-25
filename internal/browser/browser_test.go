@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localcode/internal/browser/browsertest"
 )
 
 // testManager runs a real browser on a fresh profile directory, never the
@@ -23,57 +25,29 @@ func testManager(t *testing.T) *Manager {
 	if _, err := Find(""); err != nil {
 		t.Skip("no Chrome or Edge here")
 	}
-	dir := profileDir(t)
-	if err := os.WriteFile(filepath.Join(dir, profileNameFile), []byte("Default\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	m := NewManager(Options{DataDir: dir})
+	// The directory first: its removal is to come after the browser's
+	// close, and cleanups run last one first.
+	m := NewManager(Options{DataDir: browsertest.ProfileDir(t)})
 	t.Cleanup(m.Close)
 	return m
 }
 
-// profileRemovalWait is how long a test goes on trying to remove its
-// browser's profile.
-const profileRemovalWait = 30 * time.Second
-
-// profileDir is a directory for a test's browser profile, removed when the
-// test is over. Ask for it before the browser's Close is made a cleanup:
-// cleanups run last in, first out, so the browser is then closed, and
-// waited for, before its profile is removed.
-//
-// Not t.TempDir, whose removal gives up after two seconds on Windows, where
-// a file some process has open cannot be removed. Close waits for the
-// browser, and the browser's helpers are not the browser: its network
-// service has the profile's Network files open, and one killed with its
-// browser was still there, holding one, after the browser had exited
-// (measured on the Windows CI runner: the directory came free half a
-// second later). A helper is killed the way the browser is and may take as
-// long to go, so the removal is tried again for profileRemovalWait, and
-// what the test fails with is the last refusal.
-func profileDir(t *testing.T) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("", "localcode-browser-test-")
-	if err != nil {
-		t.Fatal(err)
+// The name the shared helper writes is the one this package reads: with
+// another, a test's browser would start on a copy of the person's profile.
+func TestTheTestProfileIsNamedAsThisPackageReadsIt(t *testing.T) {
+	if browsertest.ProfileNameFile != profileNameFile {
+		t.Fatalf("browsertest writes %q and this package reads %q", browsertest.ProfileNameFile, profileNameFile)
 	}
-	t.Cleanup(func() {
-		if err := removeWithin(dir, profileRemovalWait); err != nil {
-			t.Errorf("the browser's profile could not be removed: %v", err)
-		}
-	})
-	return dir
-}
-
-// removeWithin removes dir and all that is in it, trying again until it is
-// gone or wait has passed. The error is the last try's.
-func removeWithin(dir string, wait time.Duration) error {
-	deadline := time.Now().Add(wait)
-	for {
-		err := os.RemoveAll(dir)
-		if err == nil || !time.Now().Before(deadline) {
-			return err
-		}
-		time.Sleep(50 * time.Millisecond)
+	dir := browsertest.ProfileDir(t)
+	// Read here first: ensureProfile, finding no name, would go on to
+	// copy the person's own profile, which this test is to rule out.
+	data, err := os.ReadFile(filepath.Join(dir, profileNameFile))
+	if err != nil || strings.TrimSpace(strings.SplitN(string(data), "\n", 2)[0]) != "Default" {
+		t.Fatalf("a test's profile directory names no profile: %q, %v", data, err)
+	}
+	name, imported, err := NewManager(Options{}).ensureProfile(Install{}, dir)
+	if err != nil || name != "Default" || imported {
+		t.Errorf("a test's profile is %q, imported %v, %v; want Default, not imported", name, imported, err)
 	}
 }
 
