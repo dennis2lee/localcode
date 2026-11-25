@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -66,17 +67,29 @@ func TestTheProcessHoldingAFileIsNamed(t *testing.T) {
 
 // A file that is let go while the removal waits: the directory goes, and
 // the holder at the first try is known.
+//
+// The file is closed once the first try has failed and the system has
+// named its holders, as a browser's helper lets go while the removal
+// waits. Closed on the clock, a system slow to answer under load would
+// have found it closed already.
 func TestAFileLetGoLateIsWaitedForOnWindows(t *testing.T) {
 	dir, f := openIn(t)
+	asked := make(chan struct{})
+	var once sync.Once
+	who := func(paths []string) []string {
+		named := holders(paths)
+		once.Do(func() { close(asked) })
+		return named
+	}
 	go func() {
-		time.Sleep(400 * time.Millisecond)
+		<-asked
 		f.Close()
 	}()
-	r, err := removeWithin(dir, 30*time.Second, os.RemoveAll, holders)
+	r, err := removeWithin(dir, 30*time.Second, os.RemoveAll, who)
 	if err != nil {
 		t.Fatalf("the directory was not removed once its file was closed: %v", err)
 	}
-	if r.waited < 300*time.Millisecond || r.first == nil {
+	if r.waited <= 0 || r.first == nil {
 		t.Errorf("removal = %+v, want a wait for the file to close", r)
 	}
 	if len(r.held) == 0 || !strings.HasPrefix(r.held[0], me()) {

@@ -114,8 +114,12 @@ func TestAHeldDirectoryIsWaitedFor(t *testing.T) {
 // A directory still held when the time is up is a failure, and the
 // failure says what would not go, what is left, and who holds it: the
 // browser a test left running is not waited out and passed.
+//
+// That it tries again first is TestAHeldDirectoryIsWaitedFor's to show:
+// with a bound this short, one slow first try on a loaded machine is the
+// only try there is time for.
 func TestADirectoryStillHeldAtTheEndIsAFailureThatNamesTheHolder(t *testing.T) {
-	dir, remove, _, tries := heldDir(t)
+	dir, remove, _, _ := heldDir(t)
 	asked := 0
 	holders := func([]string) []string {
 		asked++
@@ -131,9 +135,6 @@ func TestADirectoryStillHeldAtTheEndIsAFailureThatNamesTheHolder(t *testing.T) {
 	}
 	if took := time.Since(start); took < 60*time.Millisecond {
 		t.Errorf("gave up after %v, before the time it was given", took)
-	}
-	if *tries < 2 {
-		t.Errorf("tried %d times, want more than one", *tries)
 	}
 	var pe *os.PathError
 	if !errors.As(err, &pe) || filepath.Base(pe.Path) != "DIPS" {
