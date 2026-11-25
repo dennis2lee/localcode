@@ -1,0 +1,116 @@
+# Measurement only. Lives on diag/cold-start, never on main.
+#
+# cold: how long the browser takes to open its debugging port the first
+# time it is started on a fresh runner, and the times after. The product
+# gives up on the port after 30 seconds.
+#
+# rates: two timing tests, as they were and as fixed, run again and again
+# beside the load they failed under (the whole suite, twice).
+name: diag-cold-start
+
+on:
+  push:
+    branches: ['diag/cold-start']
+
+permissions:
+  contents: read
+
+jobs:
+  cold:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        include:
+          - os: ubuntu-latest
+            shard: 1
+          - os: ubuntu-latest
+            shard: 2
+          - os: ubuntu-latest
+            shard: 3
+          - os: ubuntu-latest
+            shard: 4
+    name: cold-${{ matrix.os }}-${{ matrix.shard }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: The first start, and five more
+        shell: bash
+        timeout-minutes: 20
+        env:
+          CGO_ENABLED: '0'
+          LC_PROBE: '1'
+        run: go test ./internal/browser/ -run 'TestZZColdStart$' -count=1 -timeout 18m -v | grep -E 'RESULT|^(ok|FAIL|---|panic)' || echo "PROBE FAILED"
+
+  rates:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        shard: [1, 2]
+    name: rates-${{ matrix.os }}-${{ matrix.shard }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build each test as it was and as fixed
+        shell: bash
+        timeout-minutes: 10
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p "$RUNNER_TEMP/bins"
+          go test -c -o "$RUNNER_TEMP/bins/awssso.after.exe" ./internal/awssso/
+          go test -c -o "$RUNNER_TEMP/bins/agent.after.exe" ./internal/agent/
+          git checkout origin/main -- internal/awssso/awssso.go internal/awssso/awssso_test.go internal/agent/observe_test.go
+          go test -c -o "$RUNNER_TEMP/bins/awssso.before.exe" ./internal/awssso/
+          go test -c -o "$RUNNER_TEMP/bins/agent.before.exe" ./internal/agent/
+          git checkout HEAD -- internal/awssso/awssso.go internal/awssso/awssso_test.go internal/agent/observe_test.go
+          ls -la "$RUNNER_TEMP/bins"
+      - name: Each test again and again, beside the whole suite twice
+        shell: bash
+        timeout-minutes: 30
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          bins="$RUNNER_TEMP/bins"
+          (go test ./... -count=1 -timeout 20m > "$RUNNER_TEMP/load1.log" 2>&1; echo "load 1 ended rc=$?") &
+          l1=$!
+          (go test ./... -count=1 -timeout 20m > "$RUNNER_TEMP/load2.log" 2>&1; echo "load 2 ended rc=$?") &
+          l2=$!
+          cd internal/agent
+          declare -A runs fails
+          for k in awssso.before awssso.after agent.before agent.after; do runs[$k]=0; fails[$k]=0; done
+          round=0
+          while kill -0 $l1 2>/dev/null || kill -0 $l2 2>/dev/null; do
+            for k in awssso.before awssso.after agent.before agent.after; do
+              case $k in
+                awssso.*) run='TestPollForTokenRetriesOnAuthorizationPending$'; n=100 ;;
+                agent.*)  run='TestATurnKeepsTheSmartAgentStateItStartedUnder$'; n=40 ;;
+              esac
+              out=$("$bins/$k.exe" -test.run "$run" -test.count=$n -test.timeout 10m 2>&1 || true)
+              f=$(printf '%s\n' "$out" | grep -c -- '--- FAIL' || true)
+              runs[$k]=$(( ${runs[$k]} + n )); fails[$k]=$(( ${fails[$k]} + f ))
+              if [ "$f" != "0" ]; then printf '%s\n' "$out" | grep -A2 -- '--- FAIL' | head -6; fi
+            done
+            round=$((round+1))
+          done
+          wait
+          for k in awssso.before awssso.after agent.before agent.after; do
+            echo "RATE $k fails=${fails[$k]} runs=${runs[$k]} rounds=$round"
+          done
+          echo "load 1:"; grep -E -- '^(FAIL|--- FAIL|ok )' "$RUNNER_TEMP/load1.log" | grep -v '^ok' | head -20 || true
+          echo "load 2:"; grep -E -- '^(FAIL|--- FAIL|ok )' "$RUNNER_TEMP/load2.log" | grep -v '^ok' | head -20 || true

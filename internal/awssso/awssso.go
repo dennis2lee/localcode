@@ -124,10 +124,17 @@ func login(ctx context.Context, client oidcClient, startURL string, onAuth func(
 	}, nil
 }
 
-// pollIntervalUnit scales auth.Interval/auth.ExpiresIn (both in whole
-// seconds, per the AWS API) into real durations. Production always uses
-// time.Second; tests shrink it so the retry/backoff logic can be exercised
-// without actually sleeping for seconds.
+// pollIntervalUnit scales auth.Interval (whole seconds, per the AWS API)
+// into the real wait between polls. Production always uses time.Second;
+// tests shrink it so the retry/backoff logic can be exercised without
+// actually sleeping for seconds.
+//
+// It does not scale auth.ExpiresIn. It used to, and a test that shrank the
+// unit to a millisecond gave its code a 60ms lifetime with it: three polls
+// 5ms apart had to fit in 60ms of a CI runner's time, and twice they did
+// not ("device authorization code expired before login completed", macOS
+// 2026-11-21 and Windows 2026-11-24). How often to poll is the test's to
+// shorten. How long the code lives is not on that clock.
 var pollIntervalUnit = time.Second
 
 // pollForToken repeats CreateToken at StartDeviceAuthorizationOutput's
@@ -138,7 +145,7 @@ func pollForToken(ctx context.Context, client oidcClient, reg *ssooidc.RegisterC
 	if interval <= 0 {
 		interval = 5 * pollIntervalUnit
 	}
-	deadline := time.Now().Add(time.Duration(auth.ExpiresIn) * pollIntervalUnit)
+	deadline := time.Now().Add(time.Duration(auth.ExpiresIn) * time.Second)
 
 	for {
 		if time.Now().After(deadline) {
