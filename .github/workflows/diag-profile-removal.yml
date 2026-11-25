@@ -1,6 +1,9 @@
-# Measurement only: the browser tests on Windows, several times over, on
-# the fix as it is committed (df5014c), with nothing added but this file.
-# Lives on diag/profile-removal, never on main.
+# Measurement only: the first pass of the whole suite on a fresh Windows
+# runner, on the fix as it is committed (df5014c, this branch's tree) and
+# on main beside it at the same hour. Three of six first passes on the fix
+# failed starting a browser ("did not open its debugging port within
+# 30s"): this says whether main does the same. Lives on
+# diag/profile-removal, never on main.
 name: diag-profile-removal
 
 on:
@@ -16,19 +19,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: suite-1, what: suite}
-          - {name: suite-2, what: suite}
-          - {name: suite-3, what: suite}
-          - {name: suite-4, what: suite}
-          - {name: suite-5, what: suite}
-          - {name: suite-6, what: suite}
-          - {name: package-1, what: package}
-          - {name: package-2, what: package}
+          - {name: fix-1, ref: ''}
+          - {name: fix-2, ref: ''}
+          - {name: fix-3, ref: ''}
+          - {name: fix-4, ref: ''}
+          - {name: fix-5, ref: ''}
+          - {name: fix-6, ref: ''}
+          - {name: main-1, ref: 'b26c91f8128e3765b4c0ddd8865ba8852a6a77d6'}
+          - {name: main-2, ref: 'b26c91f8128e3765b4c0ddd8865ba8852a6a77d6'}
+          - {name: main-3, ref: 'b26c91f8128e3765b4c0ddd8865ba8852a6a77d6'}
+          - {name: main-4, ref: 'b26c91f8128e3765b4c0ddd8865ba8852a6a77d6'}
+          - {name: main-5, ref: 'b26c91f8128e3765b4c0ddd8865ba8852a6a77d6'}
+          - {name: main-6, ref: 'b26c91f8128e3765b4c0ddd8865ba8852a6a77d6'}
     name: ${{ matrix.name }}
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
@@ -36,35 +45,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      # The whole suite is what was running when the removal was refused:
-      # three other packages start browsers and shells beside this one.
-      - name: Run the tests, three times over
+      - name: Run the whole suite once
         shell: bash
-        timeout-minutes: 40
+        timeout-minutes: 20
         env:
           CGO_ENABLED: '0'
-          LC_DIAG_LOG: ${{ runner.temp }}\lc-diag.log
-          LC_WHAT: ${{ matrix.what }}
         run: |
           failed=0
-          for i in 1 2 3; do
-            if [ "$LC_WHAT" = suite ]; then
-              go test ./... -count=1 -timeout 8m > "run-$i.log" 2>&1 || failed=1
-            else
-              go test ./internal/browser/ -count=1 -timeout 8m > "run-$i.log" 2>&1 || failed=1
-            fi
-            echo "=== run $i"
-            grep -vE '^(ok|\?) ' "run-$i.log" | head -200 || true
-            grep -E 'internal/(browser|agent|daemon|sshterm)\s' "run-$i.log" || true
-          done
-          echo "=== diagnostic lines"
-          cat "$LC_DIAG_LOG" || true
+          git log --oneline -1
+          go test ./... -count=1 -timeout 8m > run-1.log 2>&1 || failed=1
+          grep -vE '^(ok|\?) ' run-1.log | head -200 || true
+          grep -E 'internal/(browser|agent|daemon|sshterm)\s' run-1.log || true
           exit $failed
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: logs-${{ matrix.name }}
-          path: |
-            run-*.log
-            ${{ runner.temp }}\lc-diag.log
+          path: run-*.log
           if-no-files-found: warn
