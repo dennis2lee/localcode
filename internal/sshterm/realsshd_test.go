@@ -301,6 +301,72 @@ func TestRealShellsKeepWhatWasTypedWhileACommandRan(t *testing.T) {
 	}
 }
 
+// zsh's Ctrl+O runs the line and brings the next line of its history
+// back at the prompt after it, past a Ctrl+C to the command too. Nobody
+// typed that line, and a run is not typed onto it, whoever pressed the
+// Ctrl+C. Measured before the terminal kept it: a signal to the command
+// dropped the hold Ctrl+O left.
+func TestRealZshKeepsTheLineCtrlOBringsBackPastACtrlC(t *testing.T) {
+	setWait(t, &personYield, 300*time.Millisecond)
+	for _, who := range []string{"person", "model"} {
+		t.Run(who, func(t *testing.T) {
+			addr, home := startRealSSHD(t, "/bin/zsh")
+			me, _ := user.Current()
+			m := testManager(t, home)
+			term, err := m.Open("c1", me.Username+"@"+addr, ByModel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if err := term.WaitConnected(ctx); err != nil {
+				t.Fatal(err)
+			}
+			within(t, 15*time.Second, "integration on", func() bool { return term.Info().Integrated })
+			settled(t, term)
+			prompt := strings.TrimRight(lastRows(readScreen(term), 1)[0], " ")
+			// History: a long command, and the line after it.
+			for _, line := range []string{"sleep 30", "echo next"} {
+				term.PersonInput(nil, line, "")
+				typedLine(t, term, line)
+				term.PersonInput(&PersonKey{Key: "Enter"}, "", "")
+				if line == "sleep 30" {
+					time.Sleep(300 * time.Millisecond)
+					term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+				}
+				if !term.WaitPrompt(ctx, 15*time.Second) {
+					t.Fatalf("no prompt after %s; screen:\n%s", line, strings.Join(readScreen(term), "\n"))
+				}
+			}
+			term.PersonInput(&PersonKey{Key: "ArrowUp"}, "", "")
+			term.PersonInput(&PersonKey{Key: "ArrowUp"}, "", "")
+			typedLine(t, term, "sleep 30")
+			term.PersonInput(&PersonKey{Key: "o", Ctrl: true}, "", "")
+			within(t, 5*time.Second, "sleep running", func() bool { return term.Info().Running })
+			time.Sleep(2 * personYield)
+			if who == "person" {
+				term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+			} else if err := term.Keys("ctrl+c", term.PersonGen()); err != nil {
+				t.Fatal(err)
+			}
+			// The line is theirs, so no prompt is recorded to wait for.
+			within(t, 15*time.Second, "sleep ended", func() bool { return !term.Info().Running })
+			typedLine(t, term, "echo next")
+			time.Sleep(2 * personYield)
+			if _, err := term.Run(ctx, "echo hi", 5*time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
+				t.Fatalf("run onto the line Ctrl+O brought back: %v; screen:\n%s", err, strings.Join(readScreen(term), "\n"))
+			}
+			// Theirs until their Enter or Ctrl+C, as after Ctrl+O at any
+			// prompt.
+			term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+			typedLine(t, term, prompt)
+			if res := runWhenFree(t, term, "echo hi"); res.Output != "hi" {
+				t.Fatalf("run once the person dropped it: %+v", res)
+			}
+		})
+	}
+}
+
 // readScreen is the terminal's screen, without the empty rows at its end.
 func readScreen(term *Terminal) []string {
 	r, _ := term.Read(0, true)

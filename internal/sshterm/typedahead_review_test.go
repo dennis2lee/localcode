@@ -715,18 +715,30 @@ func TestTheHoldOutlastsACommandTheShellStarts(t *testing.T) {
 }
 
 func TestWhatClearsTheHoldAcrossACommandTheShellStarts(t *testing.T) {
-	t.Run("the model's Ctrl+C to it", func(t *testing.T) {
+	t.Run("the model's Ctrl+C to the line sent ahead", func(t *testing.T) {
+		// What was typed after the line waited in the terminal while the
+		// shell ran it, and the signal dropped it.
 		s := playedFor(t, true)
 		s.commandRuns()
-		s.term.PersonInput(&PersonKey{Key: "Escape"}, "", "")
-		s.ended("", "")
-		refusedForThem(t, s, "run after a key left for the shell")
+		s.term.PersonInput(nil, "cat\rx", "")
+		s.prints("\r\n" + s.promptText(0) + "cat")
 		s.startsOnItsOwn()
 		if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
 			t.Fatal(err)
 		}
 		s.ended("^C\r\n", "")
-		allowed(t, s, "run after the model's Ctrl+C to the command")
+		allowed(t, s, "run after the model's Ctrl+C to the line sent ahead")
+	})
+	t.Run("a signal after a line sent ahead, and text the command read", func(t *testing.T) {
+		// A command that lives through the signal (a REPL) reads what is
+		// typed after it: nothing of the line before the signal is left.
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "1\r", "")
+		s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+		s.term.PersonInput(nil, "q", "")
+		s.ended("", "")
+		allowed(t, s, "run after text the command read after a signal")
 	})
 	t.Run("a line sent ahead with nothing after it", func(t *testing.T) {
 		// The line runs; what is typed while it runs is the next prompt's,
@@ -752,23 +764,97 @@ func TestWhatClearsTheHoldAcrossACommandTheShellStarts(t *testing.T) {
 	})
 }
 
-// A signal key while a command the shell started runs, with text the last
-// prompt was never read for: the terminal drops what waits, and nothing of
-// it is held at the next prompt.
-func TestASignalDropsTextNeverRead(t *testing.T) {
-	for _, who := range []string{"person", "model"} {
-		s := playedFor(t, true)
-		s.commandRuns()
-		s.term.PersonInput(nil, "x", "")
-		s.term.output([]byte(s.promptText(0) + "x"))
-		s.startsOnItsOwn()
+// A signal key while a command runs drops what waits in the terminal, and
+// not what the shell keeps on its line: text drawn at the prompt before a
+// command the shell started, a key left for the shell, the line Ctrl+O
+// brings back (zsh does after a Ctrl+C to the command, measured). From the
+// sixth review, which found the signal dropping all of them.
+func TestASignalLeavesWhatTheShellKeeps(t *testing.T) {
+	signal := func(t *testing.T, s *playedShell, who, key string) {
+		t.Helper()
 		if who == "person" {
-			s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
-		} else if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
+			s.term.PersonInput(&PersonKey{Key: key, Ctrl: true}, "", "")
+		} else if err := s.term.Keys("ctrl+"+key, s.term.PersonGen()); err != nil {
 			t.Fatal(err)
 		}
-		s.ended("^C\r\n", "")
-		allowed(t, s, "run after the "+who+"'s Ctrl+C dropped what waited")
+	}
+	for _, who := range []string{"person", "model"} {
+		t.Run(who+"/text drawn at the prompt", func(t *testing.T) {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(nil, "x", "")
+			s.term.output([]byte(s.promptText(0) + "x"))
+			s.startsOnItsOwn()
+			signal(t, s, who, "c")
+			s.ended("^C\r\n", "x")
+			refusedForThem(t, s, "run onto text the shell kept past the "+who+"'s Ctrl+C")
+		})
+		t.Run(who+"/a key left for the shell", func(t *testing.T) {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(&PersonKey{Key: "Escape"}, "", "")
+			s.ended("", "")
+			refusedForThem(t, s, "run after a key left for the shell")
+			s.startsOnItsOwn()
+			signal(t, s, who, "c")
+			s.ended("^C\r\n", "")
+			refusedForThem(t, s, "run after the "+who+"'s Ctrl+C to a command after a key left for the shell")
+		})
+		t.Run(who+"/text read on the line, then Ctrl+Z", func(t *testing.T) {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(nil, "rm -rf x", "")
+			s.ended("", "rm -rf x")
+			refusedForThem(t, s, "run onto typed-ahead text at the first prompt")
+			s.startsOnItsOwn()
+			signal(t, s, who, "z")
+			s.ended("^Z\r\n", "rm -rf x")
+			refusedForThem(t, s, "run onto text the shell kept past the "+who+"'s Ctrl+Z")
+		})
+		t.Run(who+"/the line Ctrl+O brings back", func(t *testing.T) {
+			s := playedFor(t, true)
+			s.term.PersonInput(nil, "sleep 10", "")
+			s.term.PersonInput(&PersonKey{Key: "o", Ctrl: true}, "", "")
+			s.prints("\r\n\x1b]133;C;lc=" + s.term.marks.nonce + "\x07")
+			signal(t, s, who, "c")
+			s.ended("^C\r\n", "echo next")
+			refusedForThem(t, s, "run onto the line Ctrl+O brought back past the "+who+"'s Ctrl+C")
+		})
+		t.Run(who+"/text after a line sent ahead, then typed on at the prompt", func(t *testing.T) {
+			// The shell has it on its line once it is drawn there.
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(nil, "cat\rx", "")
+			s.prints("\r\n" + s.promptText(0) + "x")
+			s.term.PersonInput(nil, "y", "")
+			s.startsOnItsOwn()
+			signal(t, s, who, "c")
+			s.ended("^C\r\n", "xy")
+			refusedForThem(t, s, "run onto text typed on at the prompt, past the "+who+"'s Ctrl+C")
+		})
+		t.Run(who+"/text after a line sent ahead, then Ctrl+O at the prompt", func(t *testing.T) {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(nil, "cat\rx", "")
+			s.prints("\r\n" + s.promptText(0) + "x")
+			s.term.PersonInput(&PersonKey{Key: "o", Ctrl: true}, "", "")
+			s.prints("\r\n\x1b]133;C;lc=" + s.term.marks.nonce + "\x07")
+			signal(t, s, who, "c")
+			s.ended("^C\r\n", "echo next")
+			refusedForThem(t, s, "run onto the line Ctrl+O brought back past the "+who+"'s Ctrl+C")
+		})
+		t.Run(who+"/Ctrl+C to a full-screen program Ctrl+O ran", func(t *testing.T) {
+			// The program reads the key, and no signal comes of it.
+			s := playedFor(t, true)
+			s.term.PersonInput(nil, "vim foo", "")
+			s.term.PersonInput(&PersonKey{Key: "o", Ctrl: true}, "", "")
+			s.prints("\r\n\x1b]133;C;lc=" + s.term.marks.nonce + "\x07\x1b[?1049h")
+			signal(t, s, who, "c")
+			s.term.PersonInput(nil, ":q\r", "")
+			s.prints("\x1b[?1049l")
+			s.ended("", "echo next")
+			refusedForThem(t, s, "run onto the line Ctrl+O brought back after vim")
+		})
 	}
 }
 
@@ -930,9 +1016,10 @@ func TestBackspaceAfterABracketedPasteErasesNoText(t *testing.T) {
 }
 
 // What was typed for an earlier command is nothing to a later one the
-// shell starts on its own.
+// shell starts on its own. No run comes between them: a run's line drops
+// it, and the sixth review found this test passing for that alone.
 func TestAnEarlierCommandsTypingIsNothingToALaterOne(t *testing.T) {
-	t.Run("stale aheadMixed after Ctrl+C and shell-started command", func(t *testing.T) {
+	t.Run("a key, then Ctrl+C at the prompt", func(t *testing.T) {
 		s := playedFor(t, true)
 		s.commandRuns()
 		s.term.PersonInput(&PersonKey{Key: "ArrowDown"}, "", "")
@@ -940,20 +1027,18 @@ func TestAnEarlierCommandsTypingIsNothingToALaterOne(t *testing.T) {
 		refusedForThem(t, s, "run after ArrowDown while command ran")
 		s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
 		s.prints("^C\r\n" + s.promptText(130))
-		allowed(t, s, "run after Ctrl+C cleared the hold")
 		s.startsOnItsOwn()
 		s.term.PersonInput(nil, "q", "")
 		s.ended("", "")
 		allowed(t, s, "run after plain text read by a shell-started command")
 	})
 
-	t.Run("stale aheadPasted after bracketed paste and shell-started command", func(t *testing.T) {
+	t.Run("a bracketed paste, then bracketed paste off", func(t *testing.T) {
 		s := playedFor(t, true)
 		s.prints("\x1b[?2004h")
 		s.commandRuns()
 		s.term.PersonInput(nil, "", "hello")
 		s.ended("", "")
-		allowed(t, s, "run after bracketed paste read by command")
 		s.prints("\x1b[?2004l")
 		s.startsOnItsOwn()
 		s.term.PersonInput(nil, "q", "")
@@ -961,16 +1046,26 @@ func TestAnEarlierCommandsTypingIsNothingToALaterOne(t *testing.T) {
 		allowed(t, s, "run after plain text read by shell-started command with bracketed paste off")
 	})
 
-	t.Run("stale aheadText concatenated into shell-started command", func(t *testing.T) {
+	t.Run("text the prompt ends with", func(t *testing.T) {
 		s := playedFor(t, true)
 		s.commandRuns()
 		s.term.PersonInput(nil, "$", "")
 		s.ended("", "")
-		allowed(t, s, "run after '$' read by command")
 		s.startsOnItsOwn()
 		s.term.PersonInput(nil, " ", "")
 		s.ended("", "")
 		allowed(t, s, "run after space read by shell-started command")
+	})
+
+	t.Run("text, then Ctrl+D at the start of a line", func(t *testing.T) {
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "q", "")
+		s.ended("", "")
+		s.startsOnItsOwn()
+		s.term.PersonInput(&PersonKey{Key: "d", Ctrl: true}, "", "")
+		s.ended("", "")
+		allowed(t, s, "run after Ctrl+D ended a shell-started command's input")
 	})
 }
 
@@ -984,4 +1079,42 @@ func TestCtrlUAfterABracketedPasteKillsIt(t *testing.T) {
 	s.term.PersonInput(&PersonKey{Key: "u", Ctrl: true}, "", "")
 	s.ended("", "")
 	allowed(t, s, "run after Ctrl+U killed a bracketed paste")
+}
+
+// From the sixth review.
+
+// Text with a character no shell draws as typed, a cell to each: one that
+// is not graphic (U+200B, U+FEFF) or marks the one before it (a combining
+// accent). bash draws it as it is, in no cell of its own, and zsh draws
+// markup, measured; the screen cannot be read for the text either way.
+// Text that is drawn as typed, Hangul decomposed as macOS file names are
+// among it, is read as any.
+func TestTextNotDrawnAsTypedHoldsTheLine(t *testing.T) {
+	for _, c := range []struct{ name, typed, drawn string }{
+		{"U+200B, bash", "rm -rf x\u200b", "rm -rf x\u200b"},
+		{"U+200B, zsh", "rm -rf x\u200b", "rm -rf x\x1b[7m<200b>\x1b[27m"},
+		{"U+200B before a space, bash", "rm -rf x\u200b ", "rm -rf x\u200b "},
+		{"U+FEFF, bash", "rm -rf x\ufeff", "rm -rf x\ufeff"},
+		{"a combining accent, zsh", "rm cafe\u0301", "rm cafe\x1b[7m<0301>\x1b[27m"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(nil, c.typed, "")
+			s.ended("", c.drawn)
+			refusedForThem(t, s, "run onto "+c.name+" typed while the command ran")
+		})
+	}
+	for _, typed := range []string{"\u1112\u1161\u11ab", "한"} {
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "rm "+typed, "")
+		s.ended("", "rm "+typed)
+		refusedForThem(t, s, "run onto Hangul typed while the command ran")
+		s = playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, typed, "")
+		s.ended("", "")
+		allowed(t, s, "run after Hangul the command read")
+	}
 }
