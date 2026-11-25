@@ -178,6 +178,13 @@ func TestTextTypedWhileACommandRanIsOnTheNextLine(t *testing.T) {
 		s.term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
 		s.ended("", "\ufffd")
 		refusedForThem(t, s, "run onto what is left of an erased wide character")
+		// A key, then: read or not.
+		s = playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "한", "")
+		s.term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+		s.ended("", "")
+		refusedForThem(t, s, "run after Backspace on a wide character, read or not")
 	})
 	t.Run("edited as the terminal edits a line", func(t *testing.T) {
 		// Backspace and Ctrl+U where a command reads whole lines: the
@@ -195,11 +202,11 @@ func TestTextTypedWhileACommandRanIsOnTheNextLine(t *testing.T) {
 		// the line is judged as after a key.
 		s = playedFor(t, true)
 		s.commandRuns()
-		s.term.PersonInput(nil, "scp a:b", "")
+		s.term.PersonInput(nil, "scp a$ b", "")
 		s.term.PersonInput(&PersonKey{Key: "w", Ctrl: true}, "", "")
-		s.ended("", "scp a:")
+		s.ended("", "scp a$ ")
 		refusedForThem(t, s, "run onto a line Ctrl+W edited")
-		s.erase(len("scp a:"))
+		s.erase(len("scp a$ "))
 		refusedForThem(t, s, "run with it erased: nothing said where the prompt ends")
 
 		s = playedFor(t, true)
@@ -394,8 +401,9 @@ func TestTypingAtTheNewPromptKeepsTheLineTheirs(t *testing.T) {
 	s.commandRuns()
 	s.term.PersonInput(nil, "x", "")
 	s.term.output([]byte(s.promptText(0) + "x"))
-	s.term.PersonInput(nil, "y", "")
-	s.prints("y")
+	// Ending as the prompt does: the row alone would read as a prompt.
+	s.term.PersonInput(nil, "$", "")
+	s.prints("$")
 	start := time.Now()
 	refusedForThem(t, s, "run onto a line typed on before and after the prompt")
 	// Not after the three seconds a run gives a prompt to be drawn: the
@@ -452,10 +460,11 @@ func TestTheModelTypingAfterThePersonKeepsTheLineTheirs(t *testing.T) {
 	s := playedFor(t, true)
 	s.commandRuns()
 	s.term.PersonInput(nil, "ls", "")
-	if err := s.term.Type("x", false, s.term.PersonGen()); err != nil {
+	if err := s.term.Type("$", false, s.term.PersonGen()); err != nil {
 		t.Fatal(err)
 	}
-	s.ended("lsx", "lsx")
+	// Ending as the prompt does: the row alone would read as a prompt.
+	s.ended("ls$", "ls$")
 	refusedForThem(t, s, "run onto what both typed while the command ran")
 	if err := s.term.Keys("ctrl+c", s.term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
 		t.Fatalf("the model's ctrl+c on a line with the person's text: %v", err)

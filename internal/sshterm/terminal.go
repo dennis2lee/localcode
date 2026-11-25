@@ -213,6 +213,12 @@ type Terminal struct {
 	aheadMixed  bool
 	aheadSent   bool
 	aheadJudge  bool
+	// aheadBefore is text typed while the command ran before a key that
+	// signals it. The signal drops it, and the line editing after the key
+	// starts on an empty line; with `stty intr undef` no signal comes, and
+	// the shell draws it before what came after. It is read off the screen
+	// with that at the next prompt.
+	aheadBefore string
 	// aheadPasted is a bracketed paste among it, its marks sent: read as
 	// text only where the shell has bracketed paste on at its prompt. A
 	// shell that has not (bash 3.2) reads the marks as keys and draws some
@@ -623,10 +629,12 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 			// text the last prompt was never read for (a command the shell
 			// started from a line sent ahead came between), and the line is
 			// theirs until their Enter or Ctrl+C at a prompt.
-			if t.personAhead && t.aheadMixed || t.aheadJudge {
+			if t.personAhead && t.aheadMixed || t.aheadJudge || !drawnAsTyped(t.aheadBefore) {
 				t.personAfter = true
 			}
-			t.aheadJudge = t.personAhead && !t.personAfter
+			t.aheadText = t.aheadBefore + t.aheadText
+			t.aheadJudge = (t.personAhead || t.aheadBefore != "") && !t.personAfter
+			t.aheadBefore = ""
 			t.personTyped = t.personAfter || t.aheadJudge
 			t.modelTyped = t.typedAhead || t.typedAfter
 			t.typedAhead = false
@@ -777,9 +785,9 @@ func (t *Terminal) recordPrompt(x int) {
 // before the cursor, and the prompt ends where that starts
 // (aheadShownFrom). None of it there, or only ASCII spaces (which change
 // nothing a command line runs) not reaching the left edge, and the command
-// read it. Matched to the left edge, the text can go on in the row above,
-// and the prompt is taken to end at the edge, which lineEmpty does not
-// read as empty; the text is theirs either way. It cannot say with the
+// read it. Matched to the left edge, the text can go on in the row above:
+// it is theirs, and no prompt is recorded, so the last prompt's end stays
+// for the next reading. It cannot say with the
 // cursor where the mark left it (no prompt drawn, however long that has
 // been), at the left edge (nothing left of the cursor to read: a line that
 // filled the row above, or a prompt that leaves nothing on its row), in
@@ -804,6 +812,11 @@ func (t *Terminal) judgeAhead() bool {
 			return false
 		}
 		t.recordPrompt(pos.X)
+	} else if from == 0 {
+		// To the left edge: it can go on in the row above, and nothing
+		// left of it on the row is the prompt. Theirs, with no prompt
+		// recorded, and the last one's end kept for the next reading.
+		return false
 	} else {
 		// Theirs on the line, as if typed at it: until their Enter or
 		// Ctrl+C, past a command the shell starts on its own too.
@@ -2072,7 +2085,7 @@ func (t *Terminal) interrupt() {
 func (t *Terminal) sent() {
 	t.typedAfter, t.personAfter = false, false
 	t.dropAhead()
-	t.aheadSent, t.aheadJudge = false, false
+	t.aheadSent, t.aheadJudge, t.aheadBefore = false, false, ""
 	t.interrupts = interrupts{}
 }
 
@@ -2087,16 +2100,21 @@ func (t *Terminal) dropAhead() {
 // signalled notes a key the terminal turns into a signal for the command
 // that runs (either's), on the main screen: on the alternate screen a
 // full-screen program reads keys raw, and no signal comes of it. The
-// terminal drops what waits in it, what was typed while the command ran,
-// and the keys, paste marks and line ends among it no longer count. The text is
-// still read off the screen at the next prompt: with `stty intr undef`
-// the key is a character, nothing is dropped, and bash and zsh draw the
-// text (measured). A line the shell keeps the signal does not drop, and a
-// hold stays: the terminal cannot say whether text typed after a line
-// sent ahead waited behind that line or went with a line a command read.
-// Called with mu held.
+// terminal drops what waits in it, what was typed while the command ran:
+// the keys, paste marks and line ends among it no longer count, and what
+// is typed after the key starts on an empty line. The text is kept to be
+// read off the screen at the next prompt (aheadBefore): with `stty intr
+// undef` the key is a character, nothing is dropped, and bash and zsh
+// draw the text (measured). A line the shell keeps the signal does not
+// drop, and a hold stays: the terminal cannot say whether text typed after
+// a line sent ahead waited behind that line or went with a line a command
+// read. Called with mu held.
 func (t *Terminal) signalled() {
-	t.aheadMixed, t.aheadPasted, t.aheadSent = false, false, false
+	if t.personAhead {
+		t.aheadBefore += t.aheadText
+	}
+	t.dropAhead()
+	t.aheadSent = false
 }
 
 // aheadKey notes a key the person pressed while a command ran. Called
@@ -2117,7 +2135,7 @@ func (t *Terminal) aheadKey(ev uv.KeyPressEvent) {
 		// bash does nothing with it, zsh puts a line break in the line.)
 		// On the alternate screen the program reads it, as any key there.
 		t.dropAhead()
-		t.aheadSent = !t.emu.IsAltScreen()
+		t.aheadSent, t.aheadBefore = !t.emu.IsAltScreen(), ""
 	case ev.Text != "" && ev.Mod&^uv.ModShift == 0:
 		t.aheadTyped(ev.Text, false)
 	case t.emu.IsAltScreen():
@@ -2168,7 +2186,7 @@ func (t *Terminal) aheadTyped(s string, bracketed bool) {
 	}
 	if i := strings.LastIndex(s, "\r"); i >= 0 && !bracketed {
 		t.dropAhead()
-		t.aheadSent = !t.emu.IsAltScreen()
+		t.aheadSent, t.aheadBefore = !t.emu.IsAltScreen(), ""
 		s = s[i+1:]
 	}
 	if s == "" {
@@ -2176,10 +2194,11 @@ func (t *Terminal) aheadTyped(s string, bracketed bool) {
 	}
 	t.personAhead = true
 	t.aheadPasted = t.aheadPasted || bracketed
-	if t.aheadSent || strings.ContainsAny(s, "\r\t") || !drawnAsTyped(s) {
+	if t.aheadSent || !drawnAsTyped(s) {
 		// After a line sent ahead, the shell runs a command between this
-		// prompt and the one the text is drawn at. A Tab completes. A line
-		// end kept in a bracketed paste is on several rows.
+		// prompt and the one the text is drawn at. A Tab completes, and a
+		// line end kept in a bracketed paste is on several rows: neither
+		// is drawn as typed.
 		t.aheadMixed = true
 	}
 	t.aheadText += s
