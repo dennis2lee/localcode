@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.180.3
+
+A browser slow to start finishes starting.
 
 **Fixed**
 
