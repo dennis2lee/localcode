@@ -189,7 +189,9 @@ func (f *fakeOIDC) CreateToken(context.Context, *ssooidc.CreateTokenInput, ...fu
 
 // withFastPolling shrinks pollIntervalUnit for the duration of a test, so
 // pollForToken's real retry/backoff logic runs against milliseconds
-// instead of seconds.
+// instead of seconds. Only the wait between polls shrinks: a code's
+// ExpiresIn stays in seconds, so a test that is not about expiry cannot
+// run out of lifetime on a slow machine.
 func withFastPolling(t *testing.T) {
 	t.Helper()
 	old := pollIntervalUnit
@@ -220,6 +222,35 @@ func TestPollForTokenRetriesOnAuthorizationPending(t *testing.T) {
 	}
 	if fake.createTokenCalls != 3 {
 		t.Errorf("createTokenCalls = %d, want 3 (two pending + one success)", fake.createTokenCalls)
+	}
+}
+
+// Fast polling shortens the wait between polls and nothing else. The
+// code's lifetime used to shrink with it, so ExpiresIn 60 was 60ms, and a
+// runner that held the test up for that long failed it as expired. A poll
+// that takes longer than those 60ms is that stall, made on purpose.
+func TestFastPollingLeavesTheCodesLifetimeAlone(t *testing.T) {
+	withFastPolling(t)
+	fake := &fakeOIDC{
+		responses: []func() (*ssooidc.CreateTokenOutput, error){
+			func() (*ssooidc.CreateTokenOutput, error) {
+				time.Sleep(100 * time.Millisecond)
+				return nil, &types.AuthorizationPendingException{}
+			},
+			func() (*ssooidc.CreateTokenOutput, error) {
+				return &ssooidc.CreateTokenOutput{AccessToken: aws.String("late"), ExpiresIn: 3600}, nil
+			},
+		},
+	}
+	reg := &ssooidc.RegisterClientOutput{ClientId: aws.String("cid"), ClientSecret: aws.String("secret")}
+	auth := &ssooidc.StartDeviceAuthorizationOutput{DeviceCode: aws.String("dc"), Interval: 0, ExpiresIn: 60}
+
+	tok, err := pollForToken(context.Background(), fake, reg, auth)
+	if err != nil {
+		t.Fatalf("pollForToken after a poll slower than 60 fast units: %v", err)
+	}
+	if aws.ToString(tok.AccessToken) != "late" {
+		t.Errorf("AccessToken = %q, want %q", aws.ToString(tok.AccessToken), "late")
 	}
 }
 
