@@ -629,9 +629,9 @@ func TestAPasteIntoARunningCommandIsNotOnTheNextLine(t *testing.T) {
 	s := playedFor(t, true)
 	s.term.PersonInput(nil, "cat", "")
 	s.term.PersonInput(&PersonKey{Key: "Enter"}, "", "")
-	s.term.PersonInput(nil, "", "line1\nline2")
+	s.term.PersonInput(nil, "", "line1\nline2\n")
 	s.term.PersonInput(&PersonKey{Key: "d", Ctrl: true}, "", "")
-	s.prints("cat\r\nline1\r\nline2\r\n" + s.promptText(0))
+	s.prints("cat\r\nline1\r\nline1\r\nline2\r\nline2\r\n" + s.promptText(0))
 	if err := s.run(); err != nil {
 		t.Fatalf("after a paste into a command that has ended: %v", err)
 	}

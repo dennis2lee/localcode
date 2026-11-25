@@ -339,16 +339,6 @@ func (e *Emulator) BracketedPaste() bool {
 	return e.isModeSet(ansi.ModeBracketedPaste)
 }
 
-// PendingWrap reports a character written in the last column, with the
-// next one to wrap: the cursor is reported on that character, not after
-// it.
-//
-// localcode: added. A blank cell under a cursor in the last column and a
-// character there look the same from the cursor alone. See LOCALCODE.md.
-func (e *Emulator) PendingWrap() bool {
-	return e.atPhantom
-}
-
 // SendText sends arbitrary text to the terminal.
 func (e *Emulator) SendText(text string) {
 	_, _ = io.WriteString(e.pw, text)

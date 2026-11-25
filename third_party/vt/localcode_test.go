@@ -85,30 +85,3 @@ func TestBracketedPasteSaysWhatPasteGoesBy(t *testing.T) {
 		t.Fatal("on after the application turned it off")
 	}
 }
-
-// A character written in the last column leaves a wrap pending; a cursor
-// moved to the last column does not, and neither does the next character
-// once it wrapped.
-func TestPendingWrapSaysWhetherTheLastColumnHoldsACharacter(t *testing.T) {
-	e := NewEmulator(10, 3)
-	go io.Copy(io.Discard, e)
-	e.Write([]byte("\x1b[10G"))
-	if e.PendingWrap() {
-		t.Fatal("pending after the cursor was moved to the last column")
-	}
-	e.Write([]byte("\r123456789"))
-	if e.PendingWrap() {
-		t.Fatal("pending with the last column still blank")
-	}
-	e.Write([]byte("0"))
-	if !e.PendingWrap() {
-		t.Fatal("not pending after a character in the last column")
-	}
-	if x := e.CursorPosition().X; x != 9 {
-		t.Fatalf("cursor at %d, want on the last column", x)
-	}
-	e.Write([]byte("a"))
-	if e.PendingWrap() {
-		t.Fatal("still pending after the next character wrapped")
-	}
-}

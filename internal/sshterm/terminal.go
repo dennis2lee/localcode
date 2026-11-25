@@ -158,11 +158,6 @@ type Terminal struct {
 	markX       int
 	markY       int
 	markPending bool
-	// markAbs is the mark's row counted from the terminal's first line,
-	// and promptRows how far below it the last prompt recorded ended: a
-	// line that wrapped or has a line break in it ends further down.
-	markAbs    int
-	promptRows int
 	// A local terminal's screen clears (see clearEnds): how many there
 	// have been, the row the screen started at after the last, the tail of
 	// the output before, in which a clear's sequence may have begun, and
@@ -199,13 +194,22 @@ type Terminal struct {
 	// reads it: bash and zsh, measured, in the same write as the prompt.
 	// What the command read (q to a pager) is not drawn. aheadText is the
 	// text they typed then, edited as the terminal's own line editing
-	// edits it, and aheadKeys what else they pressed. aheadJudge is the
-	// line at the new prompt being theirs for that alone, until the screen
-	// is read for it when the prompt is drawn (judgeAhead).
+	// edits it. aheadMixed is anything else among it (a key, a Tab, a paste
+	// with a line end kept in it), or text after a line
+	// sent ahead (aheadSent): the screen cannot say what the shell made of
+	// that, and the line at the next prompt is theirs until their Enter or
+	// Ctrl+C. aheadJudge is the line at the new prompt being theirs for
+	// text alone, until the screen is read for it (judgeAhead).
 	personAhead bool
 	aheadText   string
-	aheadKeys   aheadKind
+	aheadMixed  bool
+	aheadSent   bool
 	aheadJudge  bool
+	// aheadPasted is a bracketed paste among it, its marks sent: read as
+	// text only where the shell has bracketed paste on at its prompt. A
+	// shell that has not (bash 3.2) reads the marks as keys and draws some
+	// of them.
+	aheadPasted bool
 	// interrupts are the Ctrl+C presses at the prompt that no prompt has
 	// answered yet, and modelInterrupt when the model last pressed one,
 	// until a prompt: a run waits for the answer, and says when none came.
@@ -318,25 +322,6 @@ type runWait struct {
 	output   string
 	captured bool
 }
-
-// aheadKind is what the person pressed while a command ran, besides text.
-type aheadKind int
-
-const (
-	// aheadTextOnly is text, with Backspace and Ctrl+U applied to it as
-	// the terminal's line editing, and the shell's, apply them: what the
-	// shell did not read of it is drawn after the prompt as it was typed.
-	aheadTextOnly aheadKind = iota
-	// aheadShown is keys that, read by the shell at its prompt, show on
-	// the line or do nothing there (shownAhead). The line is empty only
-	// when it looks as the last prompt left it.
-	aheadShown
-	// aheadUnknown is a key that can leave the shell waiting for the next
-	// one with nothing on the screen (Escape, Ctrl+X), or one the terminal
-	// does not know the shell's answer to. The line is the person's until
-	// their Enter or Ctrl+C.
-	aheadUnknown
-)
 
 func newNonce() string {
 	var b [6]byte
@@ -534,7 +519,6 @@ func (t *Terminal) feed(p []byte) error {
 func (t *Terminal) markHere() {
 	pos := t.emu.CursorPosition()
 	t.markX, t.markY, t.markPending = pos.X, pos.Y, false
-	t.markAbs = t.absRow(pos.Y)
 }
 
 // atMark reports the cursor where the end of the last command left it:
@@ -600,15 +584,6 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 				w.out = capture{max: captureLimit}
 				w.started = true
 			}
-			if !t.running && !t.aheadJudge {
-				// A command the shell started on its own (a line sent ahead,
-				// the next line of a paste, zsh's sched): what was typed for
-				// the last prompt and read there is done with. Not read there,
-				// it can still be waiting (what followed the line sent ahead),
-				// and the next mark carries it to the prompt after this
-				// command.
-				t.dropAhead()
-			}
 			t.running = true
 		case 'D':
 			if w != nil {
@@ -634,17 +609,19 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 			// that key is on this one, and so is what the model typed ahead
 			// while the command ran.
 			// What the person typed while the command ran is on this line
-			// if the command did not read it. The screen says which, once
-			// the prompt is drawn; until then, it is there. So is what was
-			// typed for the last prompt if that was never read: the shell
-			// ran a line sent ahead from it, and what followed that line is
-			// for this one (bash 3.2 says nothing as such a line starts).
-			ahead := t.personAhead || t.aheadJudge
-			t.personTyped = t.personAfter || ahead
+			// if the command did not read it. Text alone, the screen says
+			// which once the prompt is drawn (judgeAhead). Anything else, or
+			// text the last prompt was never read for (a command the shell
+			// started from a line sent ahead came between), and the line is
+			// theirs until their Enter or Ctrl+C.
+			if t.personAhead && t.aheadMixed || t.aheadJudge {
+				t.personAfter = true
+			}
+			t.aheadJudge = t.personAhead && !t.personAfter
+			t.personTyped = t.personAfter || t.aheadJudge
 			t.modelTyped = t.typedAhead || t.typedAfter
-			t.aheadJudge = ahead && !t.personAfter
-			t.personAhead = false
 			t.typedAhead = false
+			t.personAhead, t.aheadSent = false, false
 			t.interrupts.answered()
 			t.modelInterrupt = time.Time{}
 		}
@@ -757,12 +734,14 @@ func (t *Terminal) settled() {
 	if judge {
 		t.aheadJudge = false
 		if !t.judgeAhead() {
+			// The screen cannot say: the line is theirs until their Enter
+			// or Ctrl+C.
+			t.personAfter = true
 			t.notify()
 			return
 		}
 	} else {
-		x := t.emu.CursorPosition().X
-		t.recordPrompt(x, x)
+		t.recordPrompt(t.emu.CursorPosition().X)
 	}
 	if w := t.run; w != nil && w.local && w.ended && t.promptDrawn(w) {
 		t.finishRun(w)
@@ -771,61 +750,42 @@ func (t *Terminal) settled() {
 }
 
 // recordPrompt takes the prompt as ending at column x of the cursor's
-// row, with the columns from x up to to blank: the person's text is there,
-// and the line is empty once they erase it. The line then reads as empty
-// with the cursor at x, the row the same left of it, blank up to to, and
-// what is right of that (a right prompt) and under the row as it is now.
-// Called with mu held.
-func (t *Terminal) recordPrompt(x, to int) {
+// row, with the person's text between x and the cursor: the line reads as
+// empty with the cursor at x, the row the same left of it, blank up to
+// where the cursor is now, and what is right of that (a right prompt) and
+// under the row as it is now. Called with mu held.
+func (t *Terminal) recordPrompt(x int) {
 	pos := t.emu.CursorPosition()
-	_, _, next := t.aroundCursor()
-	rest := strings.TrimRight(strings.Repeat(" ", to-x)+t.cellText(pos.Y, to, t.emu.Width()), " ")
+	_, rest, next := t.aroundCursor()
+	rest = strings.TrimRight(strings.Repeat(" ", pos.X-x)+rest, " ")
 	t.promptX, t.promptY, t.promptKnown = x, pos.Y, true
 	t.promptLeft, t.promptRest, t.promptNext = t.cellText(pos.Y, 0, x), rest, next
-	t.promptRows = t.absRow(pos.Y) - t.markAbs
 }
 
-// judgeAhead records the prompt after a command the person typed during,
-// where the screen says it ends, and reports whether it could. Text: what
-// the shell drew of it is the end of what they typed, right before the
-// cursor, and the prompt ends where that starts (aheadShownFrom). None of
-// it there, or only ASCII spaces (which change nothing a command line
-// runs), and the command read it. Matched to the left edge, the text can go
-// on in the row above, and the prompt is taken to end at the edge, which
-// lineEmpty does not read as empty. Keys: the line is empty only when it
-// looks as the last prompt left it, as many rows below its mark as the
-// last prompt was below its own (a recalled line that wrapped, or has a
-// line break in it, ends further down). Any other key: the line is theirs
-// until their Enter or Ctrl+C, and nothing is recorded. Called with mu
-// held, where a prompt would be recorded.
+// judgeAhead records the prompt after a command the person typed text
+// during, where the screen says it ends, and reports whether it could.
+// What the shell drew of the text is the end of what was typed, right
+// before the cursor, and the prompt ends where that starts
+// (aheadShownFrom). None of it there, or only ASCII spaces (which change
+// nothing a command line runs) not reaching the left edge, and the command
+// read it. Matched to the left edge, the text can go on in the row above,
+// and the prompt is taken to end at the edge, which lineEmpty does not
+// read as empty. It cannot say with the cursor where the mark left it (no
+// prompt drawn, however long that has been), in the last column (the
+// cursor sits there on the last character written or over a blank cell,
+// and the screen does not say which), or after a bracketed paste where the
+// shell has bracketed paste off at its prompt. Called with mu held, where a
+// prompt would be recorded.
 func (t *Terminal) judgeAhead() bool {
 	pos := t.emu.CursorPosition()
-	switch t.aheadKeys {
-	case aheadShown:
-		// The last prompt's record, kept by the mark: before any, a record
-		// of the left edge, which lineEmpty does not read as empty.
-		left, rest, next := t.aroundCursor()
-		if pos.X == t.promptX && left == t.promptLeft && rest == t.promptRest && next == t.promptNext && t.absRow(pos.Y)-t.markAbs == t.promptRows {
-			t.recordPrompt(pos.X, pos.X)
-			return true
-		}
-		return false
-	case aheadUnknown:
+	if t.atMark() || pos.X == t.emu.Width()-1 || t.aheadPasted && !t.emu.BracketedPaste() {
 		return false
 	}
-	// A character in the last column leaves the cursor on it, not after
-	// it, until the next one wraps: the cell under the cursor is read too.
-	end := pos.X
-	if c := t.emu.CellAt(pos.X, pos.Y); t.emu.PendingWrap() || pos.X == t.emu.Width()-1 && c != nil && c.Content != "" && c.Content != " " {
-		// (A pseudo console that places the cursor itself leaves no wrap
-		// pending: a character under a cursor in the last column is read.)
-		end = pos.X + 1
-	}
-	from, spaces := t.aheadShownFrom(end, pos.Y)
-	if from == end || (spaces && from > 0) {
-		t.recordPrompt(pos.X, pos.X)
+	from, spaces := t.aheadShownFrom(pos.X, pos.Y)
+	if from == pos.X || (spaces && from > 0) {
+		t.recordPrompt(pos.X)
 	} else {
-		t.recordPrompt(from, end)
+		t.recordPrompt(from)
 	}
 	return true
 }
@@ -1974,7 +1934,7 @@ func (t *Terminal) Type(text string, enter bool, gen uint64) error {
 	if t.integrated && t.running && t.personAhead && text != "" {
 		// After what the person typed ahead: the end of what waits is no
 		// longer theirs, and the screen cannot say what of theirs is left.
-		t.aheadKeys = aheadUnknown
+		t.aheadMixed = true
 	}
 	t.emu.SendText(text)
 	t.notify()
@@ -2047,8 +2007,9 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 		for _, ev := range evs {
 			if t.signalKey(ev) {
 				t.dropAhead()
+				t.aheadSent, t.aheadJudge, t.personAfter = false, false, false
 			} else if t.personAhead {
-				t.aheadKeys = aheadUnknown
+				t.aheadMixed = true
 			}
 		}
 	}
@@ -2079,6 +2040,7 @@ func (t *Terminal) interrupt() {
 func (t *Terminal) sent() {
 	t.typedAfter, t.personAfter = false, false
 	t.dropAhead()
+	t.aheadSent, t.aheadJudge = false, false
 	t.interrupts = interrupts{}
 }
 
@@ -2087,7 +2049,7 @@ func (t *Terminal) sent() {
 // shell started on its own) and nothing of the last one's is still to be
 // read. Called with mu held.
 func (t *Terminal) dropAhead() {
-	t.personAhead, t.aheadText, t.aheadKeys = false, "", aheadTextOnly
+	t.personAhead, t.aheadText, t.aheadMixed, t.aheadPasted = false, "", false, false
 }
 
 // aheadKey notes a key the person pressed while a command ran. Called
@@ -2096,36 +2058,44 @@ func (t *Terminal) aheadKey(ev uv.KeyPressEvent) {
 	ctrl := ev.Mod == uv.ModCtrl
 	switch {
 	case t.signalKey(ev):
-		// The terminal turns it into a signal, and drops what waits.
+		// The terminal turns it into a signal, and drops what waits: what
+		// was typed for a prompt a command the shell started came before
+		// too.
 		t.dropAhead()
+		t.aheadSent, t.aheadJudge, t.personAfter = false, false, false
 	case endsLine(ev) && ev.Mod&uv.ModAlt == 0 && !(ctrl && ev.Code == 'o'):
 		// The line goes to whatever reads it, the shell too: nothing typed
-		// before it is left waiting. (Ctrl+O ends no line in the terminal.
-		// With Alt, the shell reads Escape and the key as one: bash does
-		// nothing with it, zsh puts a line break in the line.)
+		// before it is left waiting, and what is typed after it can be for
+		// the prompt after the shell runs it. (Ctrl+O ends no line in the
+		// terminal. With Alt, the shell reads Escape and the key as one:
+		// bash does nothing with it, zsh puts a line break in the line.)
 		t.dropAhead()
+		t.aheadSent = true
 	case ev.Text != "" && ev.Mod&^uv.ModShift == 0:
 		t.aheadTyped(ev.Text, false)
 	case t.emu.IsAltScreen():
 		// A full-screen program's: it reads every key. (Text is read off
 		// the screen at the prompt, as anywhere: what it read is not there.)
-	case t.aheadKeys == aheadTextOnly && ev.Mod == 0 && ev.Code == uv.KeyBackspace && aheadErasable(t.aheadText):
-		// The terminal's line editing, where a command reads whole lines:
-		// one character less. A program that reads keys took it all.
+	case !t.aheadMixed && ev.Mod == 0 && ev.Code == uv.KeyBackspace && aheadErasable(t.aheadText):
+		// The terminal's line editing, where a command reads whole lines,
+		// and the shell's: one character less. A program that reads keys
+		// took it all.
 		_, n := utf8.DecodeLastRuneInString(t.aheadText)
 		t.aheadText = t.aheadText[:len(t.aheadText)-n]
-	case t.aheadKeys == aheadTextOnly && ctrl && ev.Code == 'u' && !t.isLocal():
+	case !t.aheadMixed && ctrl && ev.Code == 'u' && !t.isLocal():
 		// Not in a local terminal: PowerShell leaves the line as it is.
 		t.aheadText = ""
+	case ctrl && ev.Code == 'd':
+		// The end of input: what is on the line goes to whatever reads it
+		// (Ctrl+D to leave a REPL, or to end what cat reads). Read by the
+		// shell, it ends the shell, or the shell says it will not, on an
+		// empty line, and does nothing to one with text on it, which stays
+		// drawn as typed.
 	default:
-		// Ctrl+W among them: where the shell has the key (a prompt the mark
-		// for has not come), zsh ends a word at more than spaces.
-		t.personAhead = true
-		if shownAhead(ev) {
-			t.aheadKeys = max(t.aheadKeys, aheadShown)
-		} else {
-			t.aheadKeys = aheadUnknown
-		}
+		// What the shell does with any other key (Up recalls a command,
+		// Escape waits for the next key, Ctrl+W ends a word differently in
+		// zsh) the screen cannot be read for.
+		t.personAhead, t.aheadMixed = true, true
 	}
 }
 
@@ -2140,59 +2110,26 @@ func aheadErasable(s string) bool {
 // aheadTyped notes text the person typed or pasted while a command ran.
 // A line end in it sends the line (unless the paste is bracketed, which
 // keeps it in the line): what came before it is not left waiting, and
-// what comes after is. Called with mu held.
+// what comes after can be for the prompt after the shell runs it. Called
+// with mu held.
 func (t *Terminal) aheadTyped(s string, bracketed bool) {
 	if i := strings.LastIndex(s, "\r"); i >= 0 && !bracketed {
 		t.dropAhead()
+		t.aheadSent = true
 		s = s[i+1:]
 	}
 	if s == "" {
 		return
 	}
 	t.personAhead = true
-	switch {
-	case bracketed:
-		// Sent between bracketed paste's marks: a shell that has not turned
-		// it on (bash 3.2) reads them as keys, and draws some of them. One
-		// that has keeps a line end in the paste on the line: over several
-		// rows, after a continuation prompt in PowerShell, with Ctrl+U taking
-		// only the last of them. Judged as keys, the line is empty only when
-		// it looks as the last prompt left it, as many rows below its mark.
-		t.aheadKeys = max(t.aheadKeys, aheadShown)
-	case strings.Contains(s, "\t"):
-		// Tab completes: what the shell draws is not what was typed.
-		t.aheadKeys = max(t.aheadKeys, aheadShown)
+	t.aheadPasted = t.aheadPasted || bracketed
+	if t.aheadSent || strings.ContainsAny(s, "\r\t") {
+		// After a line sent ahead, the shell runs a command between this
+		// prompt and the one the text is drawn at. A Tab completes. A line
+		// end kept in a bracketed paste is on several rows.
+		t.aheadMixed = true
 	}
 	t.aheadText += s
-}
-
-// shownAhead reports a key that, left unread by a command and read by
-// the shell at its next prompt, shows on the line there or does nothing:
-// measured with bash 3.2 and zsh 5.9, each key typed while a command ran
-// and a line typed at the prompt after. Up recalls a command; Page Up,
-// Page Down and Delete put a "~" there in zsh; Tab completes. The other
-// arrows, Home, End and the line-editing Ctrl keys change nothing on an
-// empty line, and Ctrl+R, Ctrl+U and Ctrl+W are the terminal's own line
-// editing (Ctrl+W ends a word at a space there, and zsh's at more). Ctrl+D ends the shell, or says it will not. In a local
-// terminal Ctrl+\ and Ctrl+Z are no signals: PowerShell shows "^\" or
-// undoes a character. Escape and Ctrl+X are not here: the shell waits for
-// the key after them with nothing shown, and the first character of the
-// next line went with them. Nor Alt with any key, which sends Escape.
-func shownAhead(ev uv.KeyPressEvent) bool {
-	switch ev.Mod {
-	case 0:
-		switch ev.Code {
-		case uv.KeyUp, uv.KeyDown, uv.KeyLeft, uv.KeyRight, uv.KeyHome, uv.KeyEnd,
-			uv.KeyPgUp, uv.KeyPgDown, uv.KeyDelete, uv.KeyTab, uv.KeyBackspace:
-			return true
-		}
-	case uv.ModCtrl:
-		switch ev.Code {
-		case 'a', 'b', 'd', 'e', 'f', 'h', 'k', 'l', 'r', 'u', 'w', '\\', 'z':
-			return true
-		}
-	}
-	return false
 }
 
 // lineEditingKey is a key the model may press at the shell's prompt:
@@ -2450,7 +2387,9 @@ func (t *Terminal) applySize() {
 		t.promptKnown = false
 		// Not read for what was typed while the command ran either: what
 		// the cut took is not on the screen to be read.
-		t.aheadJudge = false
+		if t.aheadJudge {
+			t.aheadJudge, t.personAfter = false, true
+		}
 	}
 	t.emu.Resize(cols, rows)
 	if atMark {

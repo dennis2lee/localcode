@@ -6,6 +6,7 @@ package sshterm
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // Alt+Enter, Alt+Ctrl+J, Alt+Ctrl+M and Alt+Ctrl+O while a command
@@ -105,9 +106,8 @@ func TestTextReadToTheLeftEdgeGoesOnAbove(t *testing.T) {
 	})
 }
 
-// A multi-line bracketed paste while a command runs stays
-// aheadTextOnly (or aheadShown with Tab / a shownAhead key) instead of
-// aheadUnknown, letting judgeAhead read row 2 as an empty prompt.
+// A bracketed paste over several lines while a command runs: its last row
+// can read as the prompt, and the rows above it are on the line.
 func TestABracketedPasteOverSeveralLinesIsTheirs(t *testing.T) {
 	t.Run("bracketed paste with Tab ending in prompt text", func(t *testing.T) {
 		s := playedFor(t, true)
@@ -211,60 +211,17 @@ func TestARightPromptStaysWhereItIsWhenTheTextIsErased(t *testing.T) {
 	allowed(t, s, "run once typed-ahead text is erased with a right prompt")
 }
 
-// A command the shell starts on its own (zsh's sched, a line it read
-// itself) starts with nothing left over of what was typed for the last
-// prompt: read at that prompt, or never read there because the model
-// typed too.
-func TestACommandTheShellStartsLeavesNothingOfTheLastReading(t *testing.T) {
-	t.Run("read at the last prompt", func(t *testing.T) {
-		s := playedFor(t, true)
-		s.commandRuns()
-		s.term.PersonInput(&PersonKey{Key: "Escape"}, "", "")
-		s.ended("", "")
-		refusedForThem(t, s, "run after Escape left for the shell")
-		s.prints("\r\n\x1b]133;C;lc=" + s.term.marks.nonce + "\x07")
-		s.term.PersonInput(nil, "q", "")
-		s.ended("", "")
-		allowed(t, s, "run after a key the next command read")
-	})
-	t.Run("not read, the person's Enter coming first", func(t *testing.T) {
-		// Enter at the new prompt before it is read: the line goes, and
-		// what is typed while it runs is the next one's.
-		s := playedFor(t, true)
-		s.commandRuns()
-		s.term.PersonInput(&PersonKey{Key: "Escape"}, "", "")
-		s.term.output([]byte(s.promptText(0)))
-		s.commandRuns()
-		s.term.PersonInput(nil, "q", "")
-		s.ended("", "")
-		allowed(t, s, "run after a key the next command read")
-	})
-	t.Run("not read, the model having typed too", func(t *testing.T) {
-		s := playedFor(t, true)
-		s.commandRuns()
-		s.term.PersonInput(&PersonKey{Key: "Escape"}, "", "")
-		if err := s.term.Type("x", false, s.term.PersonGen()); err != nil {
-			t.Fatal(err)
-		}
-		s.ended("x", "x")
-		refusedForThem(t, s, "run after both typed while the command ran")
-		s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
-		s.prints("^C\r\n" + s.promptText(130))
-		s.prints("\x1b]133;C;lc=" + s.term.marks.nonce + "\x07")
-		s.term.PersonInput(nil, "q", "")
-		s.ended("\r\n", "")
-		allowed(t, s, "run after a key the next command read")
-	})
-}
-
-// A prompt that ends in the last column leaves the cursor on its last
-// character. With nothing of what was typed after it, the line is empty.
-func TestAPromptToTheLastColumnWithNothingTypedOnIsEmpty(t *testing.T) {
+// Enter at the new prompt before it is read: the line goes, and what is
+// typed while it runs is the next one's.
+func TestEnterBeforeTheLineIsReadLeavesNothingOfIt(t *testing.T) {
 	s := playedFor(t, true)
 	s.commandRuns()
+	s.term.PersonInput(&PersonKey{Key: "Escape"}, "", "")
+	s.term.output([]byte(s.promptText(0)))
+	s.commandRuns()
 	s.term.PersonInput(nil, "q", "")
-	s.prints(s.promptText(0)[:len(s.promptText(0))-2] + strings.Repeat("p", DefaultCols-2) + "$ ")
-	allowed(t, s, "run at a prompt to the last column, after a key the command read")
+	s.ended("", "")
+	allowed(t, s, "run after a key the next command read")
 }
 
 // From the second review.
@@ -309,8 +266,9 @@ func TestWhatTheShellReadsAfterAFullScreenProgramIsJudgedAsAnywhere(t *testing.T
 	}
 }
 
-// The last column: the cursor stays on the last character there. Text in
-// it, one character or more, is the person's until erased.
+// The last column: the cursor sits there on the last character written or
+// over a blank cell, and the screen does not say which. Text that reaches
+// it is the person's until their Enter or Ctrl+C.
 func TestTheLastColumnIsReadAndErased(t *testing.T) {
 	s := playedFor(t, true)
 	prompt := strings.Repeat("p", DefaultCols-3) + "$ "
@@ -337,7 +295,10 @@ func TestTheLastColumnIsReadAndErased(t *testing.T) {
 	refusedForThem(t, s, "run onto text to the last column")
 	s.term.PersonInput(&PersonKey{Key: "u", Ctrl: true}, "", "")
 	s.prints("\r$ \x1b[K")
-	allowed(t, s, "run once the person cleared it")
+	refusedForThem(t, s, "run with it cleared: the last column is not read")
+	s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+	s.prints("^C\r\n" + s.promptText(130))
+	allowed(t, s, "run after the prompt their Ctrl+C brought")
 }
 
 // ASCII spaces the command read, at a prompt that is not the last one's:
@@ -455,17 +416,6 @@ func TestARecalledLineEndingLikeThePromptIsTheirs(t *testing.T) {
 	})
 }
 
-// Output that reaches the last column above the prompt is not a line the
-// prompt goes on from.
-func TestKeysReadAfterOutputToTheLastColumnLeaveTheLineEmpty(t *testing.T) {
-	s := playedFor(t, true)
-	s.commandRuns()
-	s.term.PersonInput(&PersonKey{Key: "ArrowDown"}, "", "")
-	s.term.PersonInput(nil, "q", "")
-	s.ended(strings.Repeat("-", DefaultCols)+"\r\n", "")
-	allowed(t, s, "run after keys the command read, with full-width command output above the prompt")
-}
-
 // A paste sent between bracketed paste's marks, left for a shell that has
 // not turned it on: it reads the marks as keys.
 func TestABracketedPasteLeftForAShellWithoutItIsTheirs(t *testing.T) {
@@ -497,4 +447,304 @@ func TestTheLastCharacterUnderTheCursorIsRead(t *testing.T) {
 	row := s.term.Snapshot().CursorY + 1
 	s.ended("", typed+"\x1b["+itoa(row)+";"+itoa(DefaultCols)+"H")
 	refusedForThem(t, s, "run onto text with the cursor placed on its last character")
+}
+
+// From the fourth review.
+
+// The model typing while a command the shell started from a line sent
+// ahead runs: what the person typed after that line is still theirs.
+func TestModelTypingDuringSentAheadCommandKeepsPersonsText(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		model func(s *playedShell) error
+	}{
+		{"Type", func(s *playedShell) error { return s.term.Type("y", false, s.term.PersonGen()) }},
+		{"Keys", func(s *playedShell) error { return s.term.Keys("y", s.term.PersonGen()) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(nil, "ask\rrm -rf x", "")
+			nonce := s.term.marks.nonce
+			// Command 1 ends; shell immediately starts "ask" (C mark), which
+			// prints a question so typeaheadOnly() is false.
+			s.prints("\r\n\x1b]133;D;0;lc=" + nonce + "\x07$ \x1b]133;C;lc=" + nonce + "\x07Continue? ")
+			if err := tc.model(s); err != nil {
+				t.Fatal(err)
+			}
+			// "ask" ends without reading stdin; shell draws both on the line.
+			s.ended("rm -rf xy\r\n", "rm -rf xy")
+			refusedForThem(t, s, "run onto person's text followed by model "+tc.name+" during sent-ahead command")
+		})
+	}
+}
+
+// A line sent ahead that runs longer than the wait for a prompt, in a
+// shell with no start mark (bash 3.2): what was typed after it is theirs at
+// the prompt after it.
+func TestTextAfterSlowSentAheadCommandWithoutStartMark(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	s.term.PersonInput(nil, "sleep 1\rrm -rf x", "")
+	// Command 1 finishes in bash 3.2 (no C mark); bash draws the prompt,
+	// echoes "sleep 1\r\n", and runs sleep 1 for > 150ms (simulated by prints/quiet).
+	s.prints("\r\n" + s.promptText(0) + "sleep 1\r\n")
+	// sleep 1 finishes and bash draws the prompt with the unsent text after it.
+	s.prints(s.promptText(0) + "rm -rf x")
+	refusedForThem(t, s, "run onto text typed after a slow sent-ahead command without a C mark")
+}
+
+// Ctrl+C to a command the shell started from a line sent ahead: the
+// terminal drops what waits, and the next prompt's line is empty.
+func TestCtrlCDuringSentAheadCommandClearsAheadJudge(t *testing.T) {
+	s := playedFor(t, true)
+	nonce := s.term.marks.nonce
+	emptyRowPrompt := "\x1b]133;D;0;lc=" + nonce + "\x07me@test\r\n"
+	s.prints("\r\n" + emptyRowPrompt)
+
+	s.commandRuns()
+	s.term.PersonInput(nil, "cat\rhello", "")
+	// Command 1 ends and the shell starts "cat" (C mark) with aheadJudge carried.
+	s.prints("\r\n" + emptyRowPrompt + "\x1b]133;C;lc=" + nonce + "\x07")
+	// Person interrupts "cat", dropping what was typed ahead.
+	s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+	// "cat" exits to a fresh prompt with nothing on the command line.
+	s.prints("^C\r\n" + emptyRowPrompt)
+	allowed(t, s, "run on an empty line after Ctrl+C during a sent-ahead command")
+}
+
+// A prompt that draws a right-hand part to the last column and puts the
+// cursor back: what was typed is still read.
+func TestSavedRestoredRightPromptAtLastColumnDoesNotHideTypedAheadText(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	typed := "rm -rf x"
+	s.term.PersonInput(nil, typed, "")
+	rprompt := "[main]"
+	pad := DefaultCols - 2 - len(typed) - len(rprompt)
+	// Shell draws "$ rm -rf x", saves cursor at col 10, draws right prompt
+	// flush to col DefaultCols-1 (setting atPhantom=true), and restores cursor
+	// to col 10 with ESC 8 (leaving atPhantom=true).
+	s.ended("", typed+"\x1b7"+strings.Repeat(" ", pad)+rprompt+"\x1b8")
+	refusedForThem(t, s, "run onto typed-ahead text when right prompt wrote last column between ESC 7 and ESC 8")
+}
+
+// A character a command left in the last column, and text ending one
+// column before it: the text is not taken for the prompt.
+func TestLeftoverCharInLastColumnDoesNotHideTextEndingBeforeIt(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	// "$ " (2) + 97 chars fill cols 0..98, leaving cursor at col 99
+	// over the '=' the progress line left there.
+	typed := "rm -rf x #" + strings.Repeat("a", DefaultCols-3-len("rm -rf x #"))
+	s.term.PersonInput(nil, typed, "")
+	s.ended(strings.Repeat("=", DefaultCols)+"\r", typed)
+	refusedForThem(t, s, "run onto typed-ahead text ending at Width()-2 when col Width()-1 has leftover output")
+}
+
+// A pseudo console that places the cursor on the last column, over a
+// space the person typed there.
+func TestTrailingSpaceInLastColumnWithCursorPlacedIsRead(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	typed := "rm -rf x" + strings.Repeat("a", DefaultCols-2-len("rm -rf x")-1) + " "
+	s.term.PersonInput(nil, typed, "")
+	row := s.term.Snapshot().CursorY + 1
+	s.ended("", typed+"\x1b["+itoa(row)+";"+itoa(DefaultCols)+"H")
+	refusedForThem(t, s, "run onto text ending with a space in the last column with cursor placed by CUP")
+}
+
+// zsh moving to a new row before its prompt (PROMPT_SP) after output with
+// no line end, then a recalled line or a paste over two rows ending in
+// "$ ".
+func TestZshPromptSPAfterPartialLineDoesNotHideRecalledOrPastedText(t *testing.T) {
+	// zsh PROMPT_SP sequence: "%" + (cols-1) spaces + CR + EL.
+	promptSP := "%" + strings.Repeat(" ", DefaultCols-1) + "\r\x1b[K"
+
+	t.Run("wrapped recalled command after partial-line command", func(t *testing.T) {
+		s := playedFor(t, true)
+		nonce := s.term.marks.nonce
+		// Command 1 outputs "hi" with no trailing newline; zsh PROMPT_SP wraps
+		s.commandRuns()
+		s.prints("hi\x1b]133;D;0;lc=" + nonce + "\x07" + promptSP + "$ ")
+
+		// Command 2 ends with a normal newline; ArrowUp recalls a 2-row line
+		// whose second row reads as "$ ".
+		s.commandRuns()
+		s.term.PersonInput(&PersonKey{Key: "ArrowUp"}, "", "")
+		recalled := "rm -rf x #" + strings.Repeat("a", DefaultCols-2-len("rm -rf x #")) + "$ "
+		s.prints("\x1b]133;D;0;lc=" + nonce + "\x07" + promptSP + "$ " + recalled)
+		refusedForThem(t, s, "run onto a wrapped recalled command after a partial-line command in zsh")
+	})
+
+	t.Run("multi-line bracketed paste after partial-line command", func(t *testing.T) {
+		s := playedFor(t, true)
+		nonce := s.term.marks.nonce
+		s.commandRuns()
+		s.prints("hi\x1b]133;D;0;lc=" + nonce + "\x07" + promptSP + "$ ")
+
+		s.commandRuns()
+		s.prints("\x1b[?2004h")
+		s.term.PersonInput(nil, "", "rm -rf x\r$ ")
+		s.prints("\x1b]133;D;0;lc=" + nonce + "\x07" + promptSP + "$ rm -rf x\r\n$ ")
+		refusedForThem(t, s, "run onto a multi-line bracketed paste after a partial-line command in zsh")
+	})
+}
+
+// Ctrl+L left for the shell with a recalled line: the screen is cleared
+// and the line drawn again from the top.
+func TestCtrlLTypedAheadDoesNotHideAWrappedLine(t *testing.T) {
+	t.Run("unsafe: ArrowUp + Ctrl+L with ED 2 and blank lines on screen", func(t *testing.T) {
+		s := playedFor(t, true)
+		s.commandRuns()
+		// Three blank lines put markY at row 4 with only row 0 non-empty.
+		s.prints("\r\n\r\n\r\n")
+		s.term.PersonInput(&PersonKey{Key: "ArrowUp"}, "", "")
+		s.term.PersonInput(&PersonKey{Key: "l", Ctrl: true}, "", "")
+		recalled := "rm -rf x #" + strings.Repeat("a", DefaultCols-2-len("rm -rf x #")) + "$ "
+		// Shell draws "$ " + recalled (rows 4 and 5 non-empty: 3 non-empty rows
+		// total), then Ctrl+L sends \x1b[H\x1b[2J (pushing 3 lines to scrollback)
+		s.ended("", recalled+"\x1b[H\x1b[2J$ "+recalled)
+		refusedForThem(t, s, "run onto a wrapped recalled line redrawn by Ctrl+L (ED 2)")
+	})
+
+	t.Run("unsafe: ArrowUp + Ctrl+L with ED 0", func(t *testing.T) {
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(&PersonKey{Key: "ArrowUp"}, "", "")
+		s.term.PersonInput(&PersonKey{Key: "l", Ctrl: true}, "", "")
+		recalled := "rm -rf x #" + strings.Repeat("a", DefaultCols-2-len("rm -rf x #")) + "$ "
+		// \x1b[H\x1b[J does not push to scrollback; redrawn line ends at row 1,
+		s.ended("", recalled+"\x1b[H\x1b[J$ "+recalled)
+		refusedForThem(t, s, "run onto a wrapped recalled line redrawn by Ctrl+L (ED 0)")
+	})
+
+}
+
+// A single-line bracketed paste while a command runs, for a shell with
+// bracketed paste on: drawn as text after the prompt, erased, the line
+// should read as empty again.
+func TestBracketedPasteErasedIsEmpty(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	s.prints("\x1b[?2004h")
+	s.term.PersonInput(nil, "", "ls")
+	s.ended("", "ls")
+	refusedForThem(t, s, "run onto bracketed paste text")
+	s.erase(2)
+	allowed(t, s, "run once bracketed paste text is erased")
+}
+
+// Text typed ahead, the command's output without a newline, a slow prompt:
+// the mark is mid-row, and the line must not read as empty before the
+// prompt arrives.
+func TestSlowPromptMidRowWithTypeahead(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	s.term.PersonInput(nil, "x", "")
+	s.term.output([]byte("hi\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07"))
+	s.term.mu.Lock()
+	s.term.markAt = time.Now().Add(-3 * time.Second)
+	s.term.mu.Unlock()
+	s.quiet()
+	refusedForThem(t, s, "run before a slow prompt drew what waited, mark mid-row")
+	s.prints("\r\n$ x")
+	refusedForThem(t, s, "run onto text a slow prompt drew")
+}
+
+// The hold, and what clears it, across a mark: a command the shell starts
+// on its own comes between the prompt the person typed for and the next.
+
+// startsOnItsOwn is the shell starting a command the terminal did not
+// start (zsh's sched, a line sent ahead): its start mark.
+func (s *playedShell) startsOnItsOwn() {
+	s.prints("\r\n\x1b]133;C;lc=" + s.term.marks.nonce + "\x07")
+}
+
+func TestTheHoldOutlastsACommandTheShellStarts(t *testing.T) {
+	t.Run("text never read at its prompt", func(t *testing.T) {
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "x", "")
+		s.term.output([]byte(s.promptText(0) + "x"))
+		s.startsOnItsOwn()
+		s.ended("", "x")
+		refusedForThem(t, s, "run onto text never read at its prompt")
+	})
+	t.Run("text the screen could not be read for", func(t *testing.T) {
+		// The cursor in the last column.
+		s := playedFor(t, true)
+		s.commandRuns()
+		typed := strings.Repeat("a", DefaultCols-3)
+		s.term.PersonInput(nil, typed, "")
+		s.ended("", typed)
+		refusedForThem(t, s, "run onto text to the last column")
+		s.startsOnItsOwn()
+		s.ended("", typed)
+		refusedForThem(t, s, "run onto it after a command the shell started")
+	})
+	t.Run("text a smaller terminal cut before it was read", func(t *testing.T) {
+		s := playedFor(t, true)
+		for i := 0; i < MinRows+2; i++ {
+			s.prints("line\r\n")
+		}
+		s.commandRuns()
+		s.term.PersonInput(nil, "rm -rf x", "")
+		s.term.output([]byte("\r\n" + s.promptText(0) + "rm -rf x"))
+		s.term.ViewerSize("v", DefaultCols, MinRows)
+		s.quiet()
+		s.startsOnItsOwn()
+		s.ended("", "rm -rf x")
+		refusedForThem(t, s, "run onto text a resize cut, after a command the shell started")
+	})
+	t.Run("a line end sent with the Enter key, and text after it", func(t *testing.T) {
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "pwd", "")
+		s.term.PersonInput(&PersonKey{Key: "Enter"}, "", "")
+		s.term.PersonInput(nil, "x", "")
+		// The prompt, with the line sent ahead drawn on it, read before the
+		// shell runs that line.
+		s.prints("\r\n" + s.promptText(0) + "pwd")
+		s.prints("\r\npwd-output\r\n" + s.promptText(0) + "x")
+		refusedForThem(t, s, "run onto text typed after a line sent with Enter")
+	})
+}
+
+func TestWhatClearsTheHoldAcrossACommandTheShellStarts(t *testing.T) {
+	t.Run("the model's Ctrl+C to it", func(t *testing.T) {
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(&PersonKey{Key: "Escape"}, "", "")
+		s.ended("", "")
+		refusedForThem(t, s, "run after a key left for the shell")
+		s.startsOnItsOwn()
+		if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
+			t.Fatal(err)
+		}
+		s.ended("^C\r\n", "")
+		allowed(t, s, "run after the model's Ctrl+C to the command")
+	})
+	t.Run("a line sent ahead with nothing after it", func(t *testing.T) {
+		// The line runs; what is typed while it runs is the next prompt's,
+		// and read as at any.
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "pwd\r", "")
+		s.term.output([]byte("\r\n" + s.promptText(0)))
+		s.startsOnItsOwn()
+		s.term.PersonInput(nil, "q", "")
+		s.ended("pwd-output\r\n", "")
+		allowed(t, s, "run after a key the next command read")
+	})
+	t.Run("the person's Enter before the text was read", func(t *testing.T) {
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "x", "")
+		s.term.output([]byte(s.promptText(0) + "x"))
+		s.commandRuns()
+		s.term.PersonInput(nil, "q", "")
+		s.ended("", "")
+		allowed(t, s, "run after the line was sent and the next command read a key")
+	})
 }

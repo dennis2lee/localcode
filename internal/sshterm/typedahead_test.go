@@ -215,8 +215,10 @@ func TestTextTypedWhileACommandRanIsOnTheNextLine(t *testing.T) {
 }
 
 func TestKeysTypedWhileACommandRan(t *testing.T) {
-	t.Run("read by the command, the prompt as the last one", func(t *testing.T) {
-		// Arrows and Page Down to a pager.
+	t.Run("read by the command", func(t *testing.T) {
+		// Arrows and Page Down to a pager: what the shell would make of a
+		// key left for it the screen cannot be read for, so the line is
+		// theirs until their Enter or Ctrl+C, read by the command or not.
 		s := playedFor(t, true)
 		s.commandRuns()
 		for _, k := range []string{"ArrowDown", "PageDown", "ArrowUp"} {
@@ -224,18 +226,10 @@ func TestKeysTypedWhileACommandRan(t *testing.T) {
 		}
 		s.term.PersonInput(nil, "q", "")
 		s.ended("", "")
-		allowed(t, s, "run after keys the command read")
-	})
-	t.Run("read by the command, at a prompt over two rows", func(t *testing.T) {
-		// The prompt ends a row below its mark, as the last one did.
-		s := playedFor(t, true)
-		two := s.promptText(0)[:len(s.promptText(0))-2] + "me@test\r\n$ "
-		s.prints("\r\n" + two)
-		s.commandRuns()
-		s.term.PersonInput(&PersonKey{Key: "ArrowDown"}, "", "")
-		s.term.PersonInput(nil, "q", "")
-		s.prints(two)
-		allowed(t, s, "run after keys the command read, at a two-row prompt")
+		refusedForThem(t, s, "run after keys typed while the command ran")
+		s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+		s.prints("^C\r\n" + s.promptText(130))
+		allowed(t, s, "run after the prompt their Ctrl+C brought")
 	})
 	t.Run("left for the shell, which drew what they did", func(t *testing.T) {
 		// Up: the shell put the last command on the line.
@@ -309,6 +303,17 @@ func TestKeysTypedWhileACommandRan(t *testing.T) {
 			allowed(t, s, "run after the prompt their Ctrl+C brought")
 		}
 	})
+}
+
+// Ctrl+D to a command that reads input (cat, a REPL), at the start of a
+// line: the end of its input, nothing left for the shell.
+func TestCtrlDToACommandEndsItsInput(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	s.term.PersonInput(nil, "hello\r", "")
+	s.term.PersonInput(&PersonKey{Key: "d", Ctrl: true}, "", "")
+	s.ended("hello\r\nhello\r\n", "")
+	allowed(t, s, "run after Ctrl+D ended a command's input")
 }
 
 // A line end sends what was typed before it to whatever reads it, and a
