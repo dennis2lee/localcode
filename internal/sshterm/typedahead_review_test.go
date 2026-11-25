@@ -52,10 +52,12 @@ func TestASmallerScreenBeforeTheLineIsReadKeepsItTheirs(t *testing.T) {
 
 	t.Run("shorter screen cuts off cursor row before settle", func(t *testing.T) {
 		s := playedFor(t, true)
-		// Rows that end as the prompt does: the cut is what holds.
+		// Rows that end as the prompt does, and a prompt after them to
+		// compare with: the cut is what holds.
 		for i := 0; i < MinRows+2; i++ {
 			s.prints("line$\r\n")
 		}
+		s.prints(s.promptText(0))
 		s.commandRuns()
 		s.term.PersonInput(nil, "rm -rf x", "")
 		// Cursor lands below MinRows, with typed-ahead text; settle has not run yet.
@@ -690,6 +692,7 @@ func TestTheHoldOutlastsACommandTheShellStarts(t *testing.T) {
 		for i := 0; i < MinRows+2; i++ {
 			s.prints("line$\r\n")
 		}
+		s.prints(s.promptText(0))
 		s.commandRuns()
 		s.term.PersonInput(nil, "rm -rf x", "")
 		s.term.output([]byte("\r\n" + s.promptText(0) + "rm -rf x"))
@@ -1167,6 +1170,25 @@ func TestTextNotDrawnAsTypedHoldsTheLine(t *testing.T) {
 			s.term.PersonInput(nil, c.typed, "")
 			s.prints(mark + "> " + c.drawn)
 			refusedForThem(t, s, "run onto "+c.name+" at a prompt ending in >")
+		})
+	}
+	// A character the terminal puts in the cell before it, the prompt's
+	// last space when it comes first: erasing what follows it leaves it on
+	// the line, and the prompt read off the row would have it. (From the
+	// tenth review.)
+	for _, c := range []struct{ name, ch string }{
+		{"Thai SARA AM", "\u0e33"},
+		{"a half-width voiced mark", "\uff9e"},
+		{"an emoji skin tone", "\U0001f3fd"},
+	} {
+		t.Run(c.name+" first", func(t *testing.T) {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(nil, c.ch+"x", "")
+			s.ended("", c.ch+"x")
+			refusedForThem(t, s, "run onto text starting with "+c.name)
+			s.erase(1)
+			refusedForThem(t, s, "run onto "+c.name+" left after erasing what followed it")
 		})
 	}
 	// Hangul jamo alone (U+1160, U+1161) too, measured in both shells.

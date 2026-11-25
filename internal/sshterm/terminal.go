@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -2194,16 +2195,28 @@ func (t *Terminal) aheadTyped(s string, bracketed bool) {
 // drawnAsTyped is text a shell draws as it was typed, each character in a
 // cell of its own (two for a wide one), so the screen can be read for it.
 // A character that is not graphic (U+200B, U+FEFF, a soft hyphen, private
-// use) or that marks the one before it (a combining accent, an emoji's
-// variation selector) is not: bash draws it as it is, in no cell of its
-// own, and zsh draws markup (<200b>), measured.
+// use) is not: bash draws it as it is, in no cell of its own, and zsh
+// draws markup (<200b>), measured. Nor is one the terminal puts in one
+// cell with the character before it (joinsTheOneBefore): a combining
+// accent (zsh draws <0301>), an emoji's variation selector or skin tone,
+// Thai SARA AM.
 func drawnAsTyped(s string) bool {
 	for _, r := range s {
-		if !unicode.IsGraphic(r) || unicode.IsMark(r) {
+		if !unicode.IsGraphic(r) || joinsTheOneBefore(r) {
 			return false
 		}
 	}
 	return true
+}
+
+// joinsTheOneBefore is a character the terminal puts in one cell with the
+// character before it, as one grapheme: an emoji's skin tone, Thai SARA
+// AM, a half-width voiced mark. Drawn first after a prompt, it is in the
+// cell of the prompt's last space, and the prompt read off the row would
+// have it.
+func joinsTheOneBefore(r rune) bool {
+	c, _ := ansi.FirstGraphemeCluster(" "+string(r), ansi.GraphemeWidth)
+	return c != " "
 }
 
 // lineEditingKey is a key the model may press at the shell's prompt:
