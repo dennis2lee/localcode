@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,6 +42,28 @@ func browserDaemon(t *testing.T) (*Daemon, *httptest.Server, string) {
 		t.Fatal(err)
 	}
 	return d, srv, "b1"
+}
+
+// whenStarted sends a test's first request that starts the browser again
+// while the answer is that the browser is still starting, as a person
+// would click again, and returns the first other answer with its body
+// still to read. The first start of the browser on a machine took up to
+// 73 seconds on a CI runner (see browser.startFor), and a request waits
+// for at most 45 of them.
+func whenStarted(t *testing.T, send func() *http.Response) *http.Response {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Minute)
+	for {
+		resp := send()
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		starting := resp.StatusCode == http.StatusServiceUnavailable && strings.Contains(string(body), browser.ErrStarting.Error())
+		if !starting || time.Now().After(deadline) {
+			return resp
+		}
+		t.Logf("the browser is still starting; asking again")
+	}
 }
 
 func postBrowserJSON(t *testing.T, url string, body any) *http.Response {
@@ -128,7 +151,9 @@ func TestThePanelDrivesThePage(t *testing.T) {
 	defer site.Close()
 	base := srv.URL + "/api/sessions/" + id + "/browser"
 
-	resp := postBrowserJSON(t, base+"/navigate", map[string]string{"url": site.URL})
+	resp := whenStarted(t, func() *http.Response {
+		return postBrowserJSON(t, base+"/navigate", map[string]string{"url": site.URL})
+	})
 	var nav struct{ URL, Title string }
 	json.NewDecoder(resp.Body).Decode(&nav)
 	resp.Body.Close()
@@ -227,7 +252,9 @@ func TestThePanelCannotOpenADeniedPage(t *testing.T) {
 	d.Loop.Config.Permissions = config.Permissions{agent.BrowserToolName: config.ToolPermission{Rules: []config.PermissionRule{
 		{Match: "*/blocked*", Decision: config.DecisionDeny},
 	}}}
-	resp := postBrowserJSON(t, srv.URL+"/api/sessions/"+id+"/browser/navigate", map[string]string{"url": site.URL + "/blocked"})
+	resp := whenStarted(t, func() *http.Response {
+		return postBrowserJSON(t, srv.URL+"/api/sessions/"+id+"/browser/navigate", map[string]string{"url": site.URL + "/blocked"})
+	})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("the panel's navigate to a denied page = %d, want 403", resp.StatusCode)

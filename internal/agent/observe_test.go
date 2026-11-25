@@ -218,16 +218,24 @@ func TestATurnKeepsTheSmartAgentStateItStartedUnder(t *testing.T) {
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		if n == 0 {
+			// Off, while the turn is still running: both switches, the
+			// turn log's and the roster's. The turn is running because its
+			// first request is here, and the switches go off before a byte
+			// of the answer is written, so everything the turn does with
+			// that answer (the tool call, the second round, its end) and
+			// the turn after it come after the change. Switched off after
+			// the answer was flushed, this handler raced the whole rest of
+			// the turn: held up for a few milliseconds on a loaded runner,
+			// it let the turn finish and the next one start with both
+			// switches still on (the ubuntu gate, 2026-11-24).
+			loop.SetSmartAgentEnabled(false)
+			loop.SetOrchestrateEnabled(false)
 			// The first round asks for a tool, which is what puts the
 			// turn into the loop where the switch used to be re-read.
 			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"glob","arguments":"{\"pattern\":\"*.go\"}"}}]}}]}`+"\n\n")
 			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
 			fmt.Fprint(w, "data: [DONE]\n\n")
 			w.(http.Flusher).Flush()
-			// Off, while the turn is still running: both switches, the
-			// turn log's and the roster's.
-			loop.SetSmartAgentEnabled(false)
-			loop.SetOrchestrateEnabled(false)
 			return
 		}
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n")

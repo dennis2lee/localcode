@@ -63,6 +63,10 @@ type Manager struct {
 	opts Options
 
 	startMu sync.Mutex
+	// launch is the start of the browser under way, nil when none is:
+	// every caller that wants the browser while it runs waits on it. See
+	// running.
+	launch *launch
 
 	mu         sync.Mutex
 	proc       *process
@@ -755,17 +759,109 @@ func (m *Manager) existingLocked(conv string) *Tab {
 	return nil
 }
 
-// running returns the browser, starting it if it is not running. One
-// start at a time (startMu); m.mu only around reading and setting which
-// browser there is, never across the start itself, which copies a
-// profile, launches a process and makes the first CDP calls.
+// ErrStarting is a caller that stopped waiting for the browser while it
+// was still starting. The start goes on, and a later call finds the
+// browser it started.
+var ErrStarting = errors.New("the browser is still starting; try again in a moment")
+
+// startFor bounds one start of the browser: from launching it to a
+// connection to it. A browser that is not listening by then is not
+// coming, and is killed.
+//
+// Measured on fresh GitHub runners (2026-11-25, 187 first starts): the
+// first start of the browser on a machine opened its debugging port in
+// 0.4 to 49 seconds on its own, and in up to 73 seconds beside the test
+// suite (seven of 21 Windows starts took over 30). Every later start on
+// the same machine took under 2 seconds. It was 30 seconds, and a start
+// that outlasted it was killed while it was coming up.
+const startFor = 3 * time.Minute
+
+// launch is one start of the browser, which every caller that wants the
+// browser while it runs waits on: see running.
+type launch struct {
+	done   chan struct{} // closed once the start has ended
+	cancel context.CancelFunc
+	p      *process // set before done is closed: the browser, or nil
+	err    error    // why p is nil
+}
+
+// running returns the browser, starting it if it is not running.
+//
+// The start is the browser's, not the caller's. A caller waits for it as
+// long as its own ctx allows, and is told ErrStarting when that ends
+// first; the start goes on, up to startFor, and the next caller finds the
+// browser it started. A start bound to the caller that asked for it was
+// killed when that caller stopped waiting: the panel's request gives up
+// after 45 seconds, the first start on a busy machine took longer, and
+// every click started the browser again from the beginning.
+//
+// One start at a time: a caller that comes while one runs waits on that
+// one.
+func (m *Manager) running(ctx context.Context) (*process, error) {
+	m.mu.Lock()
+	if m.alive() {
+		p := m.proc
+		m.mu.Unlock()
+		return p, nil
+	}
+	l := m.launch
+	if l == nil {
+		lctx, cancel := context.WithTimeout(context.Background(), startFor)
+		l = &launch{done: make(chan struct{}), cancel: cancel}
+		m.launch = l
+		go m.startUp(lctx, l)
+	}
+	m.mu.Unlock()
+	select {
+	case <-l.done:
+		return l.p, l.err
+	case <-ctx.Done():
+		return nil, ErrStarting
+	}
+}
+
+// startUp starts the browser for l and publishes it, under startMu so
+// that a close or a profile copy waits for it. Not called with m.mu.
+func (m *Manager) startUp(ctx context.Context, l *launch) {
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+	p, err := m.startLocked(ctx)
+	m.mu.Lock()
+	if err == nil {
+		m.proc = p
+	}
+	l.p, l.err = p, err
+	if m.launch == l {
+		m.launch = nil
+	}
+	m.mu.Unlock()
+	l.cancel()
+	close(l.done)
+}
+
+// stopStart calls off a start under way, if there is one: see Close.
+func (m *Manager) stopStart() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.launch != nil {
+		m.launch.cancel()
+	}
+}
+
+// startLocked replaces a browser that went away with a new one, which it
+// returns for startUp to publish. Called with startMu; m.mu only around
+// reading and setting which browser there is, never across the start
+// itself, which copies a profile, launches a process and makes the first
+// CDP calls.
 //
 // The new browser is published only once it is guarded and its targets
 // are followed: a tab opened on it before then would load pages the deny
 // rules had not been asked about.
-func (m *Manager) running(ctx context.Context) (*process, error) {
-	m.startMu.Lock()
-	defer m.startMu.Unlock()
+func (m *Manager) startLocked(ctx context.Context) (*process, error) {
+	// Called off (a close, a profile copy) before its turn came.
+	if ctx.Err() != nil {
+		return nil, errStartStopped
+	}
 	m.mu.Lock()
 	old := m.proc
 	if old != nil && m.alive() {
@@ -801,9 +897,6 @@ func (m *Manager) running(ctx context.Context) (*process, error) {
 	}
 	m.watchTargets(p)
 	m.guard(p)
-	m.mu.Lock()
-	m.proc = p
-	m.mu.Unlock()
 	return p, nil
 }
 
@@ -852,7 +945,9 @@ func writeProfileName(dir, name string, imported bool) error {
 // profile cannot be replaced under a running browser; every
 // conversation's tab closes with it, and the next use starts afresh.
 func (m *Manager) Import() (ImportReport, error) {
-	// No start while the profile is replaced under it.
+	// No start while the profile is replaced under it: one under way is
+	// called off rather than waited for.
+	m.stopStart()
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
 	m.stop()
@@ -1632,9 +1727,11 @@ func (m *Manager) dropLocked(conv string) *convTabs {
 	return c
 }
 
-// Close quits the browser. After a start in progress, which would
-// otherwise publish a browser after it was closed.
+// Close quits the browser. A start under way is called off first, and
+// waited for, since it would otherwise publish a browser after it was
+// closed.
 func (m *Manager) Close() {
+	m.stopStart()
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
 	m.stop()

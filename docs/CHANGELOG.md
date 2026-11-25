@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.180.3
+## v0.180.4
 
 An SSH or PowerShell terminal no longer types a `run` onto what you typed while the command before it ran.
 
@@ -10,6 +10,14 @@ An SSH or PowerShell terminal no longer types a `run` onto what you typed while 
 * That text yours on the line until you erase it, send it or press Ctrl+C, and the line empty again once it is erased
 * Text the command read (`q` to a pager, a key to a question) leaving the line empty
 * A key that is not text, typed while a command ran, keeping the line yours until your Enter or Ctrl+C: the screen cannot say what the shell made of it, and Escape left for the shell took the first character of the `run`
+
+## v0.180.3
+
+A browser slow to start finishes starting.
+
+**Fixed**
+
+* A browser slow to start no longer stopped after 30 seconds and started again at the next click: the start runs up to 3 minutes, and a request that cannot wait for it is told the browser is still starting
 
 ## v0.180.2
 

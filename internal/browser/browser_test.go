@@ -3,11 +3,13 @@ package browser
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -316,6 +318,52 @@ func TestAStartClosesTheBrowserAnEarlierRunLeft(t *testing.T) {
 	case <-left.exited:
 	case <-time.After(10 * time.Second):
 		t.Error("the browser the earlier run left is still running")
+	}
+}
+
+// A start of the browser is the browser's, not the caller's. A caller
+// that stops waiting is told the browser is still starting, the start
+// goes on, and the next caller gets the browser it started, with no
+// second start. Bound to the caller, a start that outlasted it was
+// killed: the first start on a busy machine took up to 73 seconds, the
+// panel's request gives up after 45, and every click started the browser
+// again from the beginning.
+func TestAStartOutlastsTheCallerThatAskedForIt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a browser")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("the slow browser is a shell script")
+	}
+	install, err := Find("")
+	if err != nil {
+		t.Skip("no Chrome or Edge here")
+	}
+	// The browser, two seconds late to start, counting its starts.
+	starts := filepath.Join(t.TempDir(), "starts")
+	slow := filepath.Join(t.TempDir(), "slow-browser")
+	script := fmt.Sprintf("#!/bin/sh\necho start >> '%s'\nsleep 2\nexec '%s' \"$@\"\n", starts, install.Path)
+	if err := os.WriteFile(slow, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, profileNameFile), []byte("Default\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(Options{ChromePath: slow, DataDir: dir})
+	t.Cleanup(m.Close)
+
+	impatient, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := m.Tab(impatient, "c1"); !errors.Is(err, ErrStarting) {
+		t.Fatalf("a caller that stopped waiting was told %v, want that the browser is still starting", err)
+	}
+	if _, err := m.Tab(ctxFor(t), "c1"); err != nil {
+		t.Fatalf("the next caller: %v", err)
+	}
+	data, _ := os.ReadFile(starts)
+	if n := strings.Count(string(data), "start"); n != 1 {
+		t.Errorf("the browser was started %d times, want once", n)
 	}
 }
 
