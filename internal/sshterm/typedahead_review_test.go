@@ -490,8 +490,11 @@ func TestTextAfterSlowSentAheadCommandWithoutStartMark(t *testing.T) {
 }
 
 // Ctrl+C to a command the shell started from a line sent ahead: the
-// terminal drops what waits, and the next prompt's line is empty.
-func TestCtrlCDuringSentAheadCommandClearsAheadJudge(t *testing.T) {
+// terminal drops what waits, and the next prompt's line is empty. It is
+// held all the same: the terminal cannot tell text that waited behind a
+// line sent ahead from text after a line a command read, which the shell
+// has on its line (the seventh review). Accepted.
+func TestCtrlCDuringSentAheadCommandKeepsTheHold(t *testing.T) {
 	s := playedFor(t, true)
 	nonce := s.term.marks.nonce
 	emptyRowPrompt := "\x1b]133;D;0;lc=" + nonce + "\x07me@test\r\n"
@@ -499,13 +502,13 @@ func TestCtrlCDuringSentAheadCommandClearsAheadJudge(t *testing.T) {
 
 	s.commandRuns()
 	s.term.PersonInput(nil, "cat\rhello", "")
-	// Command 1 ends and the shell starts "cat" (C mark) with aheadJudge carried.
+	// Command 1 ends and the shell starts "cat" (C mark).
 	s.prints("\r\n" + emptyRowPrompt + "\x1b]133;C;lc=" + nonce + "\x07")
 	// Person interrupts "cat", dropping what was typed ahead.
 	s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
 	// "cat" exits to a fresh prompt with nothing on the command line.
 	s.prints("^C\r\n" + emptyRowPrompt)
-	allowed(t, s, "run on an empty line after Ctrl+C during a sent-ahead command")
+	refusedForThem(t, s, "run on an empty line after Ctrl+C during a sent-ahead command")
 }
 
 // A prompt that draws a right-hand part to the last column and puts the
@@ -715,20 +718,6 @@ func TestTheHoldOutlastsACommandTheShellStarts(t *testing.T) {
 }
 
 func TestWhatClearsTheHoldAcrossACommandTheShellStarts(t *testing.T) {
-	t.Run("the model's Ctrl+C to the line sent ahead", func(t *testing.T) {
-		// What was typed after the line waited in the terminal while the
-		// shell ran it, and the signal dropped it.
-		s := playedFor(t, true)
-		s.commandRuns()
-		s.term.PersonInput(nil, "cat\rx", "")
-		s.prints("\r\n" + s.promptText(0) + "cat")
-		s.startsOnItsOwn()
-		if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
-			t.Fatal(err)
-		}
-		s.ended("^C\r\n", "")
-		allowed(t, s, "run after the model's Ctrl+C to the line sent ahead")
-	})
 	t.Run("a signal after a line sent ahead, and text the command read", func(t *testing.T) {
 		// A command that lives through the signal (a REPL) reads what is
 		// typed after it: nothing of the line before the signal is left.
@@ -765,11 +754,13 @@ func TestWhatClearsTheHoldAcrossACommandTheShellStarts(t *testing.T) {
 }
 
 // A signal key while a command runs drops what waits in the terminal, and
-// not what the shell keeps on its line: text drawn at the prompt before a
-// command the shell started, a key left for the shell, the line Ctrl+O
-// brings back (zsh does after a Ctrl+C to the command, measured). From the
-// sixth review, which found the signal dropping all of them.
-func TestASignalLeavesWhatTheShellKeeps(t *testing.T) {
+// leaves the hold: the shell keeps text drawn at the prompt before a
+// command it started, a key left for it, the line Ctrl+O brings back (zsh
+// does after a Ctrl+C to the command, measured), and the terminal cannot
+// tell text that waited behind a line sent ahead from text after a line a
+// command read. On the alternate screen a full-screen program reads the
+// key raw, and nothing is dropped. From the sixth and seventh reviews.
+func TestASignalToACommandLeavesTheHold(t *testing.T) {
 	signal := func(t *testing.T, s *playedShell, who, key string) {
 		t.Helper()
 		if who == "person" {
@@ -820,28 +811,62 @@ func TestASignalLeavesWhatTheShellKeeps(t *testing.T) {
 			s.ended("^C\r\n", "echo next")
 			refusedForThem(t, s, "run onto the line Ctrl+O brought back past the "+who+"'s Ctrl+C")
 		})
-		t.Run(who+"/text after a line sent ahead, then typed on at the prompt", func(t *testing.T) {
-			// The shell has it on its line once it is drawn there.
+		t.Run(who+"/text after a line end a command read", func(t *testing.T) {
 			s := playedFor(t, true)
 			s.commandRuns()
-			s.term.PersonInput(nil, "cat\rx", "")
-			s.prints("\r\n" + s.promptText(0) + "x")
-			s.term.PersonInput(nil, "y", "")
+			s.term.PersonInput(nil, "y\rrm -rf x", "")
+			s.ended("y\r\nrm -rf x", "rm -rf x")
 			s.startsOnItsOwn()
 			signal(t, s, who, "c")
-			s.ended("^C\r\n", "xy")
-			refusedForThem(t, s, "run onto text typed on at the prompt, past the "+who+"'s Ctrl+C")
+			s.ended("^C\r\n", "rm -rf x")
+			refusedForThem(t, s, "run onto text on the shell's line past the "+who+"'s Ctrl+C")
 		})
-		t.Run(who+"/text after a line sent ahead, then Ctrl+O at the prompt", func(t *testing.T) {
+		t.Run(who+"/Ctrl+O, and text after a line end the command read", func(t *testing.T) {
+			s := playedFor(t, true)
+			s.term.PersonInput(nil, "read x", "")
+			s.term.PersonInput(&PersonKey{Key: "o", Ctrl: true}, "", "")
+			s.term.PersonInput(nil, "y\rfoo", "")
+			s.ended("read x\r\ny\r\nfoo", "echo nextfoo")
+			s.startsOnItsOwn()
+			signal(t, s, who, "c")
+			s.ended("^C\r\n", "echo nextfoo")
+			refusedForThem(t, s, "run onto the line Ctrl+O brought back and text past the "+who+"'s Ctrl+C")
+		})
+		t.Run(who+"/a reading still to come, and a line end a command read", func(t *testing.T) {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(nil, "rm -rf x", "")
+			s.term.output([]byte(s.promptText(0) + "rm -rf x"))
+			s.startsOnItsOwn()
+			s.term.PersonInput(&PersonKey{Key: "Enter"}, "", "")
+			s.ended("\r\n", "rm -rf x")
+			s.startsOnItsOwn()
+			signal(t, s, who, "c")
+			s.ended("^C\r\n", "rm -rf x")
+			refusedForThem(t, s, "run onto text still to be read past the "+who+"'s Ctrl+C")
+		})
+		t.Run(who+"/text after a line sent ahead", func(t *testing.T) {
+			// What waited behind the line is dropped, and the line is held.
 			s := playedFor(t, true)
 			s.commandRuns()
 			s.term.PersonInput(nil, "cat\rx", "")
-			s.prints("\r\n" + s.promptText(0) + "x")
-			s.term.PersonInput(&PersonKey{Key: "o", Ctrl: true}, "", "")
-			s.prints("\r\n\x1b]133;C;lc=" + s.term.marks.nonce + "\x07")
+			s.prints("\r\n" + s.promptText(0) + "cat")
+			s.startsOnItsOwn()
 			signal(t, s, who, "c")
-			s.ended("^C\r\n", "echo next")
-			refusedForThem(t, s, "run onto the line Ctrl+O brought back past the "+who+"'s Ctrl+C")
+			s.ended("^C\r\n", "")
+			refusedForThem(t, s, "run after the "+who+"'s Ctrl+C to the line sent ahead")
+		})
+		t.Run(who+"/Ctrl+Z to a full-screen program, and text left for the shell", func(t *testing.T) {
+			// The Tab still counts: no signal dropped it. The shell
+			// completed the name.
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.prints("\x1b[?1049h")
+			s.term.PersonInput(nil, "rm -rf x\t", "")
+			signal(t, s, who, "z")
+			s.prints("\x1b[?1049l")
+			s.ended("", "rm -rf xyz")
+			refusedForThem(t, s, "run onto text left after the "+who+"'s Ctrl+Z on the alternate screen")
 		})
 		t.Run(who+"/Ctrl+C to a full-screen program Ctrl+O ran", func(t *testing.T) {
 			// The program reads the key, and no signal comes of it.
@@ -906,7 +931,7 @@ func TestEnterInAFullScreenProgramIsItsOwn(t *testing.T) {
 // a prompt drawn, not none.
 func TestAPromptAfterAScrollIsNotTheMark(t *testing.T) {
 	s := playedFor(t, true)
-	s.prints(strings.Repeat("line\r\n", DefaultRows))
+	s.prints(strings.Repeat("line\r\n", DefaultRows) + s.promptText(0))
 	s.commandRuns()
 	s.term.PersonInput(nil, "q", "")
 	// Command prints 2 chars (same width as "$ ") on the bottom row without a
@@ -1088,7 +1113,7 @@ func TestCtrlUAfterABracketedPasteKillsIt(t *testing.T) {
 // accent). bash draws it as it is, in no cell of its own, and zsh draws
 // markup, measured; the screen cannot be read for the text either way.
 // Text that is drawn as typed, Hangul decomposed as macOS file names are
-// among it, is read as any.
+// and jamo alone among it, is read as any.
 func TestTextNotDrawnAsTypedHoldsTheLine(t *testing.T) {
 	for _, c := range []struct{ name, typed, drawn string }{
 		{"U+200B, bash", "rm -rf x\u200b", "rm -rf x\u200b"},
@@ -1105,7 +1130,24 @@ func TestTextNotDrawnAsTypedHoldsTheLine(t *testing.T) {
 			refusedForThem(t, s, "run onto "+c.name+" typed while the command ran")
 		})
 	}
-	for _, typed := range []string{"\u1112\u1161\u11ab", "한"} {
+	// At a prompt that ends in ">" (fish, a custom one), zsh's markup ends
+	// as the prompt does: the row alone does not say the text was read.
+	for _, c := range []struct{ name, typed, drawn string }{
+		{"U+200B, zsh", "rm -rf x\u200b", "rm -rf x\x1b[7m<200b>\x1b[27m"},
+		{"a combining accent, zsh", "rm cafe\u0301", "rm cafe\x1b[7m<0301>\x1b[27m"},
+	} {
+		t.Run(c.name+", a prompt ending in >", func(t *testing.T) {
+			s := playedFor(t, true)
+			mark := "\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07"
+			s.prints("\r\n" + mark + "> ")
+			s.commandRuns()
+			s.term.PersonInput(nil, c.typed, "")
+			s.prints(mark + "> " + c.drawn)
+			refusedForThem(t, s, "run onto "+c.name+" at a prompt ending in >")
+		})
+	}
+	// Hangul jamo alone (U+1160, U+1161) too, measured in both shells.
+	for _, typed := range []string{"\u1112\u1161\u11ab", "한", "\u1160", "\u1161"} {
 		s := playedFor(t, true)
 		s.commandRuns()
 		s.term.PersonInput(nil, "rm "+typed, "")
@@ -1117,4 +1159,121 @@ func TestTextNotDrawnAsTypedHoldsTheLine(t *testing.T) {
 		s.ended("", "")
 		allowed(t, s, "run after Hangul the command read")
 	}
+}
+
+// From the seventh review.
+
+// A paste of nothing but control characters sends nothing: no bracketed
+// paste marks, which a shell with bracketed paste off at its prompt draws
+// (bash 3.2: 0~1~).
+func TestAPasteOfNothingSendsNothing(t *testing.T) {
+	s := playedFor(t, true)
+	s.commandRuns()
+	s.prints("\x1b[?2004h")
+	s.term.PersonInput(nil, "", "\x07")
+	// A key the command reads after it, to know the paste went first.
+	s.term.PersonInput(nil, "q", "")
+	sent := func() string {
+		s.term.inMu.Lock()
+		defer s.term.inMu.Unlock()
+		return string(s.term.inBuf)
+	}
+	within(t, 5*time.Second, "the key after the paste sent", func() bool { return strings.Contains(sent(), "q") })
+	if got := sent(); strings.Contains(got, "\x1b[200~") {
+		t.Fatalf("sent %q for a paste of nothing", got)
+	}
+	s.prints("\x1b[?2004l")
+	s.ended("", "")
+	allowed(t, s, "run after a paste of nothing")
+}
+
+// With `stty intr undef` the terminal turns Ctrl+C into no signal: the key
+// is a character, nothing is dropped, and at the next prompt bash and zsh
+// draw the text and ring the bell for the key (measured). The text is
+// read off the screen as any.
+func TestASignalKeyNoSignalComesOfLeavesTheTextToBeRead(t *testing.T) {
+	for _, who := range []string{"person", "model"} {
+		t.Run(who, func(t *testing.T) {
+			s := playedFor(t, true)
+			s.commandRuns()
+			s.term.PersonInput(nil, "rm -rf x", "")
+			if who == "person" {
+				s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+			} else if err := s.term.Keys("ctrl+c", s.term.PersonGen()); err != nil {
+				t.Fatal(err)
+			}
+			// The terminal's echo while the command ran, then the prompt.
+			s.ended("rm -rf x^C", "rm -rf x\a")
+			refusedForThem(t, s, "run onto text a Ctrl+C read as a character left ("+who+")")
+		})
+	}
+	// A bracketed paste the signal dropped, at a prompt with bracketed
+	// paste off: nothing of it, its marks included, is there.
+	s := playedFor(t, true)
+	s.commandRuns()
+	s.prints("\x1b[?2004h")
+	s.term.PersonInput(nil, "", "rm -rf x")
+	s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+	s.prints("\x1b[?2004l")
+	s.ended("^C\r\n", "")
+	allowed(t, s, "run after a Ctrl+C dropped a bracketed paste")
+	// Where the key is a signal, what it dropped is not there.
+	s = playedFor(t, true)
+	s.commandRuns()
+	s.term.PersonInput(nil, "rm -rf x", "")
+	s.term.PersonInput(&PersonKey{Key: "c", Ctrl: true}, "", "")
+	s.ended("^C\r\n", "")
+	allowed(t, s, "run after a Ctrl+C dropped what was typed")
+}
+
+// None of the text on the line is the command having read it only where
+// the row ends as the last prompt did. Output drawn since the mark (a
+// background job's) over the text, or before a slow prompt, holds the
+// line instead.
+func TestOutputSinceTheMarkIsNotTheTextRead(t *testing.T) {
+	t.Run("output after the text", func(t *testing.T) {
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "rm -rf x", "")
+		s.term.output([]byte(s.promptText(0) + "rm -rf x"))
+		s.prints("50% ")
+		refusedForThem(t, s, "run onto text output was drawn after")
+	})
+	t.Run("output before a slow prompt", func(t *testing.T) {
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "x", "")
+		s.term.output([]byte("\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07"))
+		s.prints("xyz")
+		refusedForThem(t, s, "run onto text not drawn yet, output since the mark")
+	})
+	t.Run("output that ends as the prompt does", func(t *testing.T) {
+		// zsh's prompt ends in "%", and so does a progress line.
+		s := playedFor(t, true)
+		s.prints("\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07me@test ~ % ")
+		s.commandRuns()
+		s.term.PersonInput(nil, "rm -rf x", "")
+		s.term.output([]byte("\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07me@test ~ % rm -rf x"))
+		s.prints("50%")
+		refusedForThem(t, s, "run onto text a progress line ending in % was drawn after")
+	})
+	t.Run("no prompt on its row to compare with", func(t *testing.T) {
+		// The last prompt was taken where output left the cursor at the
+		// left edge: the line is held, read or not.
+		s := playedFor(t, true)
+		s.prints("line\r\n")
+		s.commandRuns()
+		s.term.PersonInput(nil, "q", "")
+		s.ended("", "")
+		refusedForThem(t, s, "run with no prompt to compare the row with")
+	})
+	t.Run("a prompt that changes at its start", func(t *testing.T) {
+		// A clock, a directory: the end is what is compared.
+		s := playedFor(t, true)
+		s.prints("\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x0712:00 $ ")
+		s.commandRuns()
+		s.term.PersonInput(nil, "q", "")
+		s.prints("\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x0712:01 $ ")
+		allowed(t, s, "run after text the command read, at a prompt with a clock")
+	})
 }

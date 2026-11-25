@@ -204,18 +204,15 @@ type Terminal struct {
 	// sent ahead (aheadSent): the screen cannot say what the shell made of
 	// that, and the line at the next prompt is theirs until their Enter or
 	// Ctrl+C. aheadJudge is the line at the new prompt being theirs for
-	// text alone, until the screen is read for it (judgeAhead). aheadHeld
-	// is the line being theirs for text typed after a line sent ahead: the
-	// shell runs that line first, and the text waits in the terminal while
-	// it runs, where a signal to it drops the text. A line the shell keeps
-	// (text drawn on it, the line Ctrl+O brings back) is not in the
-	// terminal, and a signal to a command leaves it theirs.
+	// text alone, until the screen is read for it (judgeAhead). A signal
+	// to a command drops what waits in the terminal, and not a line the
+	// shell keeps (text drawn on it, the line Ctrl+O brings back): the
+	// line stays theirs.
 	personAhead bool
 	aheadText   string
 	aheadMixed  bool
 	aheadSent   bool
 	aheadJudge  bool
-	aheadHeld   bool
 	// aheadPasted is a bracketed paste among it, its marks sent: read as
 	// text only where the shell has bracketed paste on at its prompt. A
 	// shell that has not (bash 3.2) reads the marks as keys and draws some
@@ -625,14 +622,8 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 			// which once the prompt is drawn (judgeAhead). Anything else, or
 			// text the last prompt was never read for (a command the shell
 			// started from a line sent ahead came between), and the line is
-			// theirs until their Enter or Ctrl+C. After a line sent ahead,
-			// that line takes what is on the shell's line with it when the
-			// shell reads it, and what is left is the text after it, waiting
-			// in the terminal: a signal to the command it starts drops that
-			// too (aheadHeld).
-			hold := t.personAhead && t.aheadMixed || t.aheadJudge
-			t.aheadHeld = hold && t.aheadSent
-			if hold {
+			// theirs until their Enter or Ctrl+C at a prompt.
+			if t.personAhead && t.aheadMixed || t.aheadJudge {
 				t.personAfter = true
 			}
 			t.aheadJudge = t.personAhead && !t.personAfter
@@ -803,6 +794,15 @@ func (t *Terminal) judgeAhead() bool {
 	}
 	from, spaces := t.aheadShownFrom(pos.X, pos.Y)
 	if from == pos.X || (spaces && from > 0) {
+		// None of it there. That is the command having read it only where
+		// the row ends as the last prompt did (promptEnd): otherwise
+		// something else was drawn since the mark (a background job's
+		// output), over the text or before the prompt, and the screen
+		// cannot say.
+		end := promptEnd(t.promptLeft)
+		if end == "" || !strings.HasSuffix(strings.TrimRight(t.cellText(pos.Y, 0, pos.X), " "), end) {
+			return false
+		}
 		t.recordPrompt(pos.X)
 	} else {
 		// Theirs on the line, as if typed at it: until their Enter or
@@ -811,6 +811,16 @@ func (t *Terminal) judgeAhead() bool {
 		t.personAfter = true
 	}
 	return true
+}
+
+// promptEnd is the last two characters of s before its ASCII spaces, or
+// as many as there are: what a prompt ends with stays the same from one
+// prompt to the next where a clock or a directory at its start changes,
+// and is unlike output (zsh's prompt ends in " %", a progress line in
+// "0%").
+func promptEnd(s string) string {
+	r := []rune(strings.TrimRight(s, " "))
+	return string(r[max(len(r)-2, 0):])
 }
 
 // aheadShownFrom is the column where the end of aheadText starts, as much
@@ -2028,7 +2038,7 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 		// A signal drops what the person typed ahead too. Any other key
 		// goes after it, and the screen cannot say what of theirs is left.
 		for _, ev := range evs {
-			if t.signalKey(ev) {
+			if t.signalKey(ev) && !t.emu.IsAltScreen() {
 				t.signalled()
 			} else if t.personAhead {
 				t.aheadMixed = true
@@ -2049,7 +2059,7 @@ func (t *Terminal) Keys(keys string, gen uint64) error {
 // is no longer where it is. Called with mu held.
 func (t *Terminal) interrupt() {
 	t.interrupts.press()
-	t.typedAfter, t.personAfter, t.aheadHeld = false, false, false
+	t.typedAfter, t.personAfter = false, false
 	// The line is no longer as the command left it: a shell that reads the
 	// key as a character puts it there, and no prompt follows.
 	t.aheadJudge = false
@@ -2062,7 +2072,7 @@ func (t *Terminal) interrupt() {
 func (t *Terminal) sent() {
 	t.typedAfter, t.personAfter = false, false
 	t.dropAhead()
-	t.aheadSent, t.aheadJudge, t.aheadHeld = false, false, false
+	t.aheadSent, t.aheadJudge = false, false
 	t.interrupts = interrupts{}
 }
 
@@ -2075,16 +2085,18 @@ func (t *Terminal) dropAhead() {
 }
 
 // signalled notes a key the terminal turns into a signal for the command
-// that runs (either's). The terminal drops what waits in it: what was
-// typed while the command ran, and text typed after a line sent ahead,
-// which waited while the shell ran that line (aheadHeld). What the shell
-// keeps on its line it does not drop. Called with mu held.
+// that runs (either's), on the main screen: on the alternate screen a
+// full-screen program reads keys raw, and no signal comes of it. The
+// terminal drops what waits in it, what was typed while the command ran,
+// and the keys, paste marks and line ends among it no longer count. The text is
+// still read off the screen at the next prompt: with `stty intr undef`
+// the key is a character, nothing is dropped, and bash and zsh draw the
+// text (measured). A line the shell keeps the signal does not drop, and a
+// hold stays: the terminal cannot say whether text typed after a line
+// sent ahead waited behind that line or went with a line a command read.
+// Called with mu held.
 func (t *Terminal) signalled() {
-	t.dropAhead()
-	t.aheadSent = false
-	if t.aheadHeld {
-		t.aheadHeld, t.personAfter = false, false
-	}
+	t.aheadMixed, t.aheadPasted, t.aheadSent = false, false, false
 }
 
 // aheadKey notes a key the person pressed while a command ran. Called
@@ -2095,7 +2107,7 @@ func (t *Terminal) aheadKey(ev uv.KeyPressEvent) {
 	}
 	ctrl := ev.Mod == uv.ModCtrl
 	switch {
-	case t.signalKey(ev):
+	case t.signalKey(ev) && !t.emu.IsAltScreen():
 		t.signalled()
 	case endsLine(ev) && ev.Mod&uv.ModAlt == 0 && !(ctrl && ev.Code == 'o'):
 		// The line goes to whatever reads it, the shell too: nothing typed
@@ -2350,6 +2362,11 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		after = enter && !strings.HasSuffix(text, "\r")
 	case paste != "":
 		paste = cleanText(paste)
+		if paste == "" {
+			// Nothing to paste: no bracketed paste marks for nothing, which
+			// a shell with bracketed paste off draws.
+			break
+		}
 		paste = strings.ReplaceAll(strings.ReplaceAll(paste, "\r\n", "\r"), "\n", "\r")
 		// A shell that has not turned bracketed paste on reads a paste as
 		// typed, and a line end in it sends the line. One that has keeps
@@ -2391,7 +2408,7 @@ func (t *Terminal) PersonInput(k *PersonKey, text, paste string) error {
 		}
 	case atPrompt:
 		t.personTyped, t.personAfter = true, true
-		t.aheadJudge, t.aheadHeld = false, false
+		t.aheadJudge = false
 		if rows {
 			t.promptKnown = false
 		}

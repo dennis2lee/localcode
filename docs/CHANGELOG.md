@@ -11,6 +11,7 @@ An SSH or PowerShell terminal no longer types a `run` onto what you typed while 
 * Text the command read (`q` to a pager, a key to a question) leaving the line empty
 * A key that is not text, typed while a command ran, keeping the line yours until your Enter or Ctrl+C: the screen cannot say what the shell made of it, and Escape left for the shell took the first character of the `run`
 * Text with a character no shell draws as typed (a zero-width space, a combining accent) keeping the line yours the same way
+* A paste of nothing but control characters sending nothing: its bracketed paste marks alone were sent, and bash 3.2 drew them (`0~1~`)
 
 ## v0.180.3
 
