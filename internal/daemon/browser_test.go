@@ -17,6 +17,7 @@ import (
 
 	"localcode/internal/agent"
 	"localcode/internal/browser"
+	"localcode/internal/browser/browsertest"
 	"localcode/internal/config"
 	"localcode/internal/events"
 )
@@ -24,12 +25,10 @@ import (
 func browserDaemon(t *testing.T) (*Daemon, *httptest.Server, string) {
 	t.Helper()
 	d := newTestDaemon(t, "http://127.0.0.1:1")
-	dir := t.TempDir()
-	// A profile name already chosen, so nothing is copied from the
-	// person's own browser.
-	if err := os.WriteFile(filepath.Join(dir, "localcode-profile"), []byte("Default\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// A profile of the test's own, its name already chosen, so nothing is
+	// copied from the person's own browser. Made before the browser's
+	// close is registered, so it is removed after the browser has closed.
+	dir := browsertest.ProfileDir(t)
 	// The guard as cmd/localcode wires it.
 	d.Browser = browser.NewManager(browser.Options{DataDir: dir, Block: agent.BrowserBlock(d.Loop)})
 	t.Cleanup(d.Browser.Close)
