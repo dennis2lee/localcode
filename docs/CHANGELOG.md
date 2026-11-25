@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.180.4
+## v0.180.5
 
 An SSH or PowerShell terminal no longer types a `run` onto what you typed while the command before it ran.
 
@@ -12,6 +12,14 @@ An SSH or PowerShell terminal no longer types a `run` onto what you typed while 
 * A key that is not text, typed while a command ran, keeping the line yours until your Enter or Ctrl+C: the screen cannot say what the shell made of it, and Escape left for the shell took the first character of the `run`
 * Text with a character no shell draws as typed (a zero-width space, a combining accent) keeping the line yours the same way
 * A paste of nothing but control characters sending nothing: its bracketed paste marks alone were sent, and bash 3.2 drew them (`0~1~`)
+
+## v0.180.4
+
+Closing the browser on Windows leaves its profile free for the next start.
+
+**Fixed**
+
+* A browser killed on closing is waited for until it has exited (up to 30 seconds), so the next start or a profile import finds its profile free on Windows
 
 ## v0.180.3
 

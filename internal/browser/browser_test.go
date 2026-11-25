@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localcode/internal/browser/browsertest"
 )
 
 // testManager runs a real browser on a fresh profile directory, never the
@@ -25,13 +27,56 @@ func testManager(t *testing.T) *Manager {
 	if _, err := Find(""); err != nil {
 		t.Skip("no Chrome or Edge here")
 	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, profileNameFile), []byte("Default\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	m := NewManager(Options{DataDir: dir})
+	// The directory first: its removal is to come after the browser's
+	// close, and cleanups run last one first.
+	m := NewManager(Options{DataDir: browsertest.ProfileDir(t)})
 	t.Cleanup(m.Close)
 	return m
+}
+
+// The name the shared helper writes is the one this package reads: with
+// another, a test's browser would start on a copy of the person's profile.
+func TestTheTestProfileIsNamedAsThisPackageReadsIt(t *testing.T) {
+	if browsertest.ProfileNameFile != profileNameFile {
+		t.Fatalf("browsertest writes %q and this package reads %q", browsertest.ProfileNameFile, profileNameFile)
+	}
+	dir := browsertest.ProfileDir(t)
+	// Read here first: ensureProfile, finding no name, would go on to
+	// copy the person's own profile, which this test is to rule out.
+	data, err := os.ReadFile(filepath.Join(dir, profileNameFile))
+	if err != nil || strings.TrimSpace(strings.SplitN(string(data), "\n", 2)[0]) != "Default" {
+		t.Fatalf("a test's profile directory names no profile: %q, %v", data, err)
+	}
+	name, imported, err := NewManager(Options{}).ensureProfile(Install{}, dir)
+	if err != nil || name != "Default" || imported {
+		t.Errorf("a test's profile is %q, imported %v, %v; want Default, not imported", name, imported, err)
+	}
+}
+
+// A browser that was killed is waited for until it has exited, past the
+// three seconds a stop used to give it: on Windows a killed browser holds
+// its profile's files until the system has finished ending it.
+func TestAKilledBrowserIsWaitedForUntilItHasExited(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits past three seconds")
+	}
+	p := &process{exited: make(chan struct{})}
+	returned := make(chan struct{})
+	go func() {
+		p.kill()
+		close(returned)
+	}()
+	select {
+	case <-returned:
+		t.Fatal("kill returned and the browser has not exited")
+	case <-time.After(3500 * time.Millisecond):
+	}
+	close(p.exited)
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("kill went on waiting after the browser exited")
+	}
 }
 
 const formPage = `<!doctype html><title>Form</title>
@@ -346,11 +391,7 @@ func TestAStartOutlastsTheCallerThatAskedForIt(t *testing.T) {
 	if err := os.WriteFile(slow, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, profileNameFile), []byte("Default\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	m := NewManager(Options{ChromePath: slow, DataDir: dir})
+	m := NewManager(Options{ChromePath: slow, DataDir: browsertest.ProfileDir(t)})
 	t.Cleanup(m.Close)
 
 	impatient, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)

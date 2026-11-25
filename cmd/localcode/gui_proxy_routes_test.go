@@ -12,6 +12,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	"localcode/internal/client"
 )
 
 // Every route the Web UI calls, against a window that has handed its
@@ -158,9 +161,15 @@ func TestEveryRouteThePageCallsWorksThroughTheWindowProxy(t *testing.T) {
 		// not one a client may install an update on.
 		{method: "GET", path: "/api/update", ok: only(200, 500, 502, 503), note: "asks GitHub; offline is fine"},
 		{method: "POST", path: "/api/update/install", ok: only(403)},
+	}
 
-		// Destructive, so last, and in this order: the schedule belongs
-		// to the session, and the session to the list.
+	// Destructive, so last, and in this order: the schedule belongs
+	// to the session, and the session to the list.
+	//
+	// A table of their own, because every one after the first needs the
+	// session idle, and the message probe above left a turn running in
+	// it. See waitForTheTurnToEnd for what is waited on between the two.
+	last := []probe{
 		{method: "DELETE", path: "/api/sessions/" + sid + "/schedules/" + schedID, ok: only(200, 204)},
 		{method: "POST", path: "/api/sessions/" + sid + "/archive", ok: only(200, 204)},
 		{method: "POST", path: "/api/sessions/" + sid + "/retrieve", ok: only(200, 204)},
@@ -169,22 +178,27 @@ func TestEveryRouteThePageCallsWorksThroughTheWindowProxy(t *testing.T) {
 		{method: "DELETE", path: "/api/sessions", ok: only(200, 204)},
 	}
 
-	for _, p := range probes {
-		status, body := call(p.method, p.path, p.body)
-		okd := false
-		for _, c := range p.ok {
-			if status == c {
-				okd = true
+	drive := func(table []probe) {
+		for _, p := range table {
+			status, body := call(p.method, p.path, p.body)
+			okd := false
+			for _, c := range p.ok {
+				if status == c {
+					okd = true
+				}
 			}
-		}
-		if !okd {
-			where := p.method + " " + p.path
-			if p.note != "" {
-				where += " (" + p.note + ")"
+			if !okd {
+				where := p.method + " " + p.path
+				if p.note != "" {
+					where += " (" + p.note + ")"
+				}
+				t.Errorf("%s: %d %s (want one of %v)", where, status, strings.TrimSpace(body), p.ok)
 			}
-			t.Errorf("%s: %d %s (want one of %v)", where, status, strings.TrimSpace(body), p.ok)
 		}
 	}
+	drive(probes)
+	waitForTheTurnToEnd(t, front, sid)
+	drive(last)
 
 	// The two dialogs really were the window's, and the folder button
 	// asked for the session's own workspace rather than anything a caller
@@ -196,7 +210,59 @@ func TestEveryRouteThePageCallsWorksThroughTheWindowProxy(t *testing.T) {
 		t.Errorf("the folder button opened %q, want the session's workspace %q", *dialogs.revealed, work)
 	}
 
-	assertCoversAPIJS(t, probes, sid, schedID, "p-nope", "a-nope", "t-nope")
+	assertCoversAPIJS(t, append(probes, last...), sid, schedID, "p-nope", "a-nope", "t-nope")
+}
+
+// waitForTheTurnToEnd returns once the daemon lists the session as idle,
+// and fails the test if that takes longer than a minute.
+//
+// The daemon answers the message probe as soon as the turn is registered
+// and runs it afterwards, on a goroutine of its own. Until that goroutine
+// lets go, the daemon answers 409 to archiving the session, retrieving
+// it, forking it, deleting it, and deleting every session. That 409 is
+// the daemon being right about a turn in progress. It says nothing about
+// the window, which is what those probes are there to show, so it is not
+// among their accepted answers and the test waits here instead.
+//
+// How long the turn takes to fail against a provider that is not there
+// is the scheduler's to decide. On the CI macOS runner under -race it
+// outlasted every probe between the message and the archive, and all
+// five were refused. So the wait is on the condition and not on the
+// clock: the busy flag in GET /api/sessions is read from the tracker
+// those five handlers ask, and nothing after the message probe starts
+// another turn, so a session seen idle once stays idle. The pause below
+// spaces the questions and decides nothing.
+//
+// The minute bounds a failure and estimates nothing: on an idle machine
+// the turn is over in milliseconds. Failing here names the wait, where
+// the package's own timeout would only dump goroutines.
+func waitForTheTurnToEnd(t *testing.T, front, sid string) {
+	t.Helper()
+	const limit = time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	// Asked through the window, as everything else here is.
+	window := client.New(front)
+	for answers := 0; ; answers++ {
+		busy, listed, err := window.SessionBusy(ctx, sid)
+		switch {
+		case ctx.Err() != nil:
+			t.Fatalf("waited %s for the turn the message probe started in session %s to end: "+
+				"GET /api/sessions answered %d times and listed it as busy in every one", limit, sid, answers)
+		case err != nil:
+			t.Fatalf("asking whether the turn in session %s has ended: %v", sid, err)
+		case !listed:
+			// Not something to wait out: a session the list does not
+			// have is not going to be said idle by it.
+			t.Fatalf("GET /api/sessions does not list session %s, so nothing says whether its turn has ended", sid)
+		case !busy:
+			return
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 // assertCoversAPIJS keeps the table above and the page's own list of URLs
