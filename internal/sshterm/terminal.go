@@ -158,6 +158,11 @@ type Terminal struct {
 	markX       int
 	markY       int
 	markPending bool
+	// markAbs is the mark's row counted from the terminal's first line,
+	// and promptRows how far below it the last prompt recorded ended: a
+	// line that wrapped or has a line break in it ends further down.
+	markAbs    int
+	promptRows int
 	// A local terminal's screen clears (see clearEnds): how many there
 	// have been, the row the screen started at after the last, the tail of
 	// the output before, in which a clear's sequence may have begun, and
@@ -529,6 +534,7 @@ func (t *Terminal) feed(p []byte) error {
 func (t *Terminal) markHere() {
 	pos := t.emu.CursorPosition()
 	t.markX, t.markY, t.markPending = pos.X, pos.Y, false
+	t.markAbs = t.absRow(pos.Y)
 }
 
 // atMark reports the cursor where the end of the last command left it:
@@ -594,11 +600,13 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 				w.out = capture{max: captureLimit}
 				w.started = true
 			}
-			if !t.running {
-				// A command the shell started on its own (the next line of a
-				// paste, a line it read itself): the last prompt's line went
-				// with it, read or not.
-				t.aheadJudge = false
+			if !t.running && !t.aheadJudge {
+				// A command the shell started on its own (a line sent ahead,
+				// the next line of a paste, zsh's sched): what was typed for
+				// the last prompt and read there is done with. Not read there,
+				// it can still be waiting (what followed the line sent ahead),
+				// and the next mark carries it to the prompt after this
+				// command.
 				t.dropAhead()
 			}
 			t.running = true
@@ -625,12 +633,16 @@ func (t *Terminal) track(p []byte) (ok bool, mark int) {
 			// that brought it went with the old line. What was typed since
 			// that key is on this one, and so is what the model typed ahead
 			// while the command ran.
-			t.personTyped = t.personAfter || t.personAhead
-			t.modelTyped = t.typedAhead || t.typedAfter
 			// What the person typed while the command ran is on this line
 			// if the command did not read it. The screen says which, once
-			// the prompt is drawn; until then, it is there.
-			t.aheadJudge = t.personAhead && !t.personAfter
+			// the prompt is drawn; until then, it is there. So is what was
+			// typed for the last prompt if that was never read: the shell
+			// ran a line sent ahead from it, and what followed that line is
+			// for this one (bash 3.2 says nothing as such a line starts).
+			ahead := t.personAhead || t.aheadJudge
+			t.personTyped = t.personAfter || ahead
+			t.modelTyped = t.typedAhead || t.typedAfter
+			t.aheadJudge = ahead && !t.personAfter
 			t.personAhead = false
 			t.typedAhead = false
 			t.interrupts.answered()
@@ -770,6 +782,7 @@ func (t *Terminal) recordPrompt(x, to int) {
 	rest := strings.TrimRight(strings.Repeat(" ", to-x)+t.cellText(pos.Y, to, t.emu.Width()), " ")
 	t.promptX, t.promptY, t.promptKnown = x, pos.Y, true
 	t.promptLeft, t.promptRest, t.promptNext = t.cellText(pos.Y, 0, x), rest, next
+	t.promptRows = t.absRow(pos.Y) - t.markAbs
 }
 
 // judgeAhead records the prompt after a command the person typed during,
@@ -780,10 +793,11 @@ func (t *Terminal) recordPrompt(x, to int) {
 // runs), and the command read it. Matched to the left edge, the text can go
 // on in the row above, and the prompt is taken to end at the edge, which
 // lineEmpty does not read as empty. Keys: the line is empty only when it
-// looks as the last prompt left it, with no row above it that it can go on
-// from. Any other key: the line is theirs until their Enter or Ctrl+C, and
-// nothing is recorded. Called with mu held, where a prompt would be
-// recorded.
+// looks as the last prompt left it, as many rows below its mark as the
+// last prompt was below its own (a recalled line that wrapped, or has a
+// line break in it, ends further down). Any other key: the line is theirs
+// until their Enter or Ctrl+C, and nothing is recorded. Called with mu
+// held, where a prompt would be recorded.
 func (t *Terminal) judgeAhead() bool {
 	pos := t.emu.CursorPosition()
 	switch t.aheadKeys {
@@ -791,7 +805,7 @@ func (t *Terminal) judgeAhead() bool {
 		// The last prompt's record, kept by the mark: before any, a record
 		// of the left edge, which lineEmpty does not read as empty.
 		left, rest, next := t.aroundCursor()
-		if pos.X == t.promptX && left == t.promptLeft && rest == t.promptRest && next == t.promptNext && !t.wrapsInto(pos.Y) {
+		if pos.X == t.promptX && left == t.promptLeft && rest == t.promptRest && next == t.promptNext && t.absRow(pos.Y)-t.markAbs == t.promptRows {
 			t.recordPrompt(pos.X, pos.X)
 			return true
 		}
@@ -802,7 +816,9 @@ func (t *Terminal) judgeAhead() bool {
 	// A character in the last column leaves the cursor on it, not after
 	// it, until the next one wraps: the cell under the cursor is read too.
 	end := pos.X
-	if pos.X == t.emu.Width()-1 {
+	if c := t.emu.CellAt(pos.X, pos.Y); t.emu.PendingWrap() || pos.X == t.emu.Width()-1 && c != nil && c.Content != "" && c.Content != " " {
+		// (A pseudo console that places the cursor itself leaves no wrap
+		// pending: a character under a cursor in the last column is read.)
 		end = pos.X + 1
 	}
 	from, spaces := t.aheadShownFrom(end, pos.Y)
@@ -812,17 +828,6 @@ func (t *Terminal) judgeAhead() bool {
 		t.recordPrompt(from, end)
 	}
 	return true
-}
-
-// wrapsInto reports row y possibly going on from the row above it, which
-// reaches the last column: the screen does not say whether a line wrapped
-// there. Called with mu held.
-func (t *Terminal) wrapsInto(y int) bool {
-	if y == 0 {
-		return false
-	}
-	c := t.emu.CellAt(t.emu.Width()-1, y-1)
-	return c != nil && (c.Content != "" && c.Content != " " || c.Content == "" && c.Width == 0)
 }
 
 // aheadShownFrom is the column where the end of aheadText starts, as much
@@ -2146,11 +2151,14 @@ func (t *Terminal) aheadTyped(s string, bracketed bool) {
 	}
 	t.personAhead = true
 	switch {
-	case strings.Contains(s, "\r"):
-		// A bracketed paste kept whole: on several rows at the prompt,
-		// after a continuation prompt in PowerShell, and Ctrl+U takes only
-		// the last of them.
-		t.aheadKeys = aheadUnknown
+	case bracketed:
+		// Sent between bracketed paste's marks: a shell that has not turned
+		// it on (bash 3.2) reads them as keys, and draws some of them. One
+		// that has keeps a line end in the paste on the line: over several
+		// rows, after a continuation prompt in PowerShell, with Ctrl+U taking
+		// only the last of them. Judged as keys, the line is empty only when
+		// it looks as the last prompt left it, as many rows below its mark.
+		t.aheadKeys = max(t.aheadKeys, aheadShown)
 	case strings.Contains(s, "\t"):
 		// Tab completes: what the shell draws is not what was typed.
 		t.aheadKeys = max(t.aheadKeys, aheadShown)

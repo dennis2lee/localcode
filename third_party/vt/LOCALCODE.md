@@ -64,3 +64,13 @@ pasted line end sends the line, and localcode keeps track of whether the
 command line was sent. v0.1.0 has no way to ask. This one is an addition,
 not a fix: dropping this copy needs the same question answered another
 way.
+
+## Whether a wrap is pending
+
+`emulator.go` (`PendingWrap`): an accessor for the state a character
+written in the last column leaves (`atPhantom`). The cursor is then
+reported on that character, and a cursor in the last column over a blank
+cell is reported the same way. localcode reads the text left of the cursor
+to find what the person typed, and has to know whether the cell under it
+is part of that text. v0.1.0 has no way to ask. This one is an addition,
+not a fix.

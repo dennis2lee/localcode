@@ -226,6 +226,17 @@ func TestKeysTypedWhileACommandRan(t *testing.T) {
 		s.ended("", "")
 		allowed(t, s, "run after keys the command read")
 	})
+	t.Run("read by the command, at a prompt over two rows", func(t *testing.T) {
+		// The prompt ends a row below its mark, as the last one did.
+		s := playedFor(t, true)
+		two := s.promptText(0)[:len(s.promptText(0))-2] + "me@test\r\n$ "
+		s.prints("\r\n" + two)
+		s.commandRuns()
+		s.term.PersonInput(&PersonKey{Key: "ArrowDown"}, "", "")
+		s.term.PersonInput(nil, "q", "")
+		s.prints(two)
+		allowed(t, s, "run after keys the command read, at a two-row prompt")
+	})
 	t.Run("left for the shell, which drew what they did", func(t *testing.T) {
 		// Up: the shell put the last command on the line.
 		s := playedFor(t, true)
@@ -266,6 +277,13 @@ func TestKeysTypedWhileACommandRan(t *testing.T) {
 		s.term.PersonInput(&PersonKey{Key: "ArrowUp"}, "", "")
 		s.ended("", strings.Repeat("a", DefaultCols-2)+"$ ")
 		refusedForThem(t, s, "run onto a recalled line that wrapped to a row like the prompt")
+		// The same with a space in the last column, which looks like a
+		// blank cell.
+		s = playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(&PersonKey{Key: "ArrowUp"}, "", "")
+		s.ended("", strings.Repeat("a", DefaultCols-3)+" $ ")
+		refusedForThem(t, s, "run onto a recalled line that wrapped at a space")
 	})
 	t.Run("Ctrl+O, which ends no line in the terminal", func(t *testing.T) {
 		// The terminal keeps the text before it for the shell (macOS takes
