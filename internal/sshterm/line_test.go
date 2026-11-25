@@ -19,7 +19,8 @@ import (
 // of the model typing, the person typing, either pressing Ctrl+C, the
 // person pressing Enter, and a prompt arriving, to five steps, against a
 // shell that takes Ctrl+C as an interrupt and one that reads it as a
-// character.
+// character. The person's typing includes typing while the line they sent
+// runs, which the shell draws after the prompt that follows it.
 //
 // The test plays the shell. It keeps what a shell would have on its line
 // after reading everything sent so far, and hands the terminal the shell's
@@ -35,8 +36,10 @@ type playedShell struct {
 	text bool
 	// out is what it has printed, in order. A prompt ends a piece.
 	out []played
-	// sending is a line the person sent whose prompt has not arrived.
+	// sending is a line the person sent whose prompt has not arrived, and
+	// ahead what they typed while it ran.
 	sending bool
+	ahead   string
 }
 
 type played struct {
@@ -79,6 +82,35 @@ func (s *playedShell) ctrlC() {
 	s.out = append(s.out, played{data: "^C\r\n" + s.promptText(130), prompt: true})
 }
 
+// typedAhead is the person typing while the line they sent runs: the
+// terminal echoes it, and the shell draws it again right after the
+// prompt that follows, as bash and zsh do.
+func (s *playedShell) typedAhead(text string) {
+	s.text = true
+	s.ahead += text
+	for i := range s.out {
+		if s.out[i].sent {
+			s.out[i].data = "\r\n" + s.ahead + s.promptText(0) + s.ahead
+			return
+		}
+	}
+}
+
+// sentRuns reports the line the person sent running, to the terminal
+// too: the next prompt to come is the one after it, and none came before
+// it that the terminal took for it.
+func (s *playedShell) sentRuns() bool {
+	s.term.mu.Lock()
+	running := s.term.running
+	s.term.mu.Unlock()
+	for _, p := range s.out {
+		if p.prompt {
+			return running && p.sent
+		}
+	}
+	return false
+}
+
 // enter is the shell reading a line end: the line is run, and a prompt
 // follows.
 func (s *playedShell) enter() {
@@ -106,7 +138,7 @@ func (s *playedShell) arrive() {
 		s.term.output([]byte(p.data))
 		if p.prompt {
 			if p.sent {
-				s.sending = false
+				s.sending, s.ahead = false, ""
 			}
 			break
 		}
@@ -164,10 +196,18 @@ func (s *playedShell) step(op string) bool {
 		return true
 	}
 	// With a line of the person's sent and its prompt not here, a command
-	// is running as far as the terminal knows. What is typed then is not
-	// this test's: see IMPROVEMENTS item 67.
+	// is running as far as the terminal knows. The person's typing then
+	// waits for the shell. Anything else then is not this test's, and
+	// neither is a prompt that answers an earlier Ctrl+C, arrived or on
+	// its way, which the terminal takes for the end of the line they sent:
+	// see IMPROVEMENTS item 67.
 	if s.sending {
-		return false
+		if op != "person types" || !s.sentRuns() {
+			return false
+		}
+		s.term.PersonInput(nil, "p", "")
+		s.typedAhead("p")
+		return true
 	}
 	if strings.HasPrefix(op, "model") {
 		// The model acts ten seconds after the person's last key at the
@@ -212,7 +252,9 @@ func (s *playedShell) step(op string) bool {
 // that wait, with the prompt still not here: the last press is put as far
 // back as the wait is long. Typed is told by the terminal taking a command
 // as started, not by how the call came back: one that was neither typed
-// nor refused in two seconds was waiting for something.
+// nor refused in two seconds was waiting for something. A run refused as
+// busy was typed into nothing: the command it found running was already
+// started.
 func (s *playedShell) runs() (typed bool, err error) {
 	s.echoes()
 	s.term.mu.Lock()
@@ -222,7 +264,7 @@ func (s *playedShell) runs() (typed bool, err error) {
 	defer cancel()
 	_, err = s.term.Run(ctx, "true", time.Millisecond, s.term.PersonGen())
 	s.term.mu.Lock()
-	typed = s.term.running
+	typed = s.term.running && !errors.Is(err, ErrBusy)
 	s.term.mu.Unlock()
 	return typed, err
 }

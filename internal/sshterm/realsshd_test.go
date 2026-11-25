@@ -2,6 +2,7 @@ package sshterm
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -232,4 +233,87 @@ func TestKoreanAtTheMarginStaysOnTheScreen(t *testing.T) {
 	if !strings.Contains(screen, strings.TrimPrefix(cmd, "echo ")+"안녕하세요 한글") {
 		t.Fatalf("no output:\n%s", screen)
 	}
+}
+
+// What the person types while a command runs, against the real shells:
+// what the command does not read, the shell draws after its next prompt,
+// and a run is not typed onto it. Measured before the terminal looked: the
+// run after "echo typed" ran "echo typedecho hi".
+func TestRealShellsKeepWhatWasTypedWhileACommandRan(t *testing.T) {
+	setWait(t, &personYield, 300*time.Millisecond)
+	for _, shell := range []string{"/bin/bash", "/bin/zsh"} {
+		for _, c := range []struct {
+			name, cmd, ready, typed string
+			left                    bool // something of it is left for the shell
+		}{
+			{"a command that reads nothing", "sleep 2", "", "echo typed", true},
+			{"q to a pager", "seq 1 200 | LESS=FRX less", ":", "q", false},
+			{"q to a pager, and more", "seq 1 200 | LESS=FRX less", ":", "qecho typed", true},
+		} {
+			t.Run(filepath.Base(shell)+"/"+c.name, func(t *testing.T) {
+				addr, home := startRealSSHD(t, shell)
+				me, _ := user.Current()
+				m := testManager(t, home)
+				term, err := m.Open("c1", me.Username+"@"+addr, ByModel)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+				if err := term.WaitConnected(ctx); err != nil {
+					t.Fatal(err)
+				}
+				within(t, 15*time.Second, "integration on", func() bool { return term.Info().Integrated })
+				settled(t, term)
+				prompt := strings.TrimRight(lastRows(readScreen(term), 1)[0], " ")
+				res, err := term.Run(ctx, c.cmd, 300*time.Millisecond, term.PersonGen())
+				if err != nil || !res.TimedOut {
+					t.Fatalf("%s: %+v %v", c.cmd, res, err)
+				}
+				if c.ready != "" {
+					typedLine(t, term, c.ready)
+				}
+				term.PersonInput(nil, c.typed, "")
+				if !term.WaitPrompt(ctx, 15*time.Second) {
+					t.Fatalf("no prompt after %s; screen:\n%s", c.cmd, strings.Join(readScreen(term), "\n"))
+				}
+				if !c.left {
+					if res := runWhenFree(t, term, "echo hi"); res.Output != "hi" {
+						t.Fatalf("run after keys the command read: %+v", res)
+					}
+					return
+				}
+				shown := strings.TrimPrefix(c.typed, "q")
+				typedLine(t, term, shown)
+				time.Sleep(2 * personYield)
+				if _, err := term.Run(ctx, "echo hi", 5*time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
+					t.Fatalf("run onto %q typed while the command ran: %v; screen:\n%s", shown, err, strings.Join(readScreen(term), "\n"))
+				}
+				for range shown {
+					term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+				}
+				typedLine(t, term, prompt)
+				if res := runWhenFree(t, term, "echo hi"); res.Output != "hi" {
+					t.Fatalf("run once the person erased it: %+v", res)
+				}
+			})
+		}
+	}
+}
+
+// readScreen is the terminal's screen, without the empty rows at its end.
+func readScreen(term *Terminal) []string {
+	r, _ := term.Read(0, true)
+	return lastRows(r.Screen, len(r.Screen))
+}
+
+// lastRows is the last n rows that are not empty at the end of rows.
+func lastRows(rows []string, n int) []string {
+	for len(rows) > 0 && strings.TrimSpace(rows[len(rows)-1]) == "" {
+		rows = rows[:len(rows)-1]
+	}
+	if len(rows) > n {
+		rows = rows[len(rows)-n:]
+	}
+	return rows
 }

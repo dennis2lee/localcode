@@ -4,6 +4,7 @@ package sshterm
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -223,6 +224,54 @@ func TestARealClearKeepsWhatCameAfter(t *testing.T) {
 			}
 			if took := time.Since(start); took >= promptWait {
 				t.Errorf("the run after a clear took %s, the wait for a prompt not seen", took)
+			}
+		})
+	}
+}
+
+// What the person types while a command runs: PowerShell puts what the
+// command did not read on the next prompt's line (measured, see
+// signalKey), and a run is not typed onto it. A key the command read
+// leaves the line empty.
+func TestARealPowerShellKeepsWhatWasTypedWhileACommandRan(t *testing.T) {
+	setWait(t, &personYield, 300*time.Millisecond)
+	for _, shell := range realShells(t) {
+		t.Run(shell, func(t *testing.T) {
+			_, term := realTerminal(t, shell, t.TempDir())
+			prompt := strings.TrimRight(lastRows(readScreen(term), 1)[0], " ")
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			res, err := term.Run(ctx, "Start-Sleep -Seconds 3", time.Second, term.PersonGen())
+			if err != nil || !res.TimedOut {
+				t.Fatalf("a sleep: %+v %v", res, err)
+			}
+			term.PersonInput(nil, "echo typed", "")
+			if !term.WaitPrompt(ctx, 20*time.Second) {
+				t.Fatalf("no prompt after the sleep; info %+v, screen:\n%s", term.Info(), strings.Join(readScreen(term), "\n"))
+			}
+			typedLine(t, term, "echo typed")
+			time.Sleep(2 * personYield)
+			if _, err := term.Run(ctx, "echo hi", 10*time.Second, term.PersonGen()); !errors.Is(err, ErrLineNotEmpty) {
+				t.Fatalf("run onto what was typed while the command ran: %v; screen:\n%s", err, strings.Join(readScreen(term), "\n"))
+			}
+			for range "echo typed" {
+				term.PersonInput(&PersonKey{Key: "Backspace"}, "", "")
+			}
+			typedLine(t, term, prompt)
+			if res := runWhenFree(t, term, "echo hi"); strings.TrimSpace(res.Output) != "hi" {
+				t.Fatalf("run once the person erased it: %+v", res)
+			}
+
+			res, err = term.Run(ctx, "[Console]::ReadKey($true) | Out-Null", time.Second, term.PersonGen())
+			if err != nil || !res.TimedOut {
+				t.Fatalf("a read of one key: %+v %v", res, err)
+			}
+			term.PersonInput(nil, "q", "")
+			if !term.WaitPrompt(ctx, 20*time.Second) {
+				t.Fatalf("no prompt after the key was read; screen:\n%s", strings.Join(readScreen(term), "\n"))
+			}
+			if res := runWhenFree(t, term, "echo after"); strings.TrimSpace(res.Output) != "after" {
+				t.Fatalf("run after a key the command read: %+v", res)
 			}
 		})
 	}

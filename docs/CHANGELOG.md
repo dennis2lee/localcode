@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.180.3
+
+An SSH or PowerShell terminal no longer types a `run` onto what you typed while the command before it ran.
+
+**Fixed**
+
+* What you type while a command runs, and do not send, counted on the next prompt's line where the shell puts it: `run` no longer typed onto it (`echo typedecho hi`)
+* That text yours on the line until you erase it, send it or press Ctrl+C, and the line empty again once it is erased
+* A key the command read (`q` to a pager, a key to a question) leaving the line empty
+* Escape, Ctrl+X or a key with Alt typed while a command ran keeping the line yours until your Enter or Ctrl+C: the shell waits for the next key after them, and took the first character of the `run`
+
 ## v0.180.2
 
 The browser panel's page as tall as the panel.
