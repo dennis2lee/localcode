@@ -11,10 +11,6 @@ The browser panel's page as tall as the panel.
 * The `browser` tool's description, its click bounds and its screenshots at the page's height
 * `POST /api/sessions/{id}/browser/size`: the panel's room for the page
 
-**Fixed**
-
-* A page taller than 800 pixels no longer reaching the panel at half its width
-
 ## v0.180.1
 
 A background task's window shows its replies as markdown, set apart from the workings around them, with its result marked.
