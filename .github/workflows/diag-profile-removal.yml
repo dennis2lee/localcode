@@ -1,7 +1,7 @@
 # Measurement only: the browser tests on Windows, several times over, on
-# the combined commit 783d379 (the shared profile helper and the stop's
-# wait), with nothing added but this file. Lives on diag/profile-removal,
-# never on main.
+# commit 11d6aa6 (the shared profile helper, the stop's wait, and the
+# helper's tests waiting on the holder lookup), with nothing added but
+# this file. Lives on diag/profile-removal, never on main.
 name: diag-profile-removal
 
 on:
@@ -56,7 +56,7 @@ jobs:
             fi
             echo "=== run $i"
             grep -vE '^(ok|\?) ' "run-$i.log" | head -200 || true
-            grep -E 'internal/(browser|agent|daemon|sshterm)\s' "run-$i.log" || true
+            grep -E 'internal/(browser|browser/browsertest|agent|daemon|sshterm)\s' "run-$i.log" || true
           done
           exit $failed
       - uses: actions/upload-artifact@v4
