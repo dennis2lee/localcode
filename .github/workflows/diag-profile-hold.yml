@@ -1,0 +1,70 @@
+# Measurement only: which process holds a test browser's profile directory
+# after the browser is closed, and for how long, under the load of the
+# whole suite as test-windows runs it. Lives on diag/profile-hold, never
+# on main.
+name: diag-profile-hold
+
+on:
+  push:
+    branches: ['diag/profile-hold']
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: suite-${{ matrix.shard }}
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: The helper's own tests
+        shell: bash
+        timeout-minutes: 5
+        env:
+          CGO_ENABLED: '0'
+        run: go test ./internal/browser/browsertest/ -count=1 -timeout 3m -v || echo "HELPER TESTS FAILED"
+      # The same command as test-windows, three times, every run whatever
+      # the one before it did.
+      - name: The whole suite, three times
+        shell: bash
+        timeout-minutes: 40
+        env:
+          CGO_ENABLED: '0'
+          LOCALCODE_DIAG_LOG: ${{ runner.temp }}\profile-hold.log
+        run: |
+          for i in 1 2 3; do
+            echo "::group::run $i"
+            go test ./... -count=1 -timeout 8m || echo "RUN $i FAILED"
+            echo "::endgroup::"
+          done
+      - name: What held a profile
+        if: always()
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/profile-hold.log"
+          echo "closes, by how they went:"
+          grep ' close ' "$log" | sed 's/.* how=\([a-z-]*\).*/\1/' | sort | uniq -c
+          echo "closes that returned with a child process still running: $(grep ' close ' "$log" | grep -vc 'children-at-return=0 ')"
+          echo "removals: $(grep -c ' removed ' "$log")"
+          echo "removals that had to wait:"
+          grep ' removed ' "$log" | grep -v ' ms=0 ' || true
+          echo "first tries that failed, and who held the profile:"
+          grep ' held ' "$log" | grep ' t=0s ' | head -60 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: profile-hold-${{ matrix.shard }}
+          path: ${{ runner.temp }}/profile-hold.log
+          if-no-files-found: warn

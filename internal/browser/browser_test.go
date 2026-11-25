@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"localcode/internal/browser/browsertest"
 )
 
 // testManager runs a real browser on a fresh profile directory, never the
@@ -23,13 +23,23 @@ func testManager(t *testing.T) *Manager {
 	if _, err := Find(""); err != nil {
 		t.Skip("no Chrome or Edge here")
 	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, profileNameFile), []byte("Default\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	m := NewManager(Options{DataDir: dir})
+	// The directory first: its removal is to come after the browser's
+	// close, and cleanups run last one first.
+	m := NewManager(Options{DataDir: browsertest.ProfileDir(t)})
 	t.Cleanup(m.Close)
 	return m
+}
+
+// The name the shared helper writes is the one this package reads: with
+// another, a test's browser would start on a copy of the person's profile.
+func TestTheTestProfileIsNamedAsThisPackageReadsIt(t *testing.T) {
+	if browsertest.ProfileNameFile != profileNameFile {
+		t.Fatalf("browsertest writes %q and this package reads %q", browsertest.ProfileNameFile, profileNameFile)
+	}
+	name, imported, err := NewManager(Options{}).ensureProfile(Install{}, browsertest.ProfileDir(t))
+	if err != nil || name != "Default" || imported {
+		t.Errorf("a test's profile is %q, imported %v, %v; want Default, not imported", name, imported, err)
+	}
 }
 
 const formPage = `<!doctype html><title>Form</title>

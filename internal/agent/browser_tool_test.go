@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"localcode/internal/browser"
+	"localcode/internal/browser/browsertest"
 	"localcode/internal/config"
 	"localcode/internal/tools"
 )
@@ -168,10 +169,9 @@ c.putImageData(d, 0, 0);</script>`)
 	}))
 	defer site.Close()
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "localcode-profile"), []byte("Default\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// Removed after the browser has closed: the close below is deferred,
+	// and runs before any cleanup.
+	dir := browsertest.ProfileDir(t)
 	loop := newSmartLoop(t, "http://127.0.0.1:1")
 	loop.Config.Permissions = config.Permissions{BrowserToolName: config.ToolPermission{Rules: []config.PermissionRule{
 		{Match: "*/blocked*", Decision: config.DecisionDeny},

@@ -274,16 +274,40 @@ func readPortFile(path string) (string, bool) {
 // close asks the browser to quit and kills it if it has not within a few
 // seconds.
 func (p *process) close() {
+	// diag: how the close went, and which of the browser's processes
+	// outlive the one that was waited for.
+	t0 := time.Now()
+	pid := 0
+	if p.cmd != nil && p.cmd.Process != nil {
+		pid = p.cmd.Process.Pid
+	}
+	before := diagChildren(pid)
+	var callErr error
 	if p.conn != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = p.conn.Call(ctx, "", "Browser.close", nil, nil)
+		callErr = p.conn.Call(ctx, "", "Browser.close", nil, nil)
 		cancel()
 		_ = p.conn.Close()
 	}
+	call := time.Since(t0)
+	how := "exited"
 	select {
 	case <-p.exited:
 	case <-time.After(3 * time.Second):
 		p.kill()
+		how = "killed"
+		select {
+		case <-p.exited:
+		default:
+			how = "killed-and-still-running"
+		}
+	}
+	closed := time.Now()
+	after := diagChildren(pid)
+	diagf("close pid=%d dir=%s call=%v callErr=%v how=%s total=%v children-before=%d children-at-return=%d %v",
+		pid, p.dataDir, call.Round(time.Millisecond), callErr, how, closed.Sub(t0).Round(time.Millisecond), len(before), len(after), after)
+	if len(after) > 0 {
+		go diagWatch(pid, p.dataDir, closed, after)
 	}
 }
 
