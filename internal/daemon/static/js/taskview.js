@@ -5,7 +5,8 @@ import { createFollower } from './scroll.js';
 import { session } from './state.js';
 import * as apiClient from './api.js';
 import { Modal } from './modal.js';
-import { summarizeInput, appendError } from './transcript.js';
+import { summarizeInput, appendError, prettyJSON } from './transcript.js';
+import { renderMarkdown } from './markdown.js';
 import { askConfirm } from './prompt.js';
 import { renderTasks } from './render.js';
 
@@ -49,9 +50,53 @@ function line(cls, text) {
   return div;
 }
 
-// The reply in progress, so streamed fragments extend one line instead of
-// producing one line per fragment.
+// The reply in progress, so streamed fragments extend one reply instead of
+// producing one line per fragment, and the markdown it has so far, which
+// is drawn again whole on every fragment as the transcript draws its own.
 let currentEl = null;
+let currentText = '';
+// The newest reply in the window, and the one marked as the task's
+// result (markResult). A background task's own log has no turn.done: it
+// ends when the conversation that spawned it says so ("completed", or
+// "done" for a scheduled run), so either says the work is over.
+let lastReplyEl = null;
+let resultEl = null;
+let statusDone = false;
+let turnDone = false;
+
+// The task's replies are what a person opens this window for, and they
+// were drawn as plain text in the same voice as everything around them:
+// the instructions, every tool call with its whole input and result, and
+// the status lines. They are rendered as markdown now, as in the
+// transcript, and set apart (style.css, "The task window").
+function reply(text) {
+  const div = document.createElement('div');
+  div.className = 'msg-model';
+  div.innerHTML = renderMarkdown(text);
+  follower.keeping(() => taskModalBody.appendChild(div));
+  lastReplyEl = div;
+  markResult();
+  return div;
+}
+
+function drawReply(el, text) {
+  follower.keeping(() => { el.innerHTML = renderMarkdown(text); });
+}
+
+// markResult marks the newest reply as the task's result once the work is
+// over, so the answer reads at a glance among the workings above it. A
+// reply that arrives after the status said so (the two come on different
+// streams) takes the mark over.
+function markResult() {
+  if (!(statusDone || turnDone) || !lastReplyEl || lastReplyEl === resultEl) return;
+  if (resultEl) resultEl.classList.remove('final');
+  lastReplyEl.classList.add('final');
+  resultEl = lastReplyEl;
+}
+
+function isDoneStatus(status) {
+  return status === 'completed' || status === 'done';
+}
 
 // The tool calls still running, by tool_use_id, so the result can be put
 // back on the row that asked for it.
@@ -91,9 +136,14 @@ function toolRow(toolUseID, name, inputJSON) {
   head.appendChild(argEl);
   head.appendChild(stateEl);
 
+  // Folded, as in the transcript: a call's whole input and result are
+  // there for the asking, and were pushing the replies out of sight.
   const detail = document.createElement('pre');
   detail.className = 'detail';
-  detail.textContent = String(inputJSON || '');
+  detail.hidden = true;
+  detail.textContent = prettyJSON(inputJSON);
+  head.title = 'Show or hide what this call was given and returned';
+  head.addEventListener('click', () => { detail.hidden = !detail.hidden; });
 
   row.appendChild(head);
   row.appendChild(detail);
@@ -121,12 +171,19 @@ function applyTaskEvent(ev) {
   switch (ev.type) {
     case 'message.user':
       currentEl = null;
+      // New work: what came before it is not its answer.
+      lastReplyEl = null;
+      turnDone = false;
       if (typeof d.text === 'string') line('msg-user', d.text);
       break;
     case 'message.part.delta':
       if (typeof d.text !== 'string') return;
-      if (!currentEl) currentEl = line('msg-model', '');
-      follower.keeping(() => { currentEl.textContent += d.text; });
+      if (!currentEl) {
+        currentText = '';
+        currentEl = reply('');
+      }
+      currentText += d.text;
+      drawReply(currentEl, currentText);
       break;
     case 'message.part.end':
       // The whole reply, written over what the fragments drew: a
@@ -134,14 +191,11 @@ function applyTaskEvent(ev) {
       // finished reply are not sent at all, and this draws it — see
       // collapseFinishedDeltas in the daemon.
       if (typeof d.text === 'string' && d.text) {
-        if (currentEl) {
-          const el = currentEl;
-          follower.keeping(() => { el.textContent = d.text; });
-        } else {
-          line('msg-model', d.text);
-        }
+        if (currentEl) drawReply(currentEl, d.text);
+        else reply(d.text);
       }
       currentEl = null;
+      currentText = '';
       break;
     case 'tool.start':
       // The reply stays open: the daemon logs a message's tool.start
@@ -208,6 +262,8 @@ function applyTaskEvent(ev) {
     case 'turn.done':
       currentEl = null;
       abandonRunningToolRows();
+      turnDone = true;
+      markResult();
       line('msg-tool', '— finished —');
       break;
     case 'turn.cancelled':
@@ -244,6 +300,10 @@ export function openTaskView(taskID, about) {
   closeTaskStream();
   openTaskID = taskID;
   currentEl = null;
+  currentText = '';
+  lastReplyEl = null;
+  resultEl = null;
+  turnDone = false;
 
   const t = about || session.tasks.get(taskID);
   taskModalTitle.textContent = t && t.title ? t.title
@@ -263,6 +323,9 @@ export function openTaskView(taskID, about) {
   // The row in the Scheduled tasks panel has its own delete, which
   // removes the booking and the run together.
   showTaskButtons(about ? '' : (t ? t.status : ''));
+  // A scheduled run gets no buttons, and its status still says whether
+  // its work is over.
+  if (about) statusDone = isDoneStatus(about.status);
 
   stream = new EventSource(`/api/sessions/${taskID}/events?tail=${TASK_TAIL}`);
   stream.onmessage = (e) => {
@@ -317,6 +380,8 @@ export function isRunningStatus(status) {
 // beside a Stop for work still going on.
 function showTaskButtons(status) {
   openTaskStatus = status;
+  statusDone = isDoneStatus(status);
+  markResult();
   const running = isRunningStatus(status);
   taskCancelBtn.style.display = running ? '' : 'none';
   taskCancelBtn.disabled = false;

@@ -305,6 +305,45 @@ func SetSmartAgentInFile(path string, enabled bool) error {
 	})
 }
 
+// SetBrowserInFile writes the top-level "browser" key, leaving every other
+// key untouched.
+func SetBrowserInFile(path string, enabled bool) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal browser: %w", err)
+		}
+		raw["browser"] = encoded
+		return nil
+	})
+}
+
+// SetSSHInFile writes the top-level "ssh" key, leaving every other key
+// untouched.
+func SetSSHInFile(path string, enabled bool) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal ssh: %w", err)
+		}
+		raw["ssh"] = encoded
+		return nil
+	})
+}
+
+// SetPowerShellInFile writes the top-level "powershell" key, leaving every
+// other key untouched.
+func SetPowerShellInFile(path string, enabled bool) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal powershell: %w", err)
+		}
+		raw["powershell"] = encoded
+		return nil
+	})
+}
+
 // SetOrchestrateInFile writes the top-level "orchestrate" key, leaving
 // every other key untouched.
 //

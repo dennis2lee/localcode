@@ -118,7 +118,9 @@ func (m *runModel) server(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// runModelHome writes a config with a helper agent to delegate to.
+// runModelHome writes a config with a helper agent to delegate to. The
+// profile says "vision", so the model is not shown a test image: these
+// tests count the requests a turn makes.
 func runModelHome(t *testing.T, modelURL string) {
 	t.Helper()
 	home := t.TempDir()
@@ -127,7 +129,7 @@ func runModelHome(t *testing.T, modelURL string) {
 	}
 	cfg := fmt.Sprintf(`{
 	  "providers": {"local": {"type": "openai-compat", "base_url": %q}},
-	  "profiles": {"balanced": {"provider": "local", "model": "m"}},
+	  "profiles": {"balanced": {"provider": "local", "model": "m", "vision": false}},
 	  "default_profile": "balanced",
 	  "smart_agent": true,
 	  "orchestrate": true,

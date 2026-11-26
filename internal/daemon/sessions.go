@@ -307,6 +307,15 @@ func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		asking[id] = true
 	}
+	// So does an SSH terminal waiting for a host key or a password.
+	if d.SSH != nil {
+		for id := range d.SSH.Asking() {
+			if asking == nil {
+				asking = map[string]bool{}
+			}
+			asking[id] = true
+		}
+	}
 	type listed struct {
 		session.Session
 		Busy   bool `json:"busy"`
@@ -406,6 +415,14 @@ func (d *Daemon) handleArchiveSession(w http.ResponseWriter, r *http.Request) {
 	// The memory an idle conversation was holding. Recoverable: the
 	// history is replayed from the event log if it is ever retrieved.
 	d.Loop.ReleaseSessionMemory(id)
+	// Its browser tabs, and those of everything under it, are not kept:
+	// a page left running on the shelf goes on loading, timing out and
+	// holding its logins for a conversation nobody is in. Retrieving it
+	// starts with no tab, as a new conversation does.
+	d.closeBrowserTabs(ids)
+	// Its SSH connections close too: a shell kept open on another machine
+	// for a conversation on the shelf is a login nobody is watching.
+	d.closeSSH(ids, "the conversation was archived")
 	// The timers are left alone on purpose. A booking has never run a
 	// turn in an archived conversation — Scheduler.fire looks at the
 	// parent and marks the row missed on sight — so an armed timer on
@@ -600,7 +617,22 @@ func (d *Daemon) forgetDeleted(ids []string) {
 			d.Loop.Schedules.ForgetSession(sid)
 		}
 	}
+	d.closeBrowserTabs(ids)
+	d.closeSSH(ids, "the conversation was deleted")
 	d.announceDeleted(ids...)
+}
+
+// closeBrowserTabs closes the browser tabs of every session in ids. Each
+// close waits its turn behind its own session's browser work, in the
+// background: the handler that deletes or archives waits on no page, and
+// a page slow to close in one session holds up none of the others.
+func (d *Daemon) closeBrowserTabs(ids []string) {
+	if d.Browser == nil {
+		return
+	}
+	for _, sid := range ids {
+		d.Browser.CloseTab(sid)
+	}
 }
 
 // handleDeleteAllSessions wipes every session (visible and background-task
@@ -664,6 +696,8 @@ func (d *Daemon) handleDeleteAllSessions(w http.ResponseWriter, r *http.Request)
 			d.Loop.Schedules.ForgetSession(sid)
 		}
 	}
+	d.closeBrowserTabs(currentIDs)
+	d.closeSSH(currentIDs, "the conversation was deleted")
 	d.announceDeleted(currentIDs...)
 	w.WriteHeader(http.StatusNoContent)
 }

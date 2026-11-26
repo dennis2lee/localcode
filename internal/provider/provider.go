@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -328,6 +330,12 @@ func (b Block) ImageBytes() []byte { return b.Data }
 // still one request, and it is the request a model has to accept.
 const MaxImageBytesPerMessage = 10 * 1024 * 1024
 
+// MaxImagesPerRequest caps the images one request carries, over the whole
+// history. Bedrock's Converse API takes 20 images in a request, and the
+// Anthropic API takes none over 2000 pixels on a side once there are more
+// than 20, so 20 keeps every image within both.
+const MaxImagesPerRequest = 20
+
 // SupportedImageMediaType reports whether all three adapters can carry
 // this type. A function of the media type alone, so the table below is a
 // table and not three fixtures.
@@ -400,7 +408,33 @@ var notVisionRefusal = []string{
 	"canceled", "cancelled", "deadline exceeded",
 	"unauthorized", "access denied", "accessdenied", "expired token",
 	"credentials",
+	// An image the model would take, but not at this size: "image
+	// exceeds 5 MB maximum", "image dimensions exceed max allowed size",
+	// a request over the server's byte limit. Telling the person the
+	// model has no vision would have them switch it off on a model that
+	// has it.
+	"exceed", "too large", "too big", "request_too_large", "many-image",
+	// The same, in Bedrock's validation words: "Value at
+	// '...image.source.bytes' failed to satisfy constraint: Member must
+	// have length less than or equal to 3932160", "Maximum number of
+	// images per request is 20".
+	"must have length", "less than or equal", "maximum number",
+	// A server that is down, busy, still loading the model, or has no
+	// such model. Its message often names the model, and a model whose
+	// name says "vision" read as refusing images: kept from them for an
+	// hour by a 503. Not every 5xx: llama.cpp refuses an image with a
+	// 500 ("image input is not supported"), and its words are the
+	// refusal. Nor every 404: OpenRouter answers an image no endpoint
+	// can take with one ("No endpoints found that support image input").
+	"not found", "notfound", "does not exist",
+	"is loading", "currently loading", "unavailable", "overloaded",
+	"internal server error", "bad gateway", "gateway timeout",
 }
+
+// IsVisionRefusal reports whether err means model would not take an
+// image, for a caller outside this package that has to act on it. See
+// isVisionRefusal.
+func IsVisionRefusal(err error, model string) bool { return isVisionRefusal(err, model) }
 
 // isVisionRefusal reports whether err means the model would not take an
 // image. A function of the error alone -- no network, no model -- so a
@@ -411,15 +445,39 @@ var notVisionRefusal = []string{
 // SDK or this repository. So localcode sends the image and reads the
 // refusal, the way reasoningRejected reads a rejected thinking parameter
 // rather than predicting which accounts accept one.
-func isVisionRefusal(err error) bool {
+//
+// The model's own name is taken out of the message first: a server echoes
+// it, and "Llama-3.2-11B-Vision-Instruct" is not a refusal however its
+// request failed.
+func isVisionRefusal(err error, model string) bool {
 	if err == nil {
 		return false
 	}
 	lower := strings.ToLower(err.Error())
+	if m := strings.ToLower(strings.TrimSpace(model)); m != "" {
+		names := []string{m}
+		if i := strings.LastIndex(m, "/"); i >= 0 {
+			names = append(names, m[i+1:])
+		}
+		for _, name := range names {
+			// Not a name that is itself one of the refusal's words: a
+			// model aliased "vision" or "acme/image" would take "does not
+			// support vision" with it.
+			if !isRefusalPhrase(name) {
+				lower = withoutName(lower, name)
+			}
+		}
+	}
 	for _, p := range notVisionRefusal {
 		if strings.Contains(lower, p) {
 			return false
 		}
+	}
+	// vLLM's per-prompt image limit: "At most 1 image(s) may be provided
+	// in one prompt." A model that takes one image takes images; at most
+	// 0 is a server that takes none, and that is a refusal.
+	if n, found := imageCap(lower); found && n > 0 {
+		return false
 	}
 	for _, p := range visionRefusalPhrases {
 		if strings.Contains(lower, p) {
@@ -427,6 +485,88 @@ func isVisionRefusal(err error) bool {
 		}
 	}
 	return false
+}
+
+// imageCountLimit and imageCountLimitSet match vLLM's per-prompt limit on
+// images, with the number it allows, in the two ways vLLM has worded it:
+// "At most 1 image(s) may be provided in one prompt.", and "You set or
+// defaulted to '{"image": 1}' in `--limit-mm-per-prompt`, but passed 2
+// image items in the same prompt." (whose quotes may arrive escaped,
+// inside a JSON error body).
+var (
+	imageCountLimit    = regexp.MustCompile(`at most (\d+) image`)
+	imageCountLimitSet = regexp.MustCompile(`\\?"image\\?"\s*:\s*(\d+)`)
+)
+
+// imageCap reads a lowercased error message for vLLM's image limit:
+// the number it allows, and whether the message is one at all.
+func imageCap(lower string) (int, bool) {
+	m := imageCountLimit.FindStringSubmatch(lower)
+	if m == nil && strings.Contains(lower, "limit-mm-per-prompt") {
+		m = imageCountLimitSet.FindStringSubmatch(lower)
+	}
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// ImageCountLimit reads a server's refusal of a request for carrying more
+// images than it takes, and the number it takes. vLLM's words, set by its
+// --limit-mm-per-prompt: "At most 1 image(s) may be provided in one
+// prompt." ok is false for any other error, and for a limit of zero,
+// which is a server that takes no images (see isVisionRefusal).
+func ImageCountLimit(err error) (n int, ok bool) {
+	if err == nil {
+		return 0, false
+	}
+	n, found := imageCap(strings.ToLower(err.Error()))
+	if !found || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+func isRefusalPhrase(name string) bool {
+	for _, p := range visionRefusalPhrases {
+		if name == p {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutName is s with each occurrence of name that stands on its own
+// (no letter or digit on either side) blanked out. On its own, so a model
+// called "m" does not take the m out of "image".
+func withoutName(s, name string) string {
+	if name == "" {
+		return s
+	}
+	alnum := func(b byte) bool { return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' }
+	var out strings.Builder
+	written, from := 0, 0
+	for {
+		j := strings.Index(s[from:], name)
+		if j < 0 {
+			break
+		}
+		i := from + j
+		end := i + len(name)
+		if (i > 0 && alnum(s[i-1])) || (end < len(s) && alnum(s[end])) {
+			from = i + 1
+			continue
+		}
+		out.WriteString(s[written:i])
+		out.WriteString(" ")
+		written, from = end, end
+	}
+	out.WriteString(s[written:])
+	return out.String()
 }
 
 // SendableToolInput is a tool call's arguments as they go back to a model in
@@ -535,7 +675,7 @@ func trimLineEnds(s string) string {
 // it, to a model whose profile says it is sent images. The profile is what
 // changes that.
 func wrapVisionRefusal(err error, model string) error {
-	if !isVisionRefusal(err) {
+	if !isVisionRefusal(err, model) {
 		return err
 	}
 	return fmt.Errorf("%w\n\nhint: %s appears not to accept images. Set \"vision\": false on its profile "+

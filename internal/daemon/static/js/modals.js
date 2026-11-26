@@ -3,12 +3,12 @@ import {
   permissionTextEl, permissionAllowAlwaysBtn, permissionAllowSessionBtn,
   permissionOutsideEl, permissionAllowDirBtn, permissionAllowOutsideBtn,
   delegateModal, delegateEnabledCheckbox, delegateAgentSelect, delegateMatchListEl,
-  delegateMatchInput, delegateNote,
+  delegateMatchInput, delegateNote, delegateWarn,
   permissionSettingsModal, skipPermissionsCheckbox, skipToolsCheckbox,
   readOutsideCheckbox, writeOutsideCheckbox, permissionScopeNote,
   permissionWorkspaceNote, rememberedOutsideEl, permissionRulesListEl,
   ruleToolInput, ruleMatchInput, ruleDecisionSelect,
-  permissionSettingsNote,
+  permissionRulesWarn, permissionSettingsNote,
   workspaceModal, workspaceInput, workspaceNote, workspaceBrowseBtn, workspaceStopBusyBtn,
   effortModal, effortModelEl, effortLevelsEl, effortNoteEl, effortDefaultBtn, effortCloseBtn,
 } from './dom.js';
@@ -19,7 +19,7 @@ import { setInputLocked, renderCommDot } from './composer.js';
 import { renderPermissionStatus, renderAutoDelegate, renderWorkspace, renderEffort } from './render.js';
 import { Modal } from './modal.js';
 import { usageView } from './usage.js';
-import { settings } from './settings.js';
+import { settings, unsavedWarning } from './settings.js';
 import { taskView } from './taskview.js';
 import { anyPromptOpen } from './prompt.js';
 // Circular with sessions.js, which imports permissionRequest from here —
@@ -113,36 +113,126 @@ export function openEffort() {
 effortDefaultBtn.addEventListener('click', () => chooseEffort(''));
 effortCloseBtn.addEventListener('click', () => effort.close());
 
+// What every switch says under it for a change the daemon applied and
+// could not write to config.json.
+const NOT_SAVED = 'Applied, but not saved to config.json, so it lasts only until the daemon restarts';
+
+// serial runs one change at a time, in the order they were made: the
+// next is not sent until the one before it has been answered and drawn.
+//
+// The delegation panel and the rules list do not hold their controls
+// while a request is out, so a second change used to be sent before the
+// first was answered. The daemon applied them in order, and the answers
+// could arrive in the other one. The page then drew the older value last
+// (the agent chosen first, the switch as it was first set), listed rules
+// in an order the daemon does not hold them in, lost a rule that was
+// removed and added again, and let the answer to an earlier save decide
+// the warning about a later one. One at a time, the answers cannot cross.
+function serial() {
+  let last = Promise.resolve();
+  return (change) => {
+    const done = last.then(change);
+    // A change that throws has reported it to whoever made it, and the
+    // ones behind it still run.
+    last = done.catch(() => {});
+    return done;
+  };
+}
+
 // ---- Auto-delegation modal ----
 
 // saveAutoDelegate posts only the fields given, so the panel's three
 // controls each change one thing without restating the others. Every
 // change applies to the running loop immediately and is written to
 // config.json — see POST /api/settings/auto-delegate.
-export async function saveAutoDelegate(patch) {
+//
+// The daemon answers in two parts, as it does for Smart Agent: what it
+// now holds, which is what the panel has to show, and whether config.json
+// was written. A request that fails is one it refused before applying
+// anything: an agent it does not know, or fewer than two to choose from.
+//
+// Only the fields this request moved are taken from the answer. The
+// answer carries the whole setting, and another window can have moved
+// the rest of it since this page last read it.
+//
+// A patch can be given as a function, which is called when its turn
+// comes. The patterns are sent as a whole list, so a pattern added while
+// another change was still out has to be added to the list as that
+// change left it, not as it was when the button was pressed: built
+// early, the second of two quick additions sent a list without the
+// first, and the daemon dropped it. A function that answers null has
+// found nothing left to change.
+//
+// The switch and the target (the agent and the patterns) are written to
+// the file separately, so each has its own warning: saving one says
+// nothing about the other, and a warning goes when its own half is saved.
+const delegationChanges = serial();
+
+// What the daemon said when it refused the last change that was sent,
+// and '' once a change has been applied since. The line under the panel
+// is drawn from it (renderDelegatePanel), where it used to be read back
+// from whether the line carried the error mark. A press that sent
+// nothing then took the mark and left the words: a pattern the list
+// already had, added after a refusal. Found by review.
+let delegateRefusal = '';
+
+export function saveAutoDelegate(patch) {
+  return delegationChanges(() => {
+    const now = typeof patch === 'function' ? patch() : patch;
+    return now ? sendAutoDelegate(now) : true;
+  });
+}
+
+async function sendAutoDelegate(patch) {
+  let res;
   try {
-    await apiClient.setAutoDelegate(patch);
+    res = await apiClient.setAutoDelegate(patch);
   } catch (err) {
-    delegateNote.textContent = String(err);
-    delegateNote.classList.add('err');
+    delegateRefusal = String(err);
+    // Nothing was applied, so the control that was moved goes back to
+    // what the daemon has.
+    renderDelegatePanel();
     return false;
   }
-  if (typeof patch.enabled === 'boolean') app.autoDelegate = patch.enabled;
-  if (typeof patch.agent === 'string') app.autoDelegateAgent = patch.agent;
-  if (Array.isArray(patch.match)) app.autoDelegateMatch = patch.match.slice();
+  const held = res || {};
+  if (typeof patch.enabled === 'boolean') {
+    app.autoDelegate = typeof held.auto_delegate === 'boolean' ? held.auto_delegate : patch.enabled;
+  }
+  if (typeof patch.agent === 'string') {
+    app.autoDelegateAgent = typeof held.auto_delegate_agent === 'string' ? held.auto_delegate_agent : patch.agent;
+  }
+  if (Array.isArray(patch.match)) {
+    app.autoDelegateMatch = (Array.isArray(held.auto_delegate_match) ? held.auto_delegate_match : patch.match).slice();
+  }
+
+  // '' for a save that reached the file, which takes the warning away.
+  const reason = held.persisted === false ? held.error || 'unknown error' : '';
+  if (typeof patch.enabled === 'boolean') {
+    unsavedWarning('auto_delegate', reason && `The switch: ${NOT_SAVED}: ${reason}`);
+  }
+  if (typeof patch.agent === 'string' || Array.isArray(patch.match)) {
+    unsavedWarning('auto_delegate_target', reason && `The agent and patterns: ${NOT_SAVED}: ${reason}`);
+  }
+  // A refusal was about an earlier request, and this one was applied.
+  delegateRefusal = '';
   renderAutoDelegate();
   renderDelegatePanel();
   return true;
 }
 
 export function openAutoDelegateSettings() {
-  delegateNote.classList.remove('err');
+  delegateRefusal = '';
   renderDelegatePanel();
   delegate.open();
 }
 
 export function renderDelegatePanel() {
   delegateEnabledCheckbox.checked = app.autoDelegate;
+  // Kept through every draw: opening the panel again, another window's
+  // change, the daemon's announcement of this one.
+  const warning = [unsavedWarning('auto_delegate'), unsavedWarning('auto_delegate_target')].filter(Boolean).join(' ');
+  delegateWarn.textContent = warning;
+  delegateWarn.hidden = !warning;
 
   // Only agents other than the one answering can be delegation targets:
   // delegating to the running agent would recurse, and the daemon refuses
@@ -178,19 +268,28 @@ export function renderDelegatePanel() {
     const removeBtn = document.createElement('button');
     removeBtn.textContent = 'remove';
     removeBtn.addEventListener('click', () => {
-      saveAutoDelegate({ match: app.autoDelegateMatch.filter(p => p !== pattern) });
+      // Nothing is sent for a pattern an earlier removal already took.
+      saveAutoDelegate(() => (app.autoDelegateMatch.includes(pattern)
+        ? { match: app.autoDelegateMatch.filter(p => p !== pattern) }
+        : null));
     });
     row.appendChild(removeBtn);
     delegateMatchListEl.appendChild(row);
   }
 
-  if (!delegateNote.classList.contains('err')) {
+  delegateNote.classList.toggle('err', !!delegateRefusal);
+  if (delegateRefusal) {
+    delegateNote.textContent = delegateRefusal;
+  } else {
     if (app.autoDelegate && !app.autoDelegateAgent) {
       delegateNote.textContent = 'On, but no agent is chosen, so nothing is delegated.';
     } else if (app.autoDelegate && app.autoDelegateMatch.length === 0) {
       delegateNote.textContent = 'On, but no pattern matches anything yet, so nothing is delegated.';
     } else {
-      delegateNote.textContent = 'Changes apply to the next prompt and are written to config.json.';
+      // Not said beside a warning that one was not written.
+      delegateNote.textContent = warning
+        ? 'Changes apply to the next prompt.'
+        : 'Changes apply to the next prompt and are written to config.json.';
     }
   }
 }
@@ -204,10 +303,17 @@ export function refreshDelegatePanelIfOpen() {
 
 export function addDelegateMatch() {
   const pattern = delegateMatchInput.value.trim();
-  if (!pattern || app.autoDelegateMatch.includes(pattern)) return;
-  delegateNote.classList.remove('err');
-  saveAutoDelegate({ match: app.autoDelegateMatch.concat([pattern]) }).then(ok => {
-    if (ok) delegateMatchInput.value = '';
+  // Whether the list already has it is asked when this change's turn
+  // comes, below. Asked here, a pattern added again while its own
+  // removal was still out was found in the list and dropped, and the
+  // removal then took it. Found by review.
+  if (!pattern) return;
+  saveAutoDelegate(() => (app.autoDelegateMatch.includes(pattern)
+    ? null
+    : { match: app.autoDelegateMatch.concat([pattern]) })).then(ok => {
+    // Only what was added is cleared: the next pattern may already be
+    // typed by the time this one is answered.
+    if (ok && delegateMatchInput.value.trim() === pattern) delegateMatchInput.value = '';
   });
 }
 
@@ -217,7 +323,120 @@ export function closeDelegateModal() {
 
 // ---- Permission settings modal ----
 
+// Rules are written to config.json one at a time, so a rule the daemon
+// applied and could not write is remembered by name. A later rule that
+// is saved says nothing about an earlier one that was not, which is why
+// this is a list and not the one warning a switch keeps.
+//
+// An entry is a rule the daemon and the file disagree about: in force
+// and not in the file, or in the file and no longer in force. It goes
+// when they agree again, which is two ways. The same rule is added or
+// removed and that is saved. Or the change is taken back: a rule added
+// and not saved, then removed, is in neither, whether or not the removal
+// was saved. What the file holds is what was listed before the first
+// change that was not saved, since a rule with no entry here is one the
+// two agree about.
+//
+// A rule is one of two kinds with the same text: a pattern, which is
+// what this window adds, and an exact command, which "always allow" at
+// a prompt writes and the list marks "(exact)". The daemon keeps them
+// apart. It adds a pattern beside an exact rule of the same text, and it
+// removes both when asked to remove that text. So both are followed
+// here, for what is in force and for what the file holds: with only the
+// text compared, a pattern added beside an exact rule was not listed and
+// not warned about, and an exact rule in the file replaced by a pattern
+// in force read as nothing having changed.
+const unsavedRules = new Map();
+
+// ruleKinds says which kinds of one rule the list holds. The list is
+// what the daemon has in force, since every change here is applied to it
+// as the daemon applies it.
+function ruleKinds(tool, match, decision) {
+  const same = (app.permissionRules[tool] || []).filter(r => r.match === match && r.decision === decision);
+  return { pattern: same.some(r => !r.literal), exact: same.some(r => !!r.literal) };
+}
+
+// applyRuleChange does to the list what the daemon did to its own: a
+// rule added is one more pattern unless that pattern is there already,
+// and a rule removed takes every rule of that text, exact ones included.
+// It then records whether config.json is believed to hold the same.
+function applyRuleChange(change, tool, match, decision, res) {
+  const before = ruleKinds(tool, match, decision);
+  if (change === 'added') {
+    if (!before.pattern) (app.permissionRules[tool] = app.permissionRules[tool] || []).push({ match, decision });
+  } else {
+    const kept = (app.permissionRules[tool] || []).filter(r => !(r.match === match && r.decision === decision));
+    if (kept.length > 0) app.permissionRules[tool] = kept;
+    else delete app.permissionRules[tool];
+  }
+  const inForce = ruleKinds(tool, match, decision);
+
+  const key = JSON.stringify([tool, match, decision]);
+  const entry = unsavedRules.get(key);
+  const saved = !(res && res.persisted === false);
+  let inFile = entry ? entry.inFile : before;
+  // A save that worked did to the file what was done to the list.
+  if (saved) inFile = change === 'added' ? { pattern: true, exact: inFile.exact } : { pattern: false, exact: false };
+
+  const name = (exact) => `${tool}: "${match}"${exact ? ' (exact)' : ''} -> ${decision}`;
+  const differs = [];
+  if (inForce.pattern !== inFile.pattern) differs.push(`${inForce.pattern ? 'added' : 'removed'} ${name(false)}`);
+  if (inForce.exact !== inFile.exact) differs.push(`${inForce.exact ? 'added' : 'removed'} ${name(true)}`);
+  unsavedRules.delete(key);
+  if (differs.length > 0) {
+    const reason = (!saved && res.error) || (entry && entry.reason) || 'unknown error';
+    unsavedRules.set(key, { inFile, text: differs.join('; '), reason });
+  }
+}
+
+function renderUnsavedRules() {
+  const entries = Array.from(unsavedRules.values());
+  permissionRulesWarn.hidden = entries.length === 0;
+  permissionRulesWarn.textContent = entries.length === 0 ? '' :
+    `${NOT_SAVED}: ${entries[entries.length - 1].reason} Not saved: ${entries.map((e) => e.text).join('; ')}.`;
+}
+
+// The line under the rules. Three things are said on it, and each used
+// to be written straight onto it, over whatever was there:
+//
+//   * one of the four switches above the rules could not be changed. Its
+//     box is left where it was put, so this is the only sign the daemon
+//     does not have that value. It stays until the window is opened
+//     again and the boxes are drawn from what the daemon has. Each switch
+//     has its own: a second that could not be changed used to be written
+//     over the first. A later change of the same switch that is taken
+//     does not clear it. The switches are sent as they are pressed, two
+//     can be out at once, and the answer to an earlier one arriving last
+//     took away a failure the box still disagreed about (found by review
+//     of the commit that cleared it);
+//   * a rule the daemon refused. It is about one request, and goes with
+//     the next rule change that is applied;
+//   * with neither, how rules are kept.
+//
+// So they are kept apart and the line is drawn from them. Written over
+// each other, a rule that was added took away the only sign of a switch
+// that was not changed (found by review, in a fix for the opposite: a
+// refused rule still said after a later one was applied).
+const switchFailures = new Map();
+let ruleRefusal = '';
+
+function drawPermissionNote() {
+  permissionSettingsNote.classList.toggle('err', switchFailures.size > 0);
+  const said = [...switchFailures.values(), ruleRefusal].filter(Boolean).join(' ');
+  if (said) {
+    permissionSettingsNote.textContent = said;
+  } else if (!app.canEditPermissions) {
+    permissionSettingsNote.textContent = 'No config.json path is available in this run, so rules are read-only.';
+  } else {
+    // Not said beside a warning that one was not written.
+    permissionSettingsNote.textContent = unsavedRules.size > 0
+      ? 'Rules apply immediately. The four switches above are saved with the conversation.'
+      : 'Rules apply immediately and are written to config.json. The four switches above are saved with the conversation.';
+  }
+}
+
 export function renderPermissionRulesList() {
+  renderUnsavedRules();
   permissionRulesListEl.innerHTML = '';
   const tools = Object.keys(app.permissionRules).sort();
   if (tools.length === 0) {
@@ -298,8 +517,8 @@ async function setSessionSwitch(name, enabled) {
   try {
     applySessionPermissions(await apiClient.setSessionPermission(session.sessionID, name, enabled));
   } catch (err) {
-    permissionSettingsNote.textContent = `could not change ${name}: ${err.message}`;
-    permissionSettingsNote.classList.add('err');
+    switchFailures.set(name, `could not change ${name}: ${err.message}`);
+    drawPermissionNote();
   }
 }
 
@@ -358,10 +577,9 @@ function drawPermissionSettings() {
 export function openPermissionSettings() {
   drawPermissionSettings();
   ruleToolInput.disabled = ruleMatchInput.disabled = ruleDecisionSelect.disabled = !app.canEditPermissions;
-  permissionSettingsNote.classList.remove('err');
-  permissionSettingsNote.textContent = app.canEditPermissions
-    ? 'Rules apply immediately and are written to config.json. The four switches above are saved with the conversation.'
-    : 'No config.json path is available in this run, so rules are read-only.';
+  switchFailures.clear();
+  ruleRefusal = '';
+  drawPermissionNote();
   renderPermissionRulesList();
   permissionSettings.open();
 }
@@ -377,34 +595,52 @@ export function closePermissionSettings() {
   permissionSettings.close();
 }
 
-export async function addPermissionRule() {
+// Rule changes go one at a time, like the delegation panel's, and each
+// is applied to the list when it is answered. The answer is in two
+// parts: the rule is in force either way, and "persisted" says whether
+// config.json has it.
+const ruleChanges = serial();
+
+export function addPermissionRule() {
   const tool = ruleToolInput.value.trim();
   const match = ruleMatchInput.value.trim();
   const decision = ruleDecisionSelect.value;
-  if (!tool || !match) return;
-  try {
-    await apiClient.addPermissionRule(tool, match, decision);
-    app.permissionRules[tool] = app.permissionRules[tool] || [];
-    app.permissionRules[tool].push({ match, decision });
-    ruleToolInput.value = '';
-    ruleMatchInput.value = '';
-    renderPermissionRulesList();
-    renderPermissionStatus();
-  } catch (err) {
-    permissionSettingsNote.textContent = `Failed to add rule: ${String(err)}`;
-  }
+  if (!tool || !match) return undefined;
+  return ruleChanges(async () => {
+    try {
+      const res = await apiClient.addPermissionRule(tool, match, decision);
+      applyRuleChange('added', tool, match, decision, res);
+      // Only what was added is cleared: the next rule may already be
+      // typed by the time this one is answered.
+      if (ruleToolInput.value.trim() === tool && ruleMatchInput.value.trim() === match && ruleDecisionSelect.value === decision) {
+        ruleToolInput.value = '';
+        ruleMatchInput.value = '';
+      }
+      ruleRefusal = '';
+      drawPermissionNote();
+      renderPermissionRulesList();
+      renderPermissionStatus();
+    } catch (err) {
+      ruleRefusal = `Failed to add rule: ${String(err)}`;
+      drawPermissionNote();
+    }
+  });
 }
 
-async function removePermissionRule(tool, rule) {
-  try {
-    await apiClient.removePermissionRule(tool, rule.match, rule.decision);
-    app.permissionRules[tool] = (app.permissionRules[tool] || []).filter(r => !(r.match === rule.match && r.decision === rule.decision));
-    if (app.permissionRules[tool].length === 0) delete app.permissionRules[tool];
-    renderPermissionRulesList();
-    renderPermissionStatus();
-  } catch (err) {
-    permissionSettingsNote.textContent = `Failed to remove rule: ${String(err)}`;
-  }
+function removePermissionRule(tool, rule) {
+  return ruleChanges(async () => {
+    try {
+      const res = await apiClient.removePermissionRule(tool, rule.match, rule.decision);
+      applyRuleChange('removed', tool, rule.match, rule.decision, res);
+      ruleRefusal = '';
+      drawPermissionNote();
+      renderPermissionRulesList();
+      renderPermissionStatus();
+    } catch (err) {
+      ruleRefusal = `Failed to remove rule: ${String(err)}`;
+      drawPermissionNote();
+    }
+  });
 }
 
 // ---- Permission request modal (SSE-driven; see events.js) ----

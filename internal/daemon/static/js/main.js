@@ -26,6 +26,7 @@ import {
 import { loadAgents, loadCommands, loadSkills, loadSlashCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent, resetMCPServers } from './loaders.js';
 import { loadSessions, selectSession, createNewSession, deleteAllSessions, wireArchiveDrop, wireSessionDragGuard, loadArchived, rememberedOpenSession, renderSessionList, promptCreateGroup } from './sessions.js';
 import { wireZoom, applyZoom } from './zoom.js';
+import { readPref } from './prefs.js';
 import {
   openScheduleDialog, closeScheduleDialog, saveSchedule, previewWhen,
   closeScheduleDetails,
@@ -45,7 +46,11 @@ import { closeTaskView, cancelOpenTask, deleteOpenTask, deleteAllTasks, taskView
 import { wirePromptDialog, askText, askConfirm, anyPromptOpen } from './prompt.js';
 import { initResizers } from './resize.js';
 import { tryComplete, resetCompletion } from './complete.js';
-import { initSettings, settings } from './settings.js';
+import { initSettings, settings, refreshSettingsIfOpen } from './settings.js';
+import { initBrowserPanel, renderBrowserPanel } from './browser.js';
+import { initSSHPanel, renderSSHPanel } from './ssh.js';
+import { initPowerShellPanel, renderPowerShellPanel } from './powershell.js';
+import { wireExternalLinks } from './links.js';
 
 agentSelectEl.addEventListener('change', async () => {
   const name = agentSelectEl.value;
@@ -320,6 +325,10 @@ function initWindowControls() {
 
 async function init() {
   initWindowControls();
+  initBrowserPanel();
+  initSSHPanel();
+  initPowerShellPanel();
+  wireExternalLinks();
   initResizers();
   initSettings();
   wirePromptDialog();
@@ -343,6 +352,14 @@ async function init() {
   // reads both the settings and the agent list, and whichever of those two
   // landed second would otherwise decide what it shows.
   renderStatusBar();
+  // And the settings window, if somebody opened it before the settings
+  // arrived: it was drawn from the values the page starts with.
+  refreshSettingsIfOpen();
+  // Likewise the browser panel: the conversation can open before the
+  // setting that decides whether the panel is drawn has arrived.
+  renderBrowserPanel();
+  renderSSHPanel();
+  renderPowerShellPanel();
 
   // The section stays collapsed by default: it is where things go to be
   // out of the way. What it does not do any more is stay unloaded, for
@@ -358,9 +375,7 @@ async function init() {
   if (typeof window.addEventListener === 'function') {
     window.addEventListener('resize', autoResizeInput);
   }
-  try {
-    app.archiveOpen = !!localStorage.getItem('archiveOpen');
-  } catch { /* private window, or storage refused: stay collapsed */ }
+  app.archiveOpen = !!readPref('archiveOpen');
   // Fetched once at load whether or not the section is open, because the
   // header carries a count and a count that appears only after the first
   // expand is one nobody can trust. One request, on a page that already
@@ -400,20 +415,29 @@ export { diffLines, editDiffForTool } from './diff.js';
 export { jumpToTurn } from './transcript.js';
 export { helpLines, isPlainPrompt, tryLocalCommand } from './commands.js';
 export { applyEvent } from './events.js';
-export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage, autoResizeInput, getAttachedImages, clearAttachedImages, removeAttachedImage, getAttachmentsEl, handlePaste } from './composer.js';
+export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage, autoResizeInput, getAttachedImages, clearAttachedImages, removeAttachedImage, getAttachmentsEl, handlePaste, fitWithin } from './composer.js';
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
 export { renderSchedules, applyScheduleEvent, loadSchedules, openScheduleDetails } from './schedules.js';
-export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace, renderPermissionRulesList } from './modals.js';
+export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace, renderPermissionRulesList, saveAutoDelegate } from './modals.js';
 export { usageView, openUsage, closeUsage, figuresOf, totalOf } from './usage.js';
 export { forkSession } from './sessions.js';
-export { setPanelWidth } from './resize.js';
+export { setPanelWidth, CENTER_MIN } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
+export { renderBrowserPanel, STALE_FALLBACK_MS, pagePoint, keyEventFor, editCommandFor, modifierBits, browserShown, inGUI } from './browser.js';
+export { renderSSHPanel, runStyle, keyAction, fitSize, inputPlace, sshShown, VIEWER, SCROLL_KEEP } from './ssh.js';
+export { renderPowerShellPanel, powershellShown } from './powershell.js';
+export { fitsWith, makeRoomFor, showPanelsFor, forgetPanels, VIEWS_KEEP, SSH_BOUNDS, PS_BOUNDS } from './resize.js';
+export { snapshotURL } from './transcript.js';
+export { externalHref, openExternally } from './links.js';
+export { linkify, splitURL } from './markdown.js';
+export { importNote } from './settings.js';
 export { loadSessions, renderSessionList, selectSession, deleteSessionConfirm, reorderList, landsBelow, groupLandsBelow, dropGroupOn, wireSessionDragGuard, dropSessionOn, sessionMatchesFilter, dropSessionOnGroupHeader, dropSessionToUngroupedTop, promptCreateGroup, promptRenameGroup, promptDeleteGroup, readCollapsedGroups, writeCollapsedGroups } from './sessions.js';
 export {
   openFind, closeFind, findIsOpen, stepFind, runFind, findRefresh,
   findMatches, markRange, unmark, searchableBlocks,
 } from './find.js';
 export { resetMCPServers, mcpResetConfirmText } from './loaders.js';
-export { wireZoom, applyZoom } from './zoom.js';
+export { wireZoom, applyZoom, zoomKey, zoomWheel } from './zoom.js';
+export { readPref, readShared, writePref } from './prefs.js';
 export { wirePromptDialog, askText, askConfirm, anyPromptOpen } from './prompt.js';

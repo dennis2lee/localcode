@@ -98,7 +98,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	agentCfg := l.agentConfig(ctx, resolveAgent)
 	// Whether this model is sent images, before the tool list is built:
 	// view_image is offered only when it is. See view_image.go.
-	ctx = withViewsImages(ctx, profileViewsImages(profile, modelOverride))
+	sees := l.seesImages(ctx, profile, modelOverride).sees
 
 	// The tool allowlist for this turn, resolved before the prompt is
 	// assembled rather than after, so the assembly can condition on the
@@ -106,12 +106,16 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// same reason it always was: flipping Smart Agent off mid-turn must
 	// not leave the model holding a tool_use for a tool the next
 	// request no longer advertises.
+	ctx = withViewsImages(ctx, sees)
+	ctx = withImageLimit(ctx, l.imageLimitFor(profileWithModel(profile, modelOverride)))
 	allowedTools := l.toolsForTurn(ctx, agentCfg)
 	advertised := l.Tools.NamesFor(ctx, allowedTools)
-	// The list this turn started with. A fallback to a model that cannot
-	// see narrows it and a later one to a model that can puts it back, so
-	// each is derived from this rather than from the one before.
-	turnTools := allowedTools
+	// The list a fallback is derived from: the one a model that sees would
+	// be offered, less view_image for a fallback that cannot (see
+	// fallbackTools). Taken from the first model's own list, a turn that
+	// started on a model that cannot see offered view_image to no
+	// fallback, including one that can.
+	turnTools := l.toolsForTurn(withViewsImages(ctx, true), agentCfg)
 
 	// Before the prompt is built from it: a conversation's first turn
 	// counts toward the memory retirement clock and may retire notes,
@@ -216,6 +220,13 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// length of the history, and asking the model again would spend the
 	// rest of the window finding that out.
 	rescues := 0
+	// How often this turn has asked the model it is on again with fewer
+	// images for its server's cap; reset when a fallback moves the turn
+	// on. Learning a cap lowers what the next request carries, so one
+	// retry per model is all it takes; the bound is for the day that stops
+	// being true, when the same refusal would otherwise be asked forever.
+	// The chain of fallbacks is finite, so the turn is bounded too.
+	imageCapRetries := 0
 	// How many times this turn has moved down the fallback chain. Reported
 	// with the turn rather than kept for its own sake: a session that is
 	// quietly answering on the third model in the chain is a fact about
@@ -263,6 +274,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// they have been told those did not reach the model that answered.
 	attachedImages := countImages([]provider.Message{{Content: openingImages}})
 	imagesNoticed := false
+	// And whether they have been told that a server's cap on images in a
+	// request left some of them out. See image_limit.go.
+	capNoticed := false
 
 	for {
 		messages := l.requestHistory(ctx, sessionID)
@@ -402,6 +416,22 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		stream, err := run.client.Chat(ctx, req)
 		if err != nil {
 			l.traceModel(ctx, traceID, sessionID, trRun, streamUsage{}, "", time.Since(callStarted), err)
+			l.forgetVisionOnRefusal(run.profile, err)
+			// A server that takes fewer images than this request carried
+			// is asked again at once with as many as it takes. Only when
+			// the request carried more: one already within the cap is
+			// refused for some other reason, and asking again would
+			// repeat it.
+			if n, ok := l.learnImageLimit(run.profile, err, countImages(req.Messages)); ok && imageCapRetries < maxImageCapRetries {
+				imageCapRetries++
+				capNoticed = true
+				ctx = withImageLimit(ctx, l.imageLimitFor(run.profile))
+				l.Store.Append(sessionID, events.TypeError, map[string]any{
+					"error":     imageLimitNotice(run, n),
+					"recovered": true,
+				})
+				continue
+			}
 			// Too long is a recoverable condition, not an error to hand
 			// back: compacting is exactly what the session needs and what
 			// the user would have to do by hand anyway. Reported in the
@@ -501,7 +531,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				// A model that cannot see is not offered view_image, here
 				// as at the start of a turn, and before the prompt for it
 				// is assembled from the tools on offer.
-				allowedTools, advertised = l.fallbackTools(ctx, turnTools, profileViewsImages(next.profile, modelOverride))
+				allowedTools, advertised = l.fallbackTools(ctx, turnTools, l.seesImages(ctx, next.profile, modelOverride).sees)
 				if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride, chainAt, advertised); berr == nil {
 					l.reportFallback(sessionID, run, newRun, err)
 					fallbacks++
@@ -513,10 +543,12 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					run = newRun
 					// A model that cannot see is sent no image from here
 					// on. One already in the history stays there.
-					ctx = withViewsImages(ctx, run.profile.ViewsImages())
+					ctx = withViewsImages(ctx, l.seesImages(ctx, run.profile, "").sees)
+					ctx = withImageLimit(ctx, l.imageLimitFor(run.profile))
 					// A new endpoint gets its own retry allowance, and
 					// any retry still pending belonged to the old one.
 					sameTries = 0
+					imageCapRetries = 0
 					pending = pendingRetry{}
 					// The trim budget belongs to the old window.
 					trimBudget = l.contextWindow(ctx, run.profile) / 2
@@ -544,6 +576,21 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			})
 		}
 		if err != nil {
+			l.forgetVisionOnRefusal(run.profile, err)
+			// As for a request refused outright, when the stream had not
+			// said anything yet.
+			if !firstOutput(assistantBlocks) {
+				if n, ok := l.learnImageLimit(run.profile, err, countImages(req.Messages)); ok && imageCapRetries < maxImageCapRetries {
+					imageCapRetries++
+					capNoticed = true
+					ctx = withImageLimit(ctx, l.imageLimitFor(run.profile))
+					l.Store.Append(sessionID, events.TypeError, map[string]any{
+						"error":     imageLimitNotice(run, n),
+						"recovered": true,
+					})
+					continue
+				}
+			}
 			// A stream that died before saying anything can be asked
 			// again elsewhere. One that had already written into the
 			// transcript cannot: the conversation would end up carrying a
@@ -561,7 +608,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					return err
 				}
 				if next, ok := l.nextFallback(chain, &chainAt, err); ok {
-					allowedTools, advertised = l.fallbackTools(ctx, turnTools, profileViewsImages(next.profile, modelOverride))
+					allowedTools, advertised = l.fallbackTools(ctx, turnTools, l.seesImages(ctx, next.profile, modelOverride).sees)
 					if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride, chainAt, advertised); berr == nil {
 						l.reportFallback(sessionID, run, newRun, err)
 						fallbacks++
@@ -571,8 +618,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 						})
 						l.runRetryHook(ctx, sessionID, run, newRun, err)
 						run = newRun
-						ctx = withViewsImages(ctx, run.profile.ViewsImages())
+						ctx = withViewsImages(ctx, l.seesImages(ctx, run.profile, "").sees)
+						ctx = withImageLimit(ctx, l.imageLimitFor(run.profile))
 						sameTries = 0
+						imageCapRetries = 0
 						trimBudget = l.contextWindow(ctx, run.profile) / 2
 						continue
 					}
@@ -593,7 +642,19 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		if attachedImages > 0 && !viewsImages(ctx) && !imagesNoticed && len(assistantBlocks) > 0 {
 			imagesNoticed = true
 			l.Store.Append(sessionID, events.TypeError, map[string]any{
-				"error":     imagesLeftOutNotice(run, attachedImages),
+				"error":     imagesLeftOutNotice(run, attachedImages, l.knownSeesImages(run.profile, "").why),
+				"recovered": true,
+			})
+		}
+		// A cap learned earlier, in this conversation or another, leaves
+		// out the attached images past it without any request being
+		// refused, so nothing else would say so. The attached images are
+		// the newest, so the ones past the cap are the ones left out.
+		if cap := imagesPerRequest(ctx); viewsImages(ctx) && attachedImages > cap && cap < provider.MaxImagesPerRequest &&
+			!capNoticed && len(assistantBlocks) > 0 {
+			capNoticed = true
+			l.Store.Append(sessionID, events.TypeError, map[string]any{
+				"error":     capLeftOutNotice(run, cap, attachedImages),
 				"recovered": true,
 			})
 		}
@@ -1080,6 +1141,9 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		// only place a restart can find them.
 		if len(attached) > 0 {
 			endData["images"] = eventImages(attached)
+		}
+		if res.Snapshot != "" {
+			endData["snapshot"] = res.Snapshot
 		}
 		l.Store.Append(sessionID, events.TypeToolEnd, endData)
 		// The result is part of what every later request says, and it

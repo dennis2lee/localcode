@@ -41,8 +41,8 @@ Project rules for agents working in this repo.
   the attempt's log, and a force-cancelled attempt may keep none at all.
   The 44-minute hang above is still undiagnosed for exactly this reason.
 * What it runs, and why each is in it rather than left to memory:
-  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 2,845 tests
-    and 823 subtests over 32 packages, two of the tests skipped on macOS.
+  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 3,313 tests
+    and 1,580 subtests over 36 packages, two of the tests skipped on macOS.
     The same suite runs a second time without `-race`
     (`go test ./... -count=1 -timeout 10m`), because a test whose timing
     only holds at race-detector speed passes the race lane and fails for
@@ -55,10 +55,11 @@ Project rules for agents working in this repo.
     Measured: `-parallel 1` 10s, `-parallel 8` 9s, `-p 1` 61s.
   * `go vet ./...`, `go build -tags gui ./...`, and
     `go test -tags gui -race ./internal/gui/ -count=1 -timeout 10m`
-    (29 tests, CGo). 23 of the 29 are behind the `gui` tag, and only this
-    check compiles them. The 6 in `chrome_test.go` and `logo_test.go` are
+    (33 tests, CGo). 26 of the 33 are behind the `gui` tag, and only this
+    check compiles them. The 7 in `chrome_test.go` and `logo_test.go` are
     untagged on purpose, so the race lane runs them too. The gate runs all
-    29 on macOS, and `gui-windows.yml` runs them on Windows. Both
+    33 on macOS, and `gui-windows.yml` runs 31 of them on Windows: the 2 in
+    `newwindow_other_test.go` test the macOS and Linux link path. Both
     cross-builds run too: `GOOS=windows GOARCH=amd64` and `CGO_ENABLED=0
     GOOS=linux GOARCH=amd64`. Windows and Linux are release targets built
     from this machine, so a break in either is a break in the release.
@@ -68,12 +69,30 @@ Project rules for agents working in this repo.
     that is no longer reported. The "written, tested, never called" shape
     has shipped twice (v0.55.0, v0.57.0); `-test=false` is what makes it
     visible, at the cost of listing the functions only tests call.
-  * The Web UI suite (795 tests in 71 files, deliberately also run by
+  * The Web UI suite (1,122 tests in 83 files, deliberately also run by
     `TestWebUI`, which skips itself when node is absent), the doc-link
     checker, `gofmt`, and `git diff --check HEAD` — `HEAD` because the bare form
     compares against the index and so inspects nothing once changes are
     staged, which is the state a release is cut from.
 * Keep the default build pure Go. The GUI (`internal/gui`) is behind the `gui` build tag and uses CGo; never make a non-tagged package import it.
+* **A test that starts a browser takes its profile directory from
+  `browsertest.ProfileDir(t)`, not from `t.TempDir()`.** The helper writes
+  the profile name first, so nothing is copied from the person's own
+  browser, and it removes the directory with a 30 second wait. Call it
+  before the manager is made, so the browser's close runs before the
+  removal. On Windows `Manager.Close` waits for the browser's own process
+  (up to 30 seconds after a kill) and not for its other processes, which
+  can still hold a file in the profile. `t.TempDir()` fails the test
+  after 2 seconds. Measured over 528 closes on the CI runner, before the
+  close waited for a killed browser: 7 ran into the kill, 2 left the
+  profile held for 1.2 to 1.3 seconds, and helper processes lived up to
+  7.6 seconds. A directory
+  still held after the wait fails the test and names the holding
+  processes.
+* `third_party/vt` is a patched copy of `github.com/charmbracelet/x/vt`,
+  used through a `replace` directive in go.mod. Read its `LOCALCODE.md`
+  before upgrading or dropping it: the patch is what keeps Korean typed at
+  the right margin on the SSH panel's screen.
 * Roughly twenty tests in this repo police the repository rather than the
   product: an AST walk over every process-spawn site, the prompt-asset
   inventory in both directions, config drift against the built-in roster,

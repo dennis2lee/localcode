@@ -225,6 +225,12 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 			"this localcode cannot install updates for you; download it from %s", src))
 		return
 	}
+	// The button restarts the program as "/update" does, closing every
+	// SSH connection: said first, done when clicked again.
+	if err := d.sshUpdateRefusal(time.Now()); err != nil {
+		writeError(w, http.StatusConflict, errors.New(strings.Replace(err.Error(), "Run /update again", "Install again (or run /update)", 1)))
+		return
+	}
 	rel, path, verified, err := d.fetchLatest(r.Context(), false)
 	if err != nil {
 		writeError(w, updateHTTPStatus(err), err)

@@ -144,6 +144,9 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 	if err := updateWhileBusy(d.Handoff != nil, busy, tasks); err != nil {
 		return "", err
 	}
+	if err := d.sshUpdateRefusal(time.Now()); err != nil {
+		return "", err
+	}
 
 	// With a handoff wired the install is the one a handoff needs — a
 	// runnable binary, nothing closing this process — which on Windows is

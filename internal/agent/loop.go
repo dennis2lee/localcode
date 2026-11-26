@@ -13,6 +13,7 @@ import (
 	"localcode/internal/provider"
 	"localcode/internal/session"
 	"localcode/internal/skills"
+	"localcode/internal/sshterm"
 	"localcode/internal/tools"
 	"localcode/internal/trace"
 )
@@ -252,6 +253,25 @@ type Loop struct {
 	// in the permission broker, which is above this package.
 	ForgetOutside func(sessionID string, class tools.OutsideClass) int
 
+	// BrowserViewing reports whether a GUI window is showing this
+	// conversation's browser panel right now. The browser tool is offered
+	// only then: see hiddenTools. Nil (no daemon, no GUI) means never.
+	BrowserViewing func(sessionID string) bool
+	// CloseSSH closes every SSH connection, for "/ssh off". Nil when
+	// there is no SSH manager.
+	CloseSSH func()
+	// SSH holds the conversations' SSH terminals. Nil when there is none.
+	SSH *sshterm.Manager
+	// ClosePowerShell closes every PowerShell terminal, for
+	// "/powershell off". Nil when there is no PowerShell manager.
+	ClosePowerShell func()
+	// PowerShell holds the conversations' PowerShell terminals. Nil where
+	// there is none, which is everywhere but Windows.
+	PowerShell *sshterm.Manager
+	// CloseBrowser quits the browser, for "/browser off". Nil when there
+	// is none.
+	CloseBrowser func()
+
 	// SetSkills replaces the skill list and its prompt index together,
 	// under the loop's own lock, which matters now that "/reset-skills"
 	// can swap them while turns are running. The exported fields stay as
@@ -341,6 +361,17 @@ type Loop struct {
 	// guessed from the model name exactly as before.
 	ProbeContextWindow func(ctx context.Context, providerKey, model string) (int, bool)
 
+	// ProbeVision, if set, shows a model a test image and reports what it
+	// did with it — see (*Loop).seesImages and provider.ProbeVision. Asked
+	// only for a model whose profile does not set "vision" and that is
+	// not a Claude model, once per provider and model.
+	//
+	// A hook for the same reason ProbeContextWindow is one: it is a
+	// request on the wire, one small image and a one-word answer. The
+	// daemon wires it for every provider (see ProbeVisionWith). Left nil,
+	// nothing is asked and such a model is not sent images, as before.
+	ProbeVision func(ctx context.Context, providerKey, model string) (provider.VisionProbe, error)
+
 	// WorkspaceRules, if set, returns the AGENTS.md/CLAUDE.md section for a
 	// directory, and is asked once per turn for the directory the session
 	// is actually working in — see internal/rules.
@@ -411,6 +442,17 @@ type Loop struct {
 	// it did not say" — recorded so a server that has no answer is not
 	// asked again on every turn.
 	probedWindows map[string]int
+
+	// visionCache is what each model did with the test image, keyed by
+	// provider+model, and visionInflight the probes running now. Both
+	// under mu. See vision.go.
+	visionCache    map[string]visionEntry
+	visionInflight map[string]chan struct{}
+
+	// imageLimits is the most images each model's server takes in one
+	// request, keyed by provider+model, where it has said so. Under mu.
+	// See image_limit.go.
+	imageLimits map[string]int
 
 	// SkillsSection is the startup-loaded half of the prompt that used
 	// to be folded into SystemPrompt before the Loop ever saw it. A field

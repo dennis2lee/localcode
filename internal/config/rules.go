@@ -210,6 +210,26 @@ func (t ToolPermission) resolveFor(subject, literal string) (Decision, bool) {
 	return last, matched
 }
 
+// resolveFolded is resolveFor with a glob matched in any case, for a
+// tool whose subject is read without regard to case: PowerShell finds
+// New-Item as new-item, and a rule "New-Item *" has to see both. A
+// literal rule still compares as written.
+func (t ToolPermission) resolveFolded(subject, literal string) (Decision, bool) {
+	if t.Flat != "" {
+		return t.Flat, true
+	}
+	var last Decision
+	matched := false
+	folded := strings.ToLower(subject)
+	for _, r := range t.Rules {
+		if (r.Literal && r.Match == literal) || (!r.Literal && globMatch(strings.ToLower(r.Match), folded)) {
+			last = r.Decision
+			matched = true
+		}
+	}
+	return last, matched
+}
+
 // addRule appends rule to m[tool], first promoting a legacy flat decision
 // to an explicit "*" rule, and refusing an exact duplicate so repeated
 // approvals don't grow the list forever. Shared by the runtime
@@ -328,6 +348,9 @@ var RegisteredToolNames = []string{
 	"session_read",
 	"Command",
 	"Verdict",
+	"browser",
+	"ssh",
+	"powershell",
 	"Debate",
 	"update_plan",
 	"ask_user",
@@ -336,6 +359,11 @@ var RegisteredToolNames = []string{
 	"memory_search",
 	"memory_forget",
 }
+
+// RuleOnlyKeys are permission keys that name no tool of their own: the
+// ssh tool asks about connecting and about typing under these names, so
+// a rule can be written for each apart from the rules for its commands.
+var RuleOnlyKeys = []string{SSHConnectToolName, SSHInputToolName, PowerShellInputToolName}
 
 // IgnoredOpencodeTools lists opencode tools that localcode does not
 // implement. A rule for one of these is vacuous in localcode because
@@ -468,6 +496,11 @@ func ValidPermissionKey(name string) bool {
 			return true
 		}
 	}
+	for _, key := range RuleOnlyKeys {
+		if name == key {
+			return true
+		}
+	}
 	if _, ok := ToolAliases[name]; ok {
 		return true
 	}
@@ -485,6 +518,12 @@ func AcceptedPermissionKeys() string {
 	seen := make(map[string]bool)
 	var list []string
 	for _, name := range RegisteredToolNames {
+		if !seen[name] {
+			seen[name] = true
+			list = append(list, name)
+		}
+	}
+	for _, name := range RuleOnlyKeys {
 		if !seen[name] {
 			seen[name] = true
 			list = append(list, name)
@@ -510,6 +549,55 @@ func AcceptedPermissionKeys() string {
 // than a plain string, so its permission subject needs to be taken apart
 // before matching. See ResolvePermission.
 const BashToolName = "bash"
+
+// The ssh tool's rule names. SSHToolName's subject is a command for the
+// remote shell, resolved as a bash line is: segment by segment, with the
+// same grants. SSHConnectToolName's is where a connection goes, and
+// SSHInputToolName's is text or keys typed into whatever runs there.
+const (
+	SSHToolName        = "ssh"
+	SSHConnectToolName = "ssh_connect"
+	SSHInputToolName   = "ssh_input"
+)
+
+// The powershell tool's rule names. PowerShellToolName's subject is a
+// command for a PowerShell on this computer. It is decided as a command
+// for a shell that does not split lines as bash does: a deny rule found
+// in any part of the line denies it, and an allow that splitting would
+// decide is asked instead. PowerShellInputToolName's is text or keys
+// typed into whatever runs there, asked every time as ssh_input is.
+const (
+	PowerShellToolName      = "powershell"
+	PowerShellInputToolName = "powershell_input"
+)
+
+// IsShellTool reports a tool whose subject is a shell command line.
+func IsShellTool(name string) bool {
+	return name == BashToolName || name == SSHToolName || name == PowerShellToolName
+}
+
+// shellToolKey carries which shell tool a line is being resolved for, so
+// the segment and deny-reach checks look up that tool's rules. Bash when
+// absent.
+type shellToolKey struct{}
+
+func shellToolOf(ctx context.Context) string {
+	if v, ok := ctx.Value(shellToolKey{}).(string); ok {
+		return v
+	}
+	return BashToolName
+}
+
+// remoteShellKey carries whether the remote shell a line is for splits
+// commands as a POSIX shell does (bash or zsh, as its integration said).
+type remoteShellKey struct{}
+
+// WithRemoteShell marks ctx as resolving a command for a remote shell
+// that is POSIX or not. Without it a remote shell is taken as not, and an
+// allow decided by splitting the line becomes ask.
+func WithRemoteShell(ctx context.Context, posix bool) context.Context {
+	return context.WithValue(ctx, remoteShellKey{}, posix)
+}
 
 // ResolvePermission decides whether a call to toolName is allowed
 // automatically, must ask the user, or is denied outright. subject is
@@ -541,6 +629,37 @@ func (c *Config) ResolvePermissionFor(ctx context.Context, toolName, subject str
 	if toolName == BashToolName && subject != "" {
 		return c.resolveShellCommand(ctx, subject, staticRequiresPermission)
 	}
+	if toolName == SSHToolName {
+		if subject == "" {
+			// The ssh tool's call itself: it asks inside, under this name
+			// with the command, or under ssh_connect and ssh_input. Here
+			// only a deny decides.
+			if d := c.resolveOne(ctx, toolName, subject, false); d == DecisionDeny {
+				return DecisionDeny
+			}
+			return DecisionAllow
+		}
+		posix, _ := ctx.Value(remoteShellKey{}).(bool)
+		return c.resolveShellCommandUnder(context.WithValue(ctx, shellToolKey{}, SSHToolName), subject, staticRequiresPermission, posix)
+	}
+	if toolName == PowerShellToolName {
+		if subject == "" {
+			// As for ssh: the tool asks inside, and here only a deny
+			// decides.
+			if d := c.resolveOne(ctx, toolName, subject, false); d == DecisionDeny {
+				return DecisionDeny
+			}
+			return DecisionAllow
+		}
+		// Never POSIX: PowerShell's ";", "|", "&&" and "&" are not bash's,
+		// and its quoting is its own. A deny is also looked for where
+		// PowerShell starts a command and bash does not (powershellPieces).
+		pctx := context.WithValue(ctx, shellToolKey{}, PowerShellToolName)
+		if c.powershellDenied(pctx, subject) {
+			return DecisionDeny
+		}
+		return c.resolveShellCommandUnder(pctx, subject, staticRequiresPermission, false)
+	}
 	return c.resolveOne(ctx, toolName, subject, staticRequiresPermission)
 }
 
@@ -554,6 +673,33 @@ func (c *Config) resolveOne(ctx context.Context, toolName, subject string, stati
 		return DecisionAllow
 	}
 	return d
+}
+
+// DeniedAnywhere reports whether a rule denies subject for toolName at the
+// top level or in any agent's own permission block. It is the answer for
+// something every agent shares, such as the one browser all conversations
+// use, where a request cannot be told apart by the agent it acts for: what
+// any rule denies stays denied, and an agent's allow does not lift a
+// top-level deny there.
+//
+// Of an agent's block, only rules that name toolName count. A persona
+// shut down with "*": "deny" keeps itself from the tool, which it is
+// refused anyway; it does not close the shared thing for every agent.
+func (c *Config) DeniedAnywhere(toolName, subject string) bool {
+	c.permMu.RLock()
+	denied := false
+	for _, agentCfg := range c.Agents {
+		tp, ok := agentCfg.Permission[toolName]
+		if !ok {
+			continue
+		}
+		if d, matched := tp.resolveFor(subject, subject); matched && d == DecisionDeny {
+			denied = true
+			break
+		}
+	}
+	c.permMu.RUnlock()
+	return denied || c.ResolvePermission(toolName, subject, false) == DecisionDeny
 }
 
 // resolveRules resolves toolName and subject against a permissions map,
@@ -570,7 +716,11 @@ func resolveRules(perms map[string]ToolPermission, toolName, subject, literal st
 	// somebody who wrote "write_file" meant write_file, whatever an
 	// opencode key covering it also says.
 	if tp, ok := perms[toolName]; ok {
-		if d, matched := tp.resolveFor(subject, literal); matched {
+		match := tp.resolveFor
+		if toolName == PowerShellToolName {
+			match = tp.resolveFolded
+		}
+		if d, matched := match(subject, literal); matched {
 			return d, true
 		}
 	}
@@ -605,7 +755,7 @@ func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string,
 	defer c.permMu.RUnlock()
 
 	literal := subject
-	if segment, ok := ctx.Value(shellSegmentKey{}).(string); ok && toolName == BashToolName {
+	if segment, ok := ctx.Value(shellSegmentKey{}).(string); ok && toolName == shellToolOf(ctx) {
 		literal = segment
 	}
 
@@ -636,7 +786,7 @@ func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string,
 	// Smart Agent's shipped guards, after the user's own rules so any of
 	// them can be turned off by writing a rule for the same tool, and
 	// before the ordinary builtins because they are the stricter answer.
-	if c.SmartAgentFor(ctx) {
+	if c.smartAgentForLocked(ctx) {
 		if d, matched := secretGuard(toolName, subject); matched {
 			return d
 		}
@@ -657,10 +807,17 @@ func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string,
 // turns them all back off.
 //
 // git is allowed outright because an agent that has to ask before every
-// "git status" is unusable, and because git is the one command set where
-// almost everything is either read-only or recoverable through the reflog.
-// This is only safe alongside resolveShellCommand: matched against the raw
-// command string, "git *" would also green-light "git status && rm -rf ~".
+// "git status" is unusable. That rests on two checks in
+// resolveShellCommand. Matched against the raw command string, "git *"
+// would also green-light "git status && rm -rf ~", so each segment is
+// decided on its own. And git runs other programs on request (an alias
+// starting with "!", core.fsmonitor, rebase --exec, submodule foreach), so
+// a line that asks it to is asked whatever allowed it; see
+// lineRunsGitCommand.
+//
+// What neither check sees is what git reads from the repository: a
+// .git/config or a hook the model wrote runs on an ordinary "git status"
+// or "git commit". docs/USAGE.md lists that and the rest of what is left.
 var builtinRules = map[string][]PermissionRule{
 	BashToolName: {
 		{Match: "git", Decision: DecisionAllow},
@@ -749,7 +906,7 @@ func PermissionRuleFor(toolName, subject string) PermissionRule {
 	if subject == "" {
 		return PermissionRule{Match: "*", Decision: DecisionAllow}
 	}
-	if toolName == BashToolName {
+	if IsShellTool(toolName) {
 		fields := strings.Fields(subject)
 		if len(fields) > 0 {
 			if strings.ContainsAny(fields[0], "*?") {
@@ -845,6 +1002,10 @@ var wideProgramNames = map[string]bool{
 	"eval": true, "exec": true, "xargs": true, "env": true,
 	"start": true, "start-process": true, "saps": true, "call": true,
 	"invoke-expression": true, "iex": true, "invoke-command": true, "icm": true,
+	// Dot-sourcing runs what follows it: ". .\helper.ps1" granted as
+	// ". *" covered ". New-Item marker".
+	".": true, "source": true, "start-job": true, "sajb": true,
+	"import-module": true, "ipmo": true,
 	"wsl": true, "mshta": true, "rundll32": true, "regsvr32": true,
 	"forfiles": true, "wmic": true, "schtasks": true, "msiexec": true,
 	"invoke-item": true, "ii": true,

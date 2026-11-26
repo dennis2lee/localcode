@@ -72,16 +72,16 @@ func TestKnownPermissionDecisionsAreStillStored(t *testing.T) {
 	d, srv := permissionDecisionDaemon(t)
 	for _, decision := range []string{"allow", "ask", "deny"} {
 		status, _ := postPermissionRule(t, srv, "/api/permissions/rules", "bash", "rule-"+decision+" *", decision)
-		if status != http.StatusNoContent {
-			t.Errorf("decision %q: POST status = %d, want 204", decision, status)
+		if status != http.StatusOK {
+			t.Errorf("decision %q: POST status = %d, want 200", decision, status)
 		}
 	}
 	if _, rules := d.Loop.Config.PermissionsSnapshot(); len(rules["bash"]) != 3 {
 		t.Errorf("live config holds %d bash rules, want 3 (one per valid decision)", len(rules["bash"]))
 	}
 	status, _ := postPermissionRule(t, srv, "/api/permissions/rules/remove", "bash", "rule-deny *", "deny")
-	if status != http.StatusNoContent {
-		t.Errorf("remove POST status = %d, want 204", status)
+	if status != http.StatusOK {
+		t.Errorf("remove POST status = %d, want 200", status)
 	}
 	if _, rules := d.Loop.Config.PermissionsSnapshot(); len(rules["bash"]) != 2 {
 		t.Errorf("live config holds %d bash rules after remove, want 2", len(rules["bash"]))

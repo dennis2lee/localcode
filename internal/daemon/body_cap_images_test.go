@@ -33,7 +33,8 @@ func postMessage(t *testing.T, url string, body map[string]any) (int, string) {
 // daemon names. It travels as base64 inside the JSON body, and the body
 // was capped at 1 MB, so an image past about 768 KB, an ordinary
 // screenshot, was refused as "request body too large". The text keeps the
-// 1 MB cap.
+// 1 MB cap. Three images make up the 9 MB, since one image may be at most
+// provider.MaxImageBytes.
 func TestAMessageCarriesImagesUpToTheirOwnLimit(t *testing.T) {
 	d, srv, done := plainDaemon(t)
 	defer done()
@@ -43,15 +44,21 @@ func TestAMessageCarriesImagesUpToTheirOwnLimit(t *testing.T) {
 	url := srv.URL + "/api/sessions/s1/messages"
 	png := func(n int) []byte { return append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, n)...) }
 
-	code, body := postMessage(t, url, map[string]any{"text": "what is this",
-		"images": []map[string]any{{"media_type": "image/png", "data": png(9 << 20)}}})
+	three := func(each int) []map[string]any {
+		var out []map[string]any
+		for i := 0; i < 3; i++ {
+			out = append(out, map[string]any{"media_type": "image/png", "data": png(each)})
+		}
+		return out
+	}
+	code, body := postMessage(t, url, map[string]any{"text": "what is this", "images": three(3 << 20)})
 	if code != http.StatusAccepted {
-		t.Fatalf("a 9 MB image: status %d (%s), want 202", code, body)
+		t.Fatalf("9 MB of images: status %d (%s), want 202", code, body)
 	}
 	waitFor(t, func() bool { return len(d.turns.anyBusy([]string{"s1"})) == 0 })
 
 	code, body = postMessage(t, url, map[string]any{"text": "and this",
-		"images": []map[string]any{{"media_type": "image/png", "data": png(provider.MaxImageBytesPerMessage)}}})
+		"images": three(provider.MaxImageBytesPerMessage/3 + 1)})
 	if code != http.StatusBadRequest || !strings.Contains(body, "10MB limit") {
 		t.Errorf("images over the limit: status %d (%s), want 400 naming the 10MB limit", code, body)
 	}

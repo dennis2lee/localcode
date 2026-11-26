@@ -34,7 +34,7 @@ func (l *Loop) foldsThinking(model string) bool {
 }
 
 // MuseProfiles names the configured profiles that run a muse model,
-// sorted, for the settings window to say whether its Muse tab reaches
+// sorted, for the settings window to say whether its Muse group reaches
 // anything in this config.
 func (l *Loop) MuseProfiles() []string {
 	names := []string{}

@@ -302,3 +302,116 @@ test('a task reply that asked for a tool is drawn once, above the call', async (
   assert.ok(text.indexOf('Let me run the tests.') < text.indexOf('bash'), text);
   assert.ok(text.indexOf('bash') < text.indexOf('All pass.'), text);
 });
+
+// A task's replies are what the window is opened for, and they were plain
+// text in the same voice as the instructions, every tool call with its
+// whole input and result, and the status lines around them. They are
+// rendered as markdown now, as in the transcript, while they stream and
+// when they end.
+test('a task\'s replies are rendered as markdown', async () => {
+  const app = await load();
+  spawnTask(app);
+  const s = await openWatching(app);
+  const body = app.el('task-modal-body');
+
+  s.emit({ type: 'message.part.delta', data: { text: '## Found\n\nThe **cause** is in ' } });
+  s.emit({ type: 'message.part.delta', data: { text: '`handoff.go`:\n\n- one\n- two\n' } });
+  // The test DOM keeps innerHTML as written, so the markup is read there.
+  let reply = body.querySelector('.msg-model');
+  assert.ok(reply, 'no reply block');
+  assert.match(reply.innerHTML, /<h2>Found<\/h2>/);
+  assert.match(reply.innerHTML, /<strong>cause<\/strong>/);
+  assert.match(reply.innerHTML, /<code>handoff\.go<\/code>/);
+  assert.equal(reply.innerHTML.split('<li>').length - 1, 2, reply.innerHTML);
+
+  s.emit({ type: 'message.part.end', data: { text: 'Done:\n\n```go\nfunc main() {}\n```\n' } });
+  reply = body.querySelector('.msg-model');
+  assert.match(reply.innerHTML, /<pre><code class="language-go">/, reply.innerHTML);
+  assert.equal(body.querySelectorAll('.msg-model').length, 1, 'the end drew a second reply');
+});
+
+test('a task\'s reply cannot put markup of its own in the window', async () => {
+  const app = await load();
+  spawnTask(app);
+  const s = await openWatching(app);
+  s.emit({ type: 'message.part.end', data: { text: 'see <img src=x onerror="alert(1)"> and <b>this</b>' } });
+  const reply = app.el('task-modal-body').querySelector('.msg-model');
+  assert.doesNotMatch(reply.innerHTML, /<img|<b>/, reply.innerHTML);
+  assert.match(reply.innerHTML, /&lt;img src=x/);
+});
+
+// A call's input and result are there for the asking, folded as in the
+// transcript: shown whole, they pushed the replies out of sight.
+test('a task\'s tool calls are folded until clicked', async () => {
+  const app = await load();
+  spawnTask(app);
+  const s = await openWatching(app);
+  s.emit({ type: 'tool.start', data: { tool_use_id: 't1', name: 'bash', input: '{"command":"go test ./..."}' } });
+  s.emit({ type: 'tool.end', data: { tool_use_id: 't1', content: 'ok\nall tests pass', is_error: false } });
+  const row = app.el('task-modal-body').querySelector('.msg-toolcall');
+  const detail = row.querySelector('.detail');
+  assert.equal(detail.hidden, true, 'the call is not folded');
+  assert.match(detail.textContent, /"command": "go test/, 'the input is not laid out');
+  row.querySelector('.head').click();
+  assert.equal(detail.hidden, false, 'a click did not open it');
+  row.querySelector('.head').click();
+  assert.equal(detail.hidden, true, 'a second click did not fold it');
+});
+
+// The reply that ends a turn is the task's result, and says so.
+test('the last reply of a finished turn is marked as the result', async () => {
+  const app = await load();
+  spawnTask(app);
+  const s = await openWatching(app);
+  s.emit({ type: 'message.user', data: { text: 'find the bug' } });
+  s.emit({ type: 'message.part.end', data: { text: 'Let me look.' } });
+  s.emit({ type: 'tool.start', data: { tool_use_id: 't1', name: 'grep', input: '{}' } });
+  s.emit({ type: 'tool.end', data: { tool_use_id: 't1', content: 'x.go:3', is_error: false } });
+  s.emit({ type: 'message.part.end', data: { text: 'The bug is on line 3.' } });
+  const replies = () => [...app.el('task-modal-body').querySelectorAll('.msg-model')];
+  assert.equal(replies().filter((r) => r.classList.contains('final')).length, 0, 'marked before the turn ended');
+  s.emit({ type: 'turn.done', data: {} });
+  const marked = replies().filter((r) => r.classList.contains('final'));
+  assert.equal(marked.length, 1);
+  assert.match(marked[0].innerHTML, /The bug is on line 3\./);
+  // A turn cancelled has no result.
+  s.emit({ type: 'message.user', data: { text: 'again' } });
+  s.emit({ type: 'message.part.end', data: { text: 'Starting.' } });
+  s.emit({ type: 'turn.cancelled', data: {} });
+  assert.equal(replies().filter((r) => r.classList.contains('final')).length, 1);
+});
+
+// A background task's own log has no turn.done: it ends when the
+// conversation that spawned it says "completed". That marks the result,
+// whether it comes while the window is open or before it was opened, and
+// whichever of the two streams arrives first.
+test('a task that completes has its last reply marked as the result', async () => {
+  const app = await load();
+  spawnTask(app);
+  const s = await openWatching(app);
+  const finals = () => [...app.el('task-modal-body').querySelectorAll('.msg-model')].filter((r) => r.classList.contains('final'));
+  s.emit({ type: 'message.part.end', data: { text: 'Looking.' } });
+  assert.equal(finals().length, 0, 'marked while the task still runs');
+
+  app.sse.emit({ seq: 3, type: 'task.status', data: { task_id: 'task-1', status: 'completed' } });
+  await app.settle();
+  assert.equal(finals().length, 1);
+  // The answer arrives on the task's stream after the status did.
+  s.emit({ type: 'message.part.end', data: { text: 'The answer.' } });
+  assert.equal(finals().length, 1, 'the mark did not move, or was doubled');
+  assert.match(finals()[0].innerHTML, /The answer\./);
+});
+
+test('a task opened after it completed shows its last reply as the result', async () => {
+  const app = await load();
+  spawnTask(app);
+  app.sse.emit({ seq: 3, type: 'task.status', data: { task_id: 'task-1', status: 'completed' } });
+  await app.settle();
+  const s = await openWatching(app);
+  s.emit({ type: 'message.user', data: { text: 'look it up' } });
+  s.emit({ type: 'message.part.end', data: { text: 'Looking.' } });
+  s.emit({ type: 'message.part.end', data: { text: 'Found it.' } });
+  const finals = [...app.el('task-modal-body').querySelectorAll('.msg-model')].filter((r) => r.classList.contains('final'));
+  assert.equal(finals.length, 1);
+  assert.match(finals[0].innerHTML, /Found it\./);
+});

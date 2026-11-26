@@ -459,7 +459,7 @@ func TestFoldThinkingCommandSaysWhenItReachesNothing(t *testing.T) {
 	}
 }
 
-// MuseProfiles is what the settings window's Muse tab names, by the same
+// MuseProfiles is what the settings window's Muse group names, by the same
 // rule the switches are applied with, in a stable order.
 func TestMuseProfilesNamesTheFamilyInOrder(t *testing.T) {
 	loop := foldLoop(t, "http://127.0.0.1:1", "qwen3")

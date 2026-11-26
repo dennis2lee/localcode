@@ -10,7 +10,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { load, labelText } = require('./harness');
+const { load, descText } = require('./harness');
+
+// What the note says with the switch on: where the turn log goes, and
+// nothing about the state, which the switch already shows.
+const TURN_LOG = /^Turn log in ~\/\.localcode\/trace\.$/;
 
 async function openSettings(app) {
   app.el('settings-btn').click();
@@ -20,12 +24,12 @@ async function openSettings(app) {
 // The default the feature rests on. With it on, one request can become
 // several model calls against several contexts, which is a bill nobody
 // agreed to by installing an update.
-test('the switch is off, and says what that means', async () => {
+test('the switch is off, and the note does not repeat it', async () => {
   const app = await load();
   await openSettings(app);
 
   assert.equal(app.el('smart-agent-checkbox').checked, false);
-  assert.match(app.el('smart-agent-note').textContent, /^Off\./);
+  assert.equal(app.el('smart-agent-note').textContent, '');
   assert.equal(app.callsTo('POST', '/api/settings/smart-agent').length, 0,
     'opening the panel changed a setting');
 });
@@ -45,7 +49,7 @@ test('a daemon with it already on opens with the box ticked', async () => {
 
   assert.equal(app.el('smart-agent-checkbox').checked, true);
   // The specialists are orchestration's, so this note does not name them.
-  assert.match(app.el('smart-agent-note').textContent, /^On\./);
+  assert.match(app.el('smart-agent-note').textContent, TURN_LOG);
   assert.doesNotMatch(app.el('smart-agent-note').textContent, /explore|oracle/);
 });
 
@@ -64,7 +68,7 @@ test('ticking it tells the daemon', async () => {
   const calls = app.callsTo('POST', '/api/settings/smart-agent');
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].body, { enabled: true });
-  assert.match(app.el('smart-agent-note').textContent, /^On\./);
+  assert.match(app.el('smart-agent-note').textContent, TURN_LOG);
 });
 
 test('unticking it tells the daemon too', async () => {
@@ -86,7 +90,7 @@ test('unticking it tells the daemon too', async () => {
   await app.settle();
 
   assert.deepEqual(app.callsTo('POST', '/api/settings/smart-agent')[0].body, { enabled: false });
-  assert.match(app.el('smart-agent-note').textContent, /^Off\./);
+  assert.equal(app.el('smart-agent-note').textContent, '');
 });
 
 // The daemon is the one that decides. A box left ticked after a refused
@@ -142,7 +146,7 @@ test('a change that applied but was not saved shows as on, with a warning', asyn
 
   assert.equal(app.el('smart-agent-checkbox').checked, true,
     'the daemon is running with Smart Agent on, so the box must say so');
-  assert.match(app.el('smart-agent-note').textContent, /^On\./);
+  assert.match(app.el('smart-agent-note').textContent, TURN_LOG);
   assert.equal(app.el('smart-agent-warn').hidden, false);
   assert.match(app.el('smart-agent-warn').textContent, /not saved to config\.json/i);
   assert.match(app.el('smart-agent-warn').textContent, /disk is full/);
@@ -170,9 +174,9 @@ test('the persistence warning clears on the next successful change', async () =>
   assert.equal(app.el('smart-agent-warn').textContent, '');
 });
 
-// What the switch says it does, in the sentence beside the box.
+// What the switch says it does, in the line under its name.
 //
-// The sentence is static markup, so nothing keeps it true except a test
+// The line is static markup, so nothing keeps it true except a test
 // that names what the switch gates today, and what it no longer does:
 // delegation moved to orchestration, and a sentence still promising
 // sub-agents sends someone to the wrong switch. Each pattern below stands for
@@ -186,8 +190,8 @@ test('the persistence warning clears on the next successful change', async () =>
 // It is a summary. The effects are grouped in one line and the rest is
 // left to docs/USAGE.md, so it is held to a length: an enumeration of
 // every effect reached 158 characters, the longest sentence in the dialog.
-test('the sentence beside the box names what the switch gates, in one short line', () => {
-  const label = labelText('smart-agent-checkbox');
+test('the line under the name says what the switch gates, in one short line', () => {
+  const label = descText('smart-agent-checkbox');
   for (const [what, pattern] of [
     ['the plan and ask tools', /plan and ask tools/],
     ['model fallback', /model fallback/],
@@ -204,13 +208,14 @@ test('the sentence beside the box names what the switch gates, in one short line
   assert.ok(label.length <= 120, `${label.length} characters is long-winded for a summary`);
 });
 
-// Off says nothing about delegation, which this switch no longer touches.
+// Off says nothing at all, so nothing about delegation, which this switch
+// no longer touches.
 test('off, the note says nothing about delegation', async () => {
   const app = await load();
   await openSettings(app);
 
   const note = app.el('smart-agent-note').textContent;
-  assert.match(note, /^Off\./);
+  assert.equal(note, '');
   assert.doesNotMatch(note, /delegat|agent/i);
 });
 
@@ -228,7 +233,7 @@ test('on, the note says where the turn log goes and nothing about delegation', a
   await openSettings(app);
 
   const note = app.el('smart-agent-note').textContent;
-  assert.match(note, /^On\./);
+  assert.match(note, TURN_LOG);
   assert.match(note, /~\/\.localcode\/trace/);
   assert.doesNotMatch(note, /explore|oracle|delegat|more model calls/i);
 });

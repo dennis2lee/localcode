@@ -278,7 +278,11 @@ async function load(opts = {}) {
     // a route that cannot see it can only answer one thing for every
     // session, which is precisely the confusion under test.
     const query = new URLSearchParams(search);
-    harness.calls.push({ method, path: urlPath, body, query });
+    const call = { method, path: urlPath, body, query };
+    // Whether the request asked to outlive the page. Recorded only when
+    // it did, so the calls of every other test read as they always have.
+    if (init.keepalive) call.keepalive = true;
+    harness.calls.push(call);
     const route = matchRoute(routes, method, urlPath);
     if (route === undefined) {
       throw new Error(`harness: no route for ${method} ${urlPath} (add one via load({routes}))`);
@@ -360,6 +364,10 @@ async function load(opts = {}) {
     getItem: (k) => (stored.has(k) ? stored.get(k) : null),
     setItem: (k, v) => stored.set(k, String(v)),
     removeItem: (k) => stored.delete(k),
+    // Listing what is stored, as a real one can: the page does it once,
+    // to hand what it already holds to the desktop window's daemon.
+    get length() { return stored.size; },
+    key: (i) => [...stored.keys()][i] ?? null,
   };
   harness.storage = stored;
   // sessionStorage is its own store, per window: which conversation this
@@ -486,6 +494,7 @@ async function load(opts = {}) {
       get skipPermissions() { return internals.app.skipPermissions; }, set skipPermissions(v) { internals.app.skipPermissions = v; },
       get smartAgent() { return internals.app.smartAgent; }, set smartAgent(v) { internals.app.smartAgent = v; },
       get keepGoing() { return internals.app.keepGoing; }, set keepGoing(v) { internals.app.keepGoing = v; },
+      get repeatLimit() { return internals.app.repeatLimit; }, set repeatLimit(v) { internals.app.repeatLimit = v; },
       get foldThinking() { return internals.app.foldThinking; }, set foldThinking(v) { internals.app.foldThinking = v; },
       get museProfiles() { return internals.app.museProfiles; }, set museProfiles(v) { internals.app.museProfiles = v; },
       get showThinking() { return internals.app.showThinking; }, set showThinking(v) { internals.app.showThinking = v; },
@@ -503,15 +512,24 @@ async function load(opts = {}) {
   });
 }
 
-// labelText is the text of the <label for="id"> in the shipped index.html,
-// on one line. The settings sentences beside the checkboxes are static
-// markup rather than something js/*.js writes, so a test that wants to hold
-// one to what the code does has to read it from the page source.
-function labelText(id) {
+// descText is the line under a setting's name: the <p class="setting-desc">
+// in the same row as the control with this id, on one line, with any
+// control inside it (the repeat guard's number) left out. It is the
+// sentence that says what the switch reaches. It is static markup rather
+// than something js/*.js writes, so a test that wants to hold it to what
+// the code does has to read it from the page source.
+function descText(id) {
   const html = fs.readFileSync(path.join(STATIC_DIR, 'index.html'), 'utf8');
-  const m = new RegExp(`<label for="${id}">([\\s\\S]*?)</label>`).exec(html);
-  if (!m) throw new Error(`index.html has no <label for="${id}">`);
-  return m[1].replace(/\s+/g, ' ').trim();
+  const label = new RegExp(`<label\\b[^>]*\\bfor="${id}"[^>]*>`).exec(html);
+  if (!label) throw new Error(`index.html has no <label for="${id}">`);
+  const re = /<p class="setting-desc">([\s\S]*?)<\/p>/g;
+  re.lastIndex = label.index;
+  const m = re.exec(html);
+  const control = html.indexOf(`id="${id}"`, label.index);
+  if (!m || control < 0 || m.index > control) {
+    throw new Error(`index.html has no <p class="setting-desc"> in the row of ${id}`);
+  }
+  return m[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 }
 
-module.exports = { load, settle, defaultRoutes, labelText };
+module.exports = { load, settle, defaultRoutes, descText };

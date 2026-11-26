@@ -37,10 +37,10 @@ function css() {
   return fs.readFileSync(CSS_PATH, 'utf8');
 }
 
-async function openTypography(app) {
+async function openAppearance(app) {
   app.el('settings-btn').click();
   await app.settle();
-  app.el('settings-tab-typography').click();
+  app.el('settings-tab-appearance').click();
   return app;
 }
 
@@ -50,7 +50,7 @@ function rootProp(app, name) {
 
 test('setting a face writes the property and takes effect without a reload', async () => {
   const app = await load();
-  await openTypography(app);
+  await openAppearance(app);
 
   const select = app.el('typo-doc-select');
   const stack = Array.from(select.querySelectorAll('option')).map((o) => o.value).find((v) => v.includes('Georgia'));
@@ -64,7 +64,7 @@ test('setting a face writes the property and takes effect without a reload', asy
 
 test('setting a size writes the scale without touching the zoom', async () => {
   const app = await load();
-  await openTypography(app);
+  await openAppearance(app);
 
   app.applyZoom(1.5);
   const select = app.el('typo-size-select');
@@ -146,7 +146,7 @@ test('a stored choice survives a reload and lands before first paint', async () 
 
 test('a face name that resolves to nothing still has a fallback behind it', async () => {
   const app = await load();
-  await openTypography(app);
+  await openAppearance(app);
 
   const select = app.el('typo-mono-select');
   select.value = 'custom …';
@@ -165,7 +165,7 @@ test('a face name that resolves to nothing still has a fallback behind it', asyn
 
 test('every offered stack degrades to something readable', async () => {
   const app = await load();
-  await openTypography(app);
+  await openAppearance(app);
   const generic = { doc: 'serif', ui: 'sans-serif', mono: 'monospace' };
   for (const [role, family] of Object.entries(generic)) {
     const select = app.el(`typo-${role}-select`);
@@ -181,7 +181,7 @@ test('resetting to the default removes the property instead of writing it', asyn
   const app = await load({
     localStorage: { 'localcode.face.ui': 'Verdana, Geneva, Tahoma, sans-serif', 'localcode.textScale': '1.25' },
   });
-  await openTypography(app);
+  await openAppearance(app);
   assert.equal(rootProp(app, '--t-scale'), '1.25');
 
   const size = app.el('typo-size-select');

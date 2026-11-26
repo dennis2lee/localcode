@@ -1,0 +1,419 @@
+'use strict';
+
+// The SSH panel, in its own column after the browser panel.
+//
+// Drawn wherever the page runs (the desktop window and the Web UI) while
+// the ssh setting is on. What to get right: which conversation and
+// terminal its one stream is for, that the screen is drawn from the
+// daemon's frames without letting a remote program style or script the
+// page, that the person's keys go to the shell in order and are not taken
+// by the page's own shortcuts, and that only the person answers a
+// terminal's questions.
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { load, settle } = require('./harness');
+
+const settingsWith = (extra) => ({
+  'GET /api/settings': {
+    auto_compact_enabled: true, show_tps: true, auto_delegate: false,
+    auto_delegate_agent: '', auto_delegate_match: [], smart_agent: false,
+    skip_permissions: false, permission_rules: {}, can_edit_permissions: true,
+    ...extra,
+  },
+  'GET /api/ssh': [],
+  'POST /api/sessions/*/ssh/*/input': {},
+  'POST /api/sessions/*/ssh/*/size': {},
+  'POST /api/sessions/*/ssh/*/answer': {},
+  'POST /api/sessions/*/ssh/*/hold': {},
+  'POST /api/sessions/*/ssh/connect': { terminal: 't1' },
+});
+
+const term = (extra) => ({
+  id: 't1', epoch: 'e1', spec: 'devbox', target: 'me@10.0.0.5:22', state: 'connected',
+  shell: 'bash', integrated: true, running: false, alt: false, held: false, opener: 'model',
+  cols: 80, rows: 24, scroll_first: 0, scroll_next: 0, ...extra,
+});
+
+// Objects made in the page's realm compare by value through JSON.
+const plain = (v) => JSON.parse(JSON.stringify(v));
+
+const sshStream = (app) => app.streams.filter((s) => !s.closed && s.url.includes('/ssh/stream')).pop();
+
+const frame = (stream, kind, data) => {
+  stream.onmessage({ data: JSON.stringify({ kind, data }) });
+};
+
+async function withTerminal(extra = {}, opts = {}) {
+  const app = await load({ routes: settingsWith({ ssh: true }), ...opts });
+  const first = sshStream(app);
+  frame(first, 'state', { enabled: true, terminals: [term(extra)], wants: 0 });
+  await settle();
+  return app;
+}
+
+test('the panel is drawn with the setting on, in a browser as in the desktop window', async () => {
+  const off = await load({ routes: settingsWith({ ssh: false }) });
+  assert.equal(off.el('ssh-panel').hidden, true);
+  assert.equal(off.el('toggle-ssh').hidden, true);
+  assert.equal(sshStream(off), undefined, 'no stream with SSH off');
+
+  const on = await load({ routes: settingsWith({ ssh: true }) });
+  assert.equal(on.el('ssh-panel').hidden, false);
+  assert.equal(on.el('toggle-ssh').hidden, false);
+  const s = sshStream(on);
+  assert.ok(s, 'a stream for the conversation');
+  assert.match(s.url, new RegExp(`/api/sessions/${on.state.sessionID}/ssh/stream\\?viewer=v`));
+});
+
+test('a state with a terminal shows it, through a stream for that terminal', async () => {
+  const app = await withTerminal();
+  const s = sshStream(app);
+  assert.match(s.url, /terminal=t1/);
+  const tabs = app.el('ssh-tab-list').children;
+  assert.equal(tabs.length, 1);
+  assert.match(tabs[0].textContent, /devbox/, 'the tab names what was asked for');
+  assert.equal(app.el('ssh-term').hidden, false);
+  assert.match(app.el('ssh-status').textContent, /me@10\.0\.0\.5:22/);
+});
+
+test('the screen is drawn as text, a changed row redrawn and an unchanged one kept', async () => {
+  const app = await withTerminal();
+  const s = sshStream(app);
+  const line = (t) => [{ t }];
+  frame(s, 'screen', { terminal: 't1', epoch: 'e1', screen: { cols: 80, rows: 2, lines: [line('one'), line('two')], cx: 0, cy: 1, cursor: true } });
+  const rows = () => app.el('ssh-screen').children.filter((c) => c.className === 'ssh-row');
+  assert.deepEqual(rows().map((r) => r.textContent), ['one', 'two']);
+  const kept = rows()[0];
+  frame(s, 'screen', { terminal: 't1', epoch: 'e1', screen: { cols: 80, rows: 2, lines: [line('one'), line('three')], cx: 0, cy: 1, cursor: true } });
+  assert.deepEqual(rows().map((r) => r.textContent), ['one', 'three']);
+  assert.equal(rows()[0], kept, 'an unchanged row is the same element, so a selection on it survives');
+  // Another terminal's frame does not land here.
+  frame(s, 'screen', { terminal: 't2', epoch: 'x', screen: { lines: [line('other')] } });
+  assert.deepEqual(rows().map((r) => r.textContent), ['one', 'three']);
+});
+
+test('a run is styled by class or a checked colour, never by what the remote wrote', async () => {
+  const app = await load({ routes: settingsWith({ ssh: true }) });
+  const { runStyle } = app.internals;
+  assert.deepEqual(plain(runStyle({ t: 'x', f: '1', b: '#102030', a: 1 })), { classes: ['f1', 'ssh-bold'], style: { background: '#102030' } });
+  const evil = runStyle({ t: 'x', f: 'red;background:url(http://x)', b: '99' });
+  assert.deepEqual(plain(evil.style), {}, 'a colour that is not #rrggbb or 0-15 is dropped');
+  assert.deepEqual(plain(evil.classes), []);
+  assert.deepEqual(plain(runStyle({ t: 'x', a: 16 }).classes), ['ssh-rev-fg', 'ssh-rev-bg'], 'reverse video with no colours uses the terminal\'s');
+  assert.deepEqual(plain(runStyle({ t: '한', w: true }).classes), ['ssh-w']);
+});
+
+test('keys: text from input, keys from keydown, the window keeps its own', async () => {
+  const app = await load({ routes: settingsWith({ ssh: true }) });
+  const { keyAction } = app.internals;
+  const k = (key, mods = {}) => ({ key, ...mods });
+  assert.equal(keyAction(k('a'), false).kind, 'text');
+  assert.equal(keyAction(k('Enter'), false).kind, 'key');
+  assert.equal(keyAction(k('Escape'), false).kind, 'key');
+  assert.equal(keyAction(k('Tab'), false).kind, 'key');
+  assert.deepEqual(plain(keyAction(k('c', { ctrlKey: true }), false).key), { key: 'c', ctrl: true, alt: false, shift: false });
+  assert.equal(keyAction(k('c', { ctrlKey: true }), false, true).kind, 'pass', 'Ctrl+C with a selection copies');
+  assert.equal(keyAction(k('C', { ctrlKey: true, shiftKey: true }), false).kind, 'pass');
+  assert.equal(keyAction(k('v', { metaKey: true }), true).kind, 'pass', 'Cmd belongs to the window');
+  assert.equal(keyAction(k('=', { ctrlKey: true }), false).kind, 'pass', 'zoom');
+  assert.equal(keyAction(k('ㅎ', { isComposing: true }), false).kind, 'ime');
+  assert.equal(keyAction(k('Process', { keyCode: 229 }), false).kind, 'ime');
+  assert.equal(keyAction(k('å', { altKey: true }), true).kind, 'text', 'Option composes on macOS');
+  assert.equal(keyAction(k('x', { altKey: true }), false).kind, 'key', 'Alt+x is the shell\'s elsewhere');
+  assert.equal(keyAction(k('Shift', { shiftKey: true }), false).kind, 'ignore');
+});
+
+test('what the person types goes to the shell in order, and Escape does not stop the turn', async () => {
+  const app = await withTerminal();
+  const input = app.el('ssh-input');
+  let stopped = 0;
+  input.value = 'l';
+  input.fire('input', {});
+  input.value = 's';
+  input.fire('input', {});
+  const enter = input.fire('keydown', { key: 'Enter', stopPropagation() { stopped += 1; } });
+  const esc = input.fire('keydown', { key: 'Escape', stopPropagation() { stopped += 1; } });
+  await settle();
+  assert.equal(enter.defaultPrevented, true);
+  assert.equal(esc.defaultPrevented, true);
+  assert.equal(stopped, 2, 'Escape and Enter are the terminal\'s, not the page\'s');
+  const sent = app.callsTo('POST', /\/ssh\/t1\/input$/).map((c) => c.body);
+  assert.deepEqual(sent, [{ text: 'l' }, { text: 's' }, { key: { key: 'Enter', ctrl: false, alt: false, shift: false } }, { key: { key: 'Escape', ctrl: false, alt: false, shift: false } }]);
+});
+
+test('Korean composed by an input method is sent once, when it is done', async () => {
+  const app = await withTerminal();
+  const input = app.el('ssh-input');
+  input.fire('compositionstart', {});
+  input.value = 'ㅎ';
+  input.fire('input', { isComposing: true });
+  input.value = '한';
+  input.fire('input', { isComposing: true });
+  input.fire('compositionend', {});
+  input.fire('input', { isComposing: false });
+  // The composed text is taken on a timer after compositionend; wait for
+  // it rather than count on it firing within settle's turns.
+  await app.wait(30);
+  await settle();
+  assert.deepEqual(app.callsTo('POST', /\/ssh\/t1\/input$/).map((c) => c.body), [{ text: '한' }]);
+});
+
+test('a paste is sent as a paste', async () => {
+  const app = await withTerminal();
+  app.el('ssh-term').fire('paste', { clipboardData: { getData: () => 'echo hi\nls' } });
+  await settle();
+  assert.deepEqual(app.callsTo('POST', /\/ssh\/t1\/input$/).map((c) => c.body), [{ paste: 'echo hi\nls' }]);
+});
+
+test('a host key is accepted with the fingerprint it showed, and the panel comes into view', async () => {
+  const app = await load({ routes: settingsWith({ ssh: true }) });
+  app.el('ssh-panel').classList.add('collapsed');
+  const s = sshStream(app);
+  frame(s, 'state', {
+    enabled: true, wants: 1,
+    terminals: [term({ state: 'connecting', question: { id: 3, kind: 'host_key', for: 'me@10.0.0.5:22', host_key: { host: '10.0.0.5', key_type: 'ssh-ed25519', fingerprint: 'SHA256:abc' } } })],
+  });
+  await settle();
+  assert.equal(app.el('ssh-panel').classList.contains('collapsed'), false, 'a question shows a hidden panel');
+  const box = app.el('ssh-question');
+  assert.equal(box.hidden, false);
+  assert.match(box.textContent, /SHA256:abc/);
+  assert.match(box.textContent, /localcode asks/);
+  const accept = Array.from(box.querySelectorAll('button')).find((b) => b.textContent === 'Accept');
+  accept.click();
+  await settle();
+  assert.deepEqual(app.callsTo('POST', /\/ssh\/t1\/answer$/).map((c) => c.body), [{ question: 3, accept: true, fingerprint: 'SHA256:abc' }]);
+});
+
+test('a password is answered in the panel and the field is emptied', async () => {
+  const app = await withTerminal({ state: 'connecting', question: { id: 4, kind: 'password', for: 'me@10.0.0.5:22' } });
+  const box = app.el('ssh-question');
+  const field = box.querySelectorAll('input')[0];
+  assert.equal(field.type, 'password');
+  field.value = 'hunter2';
+  Array.from(box.querySelectorAll('button')).find((b) => b.textContent === 'OK').click();
+  await settle();
+  assert.deepEqual(app.callsTo('POST', /\/ssh\/t1\/answer$/).map((c) => c.body), [{ question: 4, accept: true, values: ['hunter2'] }]);
+  assert.equal(field.value, '', 'the password does not stay in the page');
+});
+
+test('Hold is sent and shown', async () => {
+  const app = await withTerminal();
+  app.el('ssh-hold').click();
+  await settle();
+  assert.deepEqual(app.callsTo('POST', /\/ssh\/t1\/hold$/).map((c) => c.body), [{ on: true }]);
+  frame(sshStream(app), 'state', { enabled: true, terminals: [term({ held: true })], wants: 0 });
+  assert.equal(app.el('ssh-hold').getAttribute('aria-pressed'), 'true');
+  assert.match(app.el('ssh-status').textContent, /held/);
+});
+
+test('a terminal fits whole cells of its view', async () => {
+  const app = await load({ routes: settingsWith({ ssh: true }) });
+  const { fitSize } = app.internals;
+  assert.deepEqual(plain(fitSize(812, 528, 8, 20)), { cols: 100, rows: 26 });
+  assert.equal(fitSize(0, 528, 8, 20), null);
+  assert.equal(fitSize(812, 528, 0, 20), null);
+});
+
+// The typing box is where the keys go and where an input method opens
+// its candidates: invisible, at the cursor. Its place is set in the
+// page's layout pixels from rectangles in the window's pixels, which
+// differ by the page's own zoom (js/zoom.js). Measured in Chrome and Edge
+// on Windows at 125%: the box was a quarter further from the terminal's
+// corner than the cursor, 128 pixels under the terminal's box for a
+// cursor on the last row, and the engine scrolled the terminal's box to
+// show the caret on every second key: the screen jumped and came back.
+const termBox = (zoom) => ({
+  t: { left: 100, top: 100, width: 535 * zoom, height: 600 * zoom },
+  m: { offsetWidth: 535, offsetHeight: 600, clientLeft: 1, clientTop: 1, clientWidth: 533, clientHeight: 598, boxWidth: 16, boxHeight: 17, winWidth: 1400, winHeight: 1000 },
+  // Where layout point (x, y) of the terminal's inside is in the window.
+  at: (x, y) => ({ left: 100 + (1 + x) * zoom, top: 100 + (1 + y) * zoom }),
+});
+
+test('the typing box is put at the cursor whatever the page\'s zoom', async () => {
+  const app = await load({ routes: settingsWith({ ssh: true }) });
+  const { inputPlace } = app.internals;
+  for (const zoom of [0.9, 1, 1.1, 1.25, 1.5, 2]) {
+    const b = termBox(zoom);
+    assert.deepEqual(plain(inputPlace(b.at(199, 399), b.t, b.m)), { left: 199, top: 399 },
+      `at ${zoom * 100}% the box is the zoom factor away from the cursor`);
+  }
+});
+
+test('the typing box stays inside the terminal\'s box and the window', async () => {
+  const app = await load({ routes: settingsWith({ ssh: true }) });
+  const { inputPlace } = app.internals;
+  for (const zoom of [1, 1.25]) {
+    const b = termBox(zoom);
+    // The last column, and a terminal wider than its panel.
+    assert.equal(inputPlace(b.at(525, 100), b.t, b.m).left, 533 - 16 - 2);
+    assert.equal(inputPlace(b.at(900, 100), b.t, b.m).left, 533 - 16 - 2);
+    // The last row, and a cursor under the box.
+    assert.equal(inputPlace(b.at(100, 590), b.t, b.m).top, 598 - 17 - 2);
+    assert.equal(inputPlace(b.at(100, 2000), b.t, b.m).top, 598 - 17 - 2);
+    // Lines scrolled back: the cursor is above the box, or left of it.
+    assert.deepEqual(plain(inputPlace(b.at(-50, -300), b.t, b.m)), { left: 0, top: 0 });
+  }
+  // A panel partly outside a narrow window: the box stays in the part
+  // the window shows.
+  const b = termBox(1);
+  const narrow = { ...b.m, winWidth: 400, winHeight: 500 };
+  assert.deepEqual(plain(inputPlace(b.at(500, 590), b.t, narrow)), { left: 400 - 100 - 1 - 16 - 2, top: 500 - 100 - 1 - 17 - 2 });
+  // Less of the terminal in the window than the box is wide: no place is
+  // inside both, and the box stays inside the terminal's.
+  const m = { ...b.m, winWidth: 400, winHeight: 500 };
+  const sliver = (c, t) => plain(inputPlace(c, { width: 535, height: 600, ...t }, m));
+  assert.deepEqual(sliver({ left: 492, top: 201 }, { left: 391, top: 100 }), { left: 0, top: 100 }, 'eight pixels of it at the window\'s right edge');
+  assert.deepEqual(sliver({ left: 201, top: 592 }, { left: 100, top: 491 }), { left: 100, top: 0 }, 'eight pixels of it at the window\'s bottom edge');
+  assert.deepEqual(sliver({ left: -429, top: 201 }, { left: -530, top: 100 }), { left: 533 - 16 - 2, top: 100 }, 'four pixels of it at the window\'s left edge');
+  assert.deepEqual(sliver({ left: -499, top: 201 }, { left: -600, top: 100 }), { left: 533 - 16 - 2, top: 100 }, 'all of it left of the window');
+  // A terminal with no size yet (a hidden panel) gives numbers.
+  const none = inputPlace({ left: 0, top: 0 }, { left: 0, top: 0, width: 0, height: 0 }, { ...b.m, offsetWidth: 0, offsetHeight: 0, clientWidth: 0, clientHeight: 0 });
+  assert.deepEqual(plain(none), { left: 0, top: 0 });
+});
+
+test('a screen places the typing box in layout pixels on a zoomed page', async () => {
+  const app = await withTerminal();
+  const zoom = 1.25;
+  const b = termBox(zoom);
+  const termEl = app.el('ssh-term');
+  const input = app.el('ssh-input');
+  termEl.style.width = '535px';
+  Object.assign(termEl, { offsetHeight: 600, clientLeft: 1, clientTop: 1, clientWidth: 533, clientHeight: 598 });
+  input.style.width = '16px';
+  input.offsetHeight = 17;
+  termEl.getBoundingClientRect = () => b.t;
+  // The cursor on the last row of a screen that fills the box.
+  app.el('ssh-cursor').getBoundingClientRect = () => b.at(94, 560);
+  frame(sshStream(app), 'screen', { terminal: 't1', epoch: 'e1', screen: { cols: 80, rows: 24, lines: [[{ t: 'me@devbox:~$ ' }]], cx: 12, cy: 23, cursor: true } });
+  assert.deepEqual([input.style.left, input.style.top], ['94px', '560px'],
+    'set from the rectangles alone, it was at 118.75px and 701.25px: under the box');
+});
+
+test('a screen keeps the typing box in the part of the terminal the window shows', async () => {
+  const app = await withTerminal();
+  const b = termBox(1);
+  const termEl = app.el('ssh-term');
+  const input = app.el('ssh-input');
+  termEl.style.width = '535px';
+  Object.assign(termEl, { offsetHeight: 600, clientLeft: 1, clientTop: 1, clientWidth: 533, clientHeight: 598 });
+  input.style.width = '16px';
+  input.offsetHeight = 17;
+  termEl.getBoundingClientRect = () => b.t;
+  app.el('ssh-cursor').getBoundingClientRect = () => b.at(500, 560);
+  // The window ends 300 pixels into the terminal: the panel is partly
+  // outside a window narrower than the panels' least widths.
+  app.document.documentElement.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 1000 });
+  frame(sshStream(app), 'screen', { terminal: 't1', epoch: 'e1', screen: { cols: 80, rows: 24, lines: [[{ t: 'me@devbox:~$ ' }]], cx: 64, cy: 23, cursor: true } });
+  assert.deepEqual([input.style.left, input.style.top], [`${400 - 100 - 1 - 16 - 2}px`, '560px'],
+    'at the cursor, 219 pixels outside the window, each key scrolled the document');
+});
+
+test('a scroll of the terminal\'s box is put back', async () => {
+  const app = await withTerminal();
+  const termEl = app.el('ssh-term');
+  termEl.scrollTop = 102;
+  termEl.scrollLeft = 13;
+  termEl.fire('scroll');
+  assert.deepEqual([termEl.scrollTop, termEl.scrollLeft], [0, 0]);
+});
+
+test('in a window too narrow for both, the browser and SSH panels take turns', async () => {
+  const app = await load({ routes: settingsWith({ ssh: true }) });
+  const { makeRoomFor, fitsWith } = app.internals;
+  const browser = app.el('browser-panel');
+  const ssh = app.el('ssh-panel');
+  browser.hidden = false;
+  browser.classList.remove('collapsed');
+  ssh.classList.add('collapsed');
+  assert.equal(fitsWith(ssh, 1100), false);
+  assert.equal(fitsWith(ssh, 2000), true);
+  makeRoomFor(ssh, 2000);
+  assert.equal(browser.classList.contains('collapsed'), false, 'with room for both, both stay');
+  makeRoomFor(ssh, 1100);
+  assert.equal(browser.classList.contains('collapsed'), true, 'without, showing SSH hides the browser');
+  assert.equal(app.el('toggle-browser').getAttribute('aria-expanded'), 'false');
+});
+
+test('the size this panel fits is sent for the terminal it shows, after a switch too', async () => {
+  const app = await load({ routes: settingsWith({ ssh: true }) });
+  const first = sshStream(app);
+  frame(first, 'state', { enabled: true, terminals: [term(), term({ id: 't2', epoch: 'e2', spec: 'other' })], wants: 0 });
+  await settle();
+  const tabs = app.el('ssh-tab-list').children;
+  const t1 = tabs.find((tab) => tab.textContent.includes('devbox'));
+  t1.children[0].click();
+  await app.wait(200);
+  await settle();
+  const posted = app.callsTo('POST', /\/ssh\/t1\/size$/);
+  assert.ok(posted.length >= 1, 'the switch sends this panel\'s size for the terminal now shown');
+  assert.equal(posted[posted.length - 1].body.viewer.startsWith('v'), true);
+});
+
+test('a reconnect made in another window starts the scrollback over from its own numbers', async () => {
+  const app = await withTerminal();
+  const s = sshStream(app);
+  const lines = (n, at) => Array.from({ length: n }, (_, i) => [{ t: `line ${at + i}` }]);
+  frame(s, 'scroll', { terminal: 't1', epoch: 'e1', from: 0, lines: lines(100, 0) });
+  frame(s, 'scroll', { terminal: 't1', epoch: 'e2', from: 0, lines: lines(3, 0) });
+  frame(s, 'scroll', { terminal: 't1', epoch: 'e2', from: 3, lines: lines(2, 3) });
+  const rows = app.el('ssh-scroll').children.map((r) => r.textContent);
+  assert.deepEqual(rows, ['line 0', 'line 1', 'line 2', 'line 3', 'line 4']);
+});
+
+test('the hide button holds while a question stays open', async () => {
+  const q = { id: 5, kind: 'password', for: 'me@10.0.0.5:22' };
+  const app = await withTerminal({ state: 'connecting', question: q });
+  assert.equal(app.el('ssh-panel').classList.contains('collapsed'), false);
+  app.el('ssh-panel').classList.add('collapsed');
+  frame(sshStream(app), 'state', { enabled: true, terminals: [term({ state: 'connecting', question: q })], wants: 0 });
+  assert.equal(app.el('ssh-panel').classList.contains('collapsed'), true, 'the same question does not show it again');
+  frame(sshStream(app), 'state', { enabled: true, terminals: [term({ state: 'connecting', question: { ...q, id: 6 } })], wants: 0 });
+  assert.equal(app.el('ssh-panel').classList.contains('collapsed'), false, 'a new question does');
+});
+
+test('a password typed and then cancelled does not stay in the page', async () => {
+  const app = await withTerminal({ state: 'connecting', question: { id: 7, kind: 'password', for: 'me@10.0.0.5:22' } });
+  const box = app.el('ssh-question');
+  const field = box.querySelectorAll('input')[0];
+  field.value = 'hunter2';
+  Array.from(box.querySelectorAll('button')).find((b) => b.textContent === 'Cancel').click();
+  await settle();
+  assert.equal(field.value, '');
+  assert.deepEqual(plain(app.callsTo('POST', /\/ssh\/t1\/answer$/).map((c) => c.body)), [{ question: 7, accept: false }]);
+});
+
+test('a key an input method is composing with stays off the page\'s own shortcuts', async () => {
+  const app = await withTerminal();
+  let stopped = 0;
+  const ev = app.el('ssh-input').fire('keydown', { key: 'Escape', isComposing: true, keyCode: 229, stopPropagation() { stopped += 1; } });
+  await settle();
+  assert.equal(ev.defaultPrevented, false, 'the input method still gets it');
+  assert.equal(stopped, 1, 'Escape while composing does not stop the turn');
+  assert.equal(app.callsTo('POST', /\/ssh\/t1\/input$/).length, 0);
+});
+
+test('the next syllable started before the composed one is sent is not sent with it', async () => {
+  const app = await withTerminal();
+  const input = app.el('ssh-input');
+  input.fire('compositionstart', {});
+  input.value = '한';
+  input.fire('input', { isComposing: true });
+  input.fire('compositionend', {});
+  // The next syllable starts in the same task, before the timer.
+  input.fire('compositionstart', {});
+  input.value = '한ㄱ';
+  input.fire('input', { isComposing: true });
+  await app.wait(30);
+  await settle();
+  assert.equal(input.value, '한ㄱ', 'the box is not emptied under a composition');
+  input.value = '한글';
+  input.fire('input', { isComposing: true });
+  input.fire('compositionend', {});
+  await app.wait(30);
+  await settle();
+  assert.deepEqual(plain(app.callsTo('POST', /\/ssh\/t1\/input$/).map((c) => c.body)), [{ text: '한' }, { text: '글' }]);
+  assert.equal(input.value, '', 'emptied once nothing is composed');
+});

@@ -309,6 +309,11 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 
 	loop := agent.New(store, registry, providers, cfg)
 	loop.ProjectDir = e.cwd
+	// A model the profile says nothing about is shown the test image here
+	// as in the daemon: a run is where a harness looks at figures, and
+	// without it no model but Claude was offered view_image. See
+	// agent.ProbeVisionWith.
+	loop.ProbeVision = agent.ProbeVisionWith(providers)
 
 	// Somewhere to delegate to.
 	//

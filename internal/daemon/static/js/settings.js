@@ -1,15 +1,21 @@
 // The settings window: tabs over daemon-wide settings, plus the
-// Typography tab owned by this browser (see typography.js).
+// Appearance tab owned by this browser (see typography.js).
 //
-// Everything outside Typography belongs to the daemon rather than to
+// Everything outside Appearance belongs to the daemon rather than to
 // this browser, and is shared by every client attached to it. Adding a
-// setting later is adding a block to a panel in index.html and a line
+// setting later is adding a row to a group in index.html and a line
 // to one of the handlers below; a setting in no panel fails the
 // reachability test rather than disappearing.
+//
+// A note under a switch says only what the switch cannot: never "On." or
+// "Off.", which the switch already shows. A note with nothing to say is
+// set to '' and takes no space (#settings-modal .note:empty in
+// style.css), so no draw here toggles its hidden flag.
 
 import {
   settingsModalEl, settingsBtn, settingsCloseBtn, settingsTabs,
   smartAgentCheckbox, smartAgentNoteEl, smartAgentWarnEl,
+  browserSettingsEl, browserCheckbox, browserNoteEl, browserWarnEl, browserImportBtn,
   orchestrateCheckbox, orchestrateNoteEl, orchestrateWarnEl,
   modelInvocableCheckbox, modelInvocableNoteEl, modelInvocableWarnEl,
   keepGoingCheckbox, keepGoingWarnEl,
@@ -22,6 +28,9 @@ import { askConfirm } from './prompt.js';
 import { app } from './state.js';
 import * as apiClient from './api.js';
 import { wireTypography, renderTypography } from './typography.js';
+import { inGUI, renderBrowserPanel } from './browser.js';
+import { renderSSHPanel } from './ssh.js';
+import { renderPowerShellPanel } from './powershell.js';
 
 export const settings = new Modal(settingsModalEl);
 
@@ -67,18 +76,46 @@ export function openSettings() {
   // up changed in a panel nobody watched open.
   renderTypography();
   selectSettingsTab(settingsTabs.length ? settingsTabs[0].name : '');
-  renderSmartAgent();
-  renderOrchestrate();
-  renderModelInvocable();
-  renderKeepGoing();
-  renderMuseNote();
-  renderFoldThinking();
+  renderDaemonSettings();
   settings.open();
 }
 
-// The Muse tab.
+// renderDaemonSettings draws every control the daemon holds the value of,
+// from what the page knows of it now.
 //
-// Its note answers the question somebody on another model opens it with:
+// One list, used by both callers, because a control left out of it is a
+// control that shows whatever the markup starts with. The repeat guard
+// was left out of the window's opening: its box was drawn only when the
+// number was changed, so after the page had been loaded again (a restart
+// of the desktop window, a reload) the window showed the box unticked
+// and the number empty whatever the daemon was holding, which reads as a
+// setting that was not kept. test/webui/settings_restart.test.js opens
+// the window against every one of them.
+function renderDaemonSettings() {
+  renderSmartAgent();
+  renderBrowserSetting();
+  renderSSHSetting();
+  renderPowerShellSetting();
+  renderOrchestrate();
+  renderModelInvocable();
+  renderRepeatLimit();
+  renderKeepGoing();
+  renderMuseNote();
+  renderFoldThinking();
+}
+
+// refreshSettingsIfOpen draws them again when the page's first read of
+// the daemon's settings lands. The window can be opened before that, in
+// the first moment after the page appears, and it then shows the values
+// the page starts with: every switch off. Nothing else would correct it,
+// because the other redraws wait for a setting to change.
+export function refreshSettingsIfOpen() {
+  if (settings.isOpen) renderDaemonSettings();
+}
+
+// The Muse group on the Behavior tab.
+//
+// Its note answers the question somebody on another model reads it with:
 // whether any of it is theirs. The daemon reports which profiles run a
 // muse model, by the same rule the switches are applied with.
 function renderMuseNote() {
@@ -90,27 +127,23 @@ function renderMuseNote() {
 
 // The reasoning block.
 //
-// The note says what the switch does in the state it is in, and says so
-// when show_thinking is hiding reasoning altogether: the box can be on
-// and still change nothing on screen, and that should be read here
-// rather than worked out from an absence.
+// The note speaks only when show_thinking is hiding reasoning
+// altogether: the box can be on and still change nothing on screen, and
+// that should be read here rather than worked out from an absence.
+// Otherwise the switch says it all, and the note is empty.
 //
-// The warning is kept here rather than passed in, so the redraw that a
-// settings.changed brings (which arrives for this very change) does not
-// erase a save that failed.
-let foldThinkingWarning = '';
-
-function renderFoldThinking() {
+// The warning line is keep going's (underSwitch): a save the daemon
+// applied and could not write stays told through the redraw its own
+// settings.changed brings, until the switch is saved or moved elsewhere,
+// and a request the daemon refused is told once.
+function renderFoldThinking(outcome, refused) {
+  const warning = underSwitch('fold_thinking', outcome, refused);
   foldThinkingCheckbox.checked = !!app.foldThinking;
-  foldThinkingWarnEl.textContent = foldThinkingWarning;
-  foldThinkingWarnEl.hidden = !foldThinkingWarning;
-  if (!app.showThinking) {
-    foldThinkingNoteEl.textContent = 'Reasoning is not drawn at all while show_thinking is off. /thinking on draws it again.';
-    return;
-  }
-  foldThinkingNoteEl.textContent = app.foldThinking
-    ? 'On. Click the folded line to read the reasoning again; Ctrl+O does the same in the TUI.'
-    : 'Off. The reasoning is drawn as it arrives, with no label, and stays open above the answer.';
+  foldThinkingWarnEl.textContent = warning;
+  foldThinkingWarnEl.hidden = !warning;
+  foldThinkingNoteEl.textContent = app.showThinking
+    ? ''
+    : 'Reasoning is not drawn at all while show_thinking is off. /thinking on draws it again.';
 }
 
 export function refreshFoldThinkingIfOpen() {
@@ -126,25 +159,65 @@ async function toggleFoldThinking() {
   try {
     const res = await apiClient.setFoldThinking(enabled);
     app.foldThinking = res && 'fold_thinking' in res ? !!res.fold_thinking : enabled;
-    foldThinkingWarning = res && res.persisted === false
+    renderFoldThinking(res && res.persisted === false
       ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
-      : '';
+      : '');
   } catch (err) {
     // Nothing was applied. The box goes back to what the daemon has.
-    foldThinkingWarning = `Not changed: ${err}`;
+    renderFoldThinking(undefined, `Not changed: ${err}`);
   } finally {
     foldThinkingCheckbox.disabled = false;
-    renderFoldThinking();
   }
+}
+
+// A change the daemon applied and could not write to config.json is told
+// under its switch, and stays told until that switch is saved.
+//
+// Each of the seven draws below is called two ways: with the outcome of a
+// save (a warning, or '' for a save that reached the file), and with
+// nothing, to draw again because something else changed: another
+// setting, another window, the settings arriving. Drawn again with
+// nothing, a warning used to go: turn Smart Agent on with a config that
+// could not be written, then turn SSH on, and the first warning was gone
+// while the switch it was about was still not saved.
+//
+// The delegation panel keeps its two here as well (modals.js), under
+// "auto_delegate" and "auto_delegate_target".
+const unsaved = {};
+
+export function unsavedWarning(name, outcome) {
+  if (outcome !== undefined) unsaved[name] = outcome || '';
+  return unsaved[name] || '';
+}
+
+// movedElsewhere forgets the warning under a switch that somebody else
+// has since moved: another window, or a command typed at a prompt. The
+// warning was about this page's own save of the value it had then, and
+// says nothing about the value the switch has now. The names are the
+// daemon's own for each setting, as the announcement carries them.
+export function movedElsewhere(name) {
+  unsaved[name] = '';
+}
+
+// Keep going and the repeat guard have one line under them where the
+// other switches have two, so a request the daemon refused is said on the
+// line the unsaved warning is kept on. The refusal is about one request
+// and is drawn once. The warning is about the value the daemon is still
+// running, so it is drawn beside the refusal and is still there on the
+// next draw.
+function underSwitch(name, outcome, refused) {
+  const kept = unsavedWarning(name, outcome);
+  return refused && kept ? `${refused} ${kept}` : refused || kept;
 }
 
 // Keep going.
 //
-// The tab carries the scope (muse models only); this only moves the box
-// and reports a save that did not stick.
-function renderKeepGoing(warning) {
+// The group carries the scope (muse models only); this only moves the
+// box and reports a save that did not stick.
+function renderKeepGoing(outcome, refused) {
+  const warning = underSwitch('keep_going', outcome, refused);
   keepGoingCheckbox.checked = !!app.keepGoing;
-  keepGoingWarnEl.textContent = warning || '';
+  keepGoingWarnEl.textContent = warning;
   keepGoingWarnEl.hidden = !warning;
 }
 
@@ -154,16 +227,21 @@ export function refreshKeepGoingIfOpen() {
   if (settings.isOpen) renderKeepGoing();
 }
 
+// The daemon answers in two parts, as it does for Smart Agent: "applied"
+// is the state the box has to show, "persisted" only whether config.json
+// was written. An answer that fails is a change that was not made.
 async function toggleKeepGoing() {
   const enabled = keepGoingCheckbox.checked;
   keepGoingCheckbox.disabled = true;
   try {
-    await apiClient.setKeepGoing(enabled);
-    app.keepGoing = enabled;
-    renderKeepGoing();
+    const res = await apiClient.setKeepGoing(enabled);
+    app.keepGoing = res && 'keep_going' in res ? !!res.keep_going : enabled;
+    renderKeepGoing(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
   } catch (err) {
-    keepGoingCheckbox.checked = !enabled;
-    renderKeepGoing(`Not changed: ${err}`);
+    // Nothing was applied. The box goes back to what the daemon has.
+    renderKeepGoing(undefined, `Not changed: ${err}`);
   } finally {
     keepGoingCheckbox.disabled = false;
   }
@@ -174,12 +252,21 @@ async function toggleKeepGoing() {
 // A checkbox and a number, because "off" and "give it room" are different
 // sizes of the same request. The number is only editable while the box
 // is checked; unchecking sends zero, checking sends the number.
-function renderRepeatLimit(warning) {
+//
+// Both are held while a change is out, and a draw in that time leaves
+// them held. The daemon announces a change before it answers it, and the
+// draw that announcement brings used to open the number again with the
+// request still out: a second number could be sent, and the answer to
+// the first then put the first number back over it.
+let repeatLimitOut = false;
+
+function renderRepeatLimit(outcome, refused) {
+  const warning = underSwitch('repeat_limit', outcome, refused);
   const on = app.repeatLimit > 0;
   repeatLimitCheckbox.checked = on;
-  repeatLimitInput.disabled = !on;
+  repeatLimitInput.disabled = repeatLimitOut || !on;
   if (on) repeatLimitInput.value = String(app.repeatLimit);
-  repeatLimitWarnEl.textContent = warning || '';
+  repeatLimitWarnEl.textContent = warning;
   repeatLimitWarnEl.hidden = !warning;
 }
 
@@ -187,17 +274,26 @@ export function refreshRepeatLimitIfOpen() {
   if (settings.isOpen) renderRepeatLimit();
 }
 
+// Answered in two parts as well. The one refusal a person can cause from
+// here is a number past the daemon's ceiling, which is a 400 and changes
+// nothing.
 async function applyRepeatLimit() {
   const wanted = repeatLimitCheckbox.checked ? Math.max(1, parseInt(repeatLimitInput.value, 10) || 3) : 0;
+  repeatLimitOut = true;
   repeatLimitCheckbox.disabled = true;
   repeatLimitInput.disabled = true;
   try {
-    await apiClient.setRepeatLimit(wanted);
-    app.repeatLimit = wanted;
-    renderRepeatLimit();
+    const res = await apiClient.setRepeatLimit(wanted);
+    app.repeatLimit = res && typeof res.repeat_limit === 'number' ? res.repeat_limit : wanted;
+    renderRepeatLimit(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
   } catch (err) {
-    renderRepeatLimit(`Not changed: ${err}`);
+    // Nothing was applied. The box and the number go back to what the
+    // daemon has.
+    renderRepeatLimit(undefined, `Not changed: ${err}`);
   } finally {
+    repeatLimitOut = false;
     repeatLimitCheckbox.disabled = false;
     repeatLimitInput.disabled = app.repeatLimit === 0;
   }
@@ -207,28 +303,286 @@ async function applyRepeatLimit() {
 //
 // How one agent works: its prompt, its tools, fallback, caching, the turn
 // log. It delegates nothing; handing work to other agents is
-// orchestration, below. The switch is the whole control, and the note says
-// where the turn log is, which is the one thing it adds that a person
-// goes looking for.
-
-function renderSmartAgent(warning) {
+// orchestration. The switch is the whole control, and the note says,
+// while it is on, where the turn log is, which is the one thing it adds
+// that a person goes looking for.
+function renderSmartAgent(outcome) {
+  const warning = unsavedWarning('smart_agent', outcome);
   smartAgentCheckbox.checked = !!app.smartAgent;
   smartAgentWarnEl.textContent = warning || '';
   smartAgentWarnEl.hidden = !warning;
-  if (!app.smartAgent) {
-    smartAgentNoteEl.textContent = 'Off.';
+  smartAgentNoteEl.textContent = app.smartAgent ? 'Turn log in ~/.localcode/trace.' : '';
+}
+
+// The browser.
+//
+// Only in the desktop window, which is the only place it can be used: the
+// panel that shows the page is drawn there and nowhere else, and the model
+// is offered the browser only while that panel is showing.
+
+// importNote says what a copy of the person's profile did.
+export function importNote(rep) {
+  if (!rep) return '';
+  const skipped = rep.skipped && rep.skipped.length
+    ? ` Not copied, held by the running browser: ${rep.skipped.join(', ')}. Close Chrome and copy again for those.`
+    : '';
+  return `Last copied from ${rep.from}.${skipped}`;
+}
+
+function renderBrowserSetting(outcome) {
+  let warning = unsavedWarning('browser', outcome);
+  browserSettingsEl.hidden = !inGUI();
+  browserCheckbox.checked = !!app.browser;
+  browserImportBtn.hidden = !app.browser;
+  if (!warning && !app.browserAvailable) {
+    warning = 'No Chrome or Microsoft Edge found on this computer. Install one, or set browser_path in config.json.';
+  }
+  browserWarnEl.textContent = warning || '';
+  browserWarnEl.hidden = !warning;
+  // Where the copy is and when it was last made, while it is on. That it
+  // asks nothing before it acts is fixed, so it is in the row's markup.
+  const copied = importNote(app.browserImport);
+  browserNoteEl.textContent = app.browser
+    ? `Runs on its own copy of your Chrome profile, in ~/.localcode/browser.${copied ? ` ${copied}` : ''}`
+    : '';
+}
+
+// refreshBrowserIfOpen redraws the switch when it was changed elsewhere.
+export function refreshBrowserIfOpen() {
+  if (settings.isOpen) renderBrowserSetting();
+}
+
+async function toggleBrowser() {
+  const enabled = browserCheckbox.checked;
+  browserCheckbox.disabled = true;
+  try {
+    const res = await apiClient.setBrowser(enabled);
+    app.browser = res && 'browser' in res ? !!res.browser : enabled;
+    renderBrowserSetting(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
+    renderBrowserPanel();
+  } catch (err) {
+    // Nothing was applied: the box shows what the daemon has, which
+    // another window may have changed while this request was out.
+    browserCheckbox.checked = !!app.browser;
+    browserNoteEl.textContent = `Not changed: ${err}`;
+  } finally {
+    browserCheckbox.disabled = false;
+  }
+}
+
+async function importBrowserProfile() {
+  browserImportBtn.disabled = true;
+  try {
+    const rep = await apiClient.importBrowserProfile();
+    if (rep && rep.from) app.browserImport = { from: rep.from, profile: rep.profile, skipped: rep.skipped || [] };
+    browserNoteEl.textContent = `Copied. Every conversation's tab was closed. ${importNote(app.browserImport)}`.trim();
+  } catch (err) {
+    browserNoteEl.textContent = `Not copied: ${err}`;
+  } finally {
+    browserImportBtn.disabled = false;
+  }
+}
+
+// SSH.
+//
+// In the desktop window and the Web UI, where the SSH panel is. Off
+// closes every connection, which the row's "How it asks" says before it
+// happens: that is fixed, so it is markup, and the note is left empty for
+// what a change reports. The list is every connection open now, in any
+// conversation: a shell left open in a conversation nobody is looking at
+// is a login somebody should be able to find and end.
+
+const sshEl = (id) => document.getElementById(id);
+
+// sshOut and powershellOut hold a switch while its request is out: the
+// daemon announces a change before it answers it, and the redraw that
+// announcement brings opened the switch again with the request still
+// out, as it once did for the repeat guard.
+let sshOut = false;
+let powershellOut = false;
+
+function renderSSHSetting(outcome) {
+  const warning = unsavedWarning('ssh', outcome);
+  const box = sshEl('ssh-checkbox');
+  if (!box) return;
+  box.checked = !!app.ssh;
+  box.disabled = sshOut || !app.sshAvailable;
+  const warn = sshEl('ssh-warn');
+  if (warn) {
+    warn.textContent = warning || '';
+    warn.hidden = !warning;
+  }
+  const note = sshEl('ssh-note');
+  if (note) note.textContent = '';
+  renderSSHLive();
+}
+
+// renderLive draws the terminals open now under a switch: one row each,
+// with a Close button, or a line saying there are none. Nothing while the
+// switch is off. The SSH and PowerShell rows each have one.
+//
+// Each draw is numbered, and one whose list arrives after a later draw
+// began, or after the switch went off, draws nothing: the list it has is
+// of a moment that has passed.
+async function renderLive(live) {
+  const list = sshEl(live.id);
+  if (!list) return;
+  const gen = (live.gen = (live.gen || 0) + 1);
+  const clearList = () => { for (const c of [...list.children]) c.remove(); };
+  if (!live.on()) {
+    clearList();
     return;
   }
-  smartAgentNoteEl.textContent = 'On. Turn log in ~/.localcode/trace.';
+  let rows = [];
+  try {
+    rows = await live.load();
+  } catch (err) {
+    rows = [];
+  }
+  if (gen !== live.gen || !live.on()) return;
+  clearList();
+  if (!Array.isArray(rows) || rows.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'note';
+    p.textContent = live.none;
+    list.appendChild(p);
+    return;
+  }
+  for (const r of rows) {
+    const row = document.createElement('div');
+    row.className = 'ssh-live-row';
+    const what = document.createElement('span');
+    what.textContent = `${live.label(r)} (${r.id}) in ${r.title || r.session}`;
+    what.title = what.textContent;
+    const close = document.createElement('button');
+    close.className = 'icon-btn';
+    close.textContent = 'Close';
+    close.addEventListener('click', async () => {
+      close.disabled = true;
+      try {
+        await live.close(r.session, r.id);
+      } catch (err) {
+        // The list below says what is still open.
+      }
+      renderLive(live);
+    });
+    row.append(what, close);
+    list.appendChild(row);
+  }
+}
+
+const sshLive = {
+  id: 'ssh-live',
+  on: () => !!app.ssh,
+  load: () => apiClient.listSSH(),
+  close: (s, t) => apiClient.closeSSH(s, t),
+  none: 'No connection is open.',
+  label: (r) => r.target,
+};
+
+function renderSSHLive() {
+  return renderLive(sshLive);
+}
+
+// refreshSSHIfOpen redraws the switch when it was changed elsewhere.
+export function refreshSSHIfOpen() {
+  if (settings.isOpen) renderSSHSetting();
+}
+
+async function toggleSSH() {
+  const box = sshEl('ssh-checkbox');
+  const enabled = box.checked;
+  sshOut = true;
+  box.disabled = true;
+  try {
+    const res = await apiClient.setSSH(enabled);
+    app.ssh = res && 'ssh' in res ? !!res.ssh : enabled;
+    renderSSHSetting(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
+    renderSSHPanel();
+  } catch (err) {
+    box.checked = !!app.ssh;
+    const note = sshEl('ssh-note');
+    if (note) note.textContent = `Not changed: ${err}`;
+  } finally {
+    sshOut = false;
+    box.disabled = !app.sshAvailable;
+  }
+}
+
+// PowerShell.
+//
+// Drawn as SSH is, where the daemon has PowerShell (Windows): the row is
+// hidden anywhere else, since the panel it turns on is never drawn there.
+// Off closes every PowerShell terminal, which the row's "How it asks"
+// says. The list is every PowerShell terminal open now, in any
+// conversation.
+
+const powershellLive = {
+  id: 'powershell-live',
+  on: () => !!app.powershell && !!app.powershellAvailable,
+  load: () => apiClient.listPowerShell(),
+  close: (s, t) => apiClient.closePowerShell(s, t),
+  none: 'No PowerShell is open.',
+  label: (r) => r.target || 'PowerShell',
+};
+
+function renderPowerShellSetting(outcome) {
+  const warning = unsavedWarning('powershell', outcome);
+  const row = sshEl('powershell-settings');
+  if (row) row.hidden = !app.powershellAvailable;
+  const box = sshEl('powershell-checkbox');
+  if (!box) return;
+  box.checked = !!app.powershell;
+  box.disabled = powershellOut;
+  const warn = sshEl('powershell-warn');
+  if (warn) {
+    warn.textContent = warning || '';
+    warn.hidden = !warning;
+  }
+  const note = sshEl('powershell-note');
+  if (note) note.textContent = '';
+  renderLive(powershellLive);
+}
+
+// refreshPowerShellIfOpen redraws the switch when it was changed elsewhere.
+export function refreshPowerShellIfOpen() {
+  if (settings.isOpen) renderPowerShellSetting();
+}
+
+async function togglePowerShell() {
+  const box = sshEl('powershell-checkbox');
+  const enabled = box.checked;
+  powershellOut = true;
+  box.disabled = true;
+  try {
+    const res = await apiClient.setPowerShell(enabled);
+    app.powershell = res && 'powershell' in res ? !!res.powershell : enabled;
+    renderPowerShellSetting(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
+    renderPowerShellPanel();
+  } catch (err) {
+    box.checked = !!app.powershell;
+    const note = sshEl('powershell-note');
+    if (note) note.textContent = `Not changed: ${err}`;
+  } finally {
+    powershellOut = false;
+    box.disabled = false;
+  }
 }
 
 // Orchestration.
 //
 // Everything that hands work to another agent: the built-in specialists,
-// Task and the background pair, and the Orchestrate tool's plans. The note
-// carries the part that cannot be written into the page, because it comes
-// from the daemon: which specialists the build ships, and that delegation
-// costs model calls.
+// Task and the background pair, and the Orchestrate tool's plans. The note,
+// while it is on, carries the part that cannot be written into the page,
+// because it comes from the daemon: which specialists the build ships, and
+// that delegation costs model calls. Off, the switch says it all: the
+// model delegates to no agent, including agents declared in config.json.
 //
 // The note states the two ceilings that bound what a run can spend. The
 // timeouts are in the permission prompt each run asks with, and all of
@@ -237,18 +591,19 @@ function renderSmartAgent(warning) {
 // TestTheSettingsNoteCeilingsAreTheRealOnes reads this function, so
 // changing one side alone fails the build.
 
-function renderOrchestrate(warning) {
+function renderOrchestrate(outcome) {
+  const warning = unsavedWarning('orchestrate', outcome);
   orchestrateCheckbox.checked = !!app.orchestrate;
   orchestrateWarnEl.textContent = warning || '';
   orchestrateWarnEl.hidden = !warning;
   if (!app.orchestrate) {
-    orchestrateNoteEl.textContent = 'Off. The model does the work itself and delegates to no agent.';
+    orchestrateNoteEl.textContent = '';
     return;
   }
   const roster = (app.orchestrateRoster || []).join(', ');
   const agents = roster ? `Specialists: ${roster}. ` : '';
   orchestrateNoteEl.textContent =
-    `On. ${agents}More model calls per request. Each plan asks first unless pre-approved. Up to 8 stages and 32 agent turns.`;
+    `${agents}More model calls per request. Each plan asks first unless pre-approved. Up to 8 stages and 32 agent turns.`;
 }
 
 // The model running commands.
@@ -256,22 +611,24 @@ function renderOrchestrate(warning) {
 // The note carries the list, because the switch alone says nothing about
 // what it reaches: the opt-ins live in config.json and in each command's
 // own frontmatter, and somebody turning this on without seeing them has
-// turned on something they cannot name.
-function renderModelInvocable(warning) {
+// turned on something they cannot name. Off, commands run only when
+// typed, which the switch says, and the note is empty.
+function renderModelInvocable(outcome) {
+  const warning = unsavedWarning('model_invocable', outcome);
   modelInvocableCheckbox.checked = !!app.modelInvocable;
   modelInvocableWarnEl.textContent = warning || '';
   modelInvocableWarnEl.hidden = !warning;
   const names = app.modelCommands || [];
   if (!app.modelInvocable) {
-    modelInvocableNoteEl.textContent = 'Off. Commands run only when you type them.';
+    modelInvocableNoteEl.textContent = '';
     return;
   }
   if (!names.length) {
     modelInvocableNoteEl.textContent =
-      'On, but nothing is opted in. Add built-ins to "model_commands" in config.json, or "model_invocable: true" to a command or skill.';
+      'Nothing is opted in. Add built-ins to "model_commands" in config.json, or "model_invocable: true" to a command or skill.';
     return;
   }
-  modelInvocableNoteEl.textContent = `On. May run: ${names.join(', ')}. Reachable from anything the model reads.`;
+  modelInvocableNoteEl.textContent = `May run: ${names.join(', ')}. Reachable from anything the model reads.`;
 }
 
 export function refreshModelInvocableIfOpen() {
@@ -288,7 +645,7 @@ async function toggleModelInvocable() {
       ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
       : '');
   } catch (err) {
-    modelInvocableCheckbox.checked = !enabled;
+    modelInvocableCheckbox.checked = !!app.modelInvocable;
     modelInvocableNoteEl.textContent = `Not changed: ${err}`;
   } finally {
     modelInvocableCheckbox.disabled = false;
@@ -309,7 +666,7 @@ async function toggleOrchestrate() {
       ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
       : '');
   } catch (err) {
-    orchestrateCheckbox.checked = !enabled;
+    orchestrateCheckbox.checked = !!app.orchestrate;
     orchestrateNoteEl.textContent = `Not changed: ${err}`;
   } finally {
     orchestrateCheckbox.disabled = false;
@@ -342,7 +699,7 @@ async function toggleSmartAgent() {
       : '');
   } catch (err) {
     // Nothing was applied. Put the box back where it was.
-    smartAgentCheckbox.checked = !enabled;
+    smartAgentCheckbox.checked = !!app.smartAgent;
     smartAgentNoteEl.textContent = `Not changed: ${err}`;
   } finally {
     smartAgentCheckbox.disabled = false;
@@ -549,6 +906,10 @@ export function initSettings() {
     if (e.key === 'Escape' && settings.isOpen) settings.close();
   });
   smartAgentCheckbox.addEventListener('change', toggleSmartAgent);
+  browserCheckbox.addEventListener('change', toggleBrowser);
+  browserImportBtn.addEventListener('click', importBrowserProfile);
+  sshEl('ssh-checkbox')?.addEventListener('change', toggleSSH);
+  sshEl('powershell-checkbox')?.addEventListener('change', togglePowerShell);
   orchestrateCheckbox.addEventListener('change', toggleOrchestrate);
   modelInvocableCheckbox.addEventListener('change', toggleModelInvocable);
   keepGoingCheckbox.addEventListener('change', toggleKeepGoing);

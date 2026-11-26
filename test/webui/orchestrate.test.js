@@ -12,7 +12,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { load, labelText } = require('./harness');
+const { load, descText } = require('./harness');
 
 const SETTINGS = {
   auto_compact_enabled: true, show_tps: true, auto_delegate: false,
@@ -27,37 +27,38 @@ async function openSettings(app) {
   await app.settle();
 }
 
-test('the switch is off, and says what that means', async () => {
+test('the switch is off, and the note does not repeat it', async () => {
   const app = await load({ routes: { 'GET /api/settings': SETTINGS } });
   await openSettings(app);
 
   assert.equal(app.el('orchestrate-checkbox').checked, false);
-  assert.match(app.el('orchestrate-note').textContent, /^Off\./);
+  assert.equal(app.el('orchestrate-note').textContent, '');
   assert.equal(app.callsTo('POST', '/api/settings/orchestrate').length, 0,
     'opening the panel changed a setting');
 });
 
-// Off means no delegation at all now, so that is what the note says. The
-// old "One delegation at a time" was a claim about how many ran; this is a
-// claim that none do, which is true with the switch off whatever the
+// Off means no delegation at all, which the switch says by being off: the
+// line under the name is everything it gates. The note used to say so in
+// words ("Off. The model does the work itself and delegates to no agent"),
+// and before that "One delegation at a time", a claim about how many ran.
+// It now claims nothing, which is true with the switch off whatever the
 // config declares.
-test('off, the note says the model delegates to no agent', async () => {
+test('off, the note is empty and claims nothing about how many run', async () => {
   const app = await load({ routes: { 'GET /api/settings': SETTINGS } });
   await openSettings(app);
 
   const note = app.el('orchestrate-note').textContent;
-  assert.match(note, /^Off\./);
-  assert.match(note, /delegates to no agent/);
+  assert.equal(note, '');
   assert.doesNotMatch(note, /one at a time|sequential/i);
 });
 
-// The sentence beside the box names both halves of what the switch gates:
-// delegation, with the built-in specialists, and plans. How a plan runs
-// (stages, four at a time in a fanout) is for the permission prompt and
-// USAGE.md.
-test('the sentence beside the box names delegation, the specialists and plans', () => {
-  const label = labelText('orchestrate-checkbox');
-  assert.match(label, /delegate to sub-agents/);
+// The line under the name names both halves of what the switch gates:
+// delegation to sub-agents, with the built-in specialists, and plans. How a
+// plan runs (stages, four at a time in a fanout) is for the permission
+// prompt and USAGE.md.
+test('the line under the name names sub-agents, the specialists and plans', () => {
+  const label = descText('orchestrate-checkbox');
+  assert.match(label, /\bsub-agents\b/i);
   assert.match(label, /six built-in specialists/);
   assert.match(label, /multi-stage plans/);
   assert.doesNotMatch(label, /at once/, 'the phrase an earlier sentence replaced');
@@ -79,7 +80,7 @@ test('on, it names what a run can cost, with the unit of every limit', async () 
 
   assert.equal(app.el('orchestrate-checkbox').checked, true);
   const note = app.el('orchestrate-note').textContent;
-  assert.match(note, /^On\./);
+  assert.doesNotMatch(note, /^(On|Off)\b/, 'the note repeats the state the switch shows');
   for (const limit of ['8 stages', '32 agent turns']) {
     assert.ok(note.includes(limit), `the note does not say ${limit}: ${note}`);
   }

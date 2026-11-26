@@ -420,8 +420,12 @@ func TestAnImageAfterCompactionSurvivesWholeWhileAnImageBeforeItIsGone(t *testin
 }
 
 // TestRehydratedOversizedImageCannotBypassTenMegabyteLimit ensures that an
-// oversized image in an event log is validated at the provider boundary when
-// history is rehydrated and used in subsequent model requests.
+// oversized image in an event log never reaches a provider when history is
+// rehydrated and used in subsequent model requests.
+//
+// It used to reach the provider boundary and fail there, and so did every
+// request after it, since each carries the same history: the conversation
+// could not go on. It is left out with a note now, before any adapter.
 func TestRehydratedOversizedImageCannotBypassTenMegabyteLimit(t *testing.T) {
 	dir := t.TempDir()
 	store, err := session.NewStore(dir)
@@ -456,17 +460,33 @@ func TestRehydratedOversizedImageCannotBypassTenMegabyteLimit(t *testing.T) {
 	}
 	t.Cleanup(restoredStore.Close)
 
-	p := &validatingProvider{scriptedProvider: scriptedReply("should not reach here")}
+	p := &validatingProvider{scriptedProvider: scriptedReply("answered")}
 	loop := newTestLoop(restoredStore, p)
 	loop.RehydrateAll()
 
-	// Subsequent turn attempts to send request with rehydrated history to provider.
-	err = loop.SendMessage(context.Background(), sid, "general-purpose", "next prompt")
-	if err == nil {
-		t.Fatalf("expected error from provider boundary for oversized image in history, got nil")
+	// Subsequent turn sends the rehydrated history to the provider.
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "next prompt"); err != nil {
+		t.Fatalf("a history holding an oversized image failed the turn: %v", err)
 	}
-	if !strings.Contains(err.Error(), "10MB limit") {
-		t.Errorf("err = %q, want it to cite the 10MB limit", err.Error())
+	p.mu.Lock()
+	reqs := append([]provider.ChatRequest(nil), p.requests...)
+	p.mu.Unlock()
+	if len(reqs) != 1 {
+		t.Fatalf("%d requests, want 1", len(reqs))
+	}
+	note := false
+	for _, m := range reqs[0].Messages {
+		for _, b := range m.Content {
+			if b.Type == provider.BlockImage {
+				t.Fatalf("the oversized image reached the provider (%d bytes)", len(b.Data))
+			}
+			if strings.Contains(b.Text, "It was left out: it is 11534336 bytes") {
+				note = true
+			}
+		}
+	}
+	if !note {
+		t.Error("no note says the image was left out, or why")
 	}
 }
 

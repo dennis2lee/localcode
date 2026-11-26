@@ -1,4 +1,5 @@
 import { app } from './state.js';
+import { readPref, writePref } from './prefs.js';
 
 // Ctrl+wheel zoom, owned by the page.
 //
@@ -19,7 +20,9 @@ import { app } from './state.js';
 // localStorage rather than sessionStorage, unlike the open conversation:
 // a comfortable size is a property of the person and their screen, not
 // of this window, and somebody who sized the text once should not do it
-// again in the next window.
+// again in the next window. Through js/prefs.js, which in the desktop
+// window also keeps it in a file, so it is there on whatever port the
+// window comes up on next.
 
 const KEY = 'localcode.zoom';
 const MIN = 0.5;
@@ -32,18 +35,12 @@ function clamp(z) {
 }
 
 function read() {
-  try {
-    const v = parseFloat(localStorage.getItem(KEY));
-    return Number.isFinite(v) ? clamp(v) : 1;
-  } catch {
-    return 1;
-  }
+  const v = parseFloat(readPref(KEY));
+  return Number.isFinite(v) ? clamp(v) : 1;
 }
 
 function write(z) {
-  try {
-    localStorage.setItem(KEY, String(z));
-  } catch { /* storage refused: this window keeps the size, the next starts at 1 */ }
+  writePref(KEY, String(z));
 }
 
 // apply sets the factor on the root element.
@@ -90,29 +87,45 @@ function step(dir) {
   applyZoom(below.length ? below[below.length - 1] : MIN);
 }
 
+// zoomKey is what a key event asks of the window's zoom: 1 for a step in,
+// -1 for a step out, 0 for back to 100%, and null when it is not a zoom
+// shortcut. The browser panel reads it too: a zoom shortcut is the
+// window's, and is not passed on to the page in the panel.
+export function zoomKey(e) {
+  // Not with Alt: Ctrl+Alt is AltGr on Windows and Linux, and a character
+  // typed with it is a character. A browser's own zoom shortcut takes no
+  // Alt either.
+  if ((!e.ctrlKey && !e.metaKey) || e.altKey) return null;
+  // "=" is the unshifted key on the same cap as "+", which is what
+  // ctrl+plus actually delivers on most layouts.
+  if (e.key === '+' || e.key === '=') return 1;
+  if (e.key === '-' || e.key === '_') return -1;
+  if (e.key === '0') return 0;
+  return null;
+}
+
+// zoomWheel is whether a turn of the wheel zooms the window: one with Ctrl
+// or Cmd held. Like zoomKey, the browser panel reads it and does not pass
+// the turn on to the page.
+export function zoomWheel(e) {
+  return Boolean(e.ctrlKey || e.metaKey);
+}
+
 export function wireZoom(target) {
   const el = target || document;
   applyZoom(read());
 
   el.addEventListener('wheel', (e) => {
-    if (!e.ctrlKey && !e.metaKey) return;
+    if (!zoomWheel(e)) return;
     e.preventDefault();
     step(e.deltaY < 0 ? 1 : -1);
   }, { passive: false });
 
   el.addEventListener('keydown', (e) => {
-    if (!e.ctrlKey && !e.metaKey) return;
-    // "=" is the unshifted key on the same cap as "+", which is what
-    // ctrl+plus actually delivers on most layouts.
-    if (e.key === '+' || e.key === '=') {
-      e.preventDefault();
-      step(1);
-    } else if (e.key === '-' || e.key === '_') {
-      e.preventDefault();
-      step(-1);
-    } else if (e.key === '0') {
-      e.preventDefault();
-      applyZoom(1);
-    }
+    const dir = zoomKey(e);
+    if (dir === null) return;
+    e.preventDefault();
+    if (dir === 0) applyZoom(1);
+    else step(dir);
   });
 }

@@ -249,9 +249,12 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 		}
 
 		// An earlier "allow for this session" (or "always") already covers
-		// this call, so don't ask again.
+		// this call, so don't ask again. Not a question asked every time:
+		// its answer covers one use, and so does nothing remembered. A
+		// write into .git is one (tools.Outcome.GitDir), and a grant for
+		// "notes.txt" must not cover notes.txt once it is a link into .git.
 		rule := config.PermissionRuleFor(toolName, subject)
-		if b.coveredBySession(sessionID, toolName, subject, rule) {
+		if !ask.Once && b.coveredBySession(ctx, sessionID, toolName, subject, rule) {
 			return true, nil
 		}
 		// A directory this conversation already approved leaving the
@@ -312,7 +315,7 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 			// Only this use can be approved: clients offer allow and deny.
 			"once": ask.Once,
 		}
-		if toolName == config.BashToolName {
+		if config.IsShellTool(toolName) {
 			// The line itself is granted too (see lineKey), so a restart
 			// rebuilds that grant from here.
 			request["line"] = strings.TrimSpace(subject)
@@ -409,7 +412,7 @@ func (b *PermissionBroker) applyScope(sessionID, toolName string, rule config.Pe
 		return
 	}
 	b.grant(sessionID, toolName, rule.Match)
-	if toolName == config.BashToolName && strings.TrimSpace(ask.Subject) != "" {
+	if config.IsShellTool(toolName) && strings.TrimSpace(ask.Subject) != "" {
 		b.grant(sessionID, toolName, lineKey(ask.Subject))
 	}
 	if scope == ScopeAlways {
@@ -506,9 +509,10 @@ func (b *PermissionBroker) grant(sessionID, toolName, pattern string) {
 // only when each of its commands is, by that command's own rule: the rule
 // a line generalizes to names its first command, and matching the whole
 // line against it let "ls -la && rm -rf ~" run on a grant for "ls -la".
-// See config.GrantSegments for the lines no grant covers.
-func (b *PermissionBroker) coveredBySession(sessionID, toolName, subject string, rule config.PermissionRule) bool {
-	if toolName != config.BashToolName || subject == "" {
+// See config.GrantSegmentsFor for the lines no grant covers. ctx says
+// which shell an ssh line is for.
+func (b *PermissionBroker) coveredBySession(ctx context.Context, sessionID, toolName, subject string, rule config.PermissionRule) bool {
+	if !config.IsShellTool(toolName) || subject == "" {
 		return b.isGranted(sessionID, toolName, rule.Match)
 	}
 	// The line that was answered, exactly, is what the person approved,
@@ -516,7 +520,7 @@ func (b *PermissionBroker) coveredBySession(sessionID, toolName, subject string,
 	if b.isGranted(sessionID, toolName, lineKey(subject)) {
 		return true
 	}
-	readings, ok := config.GrantSegments(subject)
+	readings, ok := config.GrantSegmentsFor(ctx, toolName, subject)
 	if !ok {
 		return false
 	}

@@ -601,3 +601,15 @@ func TestComCallPinsItsPointerArguments(t *testing.T) {
 		t.Errorf("found %d calls passing an address as an integer, want at least 3 (get_CoreWebView2, add_NewWindowRequested, get_Uri); this test no longer reads what it thinks it reads", sites)
 	}
 }
+
+// The length limit holds for what is handed over, after the repair that
+// writes each stray '%' as three bytes.
+func TestTheRepairDoesNotTakeAnAddressPastTheLimit(t *testing.T) {
+	raw := "https://example.com/" + strings.Repeat("%", maxExternalURL/2)
+	if len(raw) > maxExternalURL {
+		t.Fatalf("the test address is %d bytes, over the limit before the repair", len(raw))
+	}
+	if got, reason := externalURL(raw); reason != refusedTooLong {
+		t.Errorf("externalURL = %d bytes, %q; want it refused as too long", len(got), reason)
+	}
+}

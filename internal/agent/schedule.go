@@ -123,6 +123,16 @@ type Scheduled struct {
 	// History is the run sessions still on disk, oldest first. What Keep
 	// prunes from the back.
 	History []string `json:"history,omitempty"`
+
+	// byModel is whether the model composed the prompt: it was booked by
+	// the Schedule tool, or by a "/schedule" line the Command tool ran.
+	// Unexported, so no client is shown it, and read back from the "by"
+	// field of schedule.created so that a restart keeps it.
+	//
+	// It decides one thing, and it is the thing the booking has no other
+	// way to say: whether the prompt is handed to the run as text or as
+	// something a person typed. See modelWrittenPrompt.
+	byModel bool
 }
 
 // RepeatOptions is everything about a booking that repeats, so Add keeps
@@ -205,9 +215,45 @@ func NewScheduler(rootCtx context.Context, loop *Loop) *Scheduler {
 // real use has, so hitting it is a signal.
 const maxPendingPerSession = 16
 
-// Add books a prompt. at must be in the future; the caller has already
-// parsed and echoed it (see internal/when).
+// Who composed a booked prompt, as schedule.created records it.
+//
+// Both are written, so an absent field means the booking was made before
+// the field existed rather than that somebody forgot it. Such a booking
+// runs as the person wrote it, which is what it always did.
+const (
+	bookedByModel  = "model"
+	bookedByPerson = "person"
+)
+
+// Add books a prompt a person wrote: typed after "/schedule", or entered in
+// the window's Schedule dialog. at must be in the future; the caller has
+// already parsed and echoed it (see internal/when).
+//
+// Whoever calls this is vouching that no model composed the prompt, because
+// the run that fires it handles a leading "/" or "!" as the command it
+// looks like. A model's booking goes through AddByModel. Every caller is
+// listed in TestEveryBookingDoorSaysWhoWroteThePrompt, so a new one has to
+// be looked at.
 func (s *Scheduler) Add(sessionID, agentName, prompt string, at time.Time, rep RepeatOptions) (Scheduled, error) {
+	return s.book(sessionID, agentName, prompt, at, rep, false)
+}
+
+// AddByModel books a prompt the model composed: the Schedule tool's, or the
+// one in a "/schedule" line the Command tool ran.
+//
+// The only difference is what happens when it fires. A person's prompt is a
+// message like any other, so "!make test" in it is the shell command they
+// meant. A model's was written after reading files and tool output and
+// nobody typed it, and the switch that decides whether a model may run
+// commands at all (model_invocable) never saw it: with the switch off, a
+// model could book "!touch x" or "/orchestrate on" and have it run as
+// though it had been typed. The prompt reaches the run as text. See
+// modelWrittenPrompt.
+func (s *Scheduler) AddByModel(sessionID, agentName, prompt string, at time.Time, rep RepeatOptions) (Scheduled, error) {
+	return s.book(sessionID, agentName, prompt, at, rep, true)
+}
+
+func (s *Scheduler) book(sessionID, agentName, prompt string, at time.Time, rep RepeatOptions, byModel bool) (Scheduled, error) {
 	parent, err := s.loop.Store.Get(sessionID)
 	if err != nil {
 		return Scheduled{}, fmt.Errorf("schedule: %w", err)
@@ -237,7 +283,7 @@ func (s *Scheduler) Add(sessionID, agentName, prompt string, at time.Time, rep R
 		ID: id, SessionID: sessionID, At: at, Prompt: prompt,
 		Agent: agentName, Status: SchedulePending,
 		Repeat: rep.Rule, StopAt: rep.StopAt, StopAfter: rep.StopAfter,
-		Keep: rep.Keep,
+		Keep: rep.Keep, byModel: byModel,
 	}
 	s.entries[key(sessionID, id)] = entry
 	s.mu.Unlock()
@@ -245,8 +291,18 @@ func (s *Scheduler) Add(sessionID, agentName, prompt string, at time.Time, rep R
 	// Recorded on the conversation's own log, which is what makes the
 	// row in the panel survive a reload — the same reason a background
 	// task's row is built from task.spawned rather than from memory.
+	//
+	// The author goes on it for the same reason as the rule below: Restore
+	// rebuilds the books from this log, and a model's prompt whose author
+	// is forgotten across a restart is one that runs as typed text from
+	// then on.
+	by := bookedByPerson
+	if byModel {
+		by = bookedByModel
+	}
 	created := map[string]any{
 		"id": id, "at": at.Format(time.RFC3339), "prompt": prompt, "agent": agentName,
+		"by": by,
 	}
 	// The rule and its limits go on the event, because Restore rebuilds
 	// the books from this log and a field that is not written here does
@@ -429,7 +485,7 @@ func (s *Scheduler) fire(sessionID, id string) {
 		return
 	}
 	entry.Status = ScheduleRunning
-	agentName, prompt := entry.Agent, entry.Prompt
+	agentName, prompt, byModel := entry.Agent, entry.Prompt, entry.byModel
 	entryName, stopAfter := entry.Name, entry.StopAfter
 	repeatWords := entry.Repeat.String()
 	delete(s.timers, k)
@@ -491,6 +547,13 @@ func (s *Scheduler) fire(sessionID, id string) {
 	// Unattended: nobody is watching this turn, so a permission request
 	// it raises must not wait forever. See WithUnattended.
 	ctx := WithUnattended(s.rootCtx)
+	// A prompt the model composed is text, whatever its first character
+	// is. Task and TaskBackground say the same of a sub-agent's task with
+	// withDelegatedTask, for the same reason: SendMessage assumes that
+	// what reaches it was typed.
+	if byModel {
+		ctx = withModelWrittenPrompt(ctx, prompt)
+	}
 	err = s.loop.SendMessage(ctx, runID, agentName, prompt)
 	if err != nil {
 		s.finish(sessionID, id, runID, ScheduleFailed, err.Error())
@@ -498,6 +561,56 @@ func (s *Scheduler) fire(sessionID, id string) {
 	}
 	s.finish(sessionID, id, runID, ScheduleDone, "")
 }
+
+// modelWrittenPromptKey carries the prompt the model booked into the run
+// that fires it.
+//
+// On the context for the reason withDelegatedTask is: SendMessage is the
+// public entry point, and the scheduler is one of several callers that
+// reach it with something a person did not type. And not withDelegatedTask
+// itself, which also tags the opening message "child.input.<agent>" in the
+// prompt manifest, an entry docs/PROMPT_ASSET_INVENTORY.md describes as a
+// sub-agent's task. All this has to say is that the text was not typed.
+type modelWrittenPromptKey struct{}
+
+func withModelWrittenPrompt(ctx context.Context, text string) context.Context {
+	return context.WithValue(ctx, modelWrittenPromptKey{}, text)
+}
+
+// modelWrittenPrompt reports whether text is the prompt the model booked.
+//
+// The comparison against the turn's own text is the one a delegated task
+// makes, for the same reason: a person can open the run's conversation and
+// type in it, and what they type there is theirs. It also keeps the marker
+// off any other message the same context goes on to carry. withCommandRun
+// clears it for the line a Command call books, which can read exactly like
+// the booked prompt and is still a different message.
+func modelWrittenPrompt(ctx context.Context, text string) bool {
+	booked, _ := ctx.Value(modelWrittenPromptKey{}).(string)
+	return booked != "" && booked == text
+}
+
+// commandShaped reports whether a prompt starts the way a command does: a
+// leading "/" or "!". The prompt will not run as one when the model booked
+// it (see modelWrittenPrompt), and a model that is not told reports a
+// command as scheduled, so it is told when it books one.
+func commandShaped(prompt string) bool {
+	p := strings.TrimSpace(prompt)
+	return strings.HasPrefix(p, "/") || strings.HasPrefix(p, "!")
+}
+
+// sentAsText is what the model is told on booking a command-shaped prompt.
+// The last sentence is the way to what the user probably meant.
+const sentAsText = "A prompt a model books is sent to the run as plain text, so a leading / or ! does not " +
+	"run a command. A command to run later is one the user books themselves, with /schedule."
+
+// scheduledTurnCannotBook is what a scheduled turn is told when it tries to
+// book another, by the Schedule tool or by a "/schedule" line the Command
+// tool ran. Nobody is watching the turn, so a task that books its own
+// successor is a loop with no one in the room to notice, and the ceiling on
+// outstanding tasks is per conversation, which a chain walks straight past
+// by starting a new conversation each time.
+const scheduledTurnCannotBook = "this turn is itself a scheduled task, and a scheduled task cannot book another one"
 
 func (s *Scheduler) finish(sessionID, id, runID, status, errText string) {
 	s.status(sessionID, id, status, runID, errText)
@@ -720,10 +833,17 @@ func (s *Scheduler) restore(sessions []string, now time.Time, missed func(time.T
 				if terr != nil {
 					continue
 				}
+				// A person's prompt runs as typed, and so does one with no
+				// author on record: a booking from before the field existed
+				// ran that way, and nothing in the log says whose words it
+				// holds. A value this version does not know is some other
+				// author's, and the safe reading of that is the model's.
+				by := str(ev.Data["by"])
 				e := &Scheduled{
 					ID: id, SessionID: sessionID, At: at,
 					Prompt: str(ev.Data["prompt"]), Agent: str(ev.Data["agent"]),
-					Status: SchedulePending,
+					Status:  SchedulePending,
+					byModel: by != "" && by != bookedByPerson,
 				}
 				// The rule and its limits, if this one repeats. Rebuilt
 				// from the log rather than stored anywhere else, which is

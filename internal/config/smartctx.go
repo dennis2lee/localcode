@@ -58,3 +58,17 @@ func (c *Config) SmartAgentFor(ctx context.Context) bool {
 	}
 	return c.SmartAgentLive()
 }
+
+// smartAgentForLocked is SmartAgentFor for a caller already holding
+// permMu. Read locks on a sync.RWMutex do not nest: a writer that arrives
+// between the two blocks the second, which then never lets the first go,
+// and from then on every permission decision and every runtime setting
+// waits. resolveOneStrict took the second one through SmartAgentLive, and
+// the browser's request guard, which resolves with no pinned setting,
+// went down that path on every request a page made.
+func (c *Config) smartAgentForLocked(ctx context.Context) bool {
+	if on, ok := SmartAgentPinned(ctx); ok {
+		return on
+	}
+	return c.SmartAgent != nil && *c.SmartAgent
+}

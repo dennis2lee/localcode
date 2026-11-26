@@ -253,7 +253,7 @@ Since v0.38.0, localcode reads the context limit from the server. The configured
 |---|---|
 | `context_window` | Set only when the server does not report a context limit |
 | `max_tokens` | Maximum response length; default 4096 |
-| `vision` | Set `true` for a model that accepts images. Unset, only a Claude model is sent images, and any other model gets a note in place of each image. The `view_image` tool is offered only when this is on. |
+| `vision` | `true` or `false` overrules the test image. Unset, a Claude model is sent images, and any other model is shown a test image on its first turn and is sent images when it names the colour. A model that is not sent images gets a note in place of each image. The `view_image` tool is offered only to a model that is sent images. |
 
 ```json
 {

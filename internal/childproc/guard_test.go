@@ -27,6 +27,9 @@ var exemptSpawnSites = map[string]string{
 	// above: build-tagged to one OS each, and Hide is a no-op on both.
 	"internal/dialog/reveal_darwin.go:revealDir": "macOS only; Hide is a no-op on darwin",
 	"internal/dialog/reveal_other.go:revealDir":  "non-Windows only; Hide is a no-op there",
+	// The desktop window's links on macOS and Linux: the same shape as the
+	// file-manager button, and Windows opens links through ShellExecute.
+	"internal/gui/newwindow_other.go:openExternal": "non-Windows only; Hide is a no-op there",
 	// The one child that is meant to be seen. msiexec asks for elevation
 	// and then shows the installer, and replacing the program someone is
 	// using is not something to do behind a window they cannot find.

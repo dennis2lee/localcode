@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"localcode/internal/config"
+	"localcode/internal/provider"
 )
 
 // A pasted image reaches the model as an image, through the real route.
@@ -153,5 +156,47 @@ func TestAnUnsupportedImageTypeIsRefusedByTheRoute(t *testing.T) {
 	msg, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(msg), "image/bmp") {
 		t.Errorf("the refusal does not name the type: %s", msg)
+	}
+}
+
+// An image past what one image may be is refused by the route with what it
+// is past, rather than sent to a server that refuses it and stays in the
+// conversation to fail every request after it.
+func TestAnImageTooBigToSendIsRefusedByTheRoute(t *testing.T) {
+	d := newTestDaemon(t, "http://unused.invalid")
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+
+	var sess struct {
+		ID string `json:"id"`
+	}
+	resp, _ := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(`{}`))
+	json.NewDecoder(resp.Body).Decode(&sess)
+	resp.Body.Close()
+
+	var tall bytes.Buffer
+	if err := png.Encode(&tall, image.NewGray(image.Rect(0, 0, 10, provider.MaxImageSide+1))); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		data []byte
+		want string
+	}{
+		"bytes":  {make([]byte, provider.MaxImageBytes+1), "it is 3750001 bytes, over the 3750000 byte limit for one image"},
+		"pixels": {tall.Bytes(), "it is 10x8001 pixels, over the 8000 pixel limit for a side"},
+	} {
+		body, _ := json.Marshal(map[string]any{
+			"text":   "look",
+			"images": []map[string]any{{"media_type": "image/png", "data": c.data}},
+		})
+		resp, err := http.Post(srv.URL+"/api/sessions/"+sess.ID+"/messages", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("%s: send: %v", name, err)
+		}
+		msg, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(msg), c.want) {
+			t.Errorf("%s: status %d, %s", name, resp.StatusCode, msg)
+		}
 	}
 }

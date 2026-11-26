@@ -429,7 +429,7 @@ func TestVisionRefusalClassifierDistinguishesRefusals(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := isVisionRefusal(tc.err)
+			got := isVisionRefusal(tc.err, "my-model")
 			if got != tc.isRefusal {
 				t.Errorf("isVisionRefusal(%v) = %v, want %v", tc.err, got, tc.isRefusal)
 			}

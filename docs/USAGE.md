@@ -21,7 +21,7 @@ LocalCode supports interactive TUI, Web UI, desktop, daemon, and one-shot CLI wo
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [What stop reaches](#what-stop-reaches), [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [Shell escape](#shell-escape), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/clear](#clear), [/rewind](#rewind), [Sampling](#sampling-temperature-top_p-top_k), [/review](#review), [/redo](#redo), [/model-invocable](#model-invocable), [/usage totals](#usage-totals), [/export](#export), [/mcps](#mcps), [What the transcript shows](#what-the-transcript-shows), [Where localcode may connect](#where-localcode-may-connect), [What a session log holds](#what-a-session-log-holds-and-who-can-read-it), [/llm-doctor](#llm-doctor), [/context](#context), [The switches](#the-switches), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Archive](#archiving-a-conversation), [Referring to another conversation](#referring-to-another-conversation-with-name), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
 | [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Pasting an image](#pasting-an-image), [Status bar](#status-bar-under-the-prompt), [Settings](#settings), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn), [Redirecting a turn](#redirecting-a-turn-while-it-runs) |
-| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Leaving the project](#leaving-the-project), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Debate](#debate), [Effort](#effort), [Zoom and what a reload keeps](#zoom-and-what-a-reload-keeps), [Debug log](#debug-log), [Scheduled tasks](#scheduled-tasks), [Repeating tasks](#repeating-tasks), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm), [Checking for updates](#checking-for-updates) |
+| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Browser](#browser), [SSH](#ssh), [Leaving the project](#leaving-the-project), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Debate](#debate), [Effort](#effort), [Zoom and what a reload keeps](#zoom-and-what-a-reload-keeps), [Debug log](#debug-log), [Scheduled tasks](#scheduled-tasks), [Repeating tasks](#repeating-tasks), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm), [Checking for updates](#checking-for-updates) |
 | [Known limitations](#known-limitations) | |
 
 ## Part 1. Getting started
@@ -208,9 +208,9 @@ Links in the window:
 | Platform | Behavior |
 |---|---|
 | Windows | A link a model writes (and any other request for a new window) opens in the system's default browser, the one chosen under Default apps for `http` and `https`. Only `http` and `https` addresses are handed over. Anything else is dropped without opening a window. |
-| macOS | Not changed by this feature. The window installs no new-window handler, and what WKWebView does with a link that asks for a window is not verified. |
+| macOS, Linux | A click on a web link (left or middle button) opens it in the system's default browser, through `open` on macOS and `xdg-open` on Linux. The window has no new-window request to answer there: without one, WKWebView and WebKitGTK did nothing with a click on a link the model wrote. The page sends the click to the window instead, and the window holds the address to the same rules as Windows. |
 
-On Windows a dropped link shows nothing in the window. An address is dropped when it is empty, longer than 8192 bytes, not `http` or `https`, without a host, or when it contains a space, a control character, a double quote, `<` or `>`. A `%` that does not start an escape (`/50%off`) is not a reason to drop an address: it is handed over as `%25`, which the Windows shell can open and which a server reads the same way. `gui-frame.log` records the rule that dropped it and the scheme, never the rest of the address.
+On every platform only `http` and `https` addresses are handed over. On Windows a dropped link shows nothing in the window. An address is dropped when it is empty, longer than 8192 bytes, not `http` or `https`, without a host, or when it contains a space, a control character, a double quote, `<` or `>`. A `%` that does not start an escape (`/50%off`) is not a reason to drop an address: it is handed over as `%25`, which the Windows shell can open and which a server reads the same way. `gui-frame.log` records the rule that dropped it and the scheme, never the rest of the address.
 
 Windows asks the default browser through the shell, the same way any other program does, so changing the default browser changes where links open without restarting the window. When the hook cannot be installed, the window falls back to the earlier behavior (an Edge-engine popup) and `%LOCALAPPDATA%\localcode\gui-frame.log` says why.
 
@@ -304,7 +304,7 @@ Supported JSONC syntax:
 * Trailing commas before `}` or `]`
 * Literal `//` inside strings, including `https://example.com/v1`
 
-When the file has comments and the change updates an existing key, LocalCode splices the new value in place: comments, indentation, key order, and unrelated bytes survive. A file with no comments is rewritten whole with top-level keys sorted alphabetically, so one edit there can reorder the file. LocalCode refuses to add a missing key to a commented file because there is no unambiguous insertion point. The runtime change still applies, and the key can be added manually.
+When the file has comments and the change updates an existing key, LocalCode splices the new value in place: comments, indentation, key order, and unrelated bytes survive. A file with no comments is rewritten whole with top-level keys sorted alphabetically, so one edit there can reorder the file. A key the commented file does not have yet is added at the end of the top-level object, on its own line: after the last member and after any comments that follow it, so no existing comment moves. A trailing comma after the last member is kept as the file's style. Before v0.179.0 LocalCode refused to add a key to a commented file, and a switch turned on in the settings window was off again after a restart.
 
 #### Values from the environment: `{env:NAME}`
 
@@ -420,6 +420,11 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `hooks` | Shell commands run at lifecycle points. See [Hooks](#hooks). |
 | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `smart_agent` | Turns on the work-order prompt, enhanced tools, fallback, the turn log, cache markers and credential-path checks. It delegates nothing. Off unless set to true; also `/config smart_agent` and the settings window. See [Smart Agent](#smart-agent). |
+| `browser` | Gives the model a web browser, shown in the desktop window's browser panel. Off unless set to true; also `/browser` and the settings window. See [Browser](#browser). |
+| `ssh` | Gives the model SSH connections to work in, shown in the SSH panel of the desktop window and the Web UI. Off unless set to true; also `/ssh` and the settings window. See [SSH](#ssh). |
+| `browser_path` | The browser to run instead of the Chrome or Edge found in the usual places. |
+| `powershell` | Gives the model PowerShell terminals on this computer to work in, shown in the PowerShell panel. Windows only. Off unless set to true; also `/powershell` and the settings window. See [PowerShell](#powershell). |
+| `powershell_path` | The shell the PowerShell panel starts: `powershell.exe` (Windows PowerShell, the default), `pwsh.exe` (PowerShell 7), or a full path to either. |
 | `model_invocable` | The switch for whether the model may run commands itself. Off unless set; `/model-invocable` toggles it. On opens nothing by itself: each built-in must be named in `model_commands`, and each custom command or skill must opt in from its own frontmatter. See [/model-invocable](#model-invocable). |
 | `model_commands` | Which built-in commands the model may run, each with its leading slash. Empty, the default, means none. Inert while `model_invocable` is off. |
 | `auto_compact_enabled` | Automatic compaction past the threshold. Opencode spelling `compaction.auto` is also accepted. On unless set to false; `/auto-compact` toggles it. |
@@ -428,13 +433,13 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `memory_retire_days` | How many days a project or reference note may go unused, alongside 30 conversations, before it moves to the memory archive. `90` unless set; `0` turns retirement off. See [Auto memory](#auto-memory). |
 | `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
 | `show_thinking` | Whether the clients paint the model's reasoning while it arrives. On unless set to false; `/thinking` toggles it. Daemon-wide, like `show_tps`. The Web UI and the desktop window paint every model's reasoning. The TUI paints only a Muse model's reasoning block (see `fold_thinking`) and otherwise shows a `thinking` state on the busy line. This changes nothing about what the model does, and nothing about what is kept: a Muse model's reasoning blocks are logged while `fold_thinking` is on, whatever this switch says, and other models' reasoning is never logged. See [What the transcript shows](#what-the-transcript-shows). |
-| `fold_thinking` | Whether a Muse model's reasoning is drawn as a block of its own: labelled Thinking with its running time, and folded to one line when the answer starts. On unless set to false; `/fold-thinking` and the settings Muse tab toggle it. Daemon-wide. Applies only to model IDs containing `muse`; other models keep the plain drawing. `show_thinking` off hides the block too. While it is on, each block is also written to the session log, so a reload draws it again. See [What the transcript shows](#what-the-transcript-shows). |
+| `fold_thinking` | Whether a Muse model's reasoning is drawn as a block of its own: labelled Thinking with its running time, and folded to one line when the answer starts. On unless set to false; `/fold-thinking` and the Reasoning switch on the settings Behavior tab toggle it. Daemon-wide. Applies only to model IDs containing `muse`; other models keep the plain drawing. `show_thinking` off hides the block too. While it is on, each block is also written to the session log, so a reload draws it again. See [What the transcript shows](#what-the-transcript-shows). |
 | `show_timestamps` | Whether a time is shown beside each turn boundary in the Web UI and the desktop window. Off unless set to true; `/timestamps` toggles it. Daemon-wide. The TUI shows no turn-boundary times. See [What the transcript shows](#what-the-transcript-shows). |
 | `mouse` | Whether the TUI takes the mouse for a clickable scrollbar beside the transcript. Off unless set to true. Read from the config on the machine running the TUI, never from the daemon. See [Screen controls](#screen-controls). |
 | `trace_max_age_days` | How long a day of the Smart Agent turn log is kept. 30 when unset; zero or below means that default, not "keep forever". See [What it did](#the-turn-log). |
 | `trace_max_total_mb` | Optional cap on the trace directory, and separately on the prompt-manifest directory beside it. When set, each is bounded on its own: the oldest files go until it fits, and today's file is never removed. See [What it did](#the-turn-log). |
 | `default_profile` | The profile a conversation runs on unless its agent names another. A config needs it unless every agent it uses names a profile. `general-purpose` with no entry under `agents` names none. |
-| `keep_going` | The carry-on nudge for Muse models. Daemon-wide, on unless set to false; `/keep-going` and the settings Muse tab toggle it. The per-profile `keep_going` below is a different, numeric setting. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
+| `keep_going` | The carry-on nudge for Muse models. Daemon-wide, on unless set to false; `/keep-going` and the Keep going switch on the settings Behavior tab toggle it. The per-profile `keep_going` below is a different, numeric setting. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
 | `repeat_limit` | How many steps in a row may only repeat earlier tool calls before the turn ends. Daemon-wide; unset or `0` is off, the default, and a number arms the guard at that ceiling, at most 50. `/repeat-limit` changes it. See [A model that repeats itself](#a-model-that-repeats-itself). |
 | `orchestrate` | Delegation: the six built-in specialists, `Task`, `TaskBackground`, `TaskCollect`, the delegation prompt and the `Orchestrate` tool. Daemon-wide, off unless set. Off means the model delegates to no agent, including agents declared under `agents`. `/orchestrate` toggles it. See [Orchestration](#orchestration). |
 | `auto_update` | Whether a newer release is installed at startup. Daemon-wide, on unless set to false; a project config.json can turn it off for that checkout alone. See [At startup](#at-startup). |
@@ -452,7 +457,7 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `top_p` | Nucleus sampling threshold, above 0 and at most 1. `1.0` truncates nothing. Omit the key to send nothing at all. Reaches OpenAI-compatible, Anthropic, and Bedrock. Dropped while a Claude model is reasoning. See [Sampling](#sampling-temperature-top_p-top_k). |
 | `top_k` | Only sample from the top K candidates at each step. `0` is no limit on vLLM. Omit the key to send nothing at all. Native on Anthropic, in `additionalModelRequestFields` on Bedrock, and a vLLM extension on OpenAI-compatible servers. Dropped while reasoning. See [Sampling](#sampling-temperature-top_p-top_k). |
 | `effort` | How hard this model is asked to think. Unset sends nothing at all. See [Effort](#effort). |
-| `vision` | Whether this model is sent images: pasted ones, the ones already in the conversation, and `view_image`'s, which it is offered only when this is true. Unset means true for a model whose id contains `claude` and false for every other. Set `true` on any other model that can see. A model that is not sent images gets a note where each image was, so a conversation moved to it goes on. See [Pasting an image](#pasting-an-image). |
+| `vision` | Whether this model is sent images: pasted ones, the ones already in the conversation, and `view_image`'s, which it is offered only when this is true. Unset, a model whose id contains `claude` is sent images, and any other model is shown a test image once and decides by its answer. `true` or `false` overrules the test. A model that is not sent images gets a note where each image was, so a conversation moved to it goes on. See [Which models are sent images](#which-models-are-sent-images). |
 | `keep_going` | Per-profile budget: maximum automatic continuations for Muse models. Zero or unset: 3. `-1`: disabled. Maximum: 10. A value outside `-1` to `10` stops startup. Ignored for other model families. This numeric per-profile setting is different from the daemon-wide top-level `keep_going` switch. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
 | `fallback` | Other profile names to try, in order, when a request to this one fails for a reason another model could survive. Read only with [Smart Agent](#smart-agent) on. See [Fallback chains](#fallback-chains-when-a-model-will-not-answer). |
 | `context_window` | Total input and output limit. Discovery uses `GET /v1/models` or llama.cpp `/props`, then model-ID matching, then 128k. An explicit value overrides discovery. Do not exceed the model's actual limit. |
@@ -471,7 +476,7 @@ Each question and carry-on is a user message marked `auto`, hidden by both clien
 
 | Control | Scope | Behavior |
 |---|---|---|
-| `/keep-going` or GUI checkbox | Daemon | Enables or disables the feature and saves the value to config.json |
+| `/keep-going` or the Keep going switch in Settings | Daemon | Enables or disables the feature and saves the value to config.json |
 | Profile `keep_going` | Profile | Maximum carry-ons per turn (answers of MORE that are acted on) |
 | Unset or `0` on a Muse model | Profile | Default budget of 3 |
 | `-1` on a Muse model | Profile | Disabled for that profile |
@@ -668,10 +673,10 @@ Default behavior without any rules:
 | Tool | Confirmation |
 |---|---|
 | `read_file`, `view_image`, `glob`, `grep`, `check`, and every built-in tool not named below | Runs immediately |
-| `bash` running a `git` command | Runs immediately (built in default, see below) |
+| `bash` running a `git` command | Runs immediately except for the command execution forms below |
 | `write_file`, `edit`, `bash` running anything else, `Orchestrate`, `Schedule`, `Debate`, MCP tools | Always asks |
 
-Git commands run without confirmation by default. An explicit `bash` rule for Git can change the decision to `ask` or `deny`. Any explicit tool rule overrides its built-in default.
+Ordinary Git commands run without confirmation by default. Git options and subcommands that run another command require confirmation even when an explicit rule allows Git. An explicit tool rule overrides its built-in default.
 
 ```json
 {
@@ -713,7 +718,7 @@ Answering "always allow" writes a rule to `config.json`. For most programs the r
 
 | Family | Examples | Rule written |
 |---|---|---|
-| Interpreters and shells | `sh`, `bash`, `python3`, `node`, `perl`, `ruby`, `powershell`, `cmd`, `env`, `xargs`, `Start-Process`, `Invoke-Expression`, `schtasks`, `wmic`, `forfiles`, `msiexec`, `Invoke-Item` | The exact command. `python3 *` is not permission to run a command, it is permission to run any code written later. |
+| Interpreters and shells | `sh`, `bash`, `python3`, `node`, `perl`, `ruby`, `powershell`, `cmd`, `env`, `xargs`, `Start-Process`, `Invoke-Expression`, `Start-Job`, `Import-Module`, `.` (dot-sourcing), `schtasks`, `wmic`, `forfiles`, `msiexec`, `Invoke-Item` | The exact command. `python3 *` is not permission to run a command, it is permission to run any code written later. |
 | Privilege and destructive commands | `sudo`, `su`, `doas`, `rm`, `dd`, `shred`, `chmod`, `chown`, `kill`, `del`, `erase`, `rd`, `format`, `Remove-Item`, `icacls`, `taskkill`, `Stop-Process`, `reg`, `sc`, `net`, `shutdown`, `robocopy`, `vssadmin`, `cipher` | The exact command. `rm -rf build` and `rm -rf ~` are one rule apart under `rm *`. |
 
 The lists are not exhaustive: a program on neither generalizes to `<program> *`, so answer "once" for a command whose argument is the whole question. On Windows the privilege list also has registry, service, firewall, boot and Defender commands, among them `Set-ItemProperty`, `Set-Item`, `New-Service`, `Stop-Service`, `netsh`, `Set-NetFirewallProfile`, `bcdedit` and `Set-MpPreference`.
@@ -773,6 +778,19 @@ The panel and commands save changes with the session. Background tasks follow th
 
 `bash` rules apply to each command segment. LocalCode splits unquoted `&&`, `||`, `;`, `|`, `&`, and newlines. Every segment must resolve to `allow`; any `deny` rejects the full line. Separators that are quoted or backslash-escaped remain part of their command.
 
+A deny also checks command text after leading shell control words and assignments, recognized wrappers, the `-c` string of `sh`, `bash`, `zsh`, `dash`, `ksh`, `mksh`, `ash` and `su` (after a `--` too), `env -S`, `watch`, `eval`, and `find` execution actions. A `$'...'` string is decoded as bash decodes it, so `$'rm' -rf x` is `rm -rf x`. A command `xargs` runs is checked as if it had arguments, since it gets them from input. It checks command and process substitution bodies outside single quotes. A command word is also tried by its program's base name, so `/bin/rm -rf x` and `RM -rf x` are denied by `rm *`. These checks only add denies. An allow still depends on the segment's own text. Nested command strings and substitution bodies are checked through four levels.
+
+The wrapper list is `denyReachWrappers` in [internal/config/deny_reach.go](../internal/config/deny_reach.go). Common entries include `command`, `exec`, `nohup`, `sudo`, `env`, `timeout`, `nice`, and `xargs`. After a wrapper, every later word is tried as the start of a command. This can deny an argument that is not executed: `xargs echo rm -rf x` is denied by `rm *`.
+
+Deny reach does not determine commands from:
+
+* A command built at run time, such as `$CMD` or `$(echo rm)`.
+* A function or alias defined earlier.
+* A script file.
+* An interpreter's own code, such as `python -c`.
+* A wrapper outside the recognized list.
+* A command git runs for an alias or configuration (`git -c alias.x='!rm -rf x' x`). The git guard asks for these, and `skip_all` allows them.
+
 A line is split once more for each other way a shell can read its quotes, and the segments of every split are checked:
 
 | Construct in the line | Extra split |
@@ -789,18 +807,64 @@ The cost falls on a line that has one of the last two constructs and also a quot
 * The line is asked. "Allow for session" covers that same line again, and no other line like it.
 * A `deny` rule can match the text after a quoted separator. Under a `deny` for `rm *`, `git commit -m "a; rm b" # note` is denied.
 
-Command substitution, output redirection, and unquoted parentheses never auto-allow: `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, `>>`, and an unquoted `(`. In zsh, unquoted parentheses in a word act as glob qualifiers that run code, such as `*(e:'...')`. In other POSIX shells, they define subshells or extglobs. These forms require confirmation unless an explicit rule denies them, or permission skipping is on: with `skip_all` a line whose every segment resolves to `allow` runs with the construct in it. An explicit `deny` still denies in every mode.
+Command substitution, output redirection, unquoted parentheses and Git command execution forms never auto-allow. Shell forms include `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, `>>`, and an unquoted `(`. In zsh, unquoted parentheses in a word act as glob qualifiers that run code, such as `*(e:'...')`. In other POSIX shells, they define subshells or extglobs. These forms require confirmation even when a rule allows the command. With `skip_all`, a line whose every segment resolves to `allow` runs with the construct in it. A matched `deny` rejects the line even with `skip_all` or `skip_permissions`, within the deny reach limits above. For these forms, "allow for session" covers only the answered line. A broader session grant does not cover another such line. A stored "always" allow rule does not bypass this check.
+
+The Git guard asks for these forms:
+
+* Global `-c` settings outside the safe key list, `--config-env`, and `--exec-path=<dir>`.
+* A word the shell expands (`$VAR`, `"$VAR"`, `*`, `?`, `[`, `{a,b}`) among git's own options, their values or the subcommand.
+* `config` writes and invocations without a recognized read operation.
+* `filter-branch`, `filter-repo`, `difftool`, `mergetool`, `send-email`, `instaweb`, `daemon`, `hook`, `remote-ext`, `merge-index`, `for-each-repo`, and `svn`.
+* `submodule foreach` (also as `submodule--helper foreach`) and `bisect run`.
+* `rebase --exec` or `-x`, and `grep --open-files-in-pager` or `-O`.
+* `clone --upload-pack`, `--config`, `--template`, `-u`, or `-c`, and `init --template`.
+* `fetch`, `pull`, or `ls-remote` with `--upload-pack`, and `ls-remote -u` in git versions that have it.
+* `push` or `send-pack` with `--receive-pack` or `--exec`, `fetch-pack` with `--upload-pack` or `--exec`, and `archive --exec`.
+* Abbreviated long options (`--exe=`) and bundled short options (`-qx`) for the options above.
+* An expanded word anywhere after `config`, `submodule`, `bisect`, and the subcommands from `rebase` through `archive`. A glob can expand to a file named `--exec=cmd`. For `grep`, a word after a `--` that follows an operand is a path and is not checked, so `git grep -n foo -- *.go` runs.
+* A subcommand in any case. On a case-insensitive file system `git Submodule` runs `git-submodule`.
+
+The safe `-c` keys are `user.name`, `user.email`, `core.quotepath`, `init.defaultbranch`, `commit.gpgsign`, `pull.rebase`, `pull.ff`, every `color.` key, and `advice.<name>` with no further dot. A key that names a program, such as `core.editor` or `core.pager`, is asked. Key comparison ignores case. Bare `git --exec-path` remains allowed. Recognized `config` reads are `--get`, `--get-all`, `--get-regexp`, `--get-urlmatch`, `--list`, `-l`, the `get` and `list` subcommands, and a name with no value (`git config user.name`). A write operation in the same invocation still requires confirmation.
+
+The guard does not inspect these sources of behavior:
+
+* Repository configuration and hooks written by a bash command a rule allows (`cp hook .git/hooks/pre-commit` under a `cp *` rule), or there before the session. A redirect into `.git` is asked like any redirect.
+* Hooks git runs from outside `.git`: a `core.hooksPath` directory in the project (husky's `.husky`), a `.git/hooks` that is a symlink into the project, and the files a hook manager reads (`.pre-commit-config.yaml`, `lefthook.yml`). A write to one of them runs on the next allowed `git commit`, `git checkout`, `git merge`, `git rebase` or `git push`. To be asked before git can run a hook, write `bash` rules that ask for `git *` and then allow the subcommands to run unasked, such as `git status*`, `git diff*`, `git log*` and `git show*`. The last matching rule wins, and a line with git's own options before the subcommand (`git -C . commit`) matches only `git *`.
+* A git directory under another name: a bare repository (`HEAD`, `config`, `objects`, `refs`) the model writes and then names with `-C` or `--git-dir`, one set apart with `--separate-git-dir`, or the bare repository a worktree shares (`git worktree add` run in `proj.git`). Outside the project the workspace boundary asks about a write there, and "allow writes in this directory" for it covers it.
+* A hard link to a file in `.git`, made before the session or by a bash command a rule allows.
+* git's system configuration (`/etc/gitconfig`, and on Windows `C:\ProgramData\Git\config` and the one in the Git installation). Writing it usually needs administrator rights.
+* A file git's configuration includes (`include.path`, `includeIf`), such as a shared `../.gitconfig` or `~/.gitconfig.local`.
+* git's user configuration spelled with another Unicode normalization of an accented letter in its path, which APFS treats as the same name.
+* Configuration and hooks in another repository selected by `-C`, `--git-dir`, or `--work-tree`.
+* Existing aliases and `git-<name>` programs on PATH.
+* Configured diff and merge drivers, including `--ext-diff` and `--textconv`.
+* Editors and pagers selected by configuration.
+* File output options such as `--output`.
+* External merge strategies selected by `git merge -s <name>`.
+* A git command behind a wrapper such as `nohup git` or `time git`. A rule for the wrapper decides it. The built-in rule allows no wrapper.
+
+A `write_file` or `edit` into a `.git` directory, to a `.git` file, or to git's per-user configuration requires confirmation even when a rule allows the write. Git runs what its configuration and hooks name: `core.fsmonitor` written into `.git/config` runs on the next `git status`. The per-user configuration is `~/.gitconfig`, the file `GIT_CONFIG_GLOBAL` names, and everything in `$XDG_CONFIG_HOME/git` (`~/.config/git` when unset); git reads it in every repository.
+
+* The path is judged after `..` is taken off its text, and again where its symlinks lead. The question names where the write lands, which a link can hide.
+* A path whose physical location cannot be worked out is judged by its text: a symlink loop, a Windows junction, or a link that the kernel follows but whose expansion is longer than the path limit. The workspace boundary asks about it as outside the project. When writing outside the project is allowed the boundary does not ask, so the write is asked as a `.git` write, each time.
+* A component is `.git` in any case and in the spellings Windows and HFS+ read as `.git`: `.git.`, `.git::$INDEX_ALLOCATION`, `GIT~1`, and `.g` + U+200C + `it`.
+* Outside the project the question is a plain one. "Allow writes in this directory" for another project does not cover its `.git`.
+* Reading `.git` is not affected.
+* Inside the project, `skip_tools` and `skip_all` allow the write, since bash runs any command unasked under either. Outside it, `skip_all` allows it, and `skip_tools` does once writing outside the project is allowed.
+* The question is asked for each write and offers no "for the session" or "always". A remembered answer is kept by how a path is spelled, and a file approved earlier can be replaced by a link into `.git`: git's own allowed commands (`hash-object`, `update-index`, `checkout`) can check one out.
+
+Every file tool takes `..` and trailing separators off a path's text before it uses it, an absolute path as a relative one: `/proj/link/../x` is `/proj/x`, wherever `link` points. The workspace boundary and the `.git` check judge that same path. The glob tool judges its pattern the same way, so `/proj/*/../../secret/*` is a question about `/secret`.
 
 ### Answering a permission prompt: once, this session, or always
 
-Ordinary tool prompts provide the following choices. Workspace-boundary prompts use the choices in [Leaving the project](#leaving-the-project).
+Ordinary tool prompts provide the following choices. Workspace-boundary prompts use the choices in [Leaving the project](#leaving-the-project). A write into `.git` offers only "allow once" and "deny".
 
 | Answer | TUI key | Effect |
 |---|---|---|
 | Allow once | `y` | Approves exactly this call. Asks again next time. |
 | Deny | `n` | Refuses this call. Asks again next time. |
-| Allow for session | `s` | Approves this call and later matching calls for the life of the session. It survives a restart: the answer is in the session's log, and the grant is rebuilt from it when the session is next looked at. Nothing is written to config.json. For bash, the line that was answered is granted as it stands, so the same line runs again unasked, pipes and redirects included. Another line runs on these grants only when each of its commands is covered, as written and with its quoting removed. A line with a substitution (`$(`, a backtick), an unquoted parenthesis, or a redirect is asked unless it is the answered line. Under a shell that is not POSIX, only a line of letters, digits, spaces and ``-_./\:=,+~"'*?@`` is covered that way. |
-| Always allow | `a` (only shown when available) | Everything "allow for session" does, plus writes a matching rule to config.json, so the same pattern is auto-allowed in every future session too. |
+| Allow for session | `s` | Approves this call and later matching calls for the life of the session. It survives a restart: the answer is in the session's log, and the grant is rebuilt from it when the session is next looked at. Nothing is written to config.json. For bash, the line that was answered is granted as it stands, so the same line runs again unasked, pipes and redirects included. Another line runs on these grants only when each of its commands is covered, as written and with its quoting removed. A line with a substitution (`$(`, a backtick), an unquoted parenthesis, a redirect or a Git command execution form listed above is asked unless it is the answered line. Under a shell that is not POSIX, only a line of letters, digits, spaces and ``-_./\:=,+~"'*?@`` is covered that way. |
+| Always allow | `a` (only shown when available) | Everything "allow for session" does, plus writes a matching rule to config.json. Future sessions apply that rule subject to the shell and Git command execution checks above. |
 
 The Web UI shows the same four as buttons: Deny, Allow for session, Always allow, Allow once.
 
@@ -1328,7 +1392,7 @@ The `` !`cmd` `` splice is one of two readings of `!`. The other is the [shell e
 
 ### Shell escape
 
-Typing `!` followed by a shell command runs it in the session's workspace and puts its output in the conversation, without reaching a model on the way in: `!git status`, `!cat ~/abc.txt`. The model sees the output on the next turn, with the transcript showing you ran it. This is a shell escape, the thing an editor has always had: a person typing in their own window runs what they could have run in their own terminal. So it does not consult the permission rules, including a `deny`. That is a deliberate hole in an otherwise closed surface. A model can never cause one: a delegated or model-composed prompt starting with `!` is answered as text, never executed.
+Typing `!` followed by a shell command runs it in the session's workspace and puts its output in the conversation, without reaching a model on the way in: `!git status`, `!cat ~/abc.txt`. The model sees the output on the next turn, with the transcript showing you ran it. This is a shell escape, the thing an editor has always had: a person typing in their own window runs what they could have run in their own terminal. So it does not consult the permission rules, including a `deny`. That is a deliberate hole in an otherwise closed surface. A model can never cause one. A delegated task, a prompt the model books with the `Schedule` tool, and the prompt in a `/schedule` line the model runs through the `Command` tool are answered as text when they start with `!`, never executed. See [Scheduled tasks](#scheduled-tasks).
 
 Start with `!!` to send an ordinary message beginning with `!`. A lone `!` says what to run instead. Empty output shows `(no output)`. A failure shows its exit status, so a typo never reads as an empty answer. Output is capped. The `bash` tool keeps at most 4 MiB of what a command prints: the first half and the last half. The conversation keeps at most 128,000 bytes of that: the start and the end, with a note in the middle saying how many bytes were left out. `!find /` therefore shows the start and the end of its output, not all of it. A command past the `bash` tool's timeout is reported as killed after it.
 
@@ -1514,6 +1578,8 @@ Commands containing `` !`shell command` `` cannot be model-invocable. The substi
 
 A model-invoked command cannot invoke another command.
 
+`/schedule` is held to two more rules when the model runs it. The prompt it books is sent to the scheduled run as text. Booking with it is refused inside a scheduled run. See [Scheduled tasks](#scheduled-tasks).
+
 ### `/usage` totals
 
 Shows cumulative token counts per model for the current session, with no model call. **Token counts only, never dollar figures.**
@@ -1623,6 +1689,8 @@ Permission rules answer "which tool, on which path". They say nothing about dest
 |---|---|
 | A shell command's own connections | `curl`, a package manager, a test suite that calls an API: a separate process with its own sockets. Nothing inside this program can stop those. Refusing to *run* commands whose names look networked would be theatre — a script, a different binary name, or a here-document defeats it in seconds. What bounds them is the permission prompt on `bash`, and below that the operating system: a firewall, a network namespace, or a proxy the child inherits. |
 | An MCP server started as a subprocess | Same reason: it is a child process. A *remote* MCP server is reached by localcode itself and is covered. |
+| The [browser](#browser)'s pages | Chrome or Edge is a child process and opens its own connections. What bounds it is a `deny` rule for `browser`: the browser sends no HTTP request to a URL it matches. WebSockets are not checked. The browser is off unless the setting is on. |
+| [SSH](#ssh) connections past the first hop | localcode applies `network.egress` to the first host it dials for SSH. The hops after a jump host are dialed by that host. A command run in an SSH terminal is a process on another machine. |
 
 ### What a session log holds, and who can read it
 
@@ -1696,13 +1764,16 @@ The following daemon commands work in both clients.
 | Command | Setting | What it does |
 |---|---|---|
 | `/smart-agent` | `smart_agent` | The work-order prompt, the enhanced tools (paged reads, `update_plan`, `ask_user`), the fallback chain, the trace, the prompt cache markers and the guards. It delegates nothing. See [Smart Agent](#smart-agent). |
+| `/browser` | `browser` | The web browser shown in the desktop window's browser panel, for the model to work in. See [Browser](#browser). |
+| `/ssh` | `ssh` | SSH connections for the model to work in, shown in the SSH panel. Off closes every connection. See [SSH](#ssh). |
+| `/powershell` | `powershell` | PowerShell terminals on this computer for the model to work in, shown in the PowerShell panel. Windows only. Off closes every PowerShell terminal. See [PowerShell](#powershell). |
 | `/orchestrate` | `orchestrate` | Delegation: the specialist roster, `Task`, the background pair, the delegation policy and the Orchestrate tool. Reports the agents it can delegate to, or says why there are none. See [Orchestration](#orchestration). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
-| `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also on the settings Muse tab. |
-| `/fold-thinking` | `fold_thinking` | A Muse model's reasoning as a labelled block that folds when the answer starts. See [What the transcript shows](#what-the-transcript-shows). Also on the settings Muse tab. |
+| `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also on the settings Behavior tab. |
+| `/fold-thinking` | `fold_thinking` | A Muse model's reasoning as a labelled block that folds when the answer starts. See [What the transcript shows](#what-the-transcript-shows). Also on the settings Behavior tab. |
 | `/thinking` | `show_thinking` | Whether the clients paint the model's reasoning. See [What the transcript shows](#what-the-transcript-shows). |
 | `/timestamps` | `show_timestamps` | A time beside each turn boundary in the Web UI. See [What the transcript shows](#what-the-transcript-shows). |
-| `/repeat-limit` | `repeat_limit` | How many steps that only repeat earlier tool calls end a turn. Off by default. See [A model that repeats itself](#a-model-that-repeats-itself). Also on the settings Turns tab. |
+| `/repeat-limit` | `repeat_limit` | How many steps that only repeat earlier tool calls end a turn. Off by default. See [A model that repeats itself](#a-model-that-repeats-itself). Also on the settings Behavior tab. |
 | `/auto-compact` | `auto_compact_enabled`, `auto_compact_percent` | Auto-compaction. A number sets the threshold and turns it on: `/auto-compact 70` compacts past 70% of the context window. The default threshold is 50%. |
 | `/model-invocable` | `model_invocable` | Whether the model may run commands itself. Off unless set; each command still needs its own opt-in. See [/model-invocable](#model-invocable). |
 
@@ -1763,6 +1834,9 @@ These commands are recognized by the client or the daemon rather than sent to th
 | `/tasks` | **TUI.** Lists background tasks in this session. The Web UI has the right panel instead. See [`/tasks`](#tasks). |
 | `/smart-agent` | Toggles the Smart Agent bundle and saves the choice. `/smart-agent on\|off` sets it outright. Answered by the daemon, so both clients have it. See [The switches](#the-switches). |
 | `/auto-delegate` | Toggles auto-delegation the same way. |
+| `/browser` | Toggles the browser the same way. Off closes the browser and every tab in it. See [Browser](#browser). |
+| `/ssh` | Toggles SSH the same way. Off closes every SSH connection. See [SSH](#ssh). |
+| `/powershell` | Toggles PowerShell the same way. Off closes every PowerShell terminal. Windows only. See [PowerShell](#powershell). |
 | `/permission-skip-all` | Allows every prompt in this conversation, the workspace boundary included. |
 | `/permission-skip-tools` | Allows every tool prompt in this conversation, and still asks before a path leaves the workspace. |
 | `/read-outside` | Reading outside the workspace: `on`, `off`, or `mem-clear` to forget the directories approved at a prompt. See [Leaving the project](#leaving-the-project). |
@@ -1819,6 +1893,10 @@ The Archive count refreshes on initial load and after every archive or retrieval
 Archiving preserves the title, workspace, permissions, effort, list rank, and event log. `GET /api/sessions/{id}` and its event stream remain readable.
 
 Group membership is kept too, though an archived session shows in no group while it is away — it is not in the panel. Retrieving it puts it back where it was.
+
+SSH connections are not kept either. Archiving or deleting a conversation closes its SSH connections. See [SSH](#ssh).
+
+Browser tabs are not kept. Archiving closes the conversation's tabs, and those of its background tasks, the browser panel opens none while it is archived, and retrieving it starts with none, as a new conversation does. Deleting a conversation closes its tabs too.
 
 The log continues accepting completion and missed-schedule events. Archived sessions cannot start new work.
 
@@ -1975,19 +2053,35 @@ If one session fails to restore, for example a corrupt `.meta.json`, the rest st
 
 ## Part 6. Web UI
 
-The Web UI shares daemon sessions with the TUI and desktop window. The left panel manages sessions. The right panel shows background tasks, scheduled tasks and MCP servers. Status and permission controls are below the prompt.
+The Web UI shares daemon sessions with the TUI and desktop window. The left panel manages sessions. The right panel shows background tasks, scheduled tasks and MCP servers. In the desktop window with the [browser](#browser) on, the browser panel sits between the conversation and the right panel. Status and permission controls are below the prompt.
 
 ### Resizing and hiding the side panels
 
 | Action | How |
 |---|---|
-| Resize a panel | Drag the hairline between it and the transcript |
+| Resize a panel | Drag the hairline on the panel's inner edge: the right edge of the session panel, the left edge of the browser, SSH, PowerShell and tasks/MCP panels. |
 | Back to the default width | Double-click that same handle |
-| Hide or show a panel | The toggle button in the header, at the far left for the session panel and the far right for the tasks/MCP panel |
+| Hide or show a panel | The toggle button in the header: at the far left for the session panel, at the far right for the tasks/MCP panel, the globe right of the session name for the browser panel, the terminal beside it for the SSH panel, and the slanted terminal after that for the PowerShell panel. The globe is there while the browser panel is (the desktop window, with the browser setting on), the terminal while the SSH panel is (the SSH setting on), the slanted terminal while the PowerShell panel is (Windows, with the PowerShell setting on). Hiding the browser panel keeps its page running: the model keeps the browser. Hiding the SSH panel keeps its connections. Hiding the PowerShell panel keeps its terminals running. |
 
-Panel width and visibility persist in the browser or desktop window.
+Panel widths persist in the browser or desktop window, and so does whether the session panel is shown. The desktop window keeps them in `~/.localcode/window-state.json`: see [Settings](#settings).
 
-Minimum panel width: 160px. Use the toggle to hide a panel.
+Which of the browser, SSH, PowerShell and tasks/MCP panels are shown is kept for each conversation:
+
+* Opening a conversation again shows the panels it had, after a reload too.
+* A conversation opened for the first time starts with the panels on screen.
+* A panel localcode shows or hides itself counts: the SSH or PowerShell panel shown for a terminal that wants you, and a browser, SSH or PowerShell panel hidden for another in a narrow window.
+* A window narrower than when the conversation was left may not hold every one of the browser, SSH and PowerShell panels it shows. The SSH and PowerShell panels stay over the browser panel, and the PowerShell panel stays over the SSH panel.
+* The choices are stored in the browser, or by the desktop window in `~/.localcode/window-state.json`, for the 200 conversations opened most recently. Deleting a conversation drops its choice.
+
+| Panel | Default | Drag range |
+|---|---|---|
+| Sessions, tasks/MCP | 260px, 280px | 160px to 640px |
+| Browser | 600px | 360px to 1307px. At 1307px the page is shown at its own 1280 pixels. |
+| SSH, PowerShell | 560px | 320px to 1400px |
+
+A drag does not narrow the transcript below 280px. A side panel's drag can also take the width a shown browser, SSH or PowerShell panel has above its minimum. An SSH or PowerShell panel's drag can take it from the other two. The browser panel's drag takes only the transcript's. While the browser panel is shown, a window too narrow for every panel narrows the browser panel first, down to 360px, then the side panels, down to 160px. The transcript keeps 280px. Every panel at its minimum takes 972px, which the desktop window's default 1100px width holds. Use a toggle to hide a panel.
+
+The browser, SSH and PowerShell panels take turns in a window too narrow for all of them at their minimums beside the side panels and the transcript. Showing one hides the others that are shown, one at a time, in the order browser, SSH, PowerShell, until the one shown fits.
 
 ### Left panel: sessions
 
@@ -2007,7 +2101,7 @@ Cards show the session's current workspace. Sessions without a recorded workspac
 
 #### Session groups
 
-Sessions can be put into named groups. Which groups exist, what order they are drawn in, and which sessions are in them live on the daemon, so the browser and the desktop window show the same panel and all of it survives a restart. Whether a group is folded shut is the one exception: that is about the panel in front of you, not about the group, so it is remembered per browser.
+Sessions can be put into named groups. Which groups exist, what order they are drawn in, and which sessions are in them live on the daemon, so the browser and the desktop window show the same panel and all of it survives a restart. Whether a group is folded shut is the one exception: that is about the panel in front of you, not about the group, so it is remembered per browser, and by the desktop window in `~/.localcode/window-state.json`.
 
 | Action | Control | API |
 |---|---|---|
@@ -2019,7 +2113,7 @@ Sessions can be put into named groups. Which groups exist, what order they are d
 | Rename a group | **rename** on the group's header | `POST /api/sessions/groups` with the new list *and* `{"rename": {"from", "to"}}` |
 | Reorder the groups | Drag a group's header onto another group's header. It lands above that group when it came from below and below it, after its last card, when it came from above. A line shows which. | `GET /api/sessions/groups` to compare, then `POST /api/sessions/groups` with the whole list in the new order. Cards keep the order they had. |
 | Delete a group | **delete** on the group's header | `POST /api/sessions/groups` with the list minus that name |
-| Fold one shut | Click the group's header | Browser-local; nothing is sent |
+| Fold one shut | Click the group's header | None. Kept by the browser. The desktop window keeps it through `GET` and `PUT /api/window/state`: see [Settings](#settings). |
 
 While a filter is on, neither cards nor groups can be dragged: the panel shows only part of the list, and a move among some of the rows would have no clear meaning for the rest. Like a card, a group is not redrawn while it is carried.
 
@@ -2079,13 +2173,42 @@ Dropping a file on the input box handles it by type:
 
 Pasting an image into the prompt box attaches it to the message. A model that is sent images receives the picture rather than a path. Which models are sent images is decided by the `vision` rule below. Dropping an image file on the prompt box does the same as pasting it. The desktop window is this same page, so pasting works there too.
 
-PNG, JPEG, GIF and WEBP, and **ten megabytes for one message** counting every image in it together. Both are checked as you paste, naming the type or the limit, rather than after a turn has started. The bytes are sent as pasted — nothing is resized or re-encoded.
+The limits are checked as you paste, naming the type or the limit, rather than after a turn has started.
 
-The model has to be sent images, which the profile's `vision` key decides. A Claude model is sent images unless its profile says `"vision": false`. Any other model is sent images only with `"vision": true`.
+| Limit | Value | What happens past it |
+|---|---|---|
+| Types | PNG, JPEG, GIF, WEBP | The image is refused, naming its type. |
+| One image | 3.75 MB and 8000 pixels a side | The page scales the image down so its long side is 2576 pixels, and attaches the copy as PNG, or as JPEG when the PNG is still over 3.75 MB. A page that cannot scale an image refuses it. The daemon refuses an image past these limits from any client. |
+| One message | 10 MB, every image in it together | The image that passes 10 MB is refused. |
+| One request | The newest 20 images of the conversation, and 10 MB of them | Each older image is sent as a note saying it was left out. The conversation keeps the image. |
+| One request, server's own cap | What the server says it takes (vLLM's `--limit-mm-per-prompt`) | The request it refused is sent again at once with the newest images within the cap, and a notice says so. Every later request to that model carries no more, until localcode restarts. A later message with more images attached than the cap gets a notice saying how many were left out. |
 
-* **A model that is not sent images:** each image is replaced by a note to the model saying an image was there. The transcript shows a notice naming the model and the profile to change.
+The per-image limits are Bedrock's, the strictest of the three providers. A 2576-pixel image is the largest the newest Claude models read without scaling it down themselves. The request limit keeps a request under Bedrock's 20 MB.
+
+#### Which models are sent images
+
+The profile's `vision` key decides, and a model it leaves unset is asked.
+
+| Model | Sent images |
+|---|---|
+| `"vision": true` or `"vision": false` | As the profile says. Nothing is asked. |
+| Unset, id contains `claude` | Yes. Nothing is asked. |
+| Unset, any other id | Shown a test image the first time a turn runs on it (a 64x64 red square, asked "What colour is this image?"). Sent images when it answers red. Not sent images when it answers otherwise or its server refuses the image. |
+
+* **The test image** goes through the same provider and model as the turn, as one small request without tools. It is not counted in `/usage`. The answer is kept per provider and model.
+
+| Answer | Kept for |
+|---|---|
+| Names the colour | Until localcode restarts |
+| Another answer, or the server refuses the image | One hour, then the model is asked again |
+| No answer (an error, an empty reply, or 30 seconds without one) | Five minutes. The model is not sent images meanwhile. |
+| Any, when a turn's request to the model is refused for carrying an image | Cleared. The next turn asks again. |
+
+* **A model that is not sent images:** each image is replaced by a note to the model saying an image was there. The transcript shows a notice naming the model, the reason (for example its answer to the test image), and the profile to change.
 * **Images already in the conversation:** the same rule applies on every request. A conversation moved with `/model` to a model that cannot see goes on, and moving back sends the images again.
-* **A model that is sent images and refuses them:** the turn fails with a hint to set `"vision": false` on its profile or to switch with `/model`. Sending the message again does not help, because the image is in the conversation.
+* **A model that is sent images and refuses them:** the turn fails with a hint to set `"vision": false` on its profile or to switch with `/model`. A refusal about an image's size is not read as a model without vision, and has no such hint.
+  * A model that passed the test image is asked again on the next turn. When it now refuses, the next turn sends a note in place of each image and goes on.
+  * A model sent images by `"vision": true` or by being a Claude model is not asked. Sending the message again does not help, because the image is in the conversation.
 
 A pasted image is stored in the conversation, so it is still there after a restart, which is also why a session log with images is much larger than one without. [Compaction](#compact) drops them: an image cannot go into a text summary, so the summary says how many were omitted and the model keeps knowing a picture was discussed without still holding it.
 
@@ -2111,17 +2234,63 @@ One line directly below the input box:
 
 ### Settings
 
-The **settings** pill opens the settings window, grouped into one tab per subject. Tabs are keyboard controls: arrows move between them, Home and End jump, Escape closes the window.
+The **settings** pill opens the settings window. It has four tabs, Tools, Behavior, Appearance and Updates, and always opens on Tools. Tabs are keyboard controls: arrows move between them, Home and End jump, Escape closes the window.
 
-| Tab | What is in it |
+| Tab | Group | What is in it |
+|---|---|---|
+| Tools | Panels beside the conversation | The [Browser](#browser), shown only in the desktop window, [SSH](#ssh), and [PowerShell](#powershell), shown only on Windows |
+| Tools | Other agents and commands | [Orchestration](#orchestration), and whether the model may run opted-in commands itself |
+| Behavior | Every model | [Smart Agent](#smart-agent), and the repeat guard that ends a turn which only repeats earlier tool calls |
+| Behavior | Muse models only | The reasoning block (`fold_thinking`) and the carry-on nudge (`keep_going`). A note under the group heading names the profiles in this config that run a Muse model, or says that none do. |
+| Appearance | Faces | The reading, interface and monospace faces. See below |
+| Appearance | Text size | The overall text size and the reading, interface and code trims. See below |
+| Updates | | Check for updates, and download and install. See [Checking for updates](#checking-for-updates) |
+
+Each switch is one row: its name, one line saying what it reaches, and the switch on the right. A note appears under the line only when it says something the switch cannot. The switch alone shows whether it is on.
+
+| Switch | Note |
 |---|---|
-| Agents | [Smart Agent](#smart-agent), [Orchestration](#orchestration), and whether the model may run opted-in commands itself |
-| Turns | The repeat guard that ends a turn which only repeats earlier tool calls |
-| Muse | The switches that apply only to Muse models: the reasoning block (`fold_thinking`) and the carry-on nudge (`keep_going`). A note names the profiles in this config that run a Muse model, or says that none do. |
-| Updates | Check for updates, and download and install. See [Checking for updates](#checking-for-updates) |
-| Typography | The reading, interface and monospace faces, and the text sizes. See below |
+| Browser | While on: where the profile copy is, and when it was last copied |
+| Orchestration | While on: the specialists, the cost in model calls, and the two ceilings (8 stages, 32 agent turns) |
+| Commands the model may run | While on: the commands it may run, or where to opt one in when none is |
+| Smart Agent | While on: where the turn log goes |
+| Reasoning | While `show_thinking` is off: that reasoning is not drawn at all |
 
-Typography is per person, not per daemon. The faces and the size live in this browser's storage, survive a reload, and apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
+**How it asks**, under Browser, SSH and PowerShell, opens to say what each asks before it acts.
+
+Every setting in this window is still there after LocalCode is closed and opened again. Where each is kept:
+
+| Setting | Kept in |
+|---|---|
+| Tools and Behavior tabs, and the permission settings | `~/.localcode/config.json` (or the file given with `--config`), written when the switch moves. A file with comments keeps them: see [Comments](#comments-the-file-is-jsonc). |
+| Appearance, in the desktop window | `~/.localcode/window-state.json`, written when the choice is made |
+| Appearance, in a browser tab | That browser's storage for the daemon's address |
+
+The desktop window keeps these in the same file, for the same reason: the [zoom](#zoom-and-what-a-reload-keeps), the panel widths, which panels each conversation shows, which groups are folded, and whether the archive is open. The window's own browser storage is tied to the port the window is on, and the window does not always get its last port back: another program may hold it, Windows may have reserved it at boot (Hyper-V, WSL and Docker reserve ranges of ports), or a second window may be open. Before v0.179.0 each of those brought these settings back at their defaults. The first start of v0.179.0 or later copies what the window's storage holds into the file.
+
+Deleting `window-state.json` while the window is closed does not reset these settings when the window comes back on the same port: the page writes the file again from its own storage. To reset them, put each back to its default in the window.
+
+Limits of the desktop window's file:
+
+* Two windows open at once share it. A setting changed in one window is not undone by a different setting changed in the other.
+* Three settings hold several items each: the panel widths, the panels each conversation shows, and the folded groups. A window reads the file again before it changes one item: one panel's width, one conversation's panels, one group's fold. The items the other window changed are kept.
+* When both windows change the same setting or the same item, the change written last is kept.
+* A change to one of those items is made from the window's own copy in two cases. The daemon does not answer that read. Or an earlier change to the same setting from that window is not written yet. Items another window changed after that copy was read are then put back.
+* A conversation's panels are one item. A window that hides or shows any panel, the session panel included, writes the panels of the conversation it shows as they are on its own screen. With the same conversation in two windows, the window that did that last decides that conversation's panels.
+* A window that changes one of those items takes what the other window wrote for the rest of that setting. It draws the other window's folds at that moment: after a group is folded, opened, made, renamed or deleted in it. A conversation opens with the panels the other window left it.
+* Each window has its own daemon. A group made in one window is not listed in another until that one is started again. A group deleted or renamed in one window stays listed in the other. A window leaves alone the fold another window makes for a group that is not in its own list. A reload of its page drops that fold.
+* A change is written as it is made, one request at a time. A second change made while the first is still being written, with the window ended in that same moment, is not written.
+* The window's page asks for the file when it starts, up to three times. With no answer, or with a file that is there and cannot be read, the page writes nothing to the file while it stays open, and the settings changed in it are not there the next time. A file that cannot be read is never replaced.
+
+A switch on the Tools tab, or Smart Agent, the repeat guard or keep going on the Behavior tab, that the daemon applied and could not write to `config.json` says so under the switch, and the setting lasts only until the daemon restarts. The switch shows the applied value. The warning stays until that switch is saved from this window, or moved from another window or a prompt.
+
+The auto-delegation panel and the rules in the permissions window say the same. The panel keeps one warning for the switch and one for the agent and patterns, because the two are written to `config.json` separately. The rules list names each rule that was added or removed and not saved, because rules are written one at a time: a later rule that is saved does not save an earlier one. A rule added and removed again without being saved is not named.
+
+These warnings are kept by the page. A reload, or the desktop window opened again, starts without them, and the settings they were about are still not saved.
+
+Limit: the page takes a switch as moved from somewhere else when the daemon announces a value for it that the page does not hold, and clears the warning. It cannot tell the announcement of its own earlier change from one made elsewhere. When the announcement of one change reaches the page after the answer to the next change of the same switch, the warning about that next change is cleared, and the switch is then in force, not saved and not warned about. The announcement normally arrives before the answer it belongs to.
+
+The Appearance tab is per person, not per daemon. The faces and the size apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
 
 Text size is the type only: one overall size from 87.5% to 140% of the nine-step scale, plus a trim per group over the same range. Reading trims the transcript, the model's questions to you, thinking and review blocks, and headings. Interface trims controls, panels, status, notes (except the model's questions), and the ids shown in those rows. Code trims code set in monospace. A trim reaches steps, not faces: an id set in monospace inside an interface row, like the session id, follows the interface trim. The trims compose with the overall size: each step is its pixel value times the overall size times its trim, so making everything bigger and then bringing the code down a notch is two choices. [Zoom](#zoom-and-what-a-reload-keeps) is separate: ctrl+wheel scales the whole page, spacing included. The two compose: zoom multiplies everything, text size multiplies only the type.
 
@@ -2154,6 +2323,8 @@ Backwards because that is what a find in a conversation is usually for: where a 
 ### Model output renders as markdown
 
 The built-in offline renderer supports headings, emphasis, inline code, fenced code with syntax highlighting, lists, blockquotes, links, horizontal rules, and GFM tables. Unsupported Markdown and raw HTML are escaped as text. Model output cannot inject HTML.
+
+Every `http://` or `https://` address in the model's output is a link, written as `[text](address)` or bare, in prose, in inline code and in code blocks. A click opens it in your own browser: a new tab in a browser, and the system's default browser from the desktop window. The link leaves out what the model wrote around the address: a quote or angle bracket, punctuation that ends the sentence (`.`, `,`, `;`, `:`, `!`, `?`), a closing bracket the address does not open, and a word in another script written onto its end, such as a Korean particle (`https://example.com에서` links `https://example.com`). A path segment in another script after a `/` stays in the address. An underscore or asterisk inside an address is part of it, not emphasis. A link always opens the address it shows. A `[text](address)` link whose text reads as a web address (it contains `://` or a word starting with `www.`, read with emphasis, letter case, full-width forms and invisible characters set aside) opens that address only when it is the same one. Otherwise the text is shown as written with the address beside it, each opening itself: `[https://a.example](https://b.example)` shows both. The text of a link is what a page the model read can write. A code block is never a link's text. This is a heuristic over what text looks like: an address written in look-alike letters of another script is not recognised.
 
 ### Watching a long turn
 
@@ -2199,7 +2370,7 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | Tool | Needs permission | Purpose |
 |---|---|---|
 | `read_file` | No | Read a file with line numbers |
-| `view_image` | No | Attach an image file (PNG, JPEG, GIF or WebP, up to 3.75 MB) so the model sees it as it sees a pasted image. Offered only to a model that is sent images: see `vision` under [Profile fields](#profile-fields). |
+| `view_image` | No | Attach an image file (PNG, JPEG, GIF or WebP, up to 3.75 MB and 8000 pixels a side) so the model sees it as it sees a pasted image. Offered only to a model that is sent images: see [Which models are sent images](#which-models-are-sent-images). |
 | `glob` | No | Find files by pattern, `**` supported |
 | `grep` | No | Search file contents by regex. Stops at 200 matches and says so; names any file it could not open or could not finish reading. See [Grep completeness reporting](#grep-completeness-reporting) |
 | `write_file` | Yes | Create or overwrite a file |
@@ -2207,6 +2378,9 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | `bash` | Yes, except default Git allowance | Shell command with a two-minute default timeout. Reports exit status, empty output, timeout, and cancellation separately. `grep` 1, `diff` 1, and `test` 1 are ordinary results; `grep` 2 is an error. See [Python on Windows](#python-on-windows). |
 | `Skill` | No | Load a skill body by name. Registered only when skills exist. |
 | `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. One run at a time per directory, so a concurrent panel of reviewers does not start several copies of your test suite in one tree; a call that queued says so. |
+| `browser` | No | Work a web page in the browser shown in the desktop window's browser panel: open, read, screenshot, click, type, key, scroll. Offered only with the browser setting on and the conversation open in the desktop window. A deny rule matches the page's URL. See [Browser](#browser). |
+| `ssh` | Yes, inside the tool | Work on other machines over SSH, in terminals shown in the SSH panel: connect, run, type, key, read, wait, list, close. Offered with the ssh setting on, in a turn that is not a scheduled run. Asks under `ssh_connect`, `ssh` and `ssh_input`. See [SSH](#ssh). |
+| `powershell` | Yes, inside the tool | Work in PowerShell on this computer, in terminals shown in the PowerShell panel: open, run, type, key, read, wait, list, close. Windows only. Offered with the powershell setting on, in a turn that is not a scheduled run. Asks under `powershell` and `powershell_input`. See [PowerShell](#powershell). |
 | `session_read` | No | Read another conversation on this daemon: `mode=summary` for what it concluded and which files it touched, `mode=transcript` for its messages a page at a time. Not offered to a delegated sub agent. See [Referring to another conversation](#referring-to-another-conversation-with-name) |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server. Never in a turn `localcode run` builds itself, which connects no MCP servers; a `--session` turn routed to a running daemon has the daemon's. |
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only with [orchestration](#orchestration) on and 2 or more agents to delegate to. |
@@ -2222,7 +2396,7 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | `update_plan` | No | Write or update the checklist for work the model is doing itself, shown in the transcript. Exactly one step may be `in_progress`, and one-step plans are refused. The model is also told never to move a step from `pending` straight to `completed`, but that is guidance in the tool description rather than a refusal: the tool records the list it is given and does not compare it with the last one. Offered only with [Smart Agent](#smart-agent) on. Distinct from `Orchestrate`, which delegates stages to other agents. |
 | `ask_user` | No | Ask the user one question mid-turn and wait for the answer, without ending the turn. 2 to 4 short options, most recommended first; the user can answer in their own words instead. Once per turn. Offered only with [Smart Agent](#smart-agent) on, and only where somebody is watching: never in a one-shot run, a scheduled run, or a delegated sub agent. |
 | `Debate` | Yes, always | Book a debate: this session's agent writes, another agent reviews, round after round. Called instead of doing the work; the first round is where the work happens. Confirmation shows the parsed task, reviewers, rounds, and maximum model turns before execution. Not offered inside a debate, in an unattended turn, or to a delegated sub agent. See [Debate](#debate). |
-| `Schedule` | Yes, always | Book a prompt to run at a parsed future time in this conversation. The daemon has to still be running then. See [Scheduled tasks](#scheduled-tasks). |
+| `Schedule` | Yes, always | Book a prompt to run at a parsed future time in this conversation. The daemon has to still be running then. The prompt reaches the run as plain text: a leading `/` or `!` does not run a command. Refused inside a scheduled run. See [Scheduled tasks](#scheduled-tasks). |
 | `Command` | No | Run one of this session's own commands as a turn of its own, immediately after the current one ends. Offered only with [`/model-invocable`](#model-invocable) on, only for what has opted in (built-ins named in config.json's `model_commands`, plus custom commands and skills with `model_invocable: true` in their frontmatter), and never inside a command run: one command cannot book another. There is no wildcard. |
 
 The loop ends when the model stops requesting tools. `Verdict` and `Answer` also end the turn after a valid completion result. With `/repeat-limit` on, consecutive steps containing only previously repeated tool calls end the turn, after the configured number of them, with a transcript notice that names the repeated calls. The guard is off by default. A step is one model reply; a repeat is a call with the same tool and the same arguments as one already made this turn, so alternating between two earlier reads counts. A new edit between repeated checks counts as progress. `/repeat-limit <steps>` moves the ceiling and `/repeat-limit off` removes it; the settings window has the same control. See [A model that repeats itself](#a-model-that-repeats-itself).
@@ -2308,7 +2482,7 @@ Orchestration is everything that hands work to another agent. It is disabled by 
 | Control | Location or effect |
 |---|---|
 | `/orchestrate on\|off` | Answered by the daemon, so both clients have it. Saved to config.json. |
-| Settings window | The Orchestration section, under Smart Agent. |
+| Settings window | The Orchestration switch on the Tools tab. |
 | `"orchestrate": true` | In config.json. |
 
 With it on:
@@ -2551,7 +2725,7 @@ Background tasks appear in the Web UI's right panel while they run, the same as 
 
 ### Smart Agent
 
-Smart Agent changes how one agent works: a work-order prompt, enhanced tools, fallback, tracing, cache markers, and credential-path checks. It delegates nothing: handing work to another agent is [Orchestration](#orchestration). It is disabled by default. Use the settings window, `/smart-agent on|off`, `/config smart_agent on|off`, or `"smart_agent": true`.
+Smart Agent changes how one agent works: a work-order prompt, enhanced tools, fallback, tracing, cache markers, and credential-path checks. It delegates nothing: handing work to another agent is [Orchestration](#orchestration). It is disabled by default. Use the Smart Agent switch on the settings window's Behavior tab, `/smart-agent on|off`, `/config smart_agent on|off`, or `"smart_agent": true`.
 
 Each admitted turn retains its initial Smart Agent setting:
 
@@ -2643,7 +2817,7 @@ Set `fallback` on the primary profile:
 
 Fallback rebuilds the request for the selected model family, including orchestration policy and formatting notes.
 
-A fallback to a profile without `vision` drops `view_image` from the request. Each image in the history is sent as a note saying it was left out. The history keeps the image itself.
+A fallback to a model that is not sent images (see [Which models are sent images](#which-models-are-sent-images)) drops `view_image` from the request. Each image in the history is sent as a note saying it was left out. The history keeps the image itself. A fallback to a model that is sent images is offered `view_image` and sent the images, whatever the first model was.
 
 #### The turn log
 
@@ -2709,6 +2883,222 @@ Smart Agent denies `read_file`, `view_image`, `write_file`, and `edit` for crede
 ```
 
 The credential-path check does not parse shell commands. `bash` remains subject to its own permission rules.
+
+### Browser
+
+The model can work a web page the way a person does, in a browser shown in the desktop window's browser panel, between the conversation and the right panel. The person can watch it and take over at any point.
+
+| Item | Behavior |
+|---|---|
+| Turning it on | The Browser switch on the settings window's Tools tab, `/browser on`, or `"browser": true` in config.json. Off unless set. |
+| Where it works | The desktop window only. The model is offered the `browser` tool while the setting is on and the conversation is open in a desktop window. A Web UI in another browser, the TUI and `localcode run` never have it. |
+| Browser | Google Chrome, or Microsoft Edge when Chrome is not installed. `browser_path` names another one. It runs with no window of its own; the panel is its window. |
+| Profile | The first use copies your last used Chrome (or Edge) profile to `~/.localcode/browser`: cookies, saved passwords, site storage and preferences. History, extensions, caches, and autofill data (addresses and payment cards) are not copied. Page zoom is not kept: the copy's default zoom and each site's zoom are removed at every start, and every page is at 100%. "copy Chrome profile again" in the settings window copies it again for sites you signed in to since, and closes every tab. A file your running browser holds locked is skipped and named in the settings window; close that browser and copy again for it. With no profile to copy, the browser starts on an empty one, which keeps its passwords in the profile rather than in the system keychain. Sync is off: the model's browsing is not synced to a browser account the copy is signed in to. |
+| Conversations | One browser for the daemon, so every conversation shares the copied logins. Each conversation has its own tabs for as long as it exists, one of them active, and the panel shows the active tab of the conversation on screen. Opening another conversation shows that conversation's page, or no page if it has none. Nothing from the conversation before stays in the panel: its last frame, its address, an error from its address bar. A link that opens a new tab adds it and makes it the active one. A link opened behind the page (Ctrl, Cmd or the wheel) adds its tab and leaves the active one as it was. A page opened from a popup window (one a script opened with a size, such as a sign-in window) gets a window of its own, and covers no other conversation's page. Closing the active tab makes its opener active again while the opener is open, and otherwise the tab before it in the strip. The panel's tab strip opens, switches and closes tabs; see below. Deleting or archiving the conversation closes its tabs; retrieving an archived one does not bring them back. |
+| Questions | None: the model opens pages, clicks and types, passwords included, without asking. A `deny` rule for `browser` keeps a site out of reach: `{"browser": [{"match": "*bank*", "decision": "deny"}]}`. The browser sends no HTTP request to a matching URL, whatever leads there: a `navigate`, a redirect, a click, a frame, back and forward, a tab a link opened, a service worker, an image or script on an allowed page, or the panel's address bar. A WebSocket an allowed page opens is not checked: the browser's DevTools interception, which the check is built on, does not see WebSockets. A `navigate` to it is refused before it is sent, and an action that leads there is refused naming only the site. The rules are read on every request, so a rule added while the browser runs applies to the next one. A page already open when its rule was added stays on screen, and the model's every action on it is refused. |
+| Agents' rules | Every conversation and agent shares the one browser, so the browser refuses what any rule denies: the top-level `permission` block, or an agent's own rules for `browser`. An agent's `allow` does not lift a top-level `deny` for the browser. An agent's catch-all (`"*"`) rule applies to that agent only. |
+| Requests the browser makes itself | Turned off, because the deny rules cannot see them. Preloading is off in the browser's profile, so a page cannot have another page fetched ahead of a click (link prefetch, speculation rules, prerender). Background Fetch is off. A page's requests skip its service worker, so a worker cannot answer a navigation from navigation preload or from its cache. A request the browser starts on its own that is not named here is not checked. |
+| Page size | 1280 pixels wide, and as tall as fills the panel below its address bar: the panel sends the room it has when it shows a conversation and whenever that changes (the window, the panel's width, the panels beside it), and the conversation's tabs, and the tabs it opens after, take that height. From 320 to 2,560 pixels: past those the picture keeps the page's proportions inside the panel. 800 pixels until a panel says. The width stays 1280 at any panel size, so a page is laid out the same and a point read off a screenshot is where it was. A screenshot says its size. |
+| Addresses | `http` and `https` only, and `about:blank`. A `file:`, `javascript:` or `data:` address is refused. |
+| localcode itself | Every request the browser sends carries `LocalcodeBrowser` in its User-Agent, and the daemon refuses every request that does. A page the model opens cannot reach localcode's own API on any port a daemon listens on. |
+| Ending | The browser starts at its first use and quits when the setting is turned off, when the window closes, or when localcode exits. The first start on a machine can take over a minute. A request that stops waiting first (the panel waits 45 seconds, the `browser` tool 60) is told the browser is still starting, and the start goes on for the next request. A browser not listening within 3 minutes is stopped, and the request says so. A browser a crashed run left on the profile is closed by the next start. A second localcode on the same machine cannot use the browser while the first one runs it: the tool says which process holds it. |
+
+Everything the copied profile is signed in to is reachable by the model. Use the browser setting where that is acceptable, and deny the sites it must not touch.
+
+Above the address bar are the conversation's tabs. A click on a tab makes it the one the panel shows and the model works in. Its `×` closes it. Closing the tab shown shows the tab that opened it, if a link did and that tab is still open, and otherwise the one before it. `+` opens an empty tab and puts the cursor in the address bar for its page. A tab a link opens appears there too. A link opened with the wheel, or with Ctrl, Cmd or Shift held, opens as it does in a browser, and so does Enter on a focused link with one of them held. With Ctrl (Cmd on macOS) or the wheel, its tab opens behind the one shown. With Shift as well, or with Shift alone (a new window in a browser), its tab is the one shown. The panel shows the page from a stream of frames. A tab that closes, such as when the browser restarts, leaves "No page yet" rather than its last frame. Drag its left edge to resize it; see [Resizing and hiding the side panels](#resizing-and-hiding-the-side-panels). A click, a drag, the wheel, keys and a paste on it go to the page. Cmd (macOS) or Ctrl (elsewhere) with A, C, X, V, Z act on the page: copy and paste use the system clipboard. With Shift held as well, only Z (redo) and V (paste) do. Ctrl or Cmd with plus, minus, 0 or the wheel zooms the window, and is not sent to the page. A key the page does not use does nothing more: the browser's own shortcuts (a new tab, closing the tab, its help, its zoom) do not run. A character typed with Option or AltGr types that character. The address bar opens what is typed into it and starts the browser if it is not running; back, forward and reload act on the page. A stream that breaks, such as on a daemon restart, opens again.
+
+The `browser` tool's actions:
+
+| Action | Input | What it does |
+|---|---|---|
+| `navigate` | `url` | Opens the URL. A bare host gets `https://`. |
+| `back`, `forward`, `reload` | | History and reload. |
+| `read` | | The URL, title, text (up to 15,000 characters), and every visible element that can be clicked or typed into, numbered `[n]` (up to 250). A password field reads as `(filled)`, never its value. |
+| `screenshot` | optional `full_page`, `ref` | A snapshot: the visible page, the whole page (`full_page`), or element `[ref]` from the last `read`, up to 16,384 pixels tall. Saved as a PNG in `.localcode/snapshots/` under the conversation's working directory (under the home directory for a conversation with none), and shown under the call in the conversation. The directory gets a `.gitignore` that keeps its files out of git. A model that is sent images gets the image, unless it is over 3,750,000 bytes or 8,000 pixels on a side; any other model, and any larger snapshot, gets the file's path and size. A request carries the newest images of the conversation within the limits in [Pasting an image](#pasting-an-image), snapshots and pasted images alike, and a note in place of each older one. |
+| `click` | `ref`, or `x` and `y` | Clicks element `[ref]` from the last `read`, scrolled into view, or a point. |
+| `type` | `text`, optional `ref` | Types the text where the focus is, or into element `[ref]` after clicking it. |
+| `key` | `keys` | A key or combination: `Enter`, `Tab`, `Escape`, `ctrl+a`, `shift+Tab`. The plus key is `ctrl++` or `ctrl+plus`. With Ctrl, Cmd or Alt held, a key is a key press and types nothing. A key the page does not use does nothing more: the browser's own shortcuts do not run. Enter on a focused link with Ctrl (Cmd on macOS) held opens the link in a tab behind the active one; with Shift, in a tab that becomes the active one. |
+| `scroll` | `direction`, optional `amount`, `ref` | Scrolls up, down, left or right by `amount` steps (default 3). |
+| `wait` | `seconds` | Waits up to 10 seconds. |
+
+Limits:
+
+* Every page renders 1280 pixels wide, at 100% zoom. A click is sent as a point in that picture, so a zoomed page would not be where its picture shows it.
+* Two desktop windows showing one conversation share its pages' height: the one resized last sets it, and the other shows the page at its proportions inside its own panel.
+* A JavaScript dialog (`alert`, `confirm`, `prompt`) is answered OK at once, and the next result names it. A dialog a page opens before it is one of the conversation's tabs is answered OK and not named.
+* A link to `about:blank` opened in a tab or a window of its own is not added to the conversation's tabs.
+* Once a conversation has had a page in a popup window, the browser keeps one blank window of its own for what such a page opens. It is made again after each tab or window that is opened.
+* Downloads and file pickers are not handled.
+* Some sites refuse a browser with no window.
+* On Windows a file the running Edge or Chrome holds open cannot be copied. The import report names it.
+
+### SSH
+
+The model can open SSH connections and work in them, and you can work in the same terminals. Each terminal is shown in the SSH panel, its own column after the browser panel, in the desktop window and in the Web UI. A terminal stays connected for as long as its conversation exists in the running localcode, between turns and while the panel is hidden, so a shell keeps its directory, its variables and the programs running in it.
+
+| Item | Behavior |
+|---|---|
+| Turning it on | The SSH switch on the settings window's Tools tab, `/ssh on`, or `"ssh": true` in config.json. Off unless set. Turning it off closes every connection. |
+| Where it works | The panel is in the desktop window and in the Web UI. The model is offered the `ssh` tool while the setting is on, in any turn but a scheduled run (nobody would answer a host key or a password) and a delegated sub-agent's (its terminals would be in a session no panel shows). A turn started from the TUI has the tool; its questions are answered in the panel of a desktop window or Web UI. |
+| Lifetime | A connection ends when you close it, when the model closes one it opened, when the remote shell exits, when the server misses 3 keepalives (30 seconds apart, or `ServerAliveInterval` and `ServerAliveCountMax` from `~/.ssh/config`), when the conversation is archived or deleted, when the setting is turned off, or when localcode stops. Closing the desktop window stops localcode. `/update` and the settings window's Install button, with connections open, name them and update only when asked again within two minutes. A remote that sends output the terminal cannot draw ends that terminal, with the reason, and nothing else. Nothing else ends one: there is no idle timeout. Work that must outlive localcode belongs in `tmux` or `screen` on the remote. |
+| Limits | 8 open connections per conversation and 32 in all. An ended terminal stays in the panel with its last screen until it is closed; a conversation keeps at most 8, the oldest going first. |
+| `~/.ssh/config` | Read on every connect. Used: `Host`, `Match` with `all`, `host`, `originalhost`, `user` and `localuser`, `Include`, `HostName`, `User`, `Port`, `IdentityFile`, `IdentitiesOnly`, `IdentityAgent`, `CertificateFile`, `ProxyJump`, `UserKnownHostsFile`, `GlobalKnownHostsFile`, `HostKeyAlias`, `ServerAliveInterval`, `ServerAliveCountMax`, `ConnectTimeout`. A `Match` with any other criterion never matches; `Match exec` is never run. `/etc/ssh/ssh_config` is read after it. |
+| Not supported | `ProxyCommand` (it runs a local command; use `ProxyJump`), agent forwarding, X11, port forwarding, and keys held by a security key unless your SSH agent holds them. |
+| Authentication | In OpenSSH's order: the keys in your SSH agent (`SSH_AUTH_SOCK`, or the OpenSSH agent on Windows), your key files, keyboard-interactive, then a password. An encrypted key file asks for its passphrase only when the server accepts its public key. |
+| Host keys | Checked against `/etc/ssh/ssh_known_hosts`, `~/.ssh/known_hosts` and `~/.localcode/ssh/known_hosts`, hashed names and `@cert-authority` and `@revoked` lines included. A key that differs from the one on record ends the connection, naming both fingerprints; fix the file yourself. A host with no key on record is a question in the panel, showing the fingerprint. An accepted key is written to `~/.localcode/ssh/known_hosts`. `~/.ssh` is never written. |
+| Locale | `LANG` and every `LC_*` of localcode's environment are sent to the server, as OpenSSH sends them by default. A server that accepts them (`AcceptEnv`) runs the shell in your locale, which is what lets it read Korean typed into it. |
+
+**Questions only you answer.** A host key, a password, a passphrase and a server's own prompts (a one-time code) are asked in the panel, in a box localcode draws above the terminal, and never in the conversation. The model cannot answer them: no action of the `ssh` tool does. An answer goes from the panel to the connection and nowhere else: not into the conversation, an event, a log or a file. A question shows a hidden panel, marks the conversation as asking in the session list, and waits 5 minutes. A server gives up sooner if its own login time runs out (OpenSSH's `LoginGraceTime` is 2 minutes); connect again.
+
+**Taking over.** The terminal is shared. What you type goes to the shell at once. The model's `run`, `type` and `key` are refused for 10 seconds after you type, and, in a bash or zsh shell, while a command line you typed is unsent: from your first key until your Enter (Ctrl+M and Ctrl+J count as Enter, without Alt), or until the prompt your Ctrl+C brings, or until the line is as the prompt left it again (wherever the prompt is drawn, so Ctrl+L is fine). A Ctrl+C that brings no prompt (a shell with `stty intr undef` reads it as a character) clears nothing, and counts as a key of yours on the line until your Enter. Where the cursor is does not matter: after Ctrl+A the text is right of it and still counts, and so does the line after a Ctrl+U at its start. What you type after a Ctrl+C, yours or the model's, counts as typed at the prompt it brings. What you type while a command runs, and do not send, waits in the terminal if the command does not read it, and the shell draws it right after its next prompt. If what you typed is text alone, the terminal reads that line when the prompt is drawn: what of the text is there counts as typed until you erase it, send it or press Ctrl+C, and text the command read (`q` to a pager) is not there, so the line is empty. It reads as empty only where the row ends as the last prompt did (its last two characters): output drawn since the command ended (a background job's, before the prompt or after it), or a prompt whose end changed, keeps the line yours until your Enter or Ctrl+C. ASCII spaces alone change nothing a command runs and do not count; a no-break or an ideographic space counts as text. Backspace on an ASCII character counts as editing the text, unless you pasted where the shell has bracketed paste on. Ctrl+U in a remote shell counts as clearing it, after a paste too. Anything else keeps the line yours until your Enter or Ctrl+C, read by the command or not: a key that is not text (an arrow, Escape, the Tab key, Ctrl+D after text; Ctrl+D at the start of a line, which ends a command's input, is not one of them), a character no shell draws as typed (a zero-width space, a combining accent: zsh draws `<200b>`) or that the terminal draws in the cell before it (an emoji's skin tone), a Tab or a kept line end in what you paste, a bracketed paste where the shell at its prompt has bracketed paste off, text after a line you sent while the command ran, and a line whose prompt is slow to come or leaves the cursor at the left edge or in the last column. Enter, Ctrl+M or Ctrl+J without Alt, while the command runs, leaves nothing waiting. Ctrl+C while it runs (in a remote shell Ctrl+\ and Ctrl+Z too) drops what waits: what you type after it starts on an empty line, so Ctrl+D then leaves a REPL. With `stty intr undef` the key drops nothing, and what you typed before it is not followed. A line that is already yours stays yours past it, until your Enter or Ctrl+C at a prompt: the terminal cannot tell text after a line you sent while the command ran, which the key dropped, from text after a line the command read, which is on the shell's line. Keys other than text, typed while a full-screen program has the screen, are that program's. Text typed there is read as any other. A paste with a line end in it sends the line in a shell that reads a paste as typing (bash 3.2), and at a prompt what follows the line end counts as typed on the next line. In a shell with bracketed paste the whole paste stays on the line. Three things make the line count as typed on until your Enter, or until the prompt your Ctrl+C brings, whatever the screen shows after them: a line break in the line (a bracketed paste with a line end, or Alt+Enter, which zsh takes as one), Ctrl+O (it sends the line and recalls the next one from history; zsh recalls it after a Ctrl+C to the command too, bash 3.2 does not, and the line counts either way), and a terminal made smaller while your text is on the line, when the new size cuts text off or leaves the cursor outside it. A new size does not make a line that reads as empty count as typed on. A line you typed on and erased reads as empty again once the shell has drawn its prompt again as it was. A prompt that is drawn differently at the new width (a right prompt in zsh, a prompt wider than the terminal) does not, and the line counts as typed on until your Enter or Ctrl+C. Keys that leave something on the screen the terminal cannot tell from typing (a long recalled line, a completion list) keep the model out until your Enter or Ctrl+C. In another shell only the 10 seconds hold. **Hold**, beside the status line, keeps the model out of a terminal until you let go: its input, its `read` and `wait`, and a `run` already waiting, which ends refused with nothing of what came after. Letting go gives the model the screen and the scrollback again, what you did included; run `clear` before letting go to keep it (`clear` clears the scrollback too, and so does any program that sends the same sequence). The model cannot close a terminal you opened or one you hold. A `run` result says when you typed during the command.
+
+**The panel.** The tab strip has one tab per terminal, `×` to close it, and `+` to open one: type `user@host:port` or a `Host` from `~/.ssh/config`. The status line says where the terminal is connected, the shell, and whether a command is running. Reconnect opens a new connection in an ended terminal's tab. Click the terminal to type in it. Drag to select text.
+
+| Key | In the terminal |
+|---|---|
+| Typing, Enter, Tab, Escape, arrows, Ctrl+letter | Go to the shell. Escape does not stop the turn, Tab does not change the agent, and Ctrl+F does not open find, while the terminal has the keys. |
+| Korean and other input methods | The composed text is sent when the input method finishes it. |
+| Copy | Cmd+C on macOS; Ctrl+C or Ctrl+Shift+C elsewhere, while text in the terminal is selected. Without a selection, Ctrl+C is the interrupt. |
+| Paste | Cmd+V on macOS; Ctrl+Shift+V or Shift+Insert elsewhere. Sent as a bracketed paste when the shell asked for one. Ctrl+V alone goes to the shell. |
+| Cmd shortcuts, Ctrl+plus and Ctrl+minus | The window's. |
+
+The terminal takes the size of the smallest panel showing it, so no window cuts off what another shows. A hidden panel does not count. Output already on the screen is not reflowed when the size changes.
+
+**Knowing when a command ends.** After the first prompt, localcode types one line into a bash or zsh shell, once, where you can see it: ` __lc_n=...; __lc_p(){ ... }; ...`. It has the shell print an invisible mark before each prompt carrying the exit status, and one as each command starts, both with a number that only this terminal knows, so output that prints a mark is not taken for one. The line starts with a space, which keeps it out of the history where `HISTCONTROL=ignorespace` or zsh's `HIST_IGNORE_SPACE` is set. It keeps `$?` for prompt commands after it. It is typed only when the login shell is bash or zsh and the first screen ends in a prompt.
+
+| Case | What `run` does |
+|---|---|
+| bash or zsh | Returns when the command ends, with its output and exit status. |
+| Another shell (fish, csh, a Windows server's shell) | Returns when output has been quiet for 2 seconds, with no exit status. |
+| A nested shell (`sudo -i`, `su`, `ssh`, `docker exec`) | The nested shell prints no marks, so from outside the command that started it has not ended. When the terminal has been quiet for 3 seconds at a line that ends like a prompt, `run` returns and says so: the command may still be running (a progress line), or a nested shell is waiting. The next `run` is refused until the end is reported; in a nested shell the model works with `type` (with `enter`), `read` and `wait`. The marks come back when the nested shell exits. |
+| A full-screen program (an editor, `top`) | Returns at once and says so: the model works it with `read`, `key` and `wait`. |
+| The alternate screen left on with no command running (a full-screen program was killed) | `run` is refused until the screen is back: the terminal does not follow a command line there. `type` and `key` still reach it. |
+| A command that stops at a question | Output stopped at a line that looks like a password prompt, or for 3 seconds at a line ending in `?`, `]`, `:` or `)`. `run` returns and says the command may be waiting for input. A password is for you, in the panel. |
+| The timeout (120 seconds, at most 600) | Returns what came so far. The command goes on running. |
+| The turn stopped | Ctrl+C goes to the command `run` started, unless you typed in the terminal since. |
+
+**Where the prompt is.** The mark comes before the prompt, and a shell can take a while between the two (a prompt command of yours, a status line from git on a big tree). The terminal takes the prompt as drawn when something has moved the cursor since the mark and output has then been quiet for 150 milliseconds. A new size for the terminal does not count as something drawn. `run` waits up to 3 seconds for the prompt before it types.
+
+| Case | What the terminal does |
+|---|---|
+| A prompt that leaves the cursor where the mark did (`PS1=""`, or a prompt ending in a line break on the last row) | Takes it as drawn 2 seconds after the mark. A `run` right after a command waits that long. |
+| A prompt that draws nothing for more than 2 seconds | Takes it as drawn at 2 seconds, before it is. A `run` then is typed before the prompt. |
+| A prompt drawn in parts with more than 150 milliseconds between them | Takes the first part for the prompt until the rest arrives. |
+| Output from something else between the mark and the prompt (a background job) | Takes it for the prompt until the prompt arrives. |
+| You type before the prompt is drawn | Cannot tell your text from the prompt. The line counts as yours until your Enter, or until the prompt your Ctrl+C brings. |
+| You type at a prompt that leaves nothing on its line (`PS1=""`, or one ending in a line break) | Does not judge the line by the screen: an empty row says nothing there. The line counts as yours until your Enter, or until the prompt your Ctrl+C brings. |
+
+`run` takes one line. It refuses a line with a control character or a Tab (the shell would complete rather than type). The integration line also turns history expansion off in that shell (`set +H` in bash, `setopt nobanghist` in zsh), so a `!` or a `^` in a command is the character typed, and the line the shell runs is the line that was approved; `!!` and `^old^new` do not work in a terminal with integration. In a shell without integration, `run` refuses a `!` outside single quotes and a `^` starting the line instead.
+
+**At the prompt, commands go through `run`.** In a bash or zsh shell waiting at its prompt, `type` takes text without a line end and `key` takes only single characters and line-editing keys (arrows, Home, End, Backspace, Delete, `ctrl+a`, `ctrl+e`, `ctrl+b`, `ctrl+f`, `ctrl+k`, `ctrl+u`, `ctrl+w`, `ctrl+l`, `ctrl+c`): nothing the model types there runs except through `run`, which the rules for commands see. Once the model has typed on the prompt's line, `run` is refused until the next prompt: the one a `ctrl+c` from the model brings when the shell takes it as an interrupt (it discards the whole line), or the one after a command. Your own Ctrl+C at the prompt drops the model's text as well: the key is the line's. A `run` that follows a Ctrl+C waits for the prompt it brings, up to 10 seconds from the key, unless something was typed after the key: that is refused at once. When none has come after the model's `ctrl+c`, the refusal says so: the remote may be slow, or the shell did not take the key. `ctrl+c` drops what was typed before it and nothing after it. Keys after `ctrl+c` in the same `key` call, and anything typed after it, are on the line of the prompt it brings and keep `run` refused, however late that prompt arrives. While a Ctrl+C is unanswered, for 10 seconds at most, no prompt is recorded as where the line starts, so two presses are waited on as two. What the screen shows is not taken as proof the line is empty. Text the model typed while a command ran, with nothing waiting for it, is on the next prompt's line and counts the same. A key is named (`ctrl+o`, `Escape`); a control character is never a key name.
+
+**While a command runs.** A line end from `type` or `key` (Enter, `ctrl+j`, `ctrl+m`, `ctrl+o`) is sent only when something on the screen waits for input: a full-screen program, or a cursor line that ends like a prompt (a nested shell, a REPL) or a question (`?`, `]`, `:`, `)`, a password prompt). Otherwise it is refused: the terminal would keep the line, and the shell would run it as its next command once the running one ends.
+
+**Permissions.** The tool asks before it acts, as `bash` does, under three keys:
+
+| Key | Asked for | Matched against |
+|---|---|---|
+| `ssh_connect` | `connect` | The alias as written when it is not the host itself, the target as `user@host:port`, and each jump host: `prod-db deploy@10.0.0.5:22 via me@bastion:22`. Host names are in lower case, as OpenSSH lowers them: write these rules in lower case. "For this session" and "always" cover that subject exactly. The connection is made only to the route approved: when `~/.ssh/config` changes between the question and the dial, it is refused. |
+| `ssh` | `run` | The command, decided as a `bash` line is: each command of the line on its own, with "for this session" generalising to the program (`systemctl *`). The question names the host; a grant covers every host. An allow decided by splitting the line holds only when the terminal's shell is bash or zsh; otherwise it asks, and "for this session" covers another line only when it is made of letters, digits, spaces and ``-_./\:=,+~"'*?@``. |
+| `ssh_input` | `type` and `key` | `type <text>` or `key <keys>`. Asked every time: no "for this session". A rule still answers it. Each line `type` sends with Enter (in a nested shell or a program) is also checked against the deny rules for `ssh`. |
+
+A deny rule for `ssh_connect` also keeps the model off a terminal you opened to that host: every action on it is refused. `read`, `wait`, `list` and `close` ask nothing. `skip_permissions` and `/permission-skip-tools` turn these questions into allows, as they do for `bash`: a remote host is not a path, so the workspace boundary does not apply. A deny still denies.
+
+```json
+"permission": {
+  "ssh_connect": [{ "match": "*prod*", "decision": "deny" }],
+  "ssh": [{ "match": "git *", "decision": "allow" }, { "match": "rm *", "decision": "deny" }]
+}
+```
+
+The `ssh` tool's actions:
+
+| Action | Input | What it does |
+|---|---|---|
+| `connect` | `host`, `user`, `port` | Opens a connection and its shell, and waits for the questions you answer in the panel. Returns the terminal id (`t1`, `t2`, ...) and the first screen. |
+| `run` | `command`, `terminal`, `timeout` | Types the line and Enter and waits for it to end (see above). |
+| `type` | `text`, `enter`, `terminal` | Types text into whatever runs in the terminal, then Enter when `enter` is true. |
+| `key` | `keys`, `terminal` | Presses keys, space-separated: `ctrl+c`, `Enter`, `Escape`, `Up`, `Tab`, `F1`. |
+| `read` | `terminal`, `scrollback` | The screen as text, with up to 500 earlier lines. |
+| `wait` | `terminal`, `seconds`, `for` | Waits up to 300 seconds for text on the screen, or for the running command to end. |
+| `list` | | The conversation's terminals and their state. |
+| `close` | `terminal` | Ends a connection the model opened. |
+
+`terminal` defaults to the one the model used last.
+
+What remote output can do is limited to the screen. A remote program's title is shown as text. It cannot write to your clipboard (OSC 52 is ignored) or have its title typed back into the shell. Text on the screen is data to the model, as `bash` output is: a file that tells the model to do something is still only a file.
+
+**Limits.**
+
+* The daemon has no authentication. A program running as you on this computer, a command the model runs through `bash` included, can call the SSH panel's routes as the window does. It could also run `ssh` itself with the same keys: the boundary is `bash`'s permission rules. The routes refuse requests from another website and from a name pointed at this computer.
+* Connections do not survive localcode stopping, an update, the computer sleeping long enough for the server to drop it, or a network change. Use `tmux` or `screen` on the remote for work that must.
+* A key held only by a security key (FIDO) works only through your SSH agent.
+* The model's grants for remote commands are not per host. Deny the hosts the model must not reach with `ssh_connect`.
+* `ssh_connect` sees the connections localcode makes. A `ssh` the model runs inside a terminal to reach another host is a command: deny it with an `ssh` rule (`{"match": "ssh *", "decision": "deny"}`).
+* In a nested shell or a program, a command the model puts together key by key (`type` without Enter, then `key Enter`) is seen only by the `ssh_input` question, not by the deny rules for `ssh`. With `skip_permissions` on, nothing asks it.
+* "Something waits for input" is read from the cursor's line. A running command whose output stops at a line ending like a prompt or a question takes a line from the model; if it does not read it, the shell runs it after the command ends.
+* The SSH panel answers a daemon reached by an address or `localhost`. Reached by another name (`http://devbox.local:4096`), the panel says it cannot reach its terminals; use the address.
+* The terminal is xterm-like. Mouse reporting is not supported.
+
+### PowerShell
+
+On Windows the model can open PowerShell terminals on this computer and work in them, and you can work in the same terminals. Each terminal is shown in the PowerShell panel, a column of its own beside the SSH panel, in the desktop window and in the Web UI. It is the SSH panel's terminal with a local shell in place of a connection: what [SSH](#ssh) says about taking over, Hold, the keys, the size, the questions and `run` holds here too, except as below.
+
+| Item | Behavior |
+|---|---|
+| Turning it on | The PowerShell switch on the settings window's Tools tab, `/powershell on`, or `"powershell": true` in config.json. Off unless set. Turning it off closes every PowerShell terminal. On macOS and Linux the switch is not shown and the setting does nothing. |
+| Where it works | Windows only. The panel is in the desktop window and in the Web UI. The model is offered the `powershell` tool while the setting is on, in any turn but a scheduled run and a delegated sub-agent's, as for `ssh`. |
+| The shell | `powershell.exe` (Windows PowerShell 5.1), or the program `powershell_path` names (`pwsh.exe` for PowerShell 7). It starts in the conversation's working directory, loads your profile, and has localcode's environment. It runs under a Windows pseudo console (ConPTY), with no window of its own. |
+| Lifetime | A terminal ends when you close it, when the model closes one it opened, when the shell exits (`exit`), when the conversation is archived or deleted, when the setting is turned off, or when localcode stops. `/update` and the Install button, with terminals open, name them and update only when asked again within two minutes, as for SSH connections. |
+| Limits | 8 open terminals per conversation and 32 in all, counted apart from SSH connections. An ended terminal stays in the panel with its last screen until it is closed. |
+| Opening one | `+` in the panel's tab strip, or the model's `open`. Opening asks nothing: every command typed into it does. |
+
+**Knowing when a command ends.** localcode starts the shell with a script (`-EncodedCommand`) that wraps your `prompt` function and PSReadLine's line reader, after your profile has run. Nothing is typed into the terminal. The wrapper prints an invisible mark before each prompt, carrying the exit status and the prompt's text, and one as each command starts, both with a number only this terminal knows. Your prompt is drawn as before.
+
+| Case | What `run` returns |
+|---|---|
+| A command that ends | Its output and its exit status: the program's own exit code when it set one (`$LASTEXITCODE` changed), 1 for a cmdlet or script that failed (`$?` false, a new entry in `$Error`), the program's exit code again for a program that exits as the one before it did, and 0 otherwise. A line of several commands is reported by its last; when that is a program exiting as the one before it did and an earlier command in the line failed, the status is 1. A cmdlet failing with `-ErrorAction Ignore` adds nothing to `$Error`, and after a program that failed is reported with that program's code. |
+| A shell that drew no mark within 20 seconds of starting (a profile that replaces `prompt` later, a program in `powershell_path` that is not PowerShell) | Returns when output has been quiet for 2 seconds, with no exit status, as for a shell other than bash or zsh over SSH. |
+| The timeout (120 seconds, at most 600) | What came so far. The command goes on running. Ctrl+C from `key` or the panel stops it. |
+
+The output is read off the screen: the rows after the command line, up to the prompt. Windows Server 2022 (measured) sends the marks ahead of the text they follow, so the screen is the only reliable record, and a run ends only when every row of the prompt the mark named is drawn below the command line. A row filled to the last column is joined with the next, so a long line wrapped by the terminal comes back as one line. Colours are dropped. Output longer than the 5,000 lines of scrollback starts with a line saying how many earlier lines were lost. A command that clears the screen (`Clear-Host`, `cls`) returns what it printed after the clear: the clear is found in what the console sends (the pseudo console sends `ESC[3J`, measured), and a clear of a full-screen program's alternate screen does not count.
+
+| Prompt | What the terminal does |
+|---|---|
+| Up to about 2,250 bytes of UTF-8 (3,000 characters of base64) | Carried in the mark, and looked for on the screen. Colours are ignored. |
+| Longer | Not carried. Only the cursor's row is taken for the prompt: its earlier rows come back at the end of the output. |
+| Written in part with `Write-Host` by your `prompt` function | The mark carries only what the function returns, so the prompt on the screen is not the one the mark named. Each `run` ends 2 seconds after the command does, and what the function writes comes back at the end of the output. A prompt module that returns its prompt as text (oh-my-posh, Starship, posh-git 1.x) has neither. |
+
+**Permissions.** Two keys:
+
+| Key | Asked for | Matched against |
+|---|---|---|
+| `powershell` | `run` | The command, in any case (`new-item` is `New-Item`). The line is decided as a `bash` line is, and a deny rule that names a command (not `*` alone) also denies it when it matches a command anywhere in the line as PowerShell reads it: the line is cut at every `;`, `\|`, `&`, `(`, `)`, `{`, `}` and line end not escaped with a backtick, inside quotes too; each piece is taken without an assignment (`$x =`), a leading keyword (`return`, `throw`, `-not`), a cast (`[void]`), a `.` or a redirection, as written, without its quote marks, without backticks, with its escapes (`` `n ``) read, and with its program named without a module or directory; and the text given to `Invoke-Expression` (also piped to it), `powershell` or `pwsh` (`-Command`, `-EncodedCommand`, with `-` or `/`, a space or a `:`) and `cmd /c` is read the same way. An allow rule does not run a command unasked: PowerShell does not split a line as bash does, as [under a shell that is not POSIX](#naming-the-shell). "For this session" runs the answered line again unasked, and another line only when it is made of letters, digits, spaces and ``-_./\:=,+~"'*?@`` and its program was granted; a dot-sourced script (`. .\helper.ps1`) is granted as written. |
+| `powershell_input` | `type` and `key` | `type <text>` or `key <keys>`. Asked every time, as `ssh_input` is. Each line `type` sends with Enter is also checked against the deny rules for `powershell`. |
+
+`read`, `wait`, `list`, `open` and `close` ask nothing. A deny rule for `powershell` with the match `*` keeps the model out of every PowerShell terminal. `skip_permissions` and `/permission-skip-tools` turn these questions into allows, as they do for `ssh`, with one exception: while any deny rule applies to `powershell` (its own, the agent's, or one for every tool), a `run` line that is more than one plain command is still asked about, every time, with no answer for the session. PowerShell is a language, and a command can be reached through a variable, an alias, an escape or a string handed to another interpreter; a reading of the line cannot promise to find every one, and a person reading it can. A plain command is one program by name, not a path or a script, that does not run or define other commands (`iex`, `powershell`, `cmd`, `Start-Process`, `Set-Alias`, `Import-Module` and their kind), with only letters, digits, spaces and ``-_./\:=,+~"'*?@``, no `function:` or `alias:` path, and no splatted variable (`@args`). This holds the line the model sends, not what a plain command can arrange for a later one: a plain command can still write a script and put it on `PATH`, mount the Alias or Function provider as a drive of another name, add to the profile the next terminal loads, or start a program that starts another (WMI's `Invoke-WmiMethod`, `conhost`, a hook in git's configuration). With `skip_permissions` on, the deny rules check what the model writes; they are not a sandbox. A deny still denies.
+
+```json
+"permission": {
+  "powershell": [{ "match": "Remove-Item *", "decision": "deny" }, { "match": "Format-Volume *", "decision": "deny" }]
+}
+```
+
+The `powershell` tool's actions are the `ssh` tool's, with `open` (no input) in place of `connect`.
+
+**Limits.**
+
+* The daemon has no authentication. A program running as you on this computer can call the PowerShell panel's routes as the window does. It could also start PowerShell itself: the boundary is the same as for `bash`. The routes refuse requests from another website and from a name pointed at this computer.
+* The shell has your rights on this computer. A command the model runs there is not limited to the workspace: the workspace boundary applies to the file tools, not to commands. Deny what the model must not run.
+* Terminals do not survive localcode stopping or an update.
+* A line exactly as wide as the terminal is joined with the line after it in `run` output.
+* The console redraws its screen when the terminal is resized. On Windows Server 2022 (measured, not on 2025) a line that was exactly as wide as the old size is redrawn joined with the line after it, the prompt included. What `run` returned before the resize is not changed.
+* Ctrl+C reaches the command in the terminal and drops what was typed ahead of it. Ctrl+\\ and Ctrl+Z are keys there, not signals (measured), and text typed ahead stays for the next prompt. A program that ignores Ctrl+C keeps running; close the terminal to end it.
+* Cutting a line inside quotes too means a deny rule can match a quoted argument that would not have run (`git commit -m "a; Remove-Item b"` under a rule `Remove-Item *`). The line is denied. That is the direction a deny rule is for.
+* A command passed to another program some other way (`Start-Process` with `-ArgumentList`, a script file, a variable) is not seen by the deny rules. Deny the program.
+* PowerShell's built-in aliases are read as the commands they name: `ni` is `New-Item`, `rm` and `del` are `Remove-Item`, `mkdir` is `New-Item -ItemType Directory`. An alias or a function defined later is not, and a script on `PATH` is not: a line that defines one is asked about under `skip_permissions` while a deny rule is set, but a plain line that calls one later is not.
+* In a nested shell or a program, a command the model puts together key by key (`type` without Enter, then `key Enter`) is seen only by the `powershell_input` question, not by the deny rules for `powershell`, as for SSH. With `skip_permissions` on, nothing asks it.
+* A program started in a window of its own (`Start-Process`) outlives the terminal.
 
 ### Leaving the project
 
@@ -3002,13 +3392,13 @@ Reasoning appears as a separate muted block in the Web UI. The TUI status reads 
 
 ### Zoom and what a reload keeps
 
-Ctrl and the wheel, or ctrl with `+`, `-` and `0`, size the page. The zoom belongs to the page rather than to the window, so it survives a reload and comes back in the next window; the panel widths do the same.
+Ctrl and the wheel, or ctrl with `+`, `-` and `0`, size the page. The zoom belongs to the page rather than to the window, so it survives a reload and comes back in the next window; the panel widths do the same. The desktop window also keeps both in `~/.localcode/window-state.json`, so they come back after the window is closed and opened again, on whatever port it is given: see [Settings](#settings).
 
 Which conversation a window is looking at survives a reload too, per window: two windows on one daemon each come back to their own. A window opened fresh starts at the newest conversation, as before.
 
 Both matter because `/update` reloads the page on its own when the daemon behind a desktop window hands over. An update that finished by moving you to a different conversation at 100% zoom was taking something away from whoever ran it.
 
-The [Typography](#settings) text size is the other half of sizing: zoom scales the whole page, spacing included, while text size scales only the type. Both are stored in the browser and restored on reload, and changing one never resets the other.
+The text size on the settings window's [Appearance](#settings) tab is the other half of sizing: zoom scales the whole page, spacing included, while text size scales only the type. Both are stored in the browser and restored on reload, and changing one never resets the other.
 
 ### Debug log
 
@@ -3097,6 +3487,16 @@ Each scheduled run uses a separate session with the booking conversation's works
 
 Scheduled permission requests appear in the booking conversation and expire after five minutes. Expiry stops the run and names the blocked tool. Configure `/permission-skip-tools`, `/read-outside`, and `/write-outside` in advance if unattended access is required.
 
+Who wrote the prompt decides how it runs:
+
+| Booked by | The prompt runs |
+|---|---|
+| You, with `/schedule` or the **schedule** button | As you wrote it. A leading `/` or `!` is a command, as when you type it. `/schedule in 1 hour !make test` runs the [shell escape](#shell-escape), which does not consult the permission rules. |
+| The model, with the `Schedule` tool or a `/schedule` line it runs through the `Command` tool | As plain text. A leading `/` or `!` does not run a command, whatever `/model-invocable` is set to. The model is told so when it books such a prompt. |
+| An earlier version | As written. A booking made before the author was recorded has no author on record, including one the model made. `/show-scheduled-task` lists them. |
+
+To run a command later, book it yourself with `/schedule`. The model cannot book from inside a scheduled run: the `Schedule` tool and a `/schedule` line run through the `Command` tool both refuse.
+
 | Where | What you get |
 |---|---|
 | **schedule** button | Separate time and task fields with parsed-time preview. |
@@ -3156,10 +3556,12 @@ Click a task in the right panel to view its complete session:
 
 | What | Shown as |
 |---|---|
-| Tool calls | A line when the call starts and the same line completed with its result, `✓` or `✗`, and the output; click it for the full arguments. |
+| Its replies | Rendered as markdown (headings, lists, code blocks, tables), each in a block of its own in the reading face, apart from the instructions, tool calls and status lines around it. The last reply of a task that completed is marked **Result**. |
+| Its instructions | The prompt it was given, muted, at the top. A long one scrolls in its own box. |
+| Tool calls | One line per call, folded: `✓` or `✗` and the size of the result when it ends. Click the line for the arguments and the output, and again to fold it. |
 | A permission it is blocked on | `⏸ waiting for permission`, naming the tool and what it wants to do. Answer it in the session that spawned the task, which is where the prompt appears. The answer belongs to the task that asked: "allow for this session" there covers the task, not your conversation. |
 | Work it delegates itself | A line per sub-task it spawns and per status that comes back. |
-| The end | Finished or cancelled marker. Incomplete tool calls are marked as unfinished. |
+| The end | The status under the window. A log that records the end of a turn also gets a finished or cancelled line, with tool calls that did not finish marked. |
 | Errors and compaction | A line each. |
 
 Running tasks provide **Stop this task**. Finished tasks provide **Delete this task**, which removes the child session and its row. The parent log records deletion so the row stays removed after reload. The rows themselves can be deleted without opening them: see [Deleting background tasks](#deleting-background-tasks).
@@ -3183,7 +3585,7 @@ Switching agents changes the profile, provider, model, system prompt, and tool s
 
 Agents may use different providers. The selected model receives the preceding conversation, including earlier questions and answers.
 
-Images in that conversation reach the model only when its profile has `vision`. Unset, `vision` is true for a model id containing `claude` and false for any other. A model without it gets a note in place of each image. The image is sent again when the conversation returns to a model that can see.
+Images in that conversation reach the model only when it is sent images. See [Which models are sent images](#which-models-are-sent-images). A model that is not gets a note in place of each image. The image is sent again when the conversation returns to a model that can see.
 
 Switching agents invalidates the previous agent's cached system prompt and tool-schema prefix.
 
@@ -3219,7 +3621,7 @@ Wrapped invocations such as `env python3 x.py` and `xargs python3` are not cover
 2. Point `providers.local.base_url` at that address.
 3. Set the profile's `model` to exactly the model name LM Studio shows.
 4. Point an `agents` entry at that profile and run with `--agent`.
-5. If the model reads images, set `"vision": true` on its profile. Unset, a model whose id does not contain `claude` is sent no images and is not offered `view_image`.
+5. Images need nothing set. The model is shown a test image the first time a turn runs on it, and is sent images when it names the colour. Set `"vision": true` or `false` on the profile to overrule the test. See [Which models are sent images](#which-models-are-sent-images).
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 
@@ -3286,7 +3688,7 @@ The settings window's install button is the one path that closes the window. It 
 
 #### The settings window
 
-The **Updates** section checks or installs only when a button is clicked.
+The **Updates** tab checks or installs only when a button is clicked.
 
 | Button | What it does |
 | --- | --- |

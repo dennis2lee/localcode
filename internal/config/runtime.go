@@ -57,6 +57,19 @@ func (c *Config) AddPermissionRuleRuntime(toolName string, rule PermissionRule) 
 	addRule(c.Permissions, toolName, rule)
 }
 
+// SetAgentsRuntime replaces the agent table under the permission lock.
+// Rules are resolved under that lock from any goroutine, the browser's
+// request guard among them, for every request a page makes. Nothing in the
+// daemon changes the agents after startup; this is how a test changes an
+// agent's rules while a browser is running without racing that guard.
+// Other readers of the table (ResolveProfile) take no lock, so it is for
+// a test with no turn running, not for the daemon.
+func (c *Config) SetAgentsRuntime(agents map[string]AgentConfig) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.Agents = agents
+}
+
 // RemovePermissionRuleRuntime mirrors RemovePermissionRuleFromFile against
 // the in-memory config.
 func (c *Config) RemovePermissionRuleRuntime(toolName string, rule PermissionRule) {
@@ -138,6 +151,52 @@ func (c *Config) SetSmartAgentRuntime(v bool) {
 	c.permMu.Lock()
 	defer c.permMu.Unlock()
 	c.SmartAgent = &v
+}
+
+// BrowserLive reports whether the browser is on right now, read the same
+// way and for the same reasons as SmartAgentLive.
+func (c *Config) BrowserLive() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.Browser != nil && *c.Browser
+}
+
+// SetBrowserRuntime changes the live browser setting. The in-memory
+// counterpart to SetBrowserInFile.
+func (c *Config) SetBrowserRuntime(v bool) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.Browser = &v
+}
+
+// SSHLive reports whether SSH is on right now.
+func (c *Config) SSHLive() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.SSH != nil && *c.SSH
+}
+
+// SetSSHRuntime changes the live SSH setting. The in-memory counterpart
+// to SetSSHInFile.
+func (c *Config) SetSSHRuntime(v bool) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.SSH = &v
+}
+
+// PowerShellLive reports whether the PowerShell panel is on right now.
+func (c *Config) PowerShellLive() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.PowerShell != nil && *c.PowerShell
+}
+
+// SetPowerShellRuntime changes the live PowerShell setting. The in-memory
+// counterpart to SetPowerShellInFile.
+func (c *Config) SetPowerShellRuntime(v bool) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.PowerShell = &v
 }
 
 // OrchestrateLive reports whether the Orchestrate tool is on right now,

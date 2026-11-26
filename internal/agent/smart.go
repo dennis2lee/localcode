@@ -210,6 +210,10 @@ func (l *Loop) profileName(agentName string) string {
 // mechanism instead of two — the specs the model is shown and the check
 // in runTools both already speak allowlist, and both get this same slice,
 // so a tool hidden from the model is also refused if it is called anyway.
+// noToolOffered is an allowlist entry no tool is called, for a turn that
+// is offered no tool at all: an empty allowlist is no restriction.
+const noToolOffered = "(none)"
+
 func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []string {
 	// A debate reviewer's allowlist is not the agent's own. It reads and
 	// it reports, whatever that agent is permitted to do when somebody
@@ -221,6 +225,28 @@ func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []
 		return forced
 	}
 	if len(agentCfg.Tools) > 0 {
+		// An agent's own list is its own, except for the browser: that is
+		// offered by where the conversation is shown, not by who runs it,
+		// and naming it does not put a desktop window in front of anyone.
+		// The ssh tool likewise follows its setting and whether anybody
+		// can answer its questions.
+		browser, ssh, ps := l.browserOffered(ctx), l.sshOffered(ctx), l.powershellOffered(ctx)
+		if !browser || !ssh || !ps {
+			out := make([]string, 0, len(agentCfg.Tools))
+			for _, name := range agentCfg.Tools {
+				if (name == BrowserToolName && !browser) || (name == SSHToolName && !ssh) || (name == PowerShellToolName && !ps) {
+					continue
+				}
+				out = append(out, name)
+			}
+			if len(out) == 0 {
+				// The browser or ssh was the agent's only tool. An empty
+				// list means no restriction at all, so the agent would
+				// get every tool there is; this one matches none.
+				return []string{noToolOffered}
+			}
+			return out
+		}
 		return agentCfg.Tools
 	}
 	hidden := l.hiddenTools(ctx)
@@ -408,6 +434,22 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	// its server refuses, and every request after it. See view_image.go.
 	if !viewsImages(ctx) {
 		hidden[tools.ViewImageName] = true
+	}
+	// The browser is for a conversation somebody is watching in the GUI,
+	// where the panel shows it and they can take it over. Off, or with no
+	// GUI window on this conversation, the tool is not offered: a page the
+	// model works in where nobody can see it is not what was asked for.
+	if !l.browserOffered(ctx) {
+		hidden[BrowserToolName] = true
+	}
+	// SSH while it is on and the turn has somebody to answer a host key
+	// or a password.
+	if !l.sshOffered(ctx) {
+		hidden[SSHToolName] = true
+	}
+	// PowerShell likewise, and only where there is one.
+	if !l.powershellOffered(ctx) {
+		hidden[PowerShellToolName] = true
 	}
 	// Answer belongs to one role in one situation: a stage that declared
 	// what it returns, which is given it explicitly through the pinned
