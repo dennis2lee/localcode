@@ -370,6 +370,8 @@ export function noteAskLine(id, el) { askLines.set(id, el); }
 
 export function forgetAskLine(id) { askLines.delete(id); }
 
+export function askLineIds() { return [...askLines.keys()]; }
+
 // leaveAskUnanswered rewrites the line of question id, drawn inviting a
 // reply, to say it was left unanswered. A line drawn any other way, or a
 // question this page holds no line for, is left alone.

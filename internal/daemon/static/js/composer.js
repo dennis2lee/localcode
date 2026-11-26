@@ -1,7 +1,7 @@
 import { inputEl, centerEl, sendBtn, commDotEl } from './dom.js';
 import { app, session, turnInFlight, tasksInFlight, historyLimit } from './state.js';
 import * as apiClient from './api.js';
-import { appendTool, appendError, appendPendingUser, resolvePendingUser, leaveAskUnanswered } from './transcript.js';
+import { appendTool, appendError, appendPendingUser, resolvePendingUser, leaveAskUnanswered, forgetAskLine } from './transcript.js';
 import { renderStatusBar } from './render.js';
 import { isPlainPrompt, tryLocalCommand } from './commands.js';
 import { resetCompletion } from './complete.js';
@@ -613,13 +613,16 @@ export async function addImageFile(file, fallbackName) {
 inputEl.addEventListener('paste', handlePaste);
 
 // askNobodyWaiting is told no daemon is waiting on the model question
-// id: a stale resolution for it, or its turn declared lost. An answer from
-// here still on its way leaves it to that answer's outcome, since it may
-// have got through; one the daemon refused says it now, on the line.
+// id: a stale resolution or a stale copy of it, or its turn declared lost.
+// The box lets go of it. An answer from here still on its way leaves the
+// rest to that answer's outcome, since it may have got through.
+// Otherwise the question's line, if it still invites a reply, says it was
+// left unanswered: whether the box holds it, a newer question took the
+// box, or an answer to it was refused or failed behind a newer question.
 export function askNobodyWaiting(id) {
+  if (session.pendingAsk === id) session.pendingAsk = null;
   const answering = session.answeringAsks.get(id);
-  if (!answering) return;
-  if (answering.inFlight) {
+  if (answering && answering.inFlight) {
     answering.stale = true;
     return;
   }
@@ -665,7 +668,10 @@ export async function sendMessage() {
       // any more, whatever else was sent for it: a second answer, typed
       // after loading the whole conversation armed the box for it again,
       // is not put back when it fails, and the box is not left armed.
+      // Nor is its line to say otherwise later: a stale resolution can
+      // overtake the real one.
       session.answeringAsks.delete(id);
+      forgetAskLine(id);
       if (session.pendingAsk === id) {
         session.pendingAsk = null;
         renderCommDot();

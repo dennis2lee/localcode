@@ -1,7 +1,7 @@
 import { inputEl } from './dom.js';
 import { app, session, sessionWorking, noteActivity } from './state.js';
 import {
-  appendUser, appendTool, appendAsk, askReplyHint, askLeftHint, noteAskLine, forgetAskLine, leaveAskUnanswered, appendError, appendModelText, endModelText,
+  appendUser, appendTool, appendAsk, askReplyHint, askLeftHint, noteAskLine, forgetAskLine, askLineIds, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
   appendReview, appendThinking, endThinking, foldThinking, clearTranscript, showEarlierBanner,
   abandonPendingUsers, settleThinkingBlock, hasLiveThinking, landBeforeSeq,
@@ -254,36 +254,29 @@ const handlers = {
   'input.request': (d) => {
     const stale = d.stale === true;
     if (!stale) session.pendingAsk = d.id;
-    else if (session.pendingAsk === d.id) session.pendingAsk = null;
     const opts = Array.isArray(d.options) ? d.options : [];
     const el = appendAsk([`[the model is asking] ${d.question}`,
       ...opts.map((o, i) => `  ${i + 1}. ${o}`),
       stale ? askLeftHint : askReplyHint].join('\n'));
     if (stale) {
+      // This line says so already, and one drawn before it went with the
+      // transcript; the rest is what a stale resolution would do.
       forgetAskLine(d.id);
-      // An answer from here on its way to it is to a question nobody is
-      // waiting on, which a stale resolution would also have said.
       askNobodyWaiting(d.id);
     } else {
       noteAskLine(d.id, el);
     }
   },
-  // A stale resolution of the question the box is armed for also says so
-  // on its line. It reaches a page that held the question from before a
-  // restart, and the line went on inviting a reply that the box, no
-  // longer armed, sent to the model as a new prompt. With an answer from
-  // here on its way, the answer's outcome says it instead (sendMessage):
-  // a stale resolution can overtake the real one of an answer that got
-  // through.
+  // A stale resolution says nobody is waiting on the question: see
+  // askNobodyWaiting. It reaches a page that held the question from before
+  // a restart, whose line went on inviting a reply that the box, no longer
+  // armed, sent to the model as a new prompt. A real one is the question
+  // done with, answered or cancelled, and its line stays as drawn.
   'input.resolved': (d) => {
-    const stale = d.stale === true;
-    if (session.pendingAsk === d.id) {
-      session.pendingAsk = null;
-      if (stale) leaveAskUnanswered(d.id);
-    }
-    if (stale) {
+    if (d.stale === true) {
       askNobodyWaiting(d.id);
     } else {
+      if (session.pendingAsk === d.id) session.pendingAsk = null;
       session.answeringAsks.delete(d.id);
       forgetAskLine(d.id);
     }
@@ -950,12 +943,10 @@ async function resyncAfterReconnect() {
   // An answer still on its way is to a question no daemon will wait on
   // again, so its failure must not bring the question back.
   session.answeringPermissions.clear();
-  // The model's question the box holds is one nobody will wait on again,
-  // and its line says so rather than go on inviting a reply the box no
-  // longer takes.
-  if (session.pendingAsk) leaveAskUnanswered(session.pendingAsk);
+  // Every model question this page holds a line or an answer for belongs
+  // to a turn that is over: nobody will wait on it again.
+  for (const id of new Set([...askLineIds(), ...session.answeringAsks.keys()])) askNobodyWaiting(id);
   session.pendingAsk = null;
-  for (const id of [...session.answeringAsks.keys()]) askNobodyWaiting(id);
   session.promptQueue = [];
   setWaiting(false);
   if (!session.pendingPermissionID) setInputLocked(false);

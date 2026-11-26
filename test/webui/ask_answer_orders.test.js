@@ -1,37 +1,17 @@
 'use strict';
 
 // Every order of what can happen to a model question and an answer typed
-// for it, walked against a model of the daemon.
+// for it, walked against a model of the daemon. Besides one question and
+// one answer: two answers to it on their way at once (the second typed
+// after the whole conversation armed the box again), a newer question,
+// later resumes that bring stale resolutions, the newer question resolved
+// from another window, and with ASK_ORDERS_Y=1 answers to the newer
+// question from here too.
 //
-// The model keeps what the daemon knows (is it waiting on the question,
-// is a resolution in the log, was an answer taken and not yet written)
-// and only offers a step a real daemon could produce from there. The
-// whole-conversation replay and a session switch replay the log as the
-// daemon would serve it: a question nobody waits on and nothing answers
-// is sent stale. Orders that need the accepted race (a stale copy or
-// resolution ahead of the real resolution of an answer taken) are left
-// out.
-//
-// After every step, what the page shows is checked against what it has
-// been told:
-//
-// * box-line: the box armed for a question means its line invites a reply.
-// * box-told: the box is not armed for a question the page has been told
-//   nobody waits on (a stale copy or resolution, a real resolution, a
-//   successful answer, a 404).
-// * left-answered: a line says "(left unanswered)" only for a question
-//   nobody answered.
-// * settled: with no answer on its way, a question the page was told
-//   (stale) nobody waits on, never answered or cancelled, says
-//   "(left unanswered)" and does not hold the box.
-// * light: the light says a question waits exactly when the box is armed.
-//   Not checked right after a send, which never redraws it (before this
-//   change too).
-//
-// It does not walk a turn declared lost (the page never sends the prompt,
-// so the turn is never its own), two answers on their way at once, or a
-// replay that holds another question. ask_answer_lost_turn,
-// ask_answer_two_answers and ask_answer_other_question hold those.
+// It does not walk a turn declared lost, which costs a second of real
+// time per order; ask_answer_lost_turn, _lost_rearmed and _record hold
+// those. Depth 4 by default; ASK_ORDERS_DEPTH=5 with ASK_ORDERS_SHARDS=32
+// walks 5063 orders, and 5681 with ASK_ORDERS_Y=1.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -55,19 +35,20 @@ function lineOf(app, id) {
     .filter((el) => el.textContent.startsWith(`[the model is asking] ${id}?`)).pop();
 }
 
+const yUnwritten = (m) => !!(m.y && m.y.took && !m.y.logged);
+
 function initialModel() {
   return {
     x: { waiting: true, logged: null, taken: false },
     y: null,
     restarted: false,
-    post: false,
+    posts: [],
     answers: 0,
     wholeOffered: true,
     told: { stale: false, answered: false, cancelled: false, refused: false },
   };
 }
 
-// The log as the daemon serves it, from seq 400 (the tail) or from seq 1.
 function replay(app, m, whole) {
   if (whole) app.sse.emit({ seq: 1, type: 'message.user', data: { text: 'first' } });
   app.sse.emit({ seq: 400, type: 'message.user', data: { text: 'pick one' } });
@@ -80,38 +61,43 @@ function replay(app, m, whole) {
     app.sse.emit({ seq: 404, type: 'turn.cancelled', data: {} });
   }
   if (m.y) {
-    const yStale = !m.y.waiting;
+    const yStale = !m.y.waiting && !m.y.logged;
+    app.sse.emit({ seq: 499, type: 'message.user', data: { text: 'next' } });
     app.sse.emit(ask(500, Y, yStale));
     if (yStale) m.y.toldStale = true;
+    if (m.y.logged) app.sse.emit({ seq: 501, type: 'input.resolved', data: { id: Y, answer: 'a' } });
   }
 }
 
+const settleStep = (which, value, after) => ({
+  async run(c) {
+    c.settle(which, value);
+    await c.app.settle(12);
+    const p = which === 'first' ? c.m.posts.shift() : c.m.posts.pop();
+    after(c.m, p);
+  },
+});
+
 const steps = {
   answer: {
-    pre: (m) => !m.post && m.answers < 2,
+    pre: (m) => m.posts.length < 2 && m.answers < 3,
     async run(c) {
       if (c.app.internals.session.pendingAsk !== X) return 'skip';
       c.app.el('input').value = '1';
       c.app.el('send').click();
       await c.app.settle(12);
-      c.m.post = true;
-      c.m.postBeforeSwitch = false;
+      c.m.posts.push({ beforeSwitch: false });
       c.m.answers++;
       return 'ok';
     },
   },
-  ok: {
-    pre: (m) => m.post && m.x.waiting,
-    async run(c) {
-      c.settlePost({ status: 200, body: { status: 'resolved' } });
-      await c.app.settle(12);
-      c.m.post = false;
-      c.m.x.waiting = false;
-      c.m.x.taken = true;
-      c.m.told.answered = true;
-    },
-  },
-  // The resolution of the answer the daemon took from here.
+  ok: { pre: (m) => m.posts.length > 0 && m.x.waiting, ...settleStep('last', { status: 200, body: { status: 'resolved' } }, (m) => { m.x.waiting = false; m.x.taken = true; m.told.answered = true; }) },
+  okFirst: { pre: (m) => m.posts.length > 1 && m.x.waiting, ...settleStep('first', { status: 200, body: { status: 'resolved' } }, (m) => { m.x.waiting = false; m.x.taken = true; m.told.answered = true; }) },
+  r404: { pre: (m) => m.posts.length > 0 && !m.x.waiting, ...settleStep('last', { status: 404, body: { error: `question ${X} is not pending` } }, (m, p) => { if (!p.beforeSwitch) m.told.refused = true; }) },
+  r404First: { pre: (m) => m.posts.length > 1 && !m.x.waiting, ...settleStep('first', { status: 404, body: { error: `question ${X} is not pending` } }, (m, p) => { if (!p.beforeSwitch) m.told.refused = true; }) },
+  net: { pre: (m) => m.posts.length > 0, ...settleStep('last', { networkError: 'connection reset' }, () => {}) },
+  netFirst: { pre: (m) => m.posts.length > 1, ...settleStep('first', { networkError: 'connection reset' }, () => {}) },
+  r502: { pre: (m) => m.posts.length > 0, ...settleStep('last', { status: 502, body: { error: 'bad gateway' } }, () => {}) },
   written: {
     pre: (m) => m.x.taken && !m.x.logged && !m.restarted,
     async run(c) {
@@ -121,66 +107,23 @@ const steps = {
       c.m.x.taken = false;
     },
   },
-  r404: {
-    pre: (m) => m.post && !m.x.waiting,
-    async run(c) {
-      c.settlePost({ status: 404, body: { error: `question ${X} is not pending` } });
-      await c.app.settle(12);
-      c.m.post = false;
-      // A 404 for an answer the page sent before a switch is not this
-      // page's to know: resetSession dropped it.
-      if (!c.m.postBeforeSwitch) c.m.told.refused = true;
-    },
-  },
-  net: {
-    pre: (m) => m.post,
-    async run(c) {
-      c.settlePost({ networkError: 'connection reset' });
-      await c.app.settle(12);
-      c.m.post = false;
-    },
-  },
-  r502: {
-    pre: (m) => m.post,
-    async run(c) {
-      c.settlePost({ status: 502, body: { error: 'bad gateway' } });
-      await c.app.settle(12);
-      c.m.post = false;
-    },
-  },
-  // The daemon stops; its successor serves the resumed stream, which
-  // opens with a stale resolution for each question nobody waits on. Not
-  // between taking an answer and writing it, which is microseconds.
   restart: {
-    pre: (m) => !m.restarted && !(m.x.taken && !m.x.logged),
+    pre: (m) => !m.restarted && !(m.x.taken && !m.x.logged) && !yUnwritten(m),
     async run(c) {
       const { m, app } = c;
-      if (m.x.taken && !m.x.logged) m.x.taken = false;
       m.x.waiting = false;
       m.restarted = true;
       app.sse.fail();
       await app.settle(12);
       app.sse.reopen();
       await app.settle(12);
-      if (!m.x.logged) {
-        app.sse.emit(staleRes(X));
-        m.told.stale = true;
-      }
-      if (m.y && m.y.waiting) {
-        m.y.waiting = false;
-        app.sse.emit(staleRes(Y));
-        m.y.toldStale = true;
-      }
+      if (!m.x.logged) { app.sse.emit(staleRes(X)); m.told.stale = true; }
+      if (m.y && m.y.waiting) { m.y.waiting = false; app.sse.emit(staleRes(Y)); m.y.toldStale = true; }
       await app.settle(12);
     },
   },
-  // The same, with a resume that brings no stale resolution: only a
-  // later replay says nobody waits. A stand-in for the two ways a replay
-  // can be the first to say so: the daemon's whole-log read failed, or
-  // (an update handover) the page's stream is still the retiring
-  // daemon's while the replay comes from its successor.
   quietRestart: {
-    pre: (m) => !m.restarted && !(m.x.taken && !m.x.logged),
+    pre: (m) => !m.restarted && !(m.x.taken && !m.x.logged) && !yUnwritten(m),
     async run(c) {
       const { m, app } = c;
       m.x.waiting = false;
@@ -190,6 +133,21 @@ const steps = {
       app.sse.fail();
       await app.settle(12);
       app.sse.reopen();
+      await app.settle(12);
+    },
+  },
+  // A later blip under the successor: its resume puts away every question
+  // nobody waits on and nothing in the log answers.
+  resume: {
+    pre: (m) => m.restarted && !yUnwritten(m),
+    async run(c) {
+      const { m, app } = c;
+      app.sse.fail();
+      await app.settle(12);
+      app.sse.reopen();
+      await app.settle(12);
+      if (!m.x.waiting && !m.x.logged) { app.sse.emit(staleRes(X)); m.told.stale = true; }
+      if (m.y && !m.y.waiting && !m.y.logged) { app.sse.emit(staleRes(Y)); m.y.toldStale = true; }
       await app.settle(12);
     },
   },
@@ -215,7 +173,7 @@ const steps = {
     },
   },
   whole: {
-    pre: (m) => m.wholeOffered && !(m.x.taken && !m.x.logged),
+    pre: (m) => m.wholeOffered && !(m.x.taken && !m.x.logged) && !yUnwritten(m),
     async run(c) {
       const btn = c.app.el('transcript').querySelector('.earlier-btn');
       if (!btn) return 'skip';
@@ -227,27 +185,87 @@ const steps = {
     },
   },
   switch: {
-    pre: (m) => !(m.x.taken && !m.x.logged),
+    pre: (m) => !(m.x.taken && !m.x.logged) && !yUnwritten(m),
     async run(c) {
       c.app.internals.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
       await c.app.settle(12);
       c.app.internals.selectSession('sess-1', 'general-purpose', '/tmp/workspace');
       await c.app.settle(12);
-      // A fresh page state: what it knows is what the replay says.
       c.m.told = { stale: false, answered: c.m.told.answered, cancelled: false, refused: false };
-      if (c.m.post) c.m.postBeforeSwitch = true;
+      for (const p of c.m.posts) p.beforeSwitch = true;
+      if (c.m.y) c.m.y.toldStale = false;
       replay(c.app, c.m, false);
       await c.app.settle(12);
       c.m.wholeOffered = true;
     },
   },
-  // One question per turn: a newer one needs the first done with.
+  // ASK_ORDERS_NO_DISPLACE=1 leaves out a newer question after a quiet
+  // restart with X unresolved, the root of the one defect this walk
+  // finds, to see what it masks.
   newer: {
-    pre: (m) => !m.y && (m.x.logged || m.restarted),
+    pre: (m) => !m.y && (m.x.logged || (m.restarted && !(process.env.ASK_ORDERS_NO_DISPLACE && m.quiet))),
     async run(c) {
+      c.app.sse.emit({ seq: 499, type: 'message.user', data: { text: 'next' } });
       c.app.sse.emit(ask(500, Y, false));
       await c.app.settle(12);
-      c.m.y = { waiting: true, toldStale: false };
+      c.m.y = { waiting: true, logged: null, toldStale: false, posts: [], answered: false, took: false };
+    },
+  },
+  // ASK_ORDERS_Y=1: Y answered from here too, so an answer to each question
+  // can be on its way at once.
+  answerY: {
+    pre: (m) => !!process.env.ASK_ORDERS_Y && m.y && (m.y.posts || []).length === 0 && !m.y.answered,
+    async run(c) {
+      if (c.app.internals.session.pendingAsk !== Y) return 'skip';
+      c.app.el('input').value = '2';
+      c.app.el('send').click();
+      await c.app.settle(12);
+      c.m.y.posts.push({ beforeSwitch: false });
+      c.m.y.answered = true;
+      return 'ok';
+    },
+  },
+  okY: {
+    pre: (m) => m.y && (m.y.posts || []).length > 0 && m.y.waiting,
+    async run(c) {
+      c.settleY({ status: 200, body: { status: 'resolved' } });
+      await c.app.settle(12);
+      c.m.y.posts.pop();
+      c.m.y.waiting = false;
+      c.m.y.took = true;
+    },
+  },
+  r404Y: {
+    pre: (m) => m.y && (m.y.posts || []).length > 0 && !m.y.waiting,
+    async run(c) {
+      c.settleY({ status: 404, body: { error: `question ${Y} is not pending` } });
+      await c.app.settle(12);
+      c.m.y.posts.pop();
+    },
+  },
+  netY: {
+    pre: (m) => m.y && (m.y.posts || []).length > 0,
+    async run(c) {
+      c.settleY({ networkError: 'connection reset' });
+      await c.app.settle(12);
+      c.m.y.posts.pop();
+    },
+  },
+  writtenY: {
+    pre: (m) => m.y && m.y.took && !m.y.logged,
+    async run(c) {
+      c.app.sse.emit({ seq: 501, type: 'input.resolved', data: { id: Y, answer: '2' } });
+      await c.app.settle(12);
+      c.m.y.logged = 'answer';
+    },
+  },
+  yElsewhere: {
+    pre: (m) => m.y && m.y.waiting,
+    async run(c) {
+      c.app.sse.emit({ seq: 501, type: 'input.resolved', data: { id: Y, answer: 'a' } });
+      await c.app.settle(12);
+      c.m.y.waiting = false;
+      c.m.y.logged = 'answer';
     },
   },
 };
@@ -258,26 +276,26 @@ function check(app, m, last) {
   const lx = lineOf(app, X);
   const ly = m.y ? lineOf(app, Y) : null;
   const tx = lx ? lx.textContent : '';
+  const onWay = m.posts.length > 0;
   if (pa) {
     const l = lineOf(app, pa);
     if (!l || !l.textContent.endsWith(REPLY)) out.push(`box-line: box armed for ${pa}, whose line reads ${JSON.stringify(l && l.textContent.split('\n').pop())}`);
   }
-  // Not after a 404 alone with a quiet resume: no resolution ever follows,
-  // which is the case judged already.
   const onlyRefused = m.told.refused && !m.told.stale && !m.told.answered && !m.told.cancelled;
   if (pa === X && !(m.x.taken && !m.x.logged) && !(onlyRefused && m.quiet)
       && (m.told.stale || m.told.answered || m.told.cancelled || m.told.refused)) {
     out.push(`box-told: box armed for ${X} after ${Object.keys(m.told).filter((k) => m.told[k]).join('+')}`);
   }
-  if (pa === Y && m.y && m.y.toldStale) out.push(`box-told: box armed for ${Y} after a stale signal`);
+  if (pa === Y && m.y && (m.y.toldStale || m.y.logged || m.y.took)) out.push(`box-told: box armed for ${Y} after it was put away or taken`);
+  if (ly && ly.textContent.endsWith(LEFT) && m.y && (m.y.logged || m.y.took)) out.push(`left-answered: ${Y} says left unanswered though answered`);
   if (tx.endsWith(LEFT) && (m.told.answered || m.told.cancelled)) {
     out.push(`left-answered: ${X} says left unanswered though ${m.told.answered ? 'answered' : 'cancelled'}`);
   }
-  if (!m.post && m.told.stale && !m.told.answered && !m.told.cancelled) {
+  if (!onWay && m.told.stale && !m.told.answered && !m.told.cancelled) {
     if (!tx.endsWith(LEFT)) out.push(`settled: ${X} told stale, nothing on its way, line reads ${JSON.stringify(tx.split('\n').pop())}`);
     if (pa === X) out.push(`settled: ${X} told stale, nothing on its way, box armed for it`);
   }
-  if (ly && m.y.toldStale && !ly.textContent.endsWith(LEFT)) {
+  if (ly && m.y.toldStale && !(m.y.posts || []).length && !m.y.logged && !m.y.took && !ly.textContent.endsWith(LEFT)) {
     out.push(`settled: ${Y} told stale, line reads ${JSON.stringify(ly.textContent.split('\n').pop())}`);
   }
   if (last !== 'answer' && app.internals.session.connected && !app.internals.session.pendingPermissionID) {
@@ -288,23 +306,22 @@ function check(app, m, last) {
 }
 
 async function runSequence(seq) {
-  const posts = [];
-  // Every timer the page sets is cleared when the order is done, so
-  // thousands of pages do not stay alive behind their timers.
+  const open = [];
+  open.y = [];
   const timers = [];
   const globals = {
     setTimeout: (...a) => { const t = setTimeout(...a); timers.push(t); return t; },
     setInterval: (...a) => { const t = setInterval(...a); if (t.unref) t.unref(); timers.push(t); return t; },
   };
   try {
-    return await runIn(seq, posts, globals);
+    return await runIn(seq, open, globals);
   } finally {
     for (const t of timers) { clearTimeout(t); clearInterval(t); }
-    for (const p of posts) p({ networkError: 'done' });
+    for (const p of [...open, ...open.y]) p({ networkError: 'done' });
   }
 }
 
-async function runIn(seq, posts, globals) {
+async function runIn(seq, open, globals) {
   const app = await load({
     globals,
     routes: {
@@ -312,7 +329,10 @@ async function runIn(seq, posts, globals) {
         { id: 'sess-1', title: 'one', agent: 'general-purpose', workspace: '/tmp/workspace' },
         { id: 'sess-2', title: 'two', agent: 'general-purpose', workspace: '/tmp/workspace' },
       ],
-      'POST /api/sessions/sess-1/input/*': () => new Promise((resolve) => { posts.push(resolve); }),
+      'POST /api/sessions/sess-1/input/*': (_b, { path }) => new Promise((resolve) => {
+        if (path.endsWith(Y)) open.y.push(resolve);
+        else open.push(resolve);
+      }),
       'POST /api/sessions/*/messages': { status: 202, body: { status: 'accepted' } },
     },
   });
@@ -320,30 +340,65 @@ async function runIn(seq, posts, globals) {
   app.sse.emit(ask(401, X, false));
   await app.settle(12);
   const m = initialModel();
-  const c = { app, m, settlePost: (v) => posts[posts.length - 1](v) };
+  const c = {
+    app,
+    m,
+    settle: (which, v) => (which === 'first' ? open.shift() : open.pop())(v),
+    settleY: (v) => open.y.pop()(v),
+  };
   const problems = [];
-  const emitting = new Set(['written', 'restart', 'quietRestart', 'elsewhere', 'cancel', 'whole', 'switch', 'newer']);
+  const emitting = new Set(['written', 'restart', 'quietRestart', 'resume', 'elsewhere', 'cancel', 'whole', 'switch', 'newer', 'yElsewhere', 'writtenY']);
   for (const [at, name] of seq.entries()) {
     const r = await steps[name].run(c);
     if (r === 'skip') return { skipped: true, problems };
-    if (name === 'answer') m.lightLag = true;
+    if (name === 'answer' || name === 'answerY') m.lightLag = true;
     else if (emitting.has(name)) m.lightLag = false;
-    else if ((name === 'net' || name === 'r502') && app.internals.session.pendingAsk === X) m.lightLag = false;
+    else if (['net', 'netFirst', 'r502'].includes(name) && app.internals.session.pendingAsk === X) m.lightLag = false;
+    else if (name === 'netY' && app.internals.session.pendingAsk === Y) m.lightLag = false;
     for (const p of check(app, m, m.lightLag ? 'answer' : name)) problems.push({ at, problem: p });
     if (problems.length) break;
   }
   return { problems };
 }
 
+function simulate(name, m) {
+  switch (name) {
+    case 'answer': m.posts.push({ beforeSwitch: false }); m.answers++; break;
+    case 'ok': m.posts.pop(); m.x.waiting = false; m.x.taken = true; break;
+    case 'okFirst': m.posts.shift(); m.x.waiting = false; m.x.taken = true; break;
+    case 'r404': case 'net': case 'r502': m.posts.pop(); break;
+    case 'r404First': case 'netFirst': m.posts.shift(); break;
+    case 'written': m.x.logged = 'answer'; m.x.taken = false; break;
+    case 'restart':
+      m.x.waiting = false; m.restarted = true;
+      if (m.y) m.y.waiting = false;
+      break;
+    case 'quietRestart':
+      m.x.waiting = false; m.restarted = true; m.quiet = true;
+      if (m.y) m.y.waiting = false;
+      break;
+    case 'resume': break;
+    case 'elsewhere': m.x.waiting = false; m.x.logged = 'answer'; break;
+    case 'cancel': m.x.waiting = false; m.x.logged = 'cancel'; break;
+    case 'whole': m.wholeOffered = false; break;
+    case 'switch': m.wholeOffered = true; break;
+    case 'newer': m.y = { waiting: true, logged: null, posts: [], answered: false, took: false }; break;
+    case 'answerY': m.y.posts.push({}); m.y.answered = true; break;
+    case 'okY': m.y.posts.pop(); m.y.waiting = false; m.y.took = true; break;
+    case 'r404Y': case 'netY': m.y.posts.pop(); break;
+    case 'writtenY': m.y.logged = 'answer'; break;
+    case 'yElsewhere': m.y.waiting = false; m.y.logged = 'answer'; break;
+  }
+}
+
 function* sequences(depth) {
-  // Only the longest orders are run: every step is checked as it is
-  // taken, so each prefix is checked on the way.
   function* walk(m, prefix) {
     let extended = false;
     if (prefix.length < depth) {
       for (const [name, s] of Object.entries(steps)) {
         if (!s.pre(m)) continue;
-        // The model step without the page, to know what may follow.
+        // A second resume in a row adds nothing the first did not.
+        if (name === 'resume' && prefix[prefix.length - 1] === 'resume') continue;
         const next = structuredClone(m);
         simulate(name, next);
         extended = true;
@@ -355,37 +410,10 @@ function* sequences(depth) {
   yield* walk(initialModel(), []);
 }
 
-// The model half of each step, for the walk.
-function simulate(name, m) {
-  switch (name) {
-    case 'answer': m.post = true; m.answers++; break;
-    case 'ok': m.post = false; m.x.waiting = false; m.x.taken = true; break;
-    case 'written': m.x.logged = 'answer'; m.x.taken = false; break;
-    case 'r404': case 'net': case 'r502': m.post = false; break;
-    case 'restart':
-      m.x.waiting = false; m.restarted = true;
-      if (m.y) m.y.waiting = false;
-      break;
-    case 'quietRestart':
-      m.x.waiting = false; m.restarted = true; m.quiet = true;
-      if (m.y) m.y.waiting = false;
-      break;
-    case 'elsewhere': m.x.waiting = false; m.x.logged = 'answer'; break;
-    case 'cancel': m.x.waiting = false; m.x.logged = 'cancel'; break;
-    case 'whole': m.wholeOffered = false; break;
-    case 'switch': m.wholeOffered = true; break;
-    case 'newer': m.y = { waiting: true }; break;
-  }
-}
-
-// Depth 4 is the shallowest that reaches every defect this walk has found;
-// ASK_ORDERS_DEPTH=5 with ASK_ORDERS_SHARDS=16 walks 3337 orders.
 const DEPTH = Number(process.env.ASK_ORDERS_DEPTH || 4);
+// 16 shards of depth 5 ran a child out of its 1500 MB heap; 32 do not.
 const SHARDS = Number(process.env.ASK_ORDERS_SHARDS || 8);
 
-// One shard of the walk. The pages the walk loads are not collected
-// (about 1 MB each stays in the heap), so the walk runs as child
-// processes, one shard each, one at a time.
 async function runShard(shard, shards) {
   const rows = new Map();
   let ran = 0;
@@ -405,12 +433,18 @@ async function runShard(shard, shards) {
 }
 
 if (process.env.ASK_ORDERS_SHARD) {
-  test(`shard ${process.env.ASK_ORDERS_SHARD} of the walk`, { timeout: 600000 }, async () => {
+  test(`shard ${process.env.ASK_ORDERS_SHARD} of the walk`, { timeout: 1800000 }, async () => {
     const [shard, shards] = process.env.ASK_ORDERS_SHARD.split('/').map(Number);
     console.log(`ASK_ORDERS_RESULT ${JSON.stringify(await runShard(shard, shards))}`);
   });
+} else if (process.env.ASK_ORDERS_COUNT) {
+  test('count', () => {
+    let n = 0;
+    for (const _ of sequences(DEPTH)) n++;
+    console.log(`orders to depth ${DEPTH}: ${n}`);
+  });
 } else {
-  test(`every order of a model question's answer, to depth ${DEPTH}, leaves box, line and light agreeing`, { timeout: 900000 }, () => {
+  test(`every order of a model question's answer, to depth ${DEPTH}, leaves box, line and light agreeing`, { timeout: 3600000 }, () => {
     const { spawnSync } = require('node:child_process');
     let ran = 0;
     let skipped = 0;
@@ -435,9 +469,12 @@ if (process.env.ASK_ORDERS_SHARD) {
     const report = [];
     for (const [, list] of byKind) {
       list.sort((a, b) => a.seq.split(' > ').length - b.seq.split(' > ').length || a.seq.localeCompare(b.seq));
-      report.push(`${list.length} orders: ${list[0].problem}\n${list.slice(0, 4).map((x) => `    ${x.seq}`).join('\n')}`);
+      report.push(`${list.length} orders: ${list[0].problem}\n${list.slice(0, 6).map((x) => `    ${x.seq}`).join('\n')}`);
     }
-    console.log(`ran ${ran} orders to depth ${DEPTH}, skipped ${skipped} (an answer the box could not take)`);
+    if (process.env.ASK_ORDERS_DUMP) {
+      require('node:fs').writeFileSync(process.env.ASK_ORDERS_DUMP, JSON.stringify([...byKind.values()].flat(), null, 1));
+    }
+    console.log(`ran ${ran} orders to depth ${DEPTH}, skipped ${skipped}`);
     assert.equal(report.length, 0, `\n${report.join('\n')}`);
   });
 }
