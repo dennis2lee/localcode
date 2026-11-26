@@ -899,7 +899,7 @@ The permission pill shows the current conversation state: `permissions: ask (N r
 
 Changes apply on the next tool call. Rule changes use the same config target as "Always allow." Without a config path, persistent controls are disabled and the panel explains why.
 
-The four switches and the **forget** buttons are sent one change at a time, in the order you make them, so the boxes end at your last change. A change belongs to the conversation it was made in: it is sent there even if you switch conversations first, and its answer is not drawn in another conversation. A switch the daemon could not change is said under the panel until a later change of that switch is taken, or the panel is opened again.
+The four switches and the **forget** buttons are sent one change at a time, in the order you make them, so the answer to an earlier change is not drawn over the answer to a later one. A change that reaches the window as an announcement (another window, a `/read-outside` typed at a prompt, an "allow anywhere" answer) is not ordered against them: an answer that was slow to arrive can still be drawn over it, until the next change or until you open the conversation again. A change belongs to the conversation it was made in: it is sent there even if you switch conversations first, and its answer is not drawn in another conversation. A switch the daemon could not change is said under the panel until a later change of that switch is taken, or the panel is opened again.
 
 ### Switching the workspace directory
 

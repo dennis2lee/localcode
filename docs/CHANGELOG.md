@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.180.10
+
+The permissions window's switches and forget buttons go one change at a time, each for the conversation it was made in.
 
 **Fixed**
 
-* The four switches and the forget buttons in the Web UI's permissions window sent one change at a time, so an older answer is no longer drawn over a later change
+* The four switches and the forget buttons in the Web UI's permissions window sent one change at a time, so the answer to an earlier change is no longer drawn over the answer to a later one
 * A switch or forget answered after the conversation was switched kept out of the conversation now open: its snapshot is not drawn there and its failure is not said there
 * A switch failure cleared when a later change of the same switch is taken
 
