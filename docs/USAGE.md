@@ -899,6 +899,8 @@ The permission pill shows the current conversation state: `permissions: ask (N r
 
 Changes apply on the next tool call. Rule changes use the same config target as "Always allow." Without a config path, persistent controls are disabled and the panel explains why.
 
+The four switches are sent one change at a time, in the order you make them, so the boxes end at your last change. A change belongs to the conversation it was made in: it is sent there even if you switch conversations first, and its answer is not drawn in another conversation. A switch the daemon could not change is said under the panel until a later change of that switch is taken, or the panel is opened again.
+
 ### Switching the workspace directory
 
 Each session has its own workspace. Relative file paths and shell commands resolve from that directory. Click the workspace path in the GUI or Web UI to change it without restarting.
