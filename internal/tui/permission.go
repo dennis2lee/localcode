@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type pendingPermission struct {
@@ -20,6 +23,10 @@ type pendingPermission struct {
 	// once is a question whose answer covers this use only (a resume of
 	// a run that writes): only y and n are offered or taken.
 	once bool
+	// long is a question whose text does not fit the one line the footer
+	// gives it. Its whole text is in the transcript, which scrolls and
+	// wraps, and the footer says so. See longPermission.
+	long bool
 
 	// outside is "read" or "write" when this question exists because the
 	// path leaves the workspace, and empty otherwise. It changes both
@@ -38,33 +45,51 @@ type pendingPermission struct {
 	workspace  string
 }
 
-// prompt renders the permission modal, listing exactly the answers this
-// request will accept.
-func (p pendingPermission) prompt(typing bool) string {
-	head := fmt.Sprintf("Permission request [%s]: %s", p.tool, p.description)
+// parts is the modal in its two halves: what is asked, and how to answer.
+// The keys are the last rows, always, with the line about typing above
+// them, so a terminal too short for all of it can cut the question from
+// its top and keep what answers it. See Model.fitQuestion.
+func (p pendingPermission) parts(typing bool) (string, string) {
+	tool := expandTabs(p.tool)
+	head := fmt.Sprintf("Permission request [%s]: %s", tool, expandTabs(p.description))
+	if p.long {
+		// One line for the head, so where the rest is stays its second.
+		tool, _, _ = strings.Cut(tool, "\n")
+		head = fmt.Sprintf("Permission request [%s]: %s …\n(the whole request is in the transcript above)",
+			tool, footerLine(tool, p.description))
+	}
 	keys := "y: allow once  n: deny  s: allow for session"
 	if p.once {
 		keys = "y: allow this once  n: deny  (asked every time)"
 	} else if p.canAlways {
-		keys += fmt.Sprintf("  a: always allow %q", p.rule)
+		// Quoted, not %q: the rule is already drawn safe (events.VisibleText),
+		// and %q would escape that escaping a second time.
+		if p.rule == "" {
+			keys += "  a: always allow"
+		} else {
+			keys += fmt.Sprintf("  a: always allow \"%s\"", ruleHint(p.rule))
+		}
 	}
 
 	if p.outside != "" {
 		// Why, before what to press. Without this line the request reads
 		// as an ordinary write and there is nothing on screen saying the
 		// path is in another project.
-		head += fmt.Sprintf("\noutside this session's workspace (%s)", p.workspace)
-		keys = fmt.Sprintf("y: allow once  n: deny\nd: allow %s under %s for this session\ns: allow %s anywhere outside the workspace for this session",
-			p.outside, p.outsideDir, p.outside)
+		head += fmt.Sprintf("\noutside this session's workspace (%s)", escapeBreaks(p.workspace))
+		// "y" and "n" last: a short terminal cuts from the top, and those
+		// are the answers every question takes.
+		keys = fmt.Sprintf("d: allow %s under %s for this session\ns: allow %s anywhere outside the workspace for this session\ny: allow once  n: deny",
+			p.outside, escapeBreaks(p.outsideDir), p.outside)
 	}
 
 	// Said plainly, because otherwise the keys look broken: pressing y
 	// with a half-written message in the box types a y, and the reason
-	// is not visible anywhere on screen.
+	// is not visible anywhere on screen. Above the keys rather than under
+	// them, so the keys are the last rows.
 	if typing {
-		keys += "\n(clear the prompt box to answer — those are ordinary letters while you are writing)"
+		keys = "(clear the prompt box to answer — those are ordinary letters while you are writing)\n" + keys
 	}
-	return head + "\n" + keys
+	return head, keys
 }
 
 // staleQuestion reports whether the daemon marked a replayed
@@ -76,6 +101,91 @@ func staleQuestion(data map[string]any) bool {
 	stale, _ := data["stale"].(bool)
 	return stale
 }
+
+// escapeBreaks draws a field the modal shows inside a line of its own words:
+// a line break or a tab in it as its escape.
+func escapeBreaks(s string) string {
+	return strings.NewReplacer("\n", `\n`, "\t", `\t`).Replace(s)
+}
+
+// longPermission reports whether a question needs more than the one line
+// the footer gives it: a line break, or a head line wider than footerCols
+// columns as a terminal draws it, tabs and wide characters counted.
+//
+// The footer is not where such a question can be read. The layout keeps a
+// line or two for it, a line wider than the terminal is cut at its edge,
+// and the keys to answer it are under it. So the whole of it is written
+// into the transcript, where it scrolls and wraps, before it can be
+// answered. Measured in columns, not characters: a prompt of Korean, or
+// one padded with tabs, is twice or eight times as wide as its count.
+func longPermission(tool, description string) bool {
+	head := fmt.Sprintf("Permission request [%s]: %s", tool, description)
+	if strings.Contains(head, "\n") {
+		return true
+	}
+	return lipgloss.Width(expandTabs(head)) > footerCols
+}
+
+// footerCols is the width a short question is held to. Eighty, the width a
+// terminal starts at; the footer wraps to the real width as well, so a
+// narrower one wraps a short question rather than cutting it.
+const footerCols = 80
+
+// footerLine is the first line of a long question, cut to the columns that
+// leave its head, tool name and " …" included, inside footerCols. Ten at
+// the least, for a tool name that takes the rest.
+func footerLine(tool, description string) string {
+	line, _, _ := strings.Cut(description, "\n")
+	budget := footerCols - lipgloss.Width("Permission request []: ") - lipgloss.Width(tool) - lipgloss.Width(" …")
+	if budget < 10 {
+		budget = 10
+	}
+	return ansi.Truncate(expandTabs(line), budget, "")
+}
+
+// ruleHint is the rule "always allow" would write, on one line: a line
+// break or a tab in it shown as its escape, and past 120 characters cut
+// with a count of the rest. An exact shell rule is the whole command,
+// which the question above already shows in full, and a command of twenty
+// lines drawn as twenty rows pushed the keys off the screen.
+func ruleHint(rule string) string {
+	r := []rune(escapeBreaks(rule))
+	if len(r) <= 120 {
+		return string(r)
+	}
+	cut := escapeSafeCut(r, 120)
+	return string(r[:cut]) + fmt.Sprintf("… (%d more characters)", len(r)-cut)
+}
+
+// escapeSafeCut moves a cut at n back to before an escape it would split:
+// "\x1b", "\u202e", "\U000e0041", "\r" and the rest. The text has been
+// through events.VisibleText and escapeBreaks, so a backslash starts an escape.
+func escapeSafeCut(r []rune, n int) int {
+	for i := n - 1; i >= 0 && i >= n-10; i-- {
+		if r[i] != '\\' {
+			continue
+		}
+		size := 2
+		if i+1 < len(r) {
+			switch r[i+1] {
+			case 'x':
+				size = 4
+			case 'u':
+				size = 6
+			case 'U':
+				size = 10
+			}
+		}
+		if i+size > n {
+			return i
+		}
+		return n
+	}
+	return n
+}
+
+// expandTabs draws a tab as four spaces, so a width is the width shown.
+func expandTabs(s string) string { return strings.ReplaceAll(s, "\t", "    ") }
 
 // enqueuePermission shows a request, or queues it behind the one on
 // screen. The screen always holds the oldest unresolved request: a newer
@@ -144,6 +254,11 @@ func (m *Model) settlePermission(id string) {
 func (m *Model) resolvePermissionEvent(id string) {
 	m.settlePermission(id)
 	delete(m.answering, id)
+	// Answered, so a later request under the same id is a new question,
+	// and its text is written into the transcript again. Ids were numbered
+	// per daemon run before they carried a prefix, so a replayed log can
+	// reuse one.
+	delete(m.longShown, id)
 }
 
 // restorePermission puts an answered request back through the queue when its

@@ -1259,7 +1259,7 @@ aside h2 {
   overflow-y: auto;
 }
 #task-modal-body .msg-tool,
-#task-modal-body .msg-error { white-space: pre-wrap; font-size: var(--t-fine); margin: 4px 0; }
+#task-modal-body .msg-error { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-fine); margin: 4px 0; }
 #task-modal-body .msg-tool { color: var(--muted); font-style: italic; }
 #task-modal-body .msg-error { color: var(--err); }
 #task-modal-body .msg-model {
@@ -1602,6 +1602,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   overflow-y: auto;
 }
 #permission-modal h3 { margin-top: 0; color: var(--warn); }
+/* The question as it was written: a prompt of several paragraphs keeps its
+   line breaks, and a long unbroken run wraps inside the box instead of
+   pushing the buttons sideways. The box above already scrolls. */
+#permission-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* The reason line, shown only when the boundary is what is asking. Warn
    coloured because it is the part that changes what the request means:
    without it, a write to another project reads as an ordinary write. */

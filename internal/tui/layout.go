@@ -13,13 +13,40 @@ func (m *Model) resizeLayout() {
 	if inputHeight < 1 {
 		inputHeight = 1
 	}
-	m.input.SetHeight(inputHeight)
-	m.scrollInputToTop()
 
 	const chromeLines = 2 // status/permission line + blank separator
-	vh := m.termHeight - chromeLines - borderLines - footerLines - inputHeight
-	if vh < 3 {
-		vh = 3
+	// What the band below the prompt box really takes, once it is more
+	// than the two rows always kept for it: a wrapped or long permission
+	// question, the requests queued behind it, the busy line. Without it
+	// the frame was taller than the terminal and the alternate screen cut
+	// the bottom rows, which are the keys that answer the question.
+	m.bandRows = m.statusBandRows()
+	reserved := chromeLines
+	if m.bandRows > reserved {
+		reserved = m.bandRows
+	}
+	// The transcript keeps three rows and the prompt box what it holds,
+	// except while a permission question is on screen. Then both give way,
+	// the transcript to none and the prompt box to one row, before the keys
+	// that answer the question go past the bottom of a short terminal.
+	floor := 3
+	if m.pending != nil {
+		floor = 0
+		if room := m.termHeight - reserved - borderLines - footerLines - floor; inputHeight > room {
+			inputHeight = max(1, room)
+		}
+	}
+	m.input.SetHeight(inputHeight)
+	m.scrollInputToTop()
+	vh := m.termHeight - reserved - borderLines - footerLines - inputHeight
+	if vh < floor {
+		vh = floor
+	}
+	// A drag holds a place on a track of the old height. Ended, as a
+	// resize of the terminal ends it.
+	if vh != m.viewport.Height() {
+		m.scrollbarDragging = false
+		m.scrollbarDragGrab = 0
 	}
 	// Whether the reader was following the newest output has to survive the
 	// resize, and it does not survive on its own.
@@ -101,4 +128,31 @@ func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.resizeLayout()
 	m.refreshViewport()
 	return m, nil
+}
+
+// Update is the one door every change to the model comes through, which is
+// why the layout is checked here: the band below the prompt box grows and
+// shrinks with a permission question, a queue, a busy turn or an error,
+// and each of those arrives by a different path. The transcript is resized
+// when, and only when, the band's height has changed.
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	before := m.viewport.Height()
+	next, cmd := m.update(msg)
+	nm, ok := next.(Model)
+	if !ok || nm.termHeight <= 0 {
+		return next, cmd
+	}
+	// The band's height, or whether a question is on screen at all: the
+	// transcript gives way to no rows only under a question, so a question
+	// arriving with a band of the same height still changes the layout.
+	if nm.statusBandRows() != nm.bandRows || (nm.pending != nil) != (m.pending != nil) {
+		nm.resizeLayout()
+	}
+	// The transcript is wrapped again for the height it now has, whichever
+	// path changed it: typing re-lays out on its own, and whether the
+	// transcript overflows decides whether the scrollbar takes a column.
+	if nm.viewport.Height() != before {
+		nm.refreshViewport()
+	}
+	return nm, cmd
 }

@@ -336,7 +336,7 @@ func (m *Model) refreshViewport() {
 	// the switch is on. Decided at the full width every time, which is
 	// what keeps it stable: narrowing can only lengthen the transcript,
 	// so a scrollbar earned at full width is still earned one narrower.
-	if m.mouseEnabled && full > 1 && m.viewport.TotalLineCount() > m.viewport.Height() {
+	if m.mouseEnabled && full > 1 && m.viewport.Height() > 0 && m.viewport.TotalLineCount() > m.viewport.Height() {
 		w = full - 1
 		render(w)
 	}

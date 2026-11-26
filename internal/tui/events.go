@@ -300,18 +300,47 @@ func (m *Model) applyEvent(ev events.Event) {
 		id, _ := ev.Data["id"].(string)
 		tool, _ := ev.Data["tool"].(string)
 		desc, _ := ev.Data["description"].(string)
+		// Written safe by the daemon since v0.180.9, and read safe here as
+		// well: a log written before then is replayed from the start, and
+		// its questions now reach the transcript. The other fields drawn
+		// with it are read the same way. They are display copies only:
+		// an answer names the request by id, and the daemon keeps the
+		// directory and the rule it asked about. See events.VisibleText.
+		desc = events.VisibleText(desc)
+		tool = events.VisibleText(tool)
 		rule, _ := ev.Data["rule"].(string)
+		rule = events.VisibleText(rule)
 		canAlways, _ := ev.Data["can_always"].(bool)
 		once, _ := ev.Data["once"].(bool)
 		if desc == "" {
 			desc = "(no description given)"
 		}
 		outside, _ := ev.Data["outside"].(string)
+		// One of two words, as the Web UI takes it: the daemon writes only
+		// these, and anything else is no boundary question this client
+		// knows how to answer.
+		if outside != "read" && outside != "write" {
+			outside = ""
+		}
 		outsideDir, _ := ev.Data["outside_dir"].(string)
+		outsideDir = events.VisibleText(outsideDir)
 		workspace, _ := ev.Data["workspace"].(string)
+		workspace = events.VisibleText(workspace)
+		long := longPermission(tool, desc)
+		// The whole of a question the footer cannot hold, written where it
+		// can be read before it is answered. Once per request and text: the
+		// same request delivered again replaces the question, not the record
+		// of it, and a request with no id is never taken for another.
+		if long && (id == "" || m.longShown[id] != desc) {
+			if m.longShown == nil {
+				m.longShown = map[string]string{}
+			}
+			m.longShown[id] = desc
+			m.appendEntry(entryTool, fmt.Sprintf("[permission request: %s]\n%s", tool, desc))
+		}
 		m.enqueuePermission(&pendingPermission{
 			id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways, once: once,
-			outside: outside, outsideDir: outsideDir, workspace: workspace,
+			outside: outside, outsideDir: outsideDir, workspace: workspace, long: long,
 		})
 	case events.TypePermissionResolved:
 		// Both halves of a permission are in the log, and resume replays

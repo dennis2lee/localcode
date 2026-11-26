@@ -1198,14 +1198,28 @@ func SetUnattendedWait(d time.Duration) func() {
 // actually true of either caller, since the fact is the same one and only
 // the waiting differs.
 func unattendedRefusal(ask tools.Ask) string {
+	what := refusalSubject(ask.Description)
 	if unattendedPermissionWait <= 0 {
 		return fmt.Sprintf(
 			"not run: %q needs permission, and nobody is watching this turn, so there was nobody to ask",
-			ask.Description)
+			what)
 	}
 	return fmt.Sprintf(
 		"not run: %q needs permission, nobody is watching this turn, and no answer came within %s",
-		ask.Description, unattendedPermissionWait)
+		what, unattendedPermissionWait)
+}
+
+// refusalSubject names a question in a refusal: its first line, at most
+// 200 characters. The question itself carries the whole of what it asks
+// about (a Schedule prompt, up to 8,000 characters), and repeating all of
+// that back to the model that wrote it says nothing the model does not
+// have.
+func refusalSubject(description string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(description), "\n")
+	if r := []rune(line); len(r) > 200 {
+		return string(r[:200]) + "…"
+	}
+	return line
 }
 
 // RunningIn reports which of this conversation's booked prompts are

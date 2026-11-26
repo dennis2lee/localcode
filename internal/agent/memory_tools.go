@@ -179,10 +179,10 @@ func (MemorySaveTool) Subject(input json.RawMessage) string {
 
 func (MemorySaveTool) Describe(input json.RawMessage) string {
 	a, _ := parseMemoryArgs(input)
-	content := a.Content
-	if len(content) > 600 {
-		content = content[:600] + "…"
-	}
+	// The whole note, counted in characters. It used to be cut at 600
+	// bytes, which split a Korean or emoji character in half and said
+	// nothing about what it left out. See confirmationText.
+	content := confirmationText(a.Content)
 	reach := map[memory.Scope]string{
 		memory.ScopeUser:    "which every later session in every project will see",
 		memory.ScopeProject: "which later sessions in this project will see",
@@ -192,6 +192,13 @@ func (MemorySaveTool) Describe(input json.RawMessage) string {
 	where, ok := reach[scope]
 	if !ok {
 		where = "in a scope that is not session, project or user, which the save will refuse"
+	}
+	// The index line too, when there is one: it is written into MEMORY.md,
+	// which every later session in the scope loads, so it is as much what
+	// is being approved as the note itself.
+	if d := strings.TrimSpace(a.Description); d != "" {
+		return fmt.Sprintf("save a %s memory note %q, %s, listed as %q:\n%s",
+			strings.ToLower(a.Scope), a.Name, where, confirmationText(d), content)
 	}
 	return fmt.Sprintf("save a %s memory note %q, %s:\n%s", strings.ToLower(a.Scope), a.Name, where, content)
 }

@@ -12,6 +12,17 @@ A question a stopped daemon left open is no longer shown again when the conversa
 * A background task's permission question left unresolved in its conversation when the task's own log could not be written
 * Web UI: an answer to a model question that failed to reach the daemon not putting the question back, so the next message went to the model as a prompt
 
+## v0.180.9
+
+A permission question shows what it asks about: all of the text, with nothing a screen would act on rather than draw, and its keys on any terminal of nine rows or more.
+
+**Fixed**
+
+* A permission question that showed only the first line of the prompt a `Schedule` call books or the task a `Debate` is given, and 600 bytes of a `memory_save` note: the whole text, up to 8,000 characters, and a count of what is left out past that
+* Control characters, bidirectional and zero-width marks and other default-ignorable characters in a permission question, its directory, workspace and rule shown as escapes (`\r`, `\x1b`, `\u202e`), so a terminal or a browser draws nothing the text does not show
+* A question with a line break or wider than 80 columns written whole into the TUI's transcript, with its start, a note saying where the rest is and its keys in the permission line, which wraps to the terminal and takes the rows it needs from the transcript and the prompt box, so its keys, drawn last, stay on any terminal of nine rows or more; the Web UI keeping its line breaks and wrapping
+* The line a `memory_save` note is listed under in `MEMORY.md` shown in its permission question with the note
+
 ## v0.180.8
 
 A scheduled prompt says whose it is: the run names a prompt the model booked as its task, the list marks it, and the reply to a `!` booking says it runs in the shell.
