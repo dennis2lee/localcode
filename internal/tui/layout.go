@@ -136,13 +136,23 @@ func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 // and each of those arrives by a different path. The transcript is resized
 // when, and only when, the band's height has changed.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	before := m.viewport.Height()
 	next, cmd := m.update(msg)
-	if nm, ok := next.(Model); ok && nm.termHeight > 0 && nm.statusBandRows() != nm.bandRows {
-		nm.resizeLayout()
-		// The transcript is wrapped again for the height it now has: whether
-		// it overflows decides whether the scrollbar takes a column.
-		nm.refreshViewport()
-		return nm, cmd
+	nm, ok := next.(Model)
+	if !ok || nm.termHeight <= 0 {
+		return next, cmd
 	}
-	return next, cmd
+	// The band's height, or whether a question is on screen at all: the
+	// transcript gives way to no rows only under a question, so a question
+	// arriving with a band of the same height still changes the layout.
+	if nm.statusBandRows() != nm.bandRows || (nm.pending != nil) != (m.pending != nil) {
+		nm.resizeLayout()
+	}
+	// The transcript is wrapped again for the height it now has, whichever
+	// path changed it: typing re-lays out on its own, and whether the
+	// transcript overflows decides whether the scrollbar takes a column.
+	if nm.viewport.Height() != before {
+		nm.refreshViewport()
+	}
+	return nm, cmd
 }

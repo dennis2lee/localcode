@@ -45,9 +45,11 @@ type pendingPermission struct {
 	workspace  string
 }
 
-// prompt renders the permission modal, listing exactly the answers this
-// request will accept.
-func (p pendingPermission) prompt(typing bool) string {
+// parts is the modal in its two halves: what is asked, and how to answer.
+// The keys are the last rows, always, with the line about typing above
+// them, so a terminal too short for all of it can cut the question from
+// its top and keep what answers it. See Model.fitQuestion.
+func (p pendingPermission) parts(typing bool) (string, string) {
 	tool := expandTabs(p.tool)
 	head := fmt.Sprintf("Permission request [%s]: %s", tool, expandTabs(p.description))
 	if p.long {
@@ -73,18 +75,27 @@ func (p pendingPermission) prompt(typing bool) string {
 		// Why, before what to press. Without this line the request reads
 		// as an ordinary write and there is nothing on screen saying the
 		// path is in another project.
-		head += fmt.Sprintf("\noutside this session's workspace (%s)", p.workspace)
-		keys = fmt.Sprintf("y: allow once  n: deny\nd: allow %s under %s for this session\ns: allow %s anywhere outside the workspace for this session",
-			p.outside, p.outsideDir, p.outside)
+		head += fmt.Sprintf("\noutside this session's workspace (%s)", escapeBreaks(p.workspace))
+		// "y" and "n" last: a short terminal cuts from the top, and those
+		// are the answers every question takes.
+		keys = fmt.Sprintf("d: allow %s under %s for this session\ns: allow %s anywhere outside the workspace for this session\ny: allow once  n: deny",
+			p.outside, escapeBreaks(p.outsideDir), p.outside)
 	}
 
 	// Said plainly, because otherwise the keys look broken: pressing y
 	// with a half-written message in the box types a y, and the reason
-	// is not visible anywhere on screen.
+	// is not visible anywhere on screen. Above the keys rather than under
+	// them, so the keys are the last rows.
 	if typing {
-		keys += "\n(clear the prompt box to answer — those are ordinary letters while you are writing)"
+		keys = "(clear the prompt box to answer — those are ordinary letters while you are writing)\n" + keys
 	}
-	return head + "\n" + keys
+	return head, keys
+}
+
+// escapeBreaks draws a field the modal shows inside a line of its own words:
+// a line break or a tab in it as its escape.
+func escapeBreaks(s string) string {
+	return strings.NewReplacer("\n", `\n`, "\t", `\t`).Replace(s)
 }
 
 // longPermission reports whether a question needs more than the one line
@@ -128,11 +139,39 @@ func footerLine(tool, description string) string {
 // which the question above already shows in full, and a command of twenty
 // lines drawn as twenty rows pushed the keys off the screen.
 func ruleHint(rule string) string {
-	rule = strings.NewReplacer("\n", `\n`, "\t", `\t`).Replace(rule)
-	if r := []rune(rule); len(r) > 120 {
-		return string(r[:120]) + fmt.Sprintf("… (%d more characters)", len(r)-120)
+	r := []rune(escapeBreaks(rule))
+	if len(r) <= 120 {
+		return string(r)
 	}
-	return rule
+	cut := escapeSafeCut(r, 120)
+	return string(r[:cut]) + fmt.Sprintf("… (%d more characters)", len(r)-cut)
+}
+
+// escapeSafeCut moves a cut at n back to before an escape it would split:
+// "\x1b", "\u202e", "\U000e0041", "\r" and the rest. The text has been
+// through events.VisibleText and escapeBreaks, so a backslash starts an escape.
+func escapeSafeCut(r []rune, n int) int {
+	for i := n - 1; i >= 0 && i >= n-10; i-- {
+		if r[i] != '\\' {
+			continue
+		}
+		size := 2
+		if i+1 < len(r) {
+			switch r[i+1] {
+			case 'x':
+				size = 4
+			case 'u':
+				size = 6
+			case 'U':
+				size = 10
+			}
+		}
+		if i+size > n {
+			return i
+		}
+		return n
+	}
+	return n
 }
 
 // expandTabs draws a tab as four spaces, so a width is the width shown.
