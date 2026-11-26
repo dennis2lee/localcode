@@ -13,6 +13,7 @@ import {
   effortModal, effortModelEl, effortLevelsEl, effortNoteEl, effortDefaultBtn, effortCloseBtn,
 } from './dom.js';
 import { app, session } from './state.js';
+import { visibleText } from './format.js';
 import * as apiClient from './api.js';
 import { appendError } from './transcript.js';
 import { setInputLocked, renderCommDot } from './composer.js';
@@ -657,7 +658,8 @@ function showPermissionRequest(req, waiting) {
   // blinking green — "working" — behind a dialog that had stopped the
   // work to ask a question.
   renderCommDot();
-  let text = `[${req.tool}] ${req.description || '(no description given)'}`;
+  // Every field the question draws, read through visibleText. See format.js.
+  let text = `[${visibleText(req.tool)}] ${visibleText(req.description) || '(no description given)'}`;
   if (waiting === 1) text += ' (1 more permission request waiting)';
   else if (waiting > 1) text += ` (${waiting} more permission requests waiting)`;
   permissionTextEl.textContent = text;
@@ -668,9 +670,9 @@ function showPermissionRequest(req, waiting) {
   permissionOutsideEl.hidden = !outside;
   if (outside) {
     permissionOutsideEl.textContent =
-      `This path is outside the project this conversation is working in (${req.workspace || 'unknown'}).`;
+      `This path is outside the project this conversation is working in (${visibleText(req.workspace) || 'unknown'}).`;
     permissionAllowDirBtn.hidden = false;
-    permissionAllowDirBtn.textContent = `Allow ${outside} under ${req.outside_dir || 'this directory'}`;
+    permissionAllowDirBtn.textContent = `Allow ${outside} under ${visibleText(req.outside_dir) || 'this directory'}`;
     permissionAllowDirBtn.title = 'for the rest of this session; /'
       + outside + '-outside mem-clear forgets it';
     permissionAllowOutsideBtn.hidden = false;
@@ -687,7 +689,7 @@ function showPermissionRequest(req, waiting) {
   permissionAllowAlwaysBtn.style.display = offerAlways ? '' : 'none';
   permissionAllowSessionBtn.style.display = outside || once ? 'none' : '';
   if (offerAlways) {
-    permissionAllowAlwaysBtn.title = `don't ask again — writes "${req.rule}" to config.json`;
+    permissionAllowAlwaysBtn.title = `don't ask again — writes "${visibleText(req.rule)}" to config.json`;
   }
   permissionRequest.open();
   setInputLocked(true, 'Resolve the permission request above to continue.');

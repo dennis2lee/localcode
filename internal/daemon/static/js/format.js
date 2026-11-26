@@ -1,6 +1,27 @@
 // Pure text formatting. No DOM, no fetch — safe to unit-test directly and
 // safe for every other module to depend on.
 
+// visibleText writes every character a screen acts on, or draws as nothing,
+// as an escape a reader can see: "\r", "\x1b", "\u202e". Line breaks and
+// tabs stay. The same rule as events.VisibleText in the daemon, which
+// writes permission questions through it; the page reads the fields a
+// question carries through this as well, since a log written before the
+// daemon did is still replayed, and some fields (a directory, a rule) are
+// kept unescaped in the log because the daemon reads them back.
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Variation_Selector}\p{Default_Ignorable_Code_Point}\u2028\u2029]/gu;
+
+export function visibleText(s) {
+  if (typeof s !== 'string') return s;
+  return s.replace(HIDDEN, (c) => {
+    if (c === '\n' || c === '\t') return c;
+    if (c === '\r') return '\\r';
+    const cp = c.codePointAt(0);
+    if (cp < 0x80) return '\\x' + cp.toString(16).padStart(2, '0');
+    if (cp > 0xffff) return '\\U' + cp.toString(16).padStart(8, '0');
+    return '\\u' + cp.toString(16).padStart(4, '0');
+  });
+}
+
 export function escapeHtml(s) {
   return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }

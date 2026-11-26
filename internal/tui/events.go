@@ -299,9 +299,14 @@ func (m *Model) applyEvent(ev events.Event) {
 		desc, _ := ev.Data["description"].(string)
 		// Written safe by the daemon since v0.180.9, and read safe here as
 		// well: a log written before then is replayed from the start, and
-		// its questions now reach the transcript. See events.VisibleText.
+		// its questions now reach the transcript. The other fields drawn
+		// with it are read the same way. They are display copies only:
+		// an answer names the request by id, and the daemon keeps the
+		// directory and the rule it asked about. See events.VisibleText.
 		desc = events.VisibleText(desc)
+		tool = events.VisibleText(tool)
 		rule, _ := ev.Data["rule"].(string)
+		rule = events.VisibleText(rule)
 		canAlways, _ := ev.Data["can_always"].(bool)
 		once, _ := ev.Data["once"].(bool)
 		if desc == "" {
@@ -309,16 +314,19 @@ func (m *Model) applyEvent(ev events.Event) {
 		}
 		outside, _ := ev.Data["outside"].(string)
 		outsideDir, _ := ev.Data["outside_dir"].(string)
+		outsideDir = events.VisibleText(outsideDir)
 		workspace, _ := ev.Data["workspace"].(string)
-		long := longPermission(desc)
+		workspace = events.VisibleText(workspace)
+		long := longPermission(tool, desc)
 		// The whole of a question the footer cannot hold, written where it
-		// can be read before it is answered. Once per request: the same id
-		// arriving again replaces the question, not the record of it.
-		if long && !m.longShown[id] {
+		// can be read before it is answered. Once per request and text: the
+		// same request delivered again replaces the question, not the record
+		// of it, and a request with no id is never taken for another.
+		if long && (id == "" || m.longShown[id] != desc) {
 			if m.longShown == nil {
-				m.longShown = map[string]bool{}
+				m.longShown = map[string]string{}
 			}
-			m.longShown[id] = true
+			m.longShown[id] = desc
 			m.appendEntry(entryTool, fmt.Sprintf("[permission request: %s]\n%s", tool, desc))
 		}
 		m.enqueuePermission(&pendingPermission{

@@ -576,6 +576,10 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	m.pending = nil
 	m.pendingQueue = nil
 	m.answering = nil
+	// With the transcript it describes: the conversation opened next is
+	// replayed from its start, and a long question in it has to be written
+	// into its transcript again.
+	m.longShown = nil
 	m.pendingHintShown = false
 	m.scrollbarDragging = false
 	m.scrollbarDragGrab = 0

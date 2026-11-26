@@ -179,10 +179,10 @@ func (MemorySaveTool) Subject(input json.RawMessage) string {
 
 func (MemorySaveTool) Describe(input json.RawMessage) string {
 	a, _ := parseMemoryArgs(input)
-	content := a.Content
-	if len(content) > 600 {
-		content = content[:600] + "…"
-	}
+	// The whole note, counted in characters. It used to be cut at 600
+	// bytes, which split a Korean or emoji character in half and said
+	// nothing about what it left out. See confirmationText.
+	content := confirmationText(a.Content)
 	reach := map[memory.Scope]string{
 		memory.ScopeUser:    "which every later session in every project will see",
 		memory.ScopeProject: "which later sessions in this project will see",

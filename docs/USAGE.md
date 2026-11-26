@@ -880,11 +880,11 @@ The Web UI locks the prompt box while the permission modal is open. The TUI keep
 
 A prompt shows what it asks about in full:
 
-* `Schedule` and `Debate` show the whole prompt or task they were given, up to 8,000 characters. Past that the prompt says how many characters it leaves out.
-* Control characters, bidirectional marks and zero-width characters are shown as escapes (`\r`, `\x1b`, `\u202e`), so a terminal or a browser draws nothing the text does not show. Line breaks and tabs are kept.
+* `Schedule`, `Debate` and `memory_save` show the whole prompt, task or note they were given, up to 8,000 characters. Past that the prompt says how many characters it leaves out.
+* Characters a terminal or a browser acts on, or draws as nothing, are shown as escapes (`\r`, `\x1b`, `\u202e`): control characters, bidirectional and zero-width marks, variation selectors and the other characters Unicode calls default-ignorable, such as the Hangul fillers. Line breaks and tabs are kept. This covers every field the prompt draws: the question, the directory and workspace of a boundary prompt, and the rule "always allow" would write.
 * The Web UI keeps the line breaks and wraps a long line inside the box, which scrolls.
-* In the TUI, a question longer than one line of 120 characters is written whole into the transcript above, where it scrolls and wraps. The permission line shows its first line, says the rest is in the transcript, and keeps its keys.
-* `Orchestrate` summarizes its plan: the first line of the goal, the stages, the agents and the limits. It does not show each stage's prompt.
+* In the TUI, a question with a line break, or one whose line is wider than 80 columns as the terminal draws it, is written whole into the transcript above, where it scrolls and wraps. The permission line shows the first 40 columns of it and, on a line of its own, says the rest is in the transcript. The permission line wraps to the terminal's width instead of being cut at its edge.
+* `Orchestrate` summarizes its plan: the first line of the goal, the stages, the agents and the limits. It does not show each stage's prompt. `browser` names the action and, for `navigate`, the address; it does not show the text a `type` call types.
 
 An answer that fails to reach the daemon puts its question back, behind any question already on screen, and the error is shown. The Web UI locks the prompt box again. A question does not come back when it was answered in another window in the meantime, when the daemon says it is not waiting on it (a question a stopped daemon left in the log), or when its turn was declared lost.
 

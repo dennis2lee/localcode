@@ -9,6 +9,7 @@ import { summarizeInput, appendError, prettyJSON } from './transcript.js';
 import { renderMarkdown } from './markdown.js';
 import { askConfirm } from './prompt.js';
 import { renderTasks } from './render.js';
+import { visibleText } from './format.js';
 
 // A window on a background task.
 //
@@ -214,7 +215,7 @@ function applyTaskEvent(ev) {
     // what it is waiting for and stops saying it when it is answered.
     case 'permission.request':
       currentEl = null;
-      line('msg-error', `⏸ waiting for permission: [${d.tool || '?'}] ${d.description || ''}`);
+      line('msg-error', `⏸ waiting for permission: [${visibleText(d.tool) || '?'}] ${visibleText(d.description) || ''}`);
       break;
     case 'permission.resolved':
       currentEl = null;

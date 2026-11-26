@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
+
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type pendingPermission struct {
@@ -46,9 +48,9 @@ type pendingPermission struct {
 // prompt renders the permission modal, listing exactly the answers this
 // request will accept.
 func (p pendingPermission) prompt(typing bool) string {
-	head := fmt.Sprintf("Permission request [%s]: %s", p.tool, p.description)
+	head := fmt.Sprintf("Permission request [%s]: %s", p.tool, expandTabs(p.description))
 	if p.long {
-		head = fmt.Sprintf("Permission request [%s]: %s … (the whole request is in the transcript above)",
+		head = fmt.Sprintf("Permission request [%s]: %s …\n(the whole request is in the transcript above)",
 			p.tool, footerLine(p.description))
 	}
 	keys := "y: allow once  n: deny  s: allow for session"
@@ -76,30 +78,37 @@ func (p pendingPermission) prompt(typing bool) string {
 	return head + "\n" + keys
 }
 
-// longPermission reports whether a question's text needs more than the one
-// line the footer gives it: a line break, or more than footerRunes.
+// longPermission reports whether a question needs more than the one line
+// the footer gives it: a line break, or a head line wider than footerCols
+// columns as a terminal draws it, tabs and wide characters counted.
 //
 // The footer is not where such a question can be read. The layout keeps a
-// line or two for it, a long line runs off the terminal's edge, and the
-// keys to answer it are under it. Before, a prompt the model booked showed
-// its first line and nothing said more was booked; now the whole of it is
-// written into the transcript, where it scrolls and wraps, before it can
-// be answered.
-func longPermission(description string) bool {
-	return strings.Contains(description, "\n") || utf8.RuneCountInString(description) > footerRunes
+// line or two for it, a line wider than the terminal is cut at its edge,
+// and the keys to answer it are under it. So the whole of it is written
+// into the transcript, where it scrolls and wraps, before it can be
+// answered. Measured in columns, not characters: a prompt of Korean, or
+// one padded with tabs, is twice or eight times as wide as its count.
+func longPermission(tool, description string) bool {
+	if strings.Contains(description, "\n") {
+		return true
+	}
+	return lipgloss.Width(expandTabs(fmt.Sprintf("Permission request [%s]: %s", tool, description))) > footerCols
 }
 
-// footerRunes is how much of a question the footer shows on its own line.
-const footerRunes = 120
+// footerCols is the width a short question is held to. Eighty, the width a
+// terminal starts at; the footer wraps to the real width as well, so a
+// narrower one wraps a short question rather than cutting it.
+const footerCols = 80
 
-// footerLine is the first line of a long question, cut to footerRunes.
+// footerLine is the first line of a long question, cut to the columns that
+// leave its head inside footerCols.
 func footerLine(description string) string {
 	line, _, _ := strings.Cut(description, "\n")
-	if r := []rune(line); len(r) > footerRunes {
-		line = string(r[:footerRunes])
-	}
-	return line
+	return ansi.Truncate(expandTabs(line), footerCols/2, "")
 }
+
+// expandTabs draws a tab as four spaces, so a width is the width shown.
+func expandTabs(s string) string { return strings.ReplaceAll(s, "\t", "    ") }
 
 // enqueuePermission shows a request, or queues it behind the one on
 // screen. The screen always holds the oldest unresolved request: a newer
@@ -168,6 +177,11 @@ func (m *Model) settlePermission(id string) {
 func (m *Model) resolvePermissionEvent(id string) {
 	m.settlePermission(id)
 	delete(m.answering, id)
+	// Answered, so a later request under the same id is a new question,
+	// and its text is written into the transcript again. Ids were numbered
+	// per daemon run before they carried a prefix, so a replayed log can
+	// reuse one.
+	delete(m.longShown, id)
 }
 
 // restorePermission puts an answered request back through the queue when its

@@ -196,7 +196,13 @@ func (m Model) View() tea.View {
 		default:
 			text += fmt.Sprintf("\n(%d more permission requests waiting)", len(m.pendingQueue))
 		}
-		lines = append(lines, modalStyle.Render(text))
+		// Wrapped to the terminal rather than cut at its edge, so a question
+		// on a narrow terminal shows all of what it says. See longPermission.
+		style := modalStyle
+		if m.termWidth > 0 {
+			style = style.Width(m.termWidth)
+		}
+		lines = append(lines, style.Render(text))
 	}
 	if m.asking != nil {
 		lines = append(lines, modalStyle.Render(m.asking.prompt(strings.TrimSpace(m.input.Value()) != "")))

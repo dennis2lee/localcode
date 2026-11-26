@@ -1259,7 +1259,7 @@ aside h2 {
   overflow-y: auto;
 }
 #task-modal-body .msg-tool,
-#task-modal-body .msg-error { white-space: pre-wrap; font-size: var(--t-fine); margin: 4px 0; }
+#task-modal-body .msg-error { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-fine); margin: 4px 0; }
 #task-modal-body .msg-tool { color: var(--muted); font-style: italic; }
 #task-modal-body .msg-error { color: var(--err); }
 #task-modal-body .msg-model {

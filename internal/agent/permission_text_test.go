@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"localcode/internal/events"
 	"localcode/internal/session"
@@ -32,6 +33,15 @@ func TestVisibleTextEscapesWhatAScreenWouldActOn(t *testing.T) {
 		{"zero\u200bwidth\ufeff", `zero\u200bwidth\ufeff`},
 		{"line\u2028para\u2029", `line\u2028para\u2029`},
 		{"bad\xffbyte", `bad\xffbyte`},
+		// Drawn as nothing, though not format characters: what Unicode
+		// calls default-ignorable, and the variation selectors.
+		{"cgj\u034fvs\ufe0fvs17\U000e0100", `cgj\u034fvs\ufe0fvs17\U000e0100`},
+		{"fill\u115f\u1160\u3164\uffa0", `fill\u115f\u1160\u3164\uffa0`},
+		{"khmer\u17b4\u17b5mongol\u180b", `khmer\u17b4\u17b5mongol\u180b`},
+		// Past the basic plane in Go's own spelling, not a five-digit \u.
+		{"tag\U000e0041", `tag\U000e0041`},
+		// Drawn, so kept: a combining mark, and the Braille blank.
+		{"strike\u0336blank\u2800", "strike\u0336blank\u2800"},
 		{"한국어 그대로", "한국어 그대로"},
 	} {
 		if got := events.VisibleText(tc.in); got != tc.want {
@@ -103,5 +113,41 @@ func TestTheScheduleAndDebateQuestionsShowTheWholeText(t *testing.T) {
 	}
 	if strings.Count(got, "x") != maxConfirmationRunes {
 		t.Errorf("the question shows %d characters of the prompt, want %d", strings.Count(got, "x"), maxConfirmationRunes)
+	}
+}
+
+// A refusal names the question it could not ask, in one line. The question
+// carries up to 8,000 characters now, and handing all of them back to the
+// model that wrote them is noise in its tool result.
+func TestAnUnattendedRefusalNamesTheQuestionInOneLine(t *testing.T) {
+	restore := SetUnattendedWait(0)
+	defer restore()
+	long := "schedule for 09:00: " + strings.Repeat("x", 300) + "\n\nthe second paragraph"
+	got := unattendedRefusal(tools.Ask{Tool: "Schedule", Description: long})
+	if strings.Contains(got, "second paragraph") {
+		t.Errorf("the refusal repeats the whole question: %q", got)
+	}
+	if !strings.Contains(got, "schedule for 09:00: xxx") || !strings.Contains(got, "…") {
+		t.Errorf("the refusal does not name the question by its first line, cut: %q", got)
+	}
+	if n := strings.Count(got, "x"); n > 200 {
+		t.Errorf("the refusal carries %d characters of the question, want at most 200", n)
+	}
+	if short := unattendedRefusal(tools.Ask{Tool: "write_file", Description: "write /tmp/x"}); !strings.Contains(short, `"write /tmp/x"`) {
+		t.Errorf("a one-line question is not named whole: %q", short)
+	}
+}
+
+// memory_save showed 600 bytes of a note, which split a Korean or emoji
+// character in half and said nothing about what it left out.
+func TestAMemoryNoteIsShownWholeInItsQuestion(t *testing.T) {
+	content := "a" + strings.Repeat("가", 250) + "끝"
+	input, _ := json.Marshal(map[string]string{"scope": "project", "name": "n", "content": content})
+	got := MemorySaveTool{}.Describe(input)
+	if !strings.Contains(got, content) {
+		t.Errorf("the memory question does not carry the whole note: …%q", got[len(got)-40:])
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("the memory question is not valid UTF-8: it split a character")
 	}
 }
