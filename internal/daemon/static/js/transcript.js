@@ -359,24 +359,24 @@ export function appendAsk(text) { return appendDiv('msg-tool msg-ask', text); }
 export const askReplyHint = '  (reply in the box below, in your own words or with a number)';
 export const askLeftHint = '  (left unanswered)';
 
-// askLine is the line of the model question the box was last armed for,
-// kept until the question is done with, so it can be made to say it was
+// askLines holds, by id, the line of each model question drawn inviting a
+// reply, until the question is done with, so it can be made to say it was
 // left unanswered rather than go on inviting a reply nobody will take.
-let askLine = null;
+// More than one: an answer to an older question can still be on its way
+// when a newer one is asked. Emptied with the transcript.
+const askLines = new Map();
 
-export function noteAskLine(id, el) { askLine = { id, el }; }
+export function noteAskLine(id, el) { askLines.set(id, el); }
 
-export function forgetAskLine(id) {
-  if (askLine && askLine.id === id) askLine = null;
-}
+export function forgetAskLine(id) { askLines.delete(id); }
 
 // leaveAskUnanswered rewrites the line of question id, drawn inviting a
 // reply, to say it was left unanswered. A line drawn any other way, or a
 // question this page holds no line for, is left alone.
 export function leaveAskUnanswered(id) {
-  if (!askLine || askLine.id !== id) return;
-  const { el } = askLine;
-  askLine = null;
+  const el = askLines.get(id);
+  if (!el) return;
+  askLines.delete(id);
   if (!el.textContent.endsWith(askReplyHint)) return;
   change(() => { el.textContent = el.textContent.slice(0, -askReplyHint.length) + askLeftHint; });
 }
@@ -946,6 +946,7 @@ export function clearTranscript() {
   // a bar left open over a different one counts hits nobody searched for.
   closeFind();
   transcriptEl.innerHTML = '';
+  askLines.clear();
   // A different conversation, drawn from the bottom up. Carrying the
   // previous one's scrolled-up state over would open a session showing
   // its middle.

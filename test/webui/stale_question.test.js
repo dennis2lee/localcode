@@ -106,8 +106,10 @@ test('a task window says a stale permission request was left unanswered', async 
 });
 
 // A page that saw a question live from a daemon that has since stopped
-// still holds it: the stream resumes after it, so no copy arrives, and a
-// page only watching the turn is not told the turn was lost. Loading the
+// still holds it when the resume brings no stale resolution for it: an
+// update's handover, or a resume whose read of the whole log failed. The
+// stream resumes after the question, so no copy arrives, and a page only
+// watching the turn is not told the turn was lost. Loading the
 // whole conversation replays the log from the start without starting the
 // page over, and the new daemon sends the question stale. The page has to
 // put it away, or the transcript says "left unanswered" about a question

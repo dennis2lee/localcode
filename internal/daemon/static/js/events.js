@@ -259,8 +259,14 @@ const handlers = {
     const el = appendAsk([`[the model is asking] ${d.question}`,
       ...opts.map((o, i) => `  ${i + 1}. ${o}`),
       stale ? askLeftHint : askReplyHint].join('\n'));
-    if (stale) forgetAskLine(d.id);
-    else noteAskLine(d.id, el);
+    if (stale) {
+      forgetAskLine(d.id);
+      // An answer from here on its way to it is to a question nobody is
+      // waiting on, which a stale resolution would also have said.
+      askNobodyWaiting(d.id);
+    } else {
+      noteAskLine(d.id, el);
+    }
   },
   // A stale resolution of the question the box is armed for also says so
   // on its line. It reaches a page that held the question from before a
