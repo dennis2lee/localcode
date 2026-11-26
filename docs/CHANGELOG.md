@@ -4,8 +4,8 @@
 
 **Fixed**
 
-* The four switches in the Web UI's permissions window sent one change at a time, so an older answer is no longer drawn over a later change
-* A switch change answered after the conversation was switched kept out of the conversation now open: its snapshot is not drawn there and its failure is not said there
+* The four switches and the forget buttons in the Web UI's permissions window sent one change at a time, so an older answer is no longer drawn over a later change
+* A switch or forget answered after the conversation was switched kept out of the conversation now open: its snapshot is not drawn there and its failure is not said there
 * A switch failure cleared when a later change of the same switch is taken
 
 ## v0.180.9

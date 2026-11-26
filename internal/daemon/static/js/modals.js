@@ -520,7 +520,11 @@ export async function loadSessionPermissions(sessionID) {
 // last was drawn, an older value over a newer one, and a failure from
 // before a later change was taken was said beside a box the daemon
 // agreed with. One queue rather than one per switch, because a snapshot
-// answering skip_all carries read_outside too.
+// answering skip_all carries read_outside too. A forget goes in the same
+// queue, because its answer is the same snapshot: sent at once, it
+// reached the daemon ahead of a switch change still waiting behind
+// another, and its answer, older than that change's, could be drawn last.
+// Found by review.
 //
 // A change is for the conversation it was made in. Its answer is dropped
 // if another one is open by then, as loadSessionPermissions does: drawn,
@@ -568,14 +572,28 @@ function renderRememberedOutside() {
     const clear = document.createElement('button');
     clear.textContent = 'forget';
     clear.title = `same as /${cls}-outside mem-clear`;
-    clear.addEventListener('click', async () => {
-      try {
-        applySessionPermissions(await apiClient.forgetOutside(session.sessionID, cls));
-      } catch { /* the list simply stays as it was */ }
-    });
+    clear.addEventListener('click', () => forgetOutside(cls));
     row.appendChild(clear);
     rememberedOutsideEl.appendChild(row);
   }
+}
+
+// forgetOutside takes back one class of remembered directories, in the
+// switches' queue and for the conversation it was pressed in. See
+// setSessionSwitch.
+function forgetOutside(cls) {
+  const sessionID = session.sessionID;
+  if (!sessionID) return undefined;
+  return switchChanges(async () => {
+    let answer;
+    try {
+      answer = await apiClient.forgetOutside(sessionID, cls);
+    } catch {
+      return; // the list simply stays as it was
+    }
+    if (sessionID !== session.sessionID) return;
+    applySessionPermissions(answer);
+  });
 }
 
 // refreshPermissionSettingsIfOpen re-reads the checkboxes from app state
