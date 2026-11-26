@@ -93,7 +93,7 @@ func (t DebateTool) Describe(input json.RawMessage) string {
 	args := t.parse(input)
 	return fmt.Sprintf("debate: %s writes, %s reviews, %s (~%d model turns)\n  task: %s",
 		"this conversation's agent", strings.Join(args.Reviewers, " and "),
-		roundCount(args.Rounds), args.Rounds*(1+len(args.Reviewers)), promptSummary(args.Task))
+		roundCount(args.Rounds), args.Rounds*(1+len(args.Reviewers)), confirmationText(args.Task))
 }
 
 type debateArgs struct {

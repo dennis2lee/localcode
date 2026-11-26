@@ -97,9 +97,12 @@ func (t ScheduleTool) Describe(input json.RawMessage) string {
 		// as "schedule for 9am tomorrow" is a person agreeing to one run
 		// and getting a standing job.
 		return fmt.Sprintf("schedule for %s, %s: %s",
-			when.Format(at, now), describeLimits(opts), promptSummary(args.Prompt))
+			when.Format(at, now), describeLimits(opts), confirmationText(args.Prompt))
 	}
-	return fmt.Sprintf("schedule for %s: %s", when.Format(at, now), promptSummary(args.Prompt))
+	// The whole prompt, not its first line. It used to be promptSummary,
+	// and a prompt of two paragraphs was approved as its first while both
+	// were booked. See confirmationText.
+	return fmt.Sprintf("schedule for %s: %s", when.Format(at, now), confirmationText(args.Prompt))
 }
 
 type scheduleArgs struct {

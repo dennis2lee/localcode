@@ -297,6 +297,10 @@ func (m *Model) applyEvent(ev events.Event) {
 		id, _ := ev.Data["id"].(string)
 		tool, _ := ev.Data["tool"].(string)
 		desc, _ := ev.Data["description"].(string)
+		// Written safe by the daemon since v0.180.9, and read safe here as
+		// well: a log written before then is replayed from the start, and
+		// its questions now reach the transcript. See events.VisibleText.
+		desc = events.VisibleText(desc)
 		rule, _ := ev.Data["rule"].(string)
 		canAlways, _ := ev.Data["can_always"].(bool)
 		once, _ := ev.Data["once"].(bool)
@@ -306,9 +310,20 @@ func (m *Model) applyEvent(ev events.Event) {
 		outside, _ := ev.Data["outside"].(string)
 		outsideDir, _ := ev.Data["outside_dir"].(string)
 		workspace, _ := ev.Data["workspace"].(string)
+		long := longPermission(desc)
+		// The whole of a question the footer cannot hold, written where it
+		// can be read before it is answered. Once per request: the same id
+		// arriving again replaces the question, not the record of it.
+		if long && !m.longShown[id] {
+			if m.longShown == nil {
+				m.longShown = map[string]bool{}
+			}
+			m.longShown[id] = true
+			m.appendEntry(entryTool, fmt.Sprintf("[permission request: %s]\n%s", tool, desc))
+		}
 		m.enqueuePermission(&pendingPermission{
 			id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways, once: once,
-			outside: outside, outsideDir: outsideDir, workspace: workspace,
+			outside: outside, outsideDir: outsideDir, workspace: workspace, long: long,
 		})
 	case events.TypePermissionResolved:
 		// Both halves of a permission are in the log, and resume replays

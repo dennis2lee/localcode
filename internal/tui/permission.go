@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type pendingPermission struct {
@@ -20,6 +21,10 @@ type pendingPermission struct {
 	// once is a question whose answer covers this use only (a resume of
 	// a run that writes): only y and n are offered or taken.
 	once bool
+	// long is a question whose text does not fit the one line the footer
+	// gives it. Its whole text is in the transcript, which scrolls and
+	// wraps, and the footer says so. See longPermission.
+	long bool
 
 	// outside is "read" or "write" when this question exists because the
 	// path leaves the workspace, and empty otherwise. It changes both
@@ -42,6 +47,10 @@ type pendingPermission struct {
 // request will accept.
 func (p pendingPermission) prompt(typing bool) string {
 	head := fmt.Sprintf("Permission request [%s]: %s", p.tool, p.description)
+	if p.long {
+		head = fmt.Sprintf("Permission request [%s]: %s … (the whole request is in the transcript above)",
+			p.tool, footerLine(p.description))
+	}
 	keys := "y: allow once  n: deny  s: allow for session"
 	if p.once {
 		keys = "y: allow this once  n: deny  (asked every time)"
@@ -65,6 +74,31 @@ func (p pendingPermission) prompt(typing bool) string {
 		keys += "\n(clear the prompt box to answer — those are ordinary letters while you are writing)"
 	}
 	return head + "\n" + keys
+}
+
+// longPermission reports whether a question's text needs more than the one
+// line the footer gives it: a line break, or more than footerRunes.
+//
+// The footer is not where such a question can be read. The layout keeps a
+// line or two for it, a long line runs off the terminal's edge, and the
+// keys to answer it are under it. Before, a prompt the model booked showed
+// its first line and nothing said more was booked; now the whole of it is
+// written into the transcript, where it scrolls and wraps, before it can
+// be answered.
+func longPermission(description string) bool {
+	return strings.Contains(description, "\n") || utf8.RuneCountInString(description) > footerRunes
+}
+
+// footerRunes is how much of a question the footer shows on its own line.
+const footerRunes = 120
+
+// footerLine is the first line of a long question, cut to footerRunes.
+func footerLine(description string) string {
+	line, _, _ := strings.Cut(description, "\n")
+	if r := []rune(line); len(r) > footerRunes {
+		line = string(r[:footerRunes])
+	}
+	return line
 }
 
 // enqueuePermission shows a request, or queues it behind the one on

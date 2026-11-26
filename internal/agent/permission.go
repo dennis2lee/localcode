@@ -247,6 +247,11 @@ func (b *PermissionBroker) SetPolicy(p *PermissionPolicy, onChanged func(session
 func (b *PermissionBroker) Func() tools.PermissionFunc {
 	return func(ctx context.Context, ask tools.Ask) (bool, error) {
 		toolName, subject, description := ask.Tool, ask.Subject, ask.Description
+		// What the person reads, with every character a screen would act
+		// on written as an escape instead. Here rather than in each tool or
+		// each client, so a tool added later is covered. See
+		// events.VisibleText.
+		description = events.VisibleText(description)
 		sessionID, ok := SessionIDFromContext(ctx)
 		if !ok {
 			return false, fmt.Errorf("permission check has no session context")

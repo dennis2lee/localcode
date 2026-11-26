@@ -2,13 +2,12 @@
 
 ## Summary
 
-Open and partial work remains in orchestration, client behavior, permission prompts, desktop window verification, and SSH terminals. The numbered records below retain completed fixes and their release versions.
+Open and partial work remains in orchestration, client behavior, desktop window verification, and SSH terminals. The numbered records below retain completed fixes and their release versions.
 
 | Area | Recorded remaining work |
 |---|---|
 | Orchestration | Child-session retention and concurrent permission display (item 36) |
 | Client behavior | The open UI ideas below |
-| Permission prompts | Text a model wrote is drawn as it is given, and `Schedule` and `Debate` show only its first line (item 68) |
 | Coverage | Links and drags in the macOS window are unverified (item 64) |
 | SSH terminals | A prompt that answers a Ctrl+C is taken for the end of a line sent before it arrived, and a `run` then can be typed onto text (item 67) |
 
@@ -635,7 +634,9 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Accepted, and older than v0.179.3: the prompt is recorded once and not again while the line counts as typed on. A prompt the shell draws differently after a new size (a right prompt in zsh, a prompt wider than the new width) no longer matches the record. A line you typed on and erased before the resize is then refused until your Enter or Ctrl+C. Found by review of v0.179.3.
     * The person's line is judged empty by comparing the cursor's row, and the rows under it, with the prompt as it was recorded. A screen that makes text of theirs look like that prompt, other than the shapes closed above, would be read as empty.
 
-68. **Permission prompts: text a model wrote is drawn as it is given. Open.**
+68. **Permission prompts: text a model wrote is drawn as it is given. Fixed in v0.180.9.**
+
+    * **Fixed in v0.180.9.** The broker writes every question with control characters, bidirectional marks and zero-width characters as escapes (`VisibleText` in `internal/events/visible.go`), so every tool is covered, a later one included. `Schedule` and `Debate` show the whole text up to 8,000 characters and then say how many they left out; `Subject` is unchanged. The Web UI keeps line breaks and wraps; the TUI writes a question longer than one line into the transcript and keeps one line and its keys in the footer. `Orchestrate` still summarizes its plan rather than showing each stage's prompt. The TUI reads a question through the same function, so one written to a log before v0.180.9 is drawn clean when the log is replayed.
 
     * Four tools build their own permission text from decoded model input: `Schedule`, `Debate`, `Browser` and `Orchestrate` (`Describe` in `internal/agent`). Every other tool shows the call's JSON text, in which valid JSON escapes a control character. Only `Schedule` was probed.
     * `Schedule` and `Debate` draw the model's text up to its first line break and then ` …` (`promptSummary`). A prompt of two paragraphs is confirmed as its first. The second is booked, runs unattended under the conversation's permission switches, and is shown only after booking, in the booking's details. A model steered by text it read can book a prompt of that shape.

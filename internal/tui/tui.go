@@ -158,6 +158,10 @@ type Model struct {
 	// oldest unresolved request is what is shown, and answering nothing
 	// never promotes.
 	pendingQueue []*pendingPermission
+	// longShown names the permission requests whose whole text has been
+	// put in the transcript, so a request delivered twice is written once.
+	// See longPermission.
+	longShown map[string]bool
 	// answering holds each request settled locally while its resolve POST
 	// is in flight, keyed by id, so a failed POST can put its own request
 	// back even when several questions were answered in a row.

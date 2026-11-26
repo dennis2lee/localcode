@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Fixed**
+
+* A permission question that showed only the first line of the prompt a `Schedule` call books or the task a `Debate` is given: the whole text, up to 8,000 characters, and a count of what is left out past that
+* Control characters, bidirectional marks and zero-width characters in a permission question shown as escapes (`\r`, `\x1b`, `\u202e`), so a terminal or a browser draws nothing the text does not show
+* A question longer than one line written whole into the TUI's transcript, with its first line and keys in the permission line; the Web UI keeping its line breaks and wrapping
+
 ## v0.180.8
 
 A scheduled prompt says whose it is: the run names a prompt the model booked as its task, the list marks it, and the reply to a `!` booking says it runs in the shell.

@@ -878,6 +878,14 @@ Session grants are forgotten when a session is deleted. A daemon restart keeps t
 
 The Web UI locks the prompt box while the permission modal is open. The TUI keeps its separate permission line and shows a one-time hint if Enter is pressed while a request is pending.
 
+A prompt shows what it asks about in full:
+
+* `Schedule` and `Debate` show the whole prompt or task they were given, up to 8,000 characters. Past that the prompt says how many characters it leaves out.
+* Control characters, bidirectional marks and zero-width characters are shown as escapes (`\r`, `\x1b`, `\u202e`), so a terminal or a browser draws nothing the text does not show. Line breaks and tabs are kept.
+* The Web UI keeps the line breaks and wraps a long line inside the box, which scrolls.
+* In the TUI, a question longer than one line of 120 characters is written whole into the transcript above, where it scrolls and wraps. The permission line shows its first line, says the rest is in the transcript, and keeps its keys.
+* `Orchestrate` summarizes its plan: the first line of the goal, the stages, the agents and the limits. It does not show each stage's prompt.
+
 An answer that fails to reach the daemon puts its question back, behind any question already on screen, and the error is shown. The Web UI locks the prompt box again. A question does not come back when it was answered in another window in the meantime, when the daemon says it is not waiting on it (a question a stopped daemon left in the log), or when its turn was declared lost.
 
 ### Viewing and changing permission settings without waiting for a prompt
@@ -3479,7 +3487,7 @@ Unsupported time inputs return a specific reason:
 | `10초마다`, `every 5 seconds` | Interval shorter than the one-minute minimum. |
 | Anything else it cannot read | Refused with the examples above. |
 
-The confirmation shows the parsed time and the task up to its first line break. The rest of a longer prompt is shown only after booking, in the booking's details.
+The confirmation shows the parsed time and the whole task. See [Answering a permission prompt](#answering-a-permission-prompt-once-this-session-or-always) for how a long one is shown.
 
 Each scheduled run uses a separate session with the booking conversation's workspace and four permission switches. The `/schedule` reply and the `Schedule` tool's result name the workspace.
 
