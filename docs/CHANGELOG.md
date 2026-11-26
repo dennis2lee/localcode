@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Changed**
+
+* The prompt a model booked for a scheduled run listed by `/context all` and the turn log's manifest as a task its parent handed down (`child.input.<agent>`, trust `delegated`), as a sub-agent's task is; a prompt you booked stays unlisted
+
 ## v0.180.7
 
 An SSH or PowerShell terminal no longer takes text you typed while a command ran for part of the prompt.

@@ -321,10 +321,10 @@ func entryForSource(id, text string, delegated bool) (prompt.Entry, bool) {
 	case strings.HasPrefix(id, "debate.review."):
 		return reviewEntry(strings.TrimPrefix(id, "debate.review."), text), true
 	case strings.HasPrefix(id, "child.input."):
-		// Only where the session actually is a sub-agent. The tag says
-		// this message was somebody's delegated task; whether it still
-		// instructs is a fact about the request being built, not about
-		// the string.
+		// Only where the session actually is a sub-agent, or a scheduled
+		// run, which is a child session as well. The tag says this message
+		// was somebody's delegated task; whether it still instructs is a
+		// fact about the request being built, not about the string.
 		//
 		// Forking is what makes the difference visible. A fork copies a
 		// session's event log into a new top-level session with no
@@ -591,6 +591,11 @@ func splicedShellEntry(ref, text string) prompt.Entry {
 // nor the person's, and its authority is its own class: it instructs the
 // child, because it is the child's whole purpose, without claiming to be
 // anybody else's words. See prompt.TrustDelegated.
+//
+// A scheduled run is a child session too, and the prompt a model booked
+// for it is the same thing: a task the booking conversation's model wrote,
+// handed to a session that exists to carry it out. It takes this entry,
+// and a prompt a person booked takes none.
 // parentDelegationEntry is the same text seen from the other side: the
 // task as it sits in the parent's own history, in the arguments of the
 // tool_use block that asked for the delegation.
@@ -615,7 +620,7 @@ func parentDelegationEntry(agent, task string) prompt.Entry {
 func childInputEntry(agent, task string) prompt.Entry {
 	return prompt.RuntimeEntry(
 		"child.input."+agent, prompt.KindAgentPrompt, prompt.FromParentAgent, prompt.TrustDelegated,
-		prompt.PlaceMessage, task, "the task the "+agent+" sub-agent was given by its parent")
+		prompt.PlaceMessage, task, "the task the "+agent+" agent was given by its parent")
 }
 
 // reviewEntry describes what a reviewing agent said about this session's

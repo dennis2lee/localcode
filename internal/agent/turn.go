@@ -56,6 +56,15 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	if d, ok := delegatedTaskFrom(ctx); ok && d.task == modelText && openingSource == "" {
 		openingSource = childInputEntry(d.agent, d.task).ID
 	}
+	// The prompt a model booked for a scheduled run is a task in the same
+	// sense: a model in the booking conversation wrote it, and the run
+	// exists to carry it out. The run's request named nothing here, and an
+	// opening message that names nothing reads as the person's. A prompt a
+	// person booked carries no mark and stays that way. See
+	// Scheduler.AddByModel.
+	if openingSource == "" && modelWrittenPrompt(ctx, modelText) {
+		openingSource = childInputEntry(resolveAgent, modelText).ID
+	}
 
 	// One trace id per turn, inherited rather than minted when this turn
 	// is itself a sub-agent's. Everything below writes under it, and so

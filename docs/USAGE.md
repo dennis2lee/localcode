@@ -3490,7 +3490,7 @@ Who wrote the prompt decides how it runs:
 | Booked by | The prompt runs |
 |---|---|
 | You, with `/schedule` or the **schedule** button | As you wrote it. A leading `/` or `!` is a command, as when you type it. `/schedule in 1 hour !make test` runs the [shell escape](#shell-escape), which does not consult the permission rules. |
-| The model, with the `Schedule` tool or a `/schedule` line it runs through the `Command` tool | As plain text. A leading `/` or `!` does not run a command, whatever `/model-invocable` is set to. The model is told so when it books such a prompt. |
+| The model, with the `Schedule` tool or a `/schedule` line it runs through the `Command` tool | As plain text. A leading `/` or `!` does not run a command, whatever `/model-invocable` is set to. The model is told so when it books such a prompt. In the run, [`/context all`](#context) lists it as a task the booking conversation handed down (`child.input.<agent>`, trust `delegated`), not as something you typed. |
 | An earlier version | As written. A booking made before the author was recorded has no author on record, including one the model made. `/show-scheduled-task` lists them. |
 
 To run a command later, book it yourself with `/schedule`. The model cannot book from inside a scheduled run: the `Schedule` tool and a `/schedule` line run through the `Command` tool both refuse.
