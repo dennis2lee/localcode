@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.180.7
+
+An SSH or PowerShell terminal no longer takes text you typed while a command ran for part of the prompt.
+
+**Fixed**
+
+* Output drawn after that text, ending as the text does (`step 1` after `rm -rf 1`), no longer read as the text: once you erased that end, `run` was typed onto the rest
+* A prompt ending in a character the terminal draws in one cell with the text's first (a flag's first half, a Hangul syllable before a final consonant) keeping the line yours the same way
+
 ## v0.180.6
 
 A conversation taken over by an in-place update keeps what the previous localcode wrote and answered while it finished.

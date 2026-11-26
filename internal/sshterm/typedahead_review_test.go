@@ -1383,3 +1383,41 @@ func TestTextAfterALineSentAheadIsTheirsWhateverTheRow(t *testing.T) {
 		})
 	}
 }
+
+// From the eleventh review.
+
+// Where some of the text is on the row, the prompt is taken to end where
+// it starts only if the row up to there ends as the last prompt did.
+// Output drawn after the text whose end matches the text's end, or a
+// prompt whose last character the terminal drew in one cell with the
+// text's first, holds the line instead: erasing what the reading took
+// for the text does not free it.
+func TestTheRowBeforeTheTextEndsAsThePromptDid(t *testing.T) {
+	t.Run("output after the text, ending as the text does", func(t *testing.T) {
+		s := playedFor(t, true)
+		s.commandRuns()
+		s.term.PersonInput(nil, "rm -rf 1", "")
+		s.term.output([]byte(s.promptText(0) + "rm -rf 1"))
+		s.prints("step 1")
+		refusedForThem(t, s, "run onto text with output after it")
+		s.erase(2)
+		refusedForThem(t, s, "run onto the text left after erasing the end the output shared")
+	})
+	for _, c := range []struct{ name, prompt, ch string }{
+		{"a flag's second half after its first", "\U0001f1fa", "\U0001f1f8"},
+		{"a final consonant after a Hangul syllable", "한", "\u11ab"},
+		{"a syllable after a leading consonant", "\u1112", "가"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := playedFor(t, true)
+			mark := "\x1b]133;D;0;lc=" + s.term.marks.nonce + "\x07"
+			s.prints("\r\n" + mark + c.prompt)
+			s.commandRuns()
+			s.term.PersonInput(nil, c.ch+"x", "")
+			s.prints(mark + c.prompt + c.ch + "x")
+			refusedForThem(t, s, "run onto text starting with "+c.name)
+			s.erase(1)
+			refusedForThem(t, s, "run onto "+c.name+" left after erasing what followed it")
+		})
+	}
+}

@@ -794,26 +794,32 @@ func (t *Terminal) judgeAhead() bool {
 		return false
 	}
 	from, spaces := t.aheadShownFrom(pos.X, pos.Y)
-	if from == pos.X || (spaces && from > 0) {
-		// None of it there. That is the command having read it only where
-		// the row ends as the last prompt did (promptEnd): otherwise
-		// something else was drawn since the mark (a background job's
-		// output), over the text or before the prompt, and the screen
-		// cannot say.
-		end := promptEnd(t.promptLeft)
-		if end == "" || !strings.HasSuffix(strings.TrimRight(t.cellText(pos.Y, 0, pos.X), " "), end) {
-			return false
-		}
-		t.recordPrompt(pos.X)
-	} else if from == 0 {
+	none := from == pos.X || (spaces && from > 0)
+	if !none && from == 0 {
 		// To the left edge: it can go on in the row above, and nothing
 		// left of it on the row is the prompt. Theirs, with no prompt
 		// recorded, and the last one's end kept for the next reading.
 		return false
-	} else {
+	}
+	// The prompt ends at the cursor where none of it is there (the command
+	// read it), and where it starts where some is. Either way the row up
+	// to there ends as the last prompt did (promptEnd), or something else
+	// was drawn since the mark and the screen cannot say: a background
+	// job's output before the prompt, over the text or after it (where its
+	// end can match the text's), or a prompt whose last character the
+	// terminal drew in one cell with the text's first.
+	at := from
+	if none {
+		at = pos.X
+	}
+	end := promptEnd(t.promptLeft)
+	if end == "" || !strings.HasSuffix(strings.TrimRight(t.cellText(pos.Y, 0, at), " "), end) {
+		return false
+	}
+	t.recordPrompt(at)
+	if !none {
 		// Theirs on the line, as if typed at it: until their Enter or
 		// Ctrl+C, past a command the shell starts on its own too.
-		t.recordPrompt(from)
 		t.personAfter = true
 	}
 	return true
