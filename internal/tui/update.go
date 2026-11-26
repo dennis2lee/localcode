@@ -12,7 +12,7 @@ import (
 	"localcode/internal/events"
 )
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spinTickMsg:
 		return m.handleSpinTick()
@@ -176,6 +176,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// show one a turn left behind when its daemon stopped.
 			if client.IsNotPending(msg.err) {
 				delete(m.answering, msg.id)
+				// Gone from the daemon, so a later request under its id
+				// is a new question. See longPermission.
+				delete(m.longShown, msg.id)
 			} else {
 				m.restorePermission(msg.id)
 			}

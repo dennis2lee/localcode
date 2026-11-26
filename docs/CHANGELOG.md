@@ -6,7 +6,8 @@
 
 * A permission question that showed only the first line of the prompt a `Schedule` call books or the task a `Debate` is given, and 600 bytes of a `memory_save` note: the whole text, up to 8,000 characters, and a count of what is left out past that
 * Control characters, bidirectional and zero-width marks and other default-ignorable characters in a permission question, its directory, workspace and rule shown as escapes (`\r`, `\x1b`, `\u202e`), so a terminal or a browser draws nothing the text does not show
-* A question with a line break or wider than 80 columns written whole into the TUI's transcript, with its start, a note saying where the rest is and its keys in the permission line, which wraps to the terminal; the Web UI keeping its line breaks and wrapping
+* A question with a line break or wider than 80 columns written whole into the TUI's transcript, with its start, a note saying where the rest is and its keys in the permission line, which wraps to the terminal and takes the rows it needs from the transcript; the Web UI keeping its line breaks and wrapping
+* The line a `memory_save` note is listed under in `MEMORY.md` shown in its permission question with the note
 
 ## v0.180.8
 

@@ -193,6 +193,13 @@ func (MemorySaveTool) Describe(input json.RawMessage) string {
 	if !ok {
 		where = "in a scope that is not session, project or user, which the save will refuse"
 	}
+	// The index line too, when there is one: it is written into MEMORY.md,
+	// which every later session in the scope loads, so it is as much what
+	// is being approved as the note itself.
+	if d := strings.TrimSpace(a.Description); d != "" {
+		return fmt.Sprintf("save a %s memory note %q, %s, listed as %q:\n%s",
+			strings.ToLower(a.Scope), a.Name, where, confirmationText(d), content)
+	}
 	return fmt.Sprintf("save a %s memory note %q, %s:\n%s", strings.ToLower(a.Scope), a.Name, where, content)
 }
 

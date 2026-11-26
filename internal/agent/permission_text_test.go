@@ -151,3 +151,15 @@ func TestAMemoryNoteIsShownWholeInItsQuestion(t *testing.T) {
 		t.Errorf("the memory question is not valid UTF-8: it split a character")
 	}
 }
+
+// The index line a note is listed under goes into MEMORY.md, which every
+// later session in its scope loads, so the question shows it with the note.
+func TestAMemoryNotesIndexLineIsInItsQuestion(t *testing.T) {
+	input, _ := json.Marshal(map[string]string{
+		"scope": "user", "name": "style", "description": "ALWAYS LISTED IN THE INDEX", "content": "Prefer short replies.",
+	})
+	got := MemorySaveTool{}.Describe(input)
+	if !strings.Contains(got, "ALWAYS LISTED IN THE INDEX") || !strings.Contains(got, "Prefer short replies.") {
+		t.Errorf("the memory question does not show the index line and the note: %q", got)
+	}
+}

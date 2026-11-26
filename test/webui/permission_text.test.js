@@ -49,3 +49,16 @@ test('line breaks and tabs in a question stay as they are', async () => {
   const text = app.el('permission-text').textContent;
   assert.ok(text.includes('run the tests\n\n\tthen the second thing'), JSON.stringify(text));
 });
+
+test('the rule an "always allow" would write is drawn escaped', async () => {
+  const app = await load();
+  const rlo = String.fromCodePoint(0x202e);
+  app.sse.emit({
+    seq: 1,
+    type: 'permission.request',
+    data: { id: 'p1', tool: 'write_file', description: 'write /tmp/x', can_always: true, rule: '/tmp/' + rlo + 'x' },
+  });
+  const title = app.el('permission-allow-always').title;
+  assert.ok(!title.includes(rlo), JSON.stringify(title));
+  assert.ok(title.includes('/tmp/' + String.fromCharCode(92) + 'u202ex'), title);
+});

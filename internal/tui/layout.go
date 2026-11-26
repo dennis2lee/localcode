@@ -17,7 +17,17 @@ func (m *Model) resizeLayout() {
 	m.scrollInputToTop()
 
 	const chromeLines = 2 // status/permission line + blank separator
-	vh := m.termHeight - chromeLines - borderLines - footerLines - inputHeight
+	// What the band below the prompt box really takes, once it is more
+	// than the two rows always kept for it: a wrapped or long permission
+	// question, the requests queued behind it, the busy line. Without it
+	// the frame was taller than the terminal and the alternate screen cut
+	// the bottom rows, which are the keys that answer the question.
+	m.bandRows = m.statusBandRows()
+	reserved := chromeLines
+	if m.bandRows > reserved {
+		reserved = m.bandRows
+	}
+	vh := m.termHeight - reserved - borderLines - footerLines - inputHeight
 	if vh < 3 {
 		vh = 3
 	}
@@ -101,4 +111,18 @@ func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.resizeLayout()
 	m.refreshViewport()
 	return m, nil
+}
+
+// Update is the one door every change to the model comes through, which is
+// why the layout is checked here: the band below the prompt box grows and
+// shrinks with a permission question, a queue, a busy turn or an error,
+// and each of those arrives by a different path. The transcript is resized
+// when, and only when, the band's height has changed.
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	if nm, ok := next.(Model); ok && nm.termHeight > 0 && nm.statusBandRows() != nm.bandRows {
+		nm.resizeLayout()
+		return nm, cmd
+	}
+	return next, cmd
 }

@@ -1,12 +1,17 @@
 package tui
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"localcode/internal/client"
 	"localcode/internal/events"
 )
 
@@ -136,7 +141,7 @@ func TestALongQuestionsFooterFitsAndSaysWhereTheRestIs(t *testing.T) {
 		t.Fatalf("the footer does not say where the rest is on a line of its own:\n%s", footer)
 	}
 	for _, l := range lines {
-		if w := len([]rune(l)); w > 80 {
+		if w := lipgloss.Width(l); w > 80 {
 			t.Errorf("a footer line is %d columns wide: %q", w, l)
 		}
 	}
@@ -224,5 +229,170 @@ func TestTheBoundaryFieldsOfAQuestionAreDrawnClean(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the question does not show %s as escapes: %q", want, prompt)
 		}
+	}
+}
+
+// sized is a model laid out for a terminal of w by h, as a resize gives it.
+func sized(t *testing.T, w, h int) Model {
+	t.Helper()
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	return updated.(Model)
+}
+
+// deliver sends one event the way the stream does, through Update.
+func deliver(t *testing.T, m Model, ev events.Event) Model {
+	t.Helper()
+	updated, _ := m.Update(eventMsg{ev: ev, gen: m.streamGen})
+	return updated.(Model)
+}
+
+// The frame fits the terminal. The band below the prompt box grows with a
+// wrapped or long question, its rule and the requests behind it, and the
+// transcript gives up the rows: the alternate screen cuts what is past the
+// last one, and those are the keys that answer the question.
+func TestThePermissionBandTakesItsRowsFromTheTranscript(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		w, h  int
+		ev    events.Event
+		queue bool
+		wants []string
+	}{
+		{"a long question with its rule and a queue, 80 by 24", 80, 24,
+			events.Event{Type: events.TypePermissionRequest, Data: map[string]any{
+				"id": "p1", "tool": "write_file", "description": "write /tmp/long\nsecond line",
+				"rule": "/Users/alice/workspace/project/internal/service/handler.go", "can_always": true,
+			}}, true,
+			[]string{"y: allow", "handler.go", "1 more permission request waiting", "transcript above"}},
+		{"a short question wrapped on 28 columns", 28, 24,
+			permissionEvent("p1", "write /tmp/a/long/path/to/file/name/here ENDMARK"), false,
+			[]string{"ENDMARK", "y: allow"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sized(t, tc.w, tc.h)
+			m.waiting = true
+			m = deliver(t, m, tc.ev)
+			if tc.queue {
+				m = deliver(t, m, permissionEvent("p2", "second queued request"))
+			}
+			view := m.View().Content
+			rows := strings.Split(view, "\n")
+			if len(rows) > tc.h {
+				t.Errorf("the frame is %d rows on a %d-row terminal", len(rows), tc.h)
+			}
+			shown := strings.Join(rows[:min(len(rows), tc.h)], "\n")
+			for _, want := range tc.wants {
+				if !strings.Contains(shown, want) {
+					t.Errorf("%q is past the last row of the terminal:\n%s", want, shown)
+				}
+			}
+		})
+	}
+	// And when the question is answered the transcript gets the rows back.
+	m := sized(t, 80, 24)
+	before := m.viewport.Height()
+	m = deliver(t, m, permissionEvent("p1", "write /tmp/long\nsecond line"))
+	if m.viewport.Height() >= before {
+		t.Errorf("the transcript kept %d rows under a three-row question", m.viewport.Height())
+	}
+	m = deliver(t, m, events.Event{Type: events.TypePermissionResolved, Data: map[string]any{"id": "p1"}})
+	if m.viewport.Height() != before {
+		t.Errorf("the transcript has %d rows after the question was answered, want %d back", m.viewport.Height(), before)
+	}
+}
+
+// The rule is drawn once escaped. It is read through VisibleText, and %q
+// on top of that wrote every backslash of the escape twice.
+func TestTheRuleIsEscapedOnce(t *testing.T) {
+	rlo := string(rune(0x202e))
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypePermissionRequest, Data: map[string]any{
+		"id": "p1", "tool": "write_file", "description": "write /tmp/x",
+		"rule": "/tmp/" + rlo + "x", "can_always": true,
+	}})
+	prompt := m.pending.prompt(false)
+	want := `a: always allow "/tmp/` + "\\" + `u202ex"`
+	if !strings.Contains(prompt, want) {
+		t.Errorf("the rule is drawn as %q, want it to contain %q", prompt, want)
+	}
+	if strings.Contains(prompt, rlo) {
+		t.Errorf("the rule is drawn raw: %q", prompt)
+	}
+}
+
+// The tool's name is part of the head: a tab in it is drawn as spaces and
+// a line break in it makes the question long. A long name leaves the head
+// inside 80 columns all the same.
+func TestTheToolNameCountsInTheHead(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypePermissionRequest, Data: map[string]any{"id": "p1", "tool": "my\ttool", "description": "short"}})
+	if strings.Contains(m.pending.prompt(false), "\t") {
+		t.Errorf("a tab in the tool name reaches the footer: %q", m.pending.prompt(false))
+	}
+	m = newTestModel()
+	m.applyEvent(events.Event{Type: events.TypePermissionRequest, Data: map[string]any{"id": "p1", "tool": "foo\nbar", "description": "short"}})
+	if !m.pending.long {
+		t.Error("a tool name with a line break is not a long question")
+	}
+	m = newTestModel()
+	m.applyEvent(events.Event{Type: events.TypePermissionRequest, Data: map[string]any{
+		"id": "p1", "tool": "mcp__filesystem__write_file_contents", "description": strings.Repeat("w", 120) + "\nsecond",
+	}})
+	head, _, _ := strings.Cut(m.pending.prompt(false), "\n")
+	if w := lipgloss.Width(head); w > 80 {
+		t.Errorf("the head of a long question with a long tool name is %d columns: %q", w, head)
+	}
+}
+
+// A lost turn takes its questions with it, so one asked again under a
+// reused id is written into the transcript again.
+func TestALostTurnForgetsWhatItWroteIntoTheTranscript(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+	desc := "schedule for 09:00: run\n\nsecond"
+	m.applyEvent(permissionEvent("p1", desc))
+	m.endLostTurn()
+	m.applyEvent(permissionEvent("p1", desc))
+	if n := strings.Count(m.transcriptText(), "second"); n != 2 {
+		t.Errorf("the question asked again after a lost turn is in the transcript %d times, want 2", n)
+	}
+}
+
+// A boundary question is one of two words. Anything else is not one, as
+// the Web UI already takes it, and is not drawn into the keys.
+func TestAnUnknownBoundaryWordIsNotABoundaryQuestion(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypePermissionRequest, Data: map[string]any{
+		"id": "p1", "tool": "write_file", "description": "write /tmp/x",
+		"outside": "write" + string(rune(0x1b)) + "[8m", "outside_dir": "/tmp/a", "workspace": "/work/b",
+	}})
+	if p := m.pending.prompt(false); strings.Contains(p, string(rune(0x1b))) || strings.Contains(p, "d: allow") {
+		t.Errorf("an unknown boundary word is drawn into the keys: %q", p)
+	}
+}
+
+// An answer the daemon says is for nothing pending drops the question, and
+// a later request under its id is a new one.
+func TestAQuestionTheDaemonNoLongerHoldsIsForgotten(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":"permission request p1 is not pending"}`)
+	}))
+	defer srv.Close()
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
+	desc := "schedule for 09:00: run\n\nsecond"
+	m.applyEvent(permissionEvent("p1", desc))
+	m.pendingSince = time.Now().Add(-time.Hour)
+	next, cmd, handled := press(m, "n")
+	if !handled || cmd == nil {
+		t.Fatal("n did not answer the question")
+	}
+	updated, _ := next.Update(cmd())
+	m = updated.(Model)
+	m.applyEvent(permissionEvent("p1", desc))
+	if n := strings.Count(m.transcriptText(), "second"); n != 2 {
+		t.Errorf("the question asked again after a not-pending answer is in the transcript %d times, want 2", n)
 	}
 }

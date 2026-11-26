@@ -180,37 +180,7 @@ func (m Model) View() tea.View {
 	lines = append(lines, strings.Split(m.input.View(), "\n")...)
 	lines = append(lines, m.inputBorder())
 
-	// The status band lives BELOW the prompt box: the permission prompt,
-	// the busy indicator (own turn and/or background tasks), or the last
-	// error — one at a time, gone when there is nothing to say.
-	if m.pending != nil {
-		// The queue behind it is named, or answering the modal answers
-		// a question the reader cannot see coming: with a fanout of
-		// four the modal would otherwise clear three times with no
-		// warning of what each answer was for.
-		text := m.pending.prompt(strings.TrimSpace(m.input.Value()) != "")
-		switch len(m.pendingQueue) {
-		case 0:
-		case 1:
-			text += "\n(1 more permission request waiting)"
-		default:
-			text += fmt.Sprintf("\n(%d more permission requests waiting)", len(m.pendingQueue))
-		}
-		// Wrapped to the terminal rather than cut at its edge, so a question
-		// on a narrow terminal shows all of what it says. See longPermission.
-		style := modalStyle
-		if m.termWidth > 0 {
-			style = style.Width(m.termWidth)
-		}
-		lines = append(lines, style.Render(text))
-	}
-	if m.asking != nil {
-		lines = append(lines, modalStyle.Render(m.asking.prompt(strings.TrimSpace(m.input.Value()) != "")))
-	} else if m.busy() {
-		lines = append(lines, statusStyle.Render(m.busyLine()))
-	} else if m.errMsg != "" {
-		lines = append(lines, errorStyle.Render("Error: "+m.errMsg))
-	}
+	lines = append(lines, m.statusBand()...)
 
 	// Agent status lives below the input box (not above it), so it reads
 	// as "what will the next message use" right next to where the next
@@ -285,4 +255,53 @@ func (m Model) View() tea.View {
 		v.Cursor = cur
 	}
 	return v
+}
+
+// statusBand is what is drawn below the prompt box: the permission
+// question, then the model's question, the busy line or the last error.
+//
+// One definition for two readers. View draws it, and resizeLayout gives
+// the transcript whatever height it leaves, so a question that wraps to
+// several rows takes them from the transcript instead of pushing the keys
+// that answer it off the bottom of the screen.
+func (m Model) statusBand() []string {
+	var out []string
+	if m.pending != nil {
+		// The queue behind it is named, or answering the modal answers
+		// a question the reader cannot see coming: with a fanout of
+		// four the modal would otherwise clear three times with no
+		// warning of what each answer was for.
+		text := m.pending.prompt(strings.TrimSpace(m.input.Value()) != "")
+		switch len(m.pendingQueue) {
+		case 0:
+		case 1:
+			text += "\n(1 more permission request waiting)"
+		default:
+			text += fmt.Sprintf("\n(%d more permission requests waiting)", len(m.pendingQueue))
+		}
+		// Wrapped to the terminal rather than cut at its edge, so a question
+		// on a narrow terminal shows all of what it says. See longPermission.
+		style := modalStyle
+		if m.termWidth > 0 {
+			style = style.Width(m.termWidth)
+		}
+		out = append(out, style.Render(text))
+	}
+	if m.asking != nil {
+		out = append(out, modalStyle.Render(m.asking.prompt(strings.TrimSpace(m.input.Value()) != "")))
+	} else if m.busy() {
+		out = append(out, statusStyle.Render(m.busyLine()))
+	} else if m.errMsg != "" {
+		out = append(out, errorStyle.Render("Error: "+m.errMsg))
+	}
+	return out
+}
+
+// statusBandRows is how many rows statusBand takes on screen.
+func (m Model) statusBandRows() int {
+	n := 0
+	for _, block := range m.statusBand() {
+		n += strings.Count(block, "\n") + 1
+	}
+	return n
 }

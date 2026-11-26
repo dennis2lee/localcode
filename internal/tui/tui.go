@@ -164,6 +164,9 @@ type Model struct {
 	// and an id is forgotten when its request is resolved. Cleared with the
 	// transcript on a session switch. See longPermission.
 	longShown map[string]string
+	// bandRows is the height of the band below the prompt box the layout
+	// was last computed for. See statusBand and Update.
+	bandRows int
 	// answering holds each request settled locally while its resolve POST
 	// is in flight, keyed by id, so a failed POST can put its own request
 	// back even when several questions were answered in a row.

@@ -313,6 +313,12 @@ func (m *Model) applyEvent(ev events.Event) {
 			desc = "(no description given)"
 		}
 		outside, _ := ev.Data["outside"].(string)
+		// One of two words, as the Web UI takes it: the daemon writes only
+		// these, and anything else is no boundary question this client
+		// knows how to answer.
+		if outside != "read" && outside != "write" {
+			outside = ""
+		}
 		outsideDir, _ := ev.Data["outside_dir"].(string)
 		outsideDir = events.VisibleText(outsideDir)
 		workspace, _ := ev.Data["workspace"].(string)

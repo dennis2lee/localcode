@@ -88,6 +88,9 @@ func (m *Model) endLostTurn() {
 		m.pending = nil
 		m.pendingQueue = nil
 		m.answering = nil
+		// The questions are gone with the turn, so one asked again under a
+		// reused id is written into the transcript again.
+		m.longShown = nil
 		m.asking = nil
 		m.appendTool("[the localcode running this turn is no longer running it; the turn did not finish]")
 	}

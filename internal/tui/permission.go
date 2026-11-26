@@ -48,16 +48,19 @@ type pendingPermission struct {
 // prompt renders the permission modal, listing exactly the answers this
 // request will accept.
 func (p pendingPermission) prompt(typing bool) string {
-	head := fmt.Sprintf("Permission request [%s]: %s", p.tool, expandTabs(p.description))
+	tool := expandTabs(p.tool)
+	head := fmt.Sprintf("Permission request [%s]: %s", tool, expandTabs(p.description))
 	if p.long {
 		head = fmt.Sprintf("Permission request [%s]: %s …\n(the whole request is in the transcript above)",
-			p.tool, footerLine(p.description))
+			tool, footerLine(tool, p.description))
 	}
 	keys := "y: allow once  n: deny  s: allow for session"
 	if p.once {
 		keys = "y: allow this once  n: deny  (asked every time)"
 	} else if p.canAlways {
-		keys += fmt.Sprintf("  a: always allow %q", p.rule)
+		// Quoted, not %q: the rule is already drawn safe (events.VisibleText),
+		// and %q would escape that escaping a second time.
+		keys += fmt.Sprintf("  a: always allow \"%s\"", p.rule)
 	}
 
 	if p.outside != "" {
@@ -89,10 +92,11 @@ func (p pendingPermission) prompt(typing bool) string {
 // answered. Measured in columns, not characters: a prompt of Korean, or
 // one padded with tabs, is twice or eight times as wide as its count.
 func longPermission(tool, description string) bool {
-	if strings.Contains(description, "\n") {
+	head := fmt.Sprintf("Permission request [%s]: %s", tool, description)
+	if strings.Contains(head, "\n") {
 		return true
 	}
-	return lipgloss.Width(expandTabs(fmt.Sprintf("Permission request [%s]: %s", tool, description))) > footerCols
+	return lipgloss.Width(expandTabs(head)) > footerCols
 }
 
 // footerCols is the width a short question is held to. Eighty, the width a
@@ -101,10 +105,15 @@ func longPermission(tool, description string) bool {
 const footerCols = 80
 
 // footerLine is the first line of a long question, cut to the columns that
-// leave its head inside footerCols.
-func footerLine(description string) string {
+// leave its head, tool name and " …" included, inside footerCols. Ten at
+// the least, for a tool name that takes the rest.
+func footerLine(tool, description string) string {
 	line, _, _ := strings.Cut(description, "\n")
-	return ansi.Truncate(expandTabs(line), footerCols/2, "")
+	budget := footerCols - lipgloss.Width("Permission request []: ") - lipgloss.Width(tool) - lipgloss.Width(" …")
+	if budget < 10 {
+		budget = 10
+	}
+	return ansi.Truncate(expandTabs(line), budget, "")
 }
 
 // expandTabs draws a tab as four spaces, so a width is the width shown.
