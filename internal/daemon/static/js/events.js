@@ -1,7 +1,7 @@
 import { inputEl } from './dom.js';
 import { app, session, sessionWorking, noteActivity } from './state.js';
 import {
-  appendUser, appendTool, appendAsk, appendError, appendModelText, endModelText,
+  appendUser, appendTool, appendAsk, askLeftUnanswered, askReplyHint, askLeftHint, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
   appendReview, appendThinking, endThinking, foldThinking, clearTranscript, showEarlierBanner,
   abandonPendingUsers, settleThinkingBlock, hasLiveThinking, landBeforeSeq,
@@ -30,6 +30,10 @@ import { loadSessions, renderSessionList, loadArchived, selectSession } from './
 import { loadAgents } from './loaders.js';
 
 let eventSource = null;
+
+// askLine is the model question the box was last armed for and the line
+// that asks it, for input.resolved to rewrite. See askLeftUnanswered.
+let askLine = null;
 
 // isOrchestrateStage reports whether a task id is an orchestration stage
 // progress report rather than a task. The daemon reports stage progress
@@ -256,12 +260,21 @@ const handlers = {
     if (!stale) session.pendingAsk = d.id;
     else if (session.pendingAsk === d.id) session.pendingAsk = null;
     const opts = Array.isArray(d.options) ? d.options : [];
-    appendAsk([`[the model is asking] ${d.question}`,
+    const el = appendAsk([`[the model is asking] ${d.question}`,
       ...opts.map((o, i) => `  ${i + 1}. ${o}`),
-      stale ? '  (left unanswered)' : '  (reply in the box below, in your own words or with a number)'].join('\n'));
+      stale ? askLeftHint : askReplyHint].join('\n'));
+    askLine = stale ? null : { id: d.id, el };
   },
+  // A stale resolution of the question the box is armed for also says so
+  // on its line. It reaches a page that held the question from before a
+  // restart, and the line went on inviting a reply that the box, no
+  // longer armed, sent to the model as a new prompt.
   'input.resolved': (d) => {
-    if (session.pendingAsk === d.id) session.pendingAsk = null;
+    if (session.pendingAsk === d.id) {
+      session.pendingAsk = null;
+      if (d.stale === true && askLine && askLine.id === d.id) askLeftUnanswered(askLine.el);
+    }
+    if (askLine && askLine.id === d.id) askLine = null;
     if (d.answer) appendTool(`[answered] ${d.answer}`);
   },
   // The model's own checklist. Whole list every time, for the same

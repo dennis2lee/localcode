@@ -353,6 +353,18 @@ export function appendTool(text) { return appendDiv('msg-tool', text); }
 // before the line is inserted, so the scroll follower measures and scrolls
 // with the height the line will keep.
 export function appendAsk(text) { return appendDiv('msg-tool msg-ask', text); }
+
+// The last line of a model question's record: what it invites while the
+// box takes the answer, and what it says once nobody will.
+export const askReplyHint = '  (reply in the box below, in your own words or with a number)';
+export const askLeftHint = '  (left unanswered)';
+
+// askLeftUnanswered rewrites a question's line drawn inviting a reply to
+// say it was left unanswered. A line drawn any other way is left alone.
+export function askLeftUnanswered(el) {
+  if (!el || !el.textContent.endsWith(askReplyHint)) return;
+  change(() => { el.textContent = el.textContent.slice(0, -askReplyHint.length) + askLeftHint; });
+}
 export function appendError(err) { return appendDiv('msg-error', 'Error: ' + String(err)); }
 
 // showEarlierBanner puts a line at the very top of the transcript saying

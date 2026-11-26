@@ -276,7 +276,11 @@ test('a resumed stream puts away the questions the page held', async () => {
   assert.equal(app.state.pendingPermissionID, 'd1-p2', 'd1-p1 should be put away and d1-p2 brought up');
   assert.deepEqual([...app.state.pendingPermissionQueue], []);
   assert.equal(app.internals.session.pendingAsk, null, 'the box is still armed for a question nobody is waiting on');
-  assert.equal(app.el('transcript').textContent, before, 'putting a question away drew something');
+  assert.equal(
+    app.el('transcript').textContent,
+    before.replace('(reply in the box below, in your own words or with a number)', '(left unanswered)'),
+    'putting the questions away changed anything but the held question, which says it was left unanswered',
+  );
 
   app.sse.emit(staleResolution('permission', 'd1-p2'));
   await app.settle();
@@ -305,4 +309,86 @@ test('a task window says a request it showed waiting was left unanswered, once',
   s.emit(staleResolution('permission', 'd1-p1'));
   assert.equal(count(/permission left unanswered/g), 1, 'the window should say it once, for the request it showed waiting');
   assert.doesNotMatch(body.textContent, /permission not answered|permission denied/);
+});
+
+// The line of a question the page held from before a restart says it was
+// left unanswered once it is put away. It went on inviting a reply, and
+// the box, no longer armed, sent that reply to the model as a new prompt.
+test('a model question held through a restart says on its line it was left unanswered', async () => {
+  const app = await load();
+  app.sse.emit({ seq: 400, type: 'message.user', data: { text: 'pick one' } });
+  app.sse.emit(ask(401, 'd1-i1', 'which one?', false));
+  await app.settle();
+  app.sse.fail();
+  app.sse.reopen();
+  await app.settle();
+
+  app.sse.emit(staleResolution('input', 'd0-i9'));
+  await app.settle();
+  assert.match(app.el('transcript').textContent, /reply in the box below/, 'a stale resolution of another question rewrote this one');
+
+  app.sse.emit(staleResolution('input', 'd1-i1'));
+  await app.settle();
+  const [line] = Array.from(app.el('transcript').querySelectorAll('.msg-ask'));
+  assert.ok(line.textContent.endsWith('\n  (left unanswered)'), `the held question reads: ${JSON.stringify(line.textContent)}`);
+  assert.doesNotMatch(line.textContent, /reply in the box below/);
+  assert.match(line.textContent, / {2}1\. a\n {2}2\. b/, 'the rewrite lost the options');
+});
+
+// Only a stale resolution says so. A question answered keeps its line as
+// drawn, with the answer below it.
+test('an answered model question keeps its line', async () => {
+  const app = await load();
+  app.sse.emit(ask(1, 'q1', 'which one?', false));
+  app.sse.emit({ seq: 2, type: 'input.resolved', data: { id: 'q1', answer: 'a' } });
+  await app.settle();
+  const text = app.el('transcript').textContent;
+  assert.match(text, /reply in the box below/);
+  assert.doesNotMatch(text, /left unanswered/);
+  assert.match(text, /\[answered\] a/);
+});
+
+// A task window that drew a request stale has nothing waiting, so a later
+// resume's stale resolution for it adds nothing.
+test('a task window that drew a request stale says so once across a resume', async () => {
+  const app = await load();
+  app.sse.emit({ seq: 1, type: 'task.spawned', data: { task_id: 'task-1', agent: 'explore' } });
+  app.sse.emit({ seq: 2, type: 'task.status', data: { task_id: 'task-1', status: 'running' } });
+  app.el('tasks').children[0].click();
+  await app.settle();
+  const s = app.streamFor('/api/sessions/task-1/events');
+  s.emit(permission(3, 'pA-1', 'rm -rf build/', true));
+  s.fail();
+  s.reopen();
+  s.emit(staleResolution('permission', 'pA-1'));
+  const said = (app.el('task-modal-body').textContent.match(/permission left unanswered/g) || []).length;
+  assert.equal(said, 1, `the window said "left unanswered" ${said} times`);
+});
+
+// A task window reopened after its daemon stopped draws the request stale
+// and forgets what the first opening drew waiting.
+test('a task window reopened on a task whose question was left open says so once', async () => {
+  const app = await load();
+  app.sse.emit({ seq: 1, type: 'task.spawned', data: { task_id: 'task-1', agent: 'explore' } });
+  app.sse.emit({ seq: 2, type: 'task.status', data: { task_id: 'task-1', status: 'running' } });
+  app.el('tasks').children[0].click();
+  await app.settle();
+  const first = app.streamFor('/api/sessions/task-1/events');
+  first.emit(permission(3, 'pA-1', 'rm -rf build/', false));
+  const body = app.el('task-modal-body');
+  assert.match(body.textContent, /waiting for permission/, 'precondition: drawn waiting');
+
+  app.el('task-close').click();
+  await app.settle();
+  app.el('tasks').children[0].click();
+  await app.settle();
+  const second = app.streamFor('/api/sessions/task-1/events');
+  assert.notEqual(second, first, 'precondition: a new stream');
+  second.emit(permission(3, 'pA-1', 'rm -rf build/', true));
+  assert.doesNotMatch(body.textContent, /waiting for permission/);
+  second.fail();
+  second.reopen();
+  second.emit(staleResolution('permission', 'pA-1'));
+  const said = (body.textContent.match(/permission left unanswered/g) || []).length;
+  assert.equal(said, 1, `the window said "left unanswered" ${said} times`);
 });
