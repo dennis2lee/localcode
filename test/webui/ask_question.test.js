@@ -121,17 +121,18 @@ test('the question and its options stay plain text', async () => {
   assert.ok(!line.outerHTML.includes('<img') && !line.outerHTML.includes('<script'), `serialized as ${line.outerHTML}`);
 });
 
+// One page each: a daemon asks one question at a time, and a second live
+// question puts the first away.
 test('a question without options still draws with its hint', async () => {
-  const app = await load();
-  app.sse.emit(request(1, 'q1', 'what now?', undefined));
-  app.sse.emit(request(2, 'q2', 'and then?', 'not a list'));
-  await app.settle();
-
-  const lines = questionLines(app);
-  assert.equal(lines.length, 2);
-  assert.equal(lines[0].textContent, `[the model is asking] what now?\n${HINT}`);
-  assert.equal(lines[1].textContent, `[the model is asking] and then?\n${HINT}`);
-  for (const l of lines) assert.ok(l.classList.contains(askClass(app)));
+  for (const [question, options] of [['what now?', undefined], ['and then?', 'not a list']]) {
+    const app = await load();
+    app.sse.emit(request(1, 'q1', question, options));
+    await app.settle();
+    const lines = questionLines(app);
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].textContent, `[the model is asking] ${question}\n${HINT}`);
+    assert.ok(lines[0].classList.contains(askClass(app)));
+  }
 });
 
 test('other tool lines keep their size', async () => {

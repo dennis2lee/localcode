@@ -264,6 +264,12 @@ const handlers = {
       forgetAskLine(d.id);
       askNobodyWaiting(d.id);
     } else {
+      // A daemon asks one model question at a time in a session, so a live
+      // one means every other this page holds is over: its turn ended, and
+      // the stream that would have said so may have been away.
+      for (const id of new Set([...askLineIds(), ...session.answeringAsks.keys()])) {
+        if (id !== d.id) askNobodyWaiting(id);
+      }
       noteAskLine(d.id, el);
     }
   },
