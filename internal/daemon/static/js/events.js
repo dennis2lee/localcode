@@ -1,14 +1,14 @@
 import { inputEl } from './dom.js';
 import { app, session, sessionWorking, noteActivity } from './state.js';
 import {
-  appendUser, appendTool, appendAsk, askLeftUnanswered, askReplyHint, askLeftHint, appendError, appendModelText, endModelText,
+  appendUser, appendTool, appendAsk, askReplyHint, askLeftHint, noteAskLine, forgetAskLine, leaveAskUnanswered, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
   appendReview, appendThinking, endThinking, foldThinking, clearTranscript, showEarlierBanner,
   abandonPendingUsers, settleThinkingBlock, hasLiveThinking, landBeforeSeq,
 } from './transcript.js';
 import { findRefresh } from './find.js';
 import { renderStatusBar, renderTasks, renderTaskProgress, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
-import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
+import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry, askNobodyWaiting } from './composer.js';
 import {
   refreshDelegatePanelIfOpen, refreshPermissionSettingsIfOpen,
   enqueuePermissionRequest, settlePermissionRequest,
@@ -30,10 +30,6 @@ import { loadSessions, renderSessionList, loadArchived, selectSession } from './
 import { loadAgents } from './loaders.js';
 
 let eventSource = null;
-
-// askLine is the model question the box was last armed for and the line
-// that asks it, for input.resolved to rewrite. See askLeftUnanswered.
-let askLine = null;
 
 // isOrchestrateStage reports whether a task id is an orchestration stage
 // progress report rather than a task. The daemon reports stage progress
@@ -263,18 +259,28 @@ const handlers = {
     const el = appendAsk([`[the model is asking] ${d.question}`,
       ...opts.map((o, i) => `  ${i + 1}. ${o}`),
       stale ? askLeftHint : askReplyHint].join('\n'));
-    askLine = stale ? null : { id: d.id, el };
+    if (stale) forgetAskLine(d.id);
+    else noteAskLine(d.id, el);
   },
   // A stale resolution of the question the box is armed for also says so
   // on its line. It reaches a page that held the question from before a
   // restart, and the line went on inviting a reply that the box, no
-  // longer armed, sent to the model as a new prompt.
+  // longer armed, sent to the model as a new prompt. With an answer from
+  // here on its way, the answer's outcome says it instead (sendMessage):
+  // a stale resolution can overtake the real one of an answer that got
+  // through.
   'input.resolved': (d) => {
+    const stale = d.stale === true;
     if (session.pendingAsk === d.id) {
       session.pendingAsk = null;
-      if (d.stale === true && askLine && askLine.id === d.id) askLeftUnanswered(askLine.el);
+      if (stale) leaveAskUnanswered(d.id);
     }
-    if (askLine && askLine.id === d.id) askLine = null;
+    if (stale) {
+      askNobodyWaiting(d.id);
+    } else {
+      if (session.answeringAsk && session.answeringAsk.id === d.id) session.answeringAsk = null;
+      forgetAskLine(d.id);
+    }
     if (d.answer) appendTool(`[answered] ${d.answer}`);
   },
   // The model's own checklist. Whole list every time, for the same
@@ -939,6 +945,7 @@ async function resyncAfterReconnect() {
   // again, so its failure must not bring the question back.
   session.answeringPermissions.clear();
   session.pendingAsk = null;
+  if (session.answeringAsk) askNobodyWaiting(session.answeringAsk.id);
   session.promptQueue = [];
   setWaiting(false);
   if (!session.pendingPermissionID) setInputLocked(false);

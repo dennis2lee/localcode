@@ -1,7 +1,7 @@
 import { inputEl, centerEl, sendBtn, commDotEl } from './dom.js';
 import { app, session, turnInFlight, tasksInFlight, historyLimit } from './state.js';
 import * as apiClient from './api.js';
-import { appendTool, appendError, appendPendingUser, resolvePendingUser } from './transcript.js';
+import { appendTool, appendError, appendPendingUser, resolvePendingUser, leaveAskUnanswered } from './transcript.js';
 import { renderStatusBar } from './render.js';
 import { isPlainPrompt, tryLocalCommand } from './commands.js';
 import { resetCompletion } from './complete.js';
@@ -612,6 +612,21 @@ export async function addImageFile(file, fallbackName) {
 
 inputEl.addEventListener('paste', handlePaste);
 
+// askNobodyWaiting is told no daemon is waiting on the model question
+// id: a stale resolution for it, or its turn declared lost. An answer from
+// here still on its way leaves it to that answer's outcome, since it may
+// have got through; one the daemon refused says it now, on the line.
+export function askNobodyWaiting(id) {
+  const answering = session.answeringAsk;
+  if (!answering || answering.id !== id) return;
+  if (answering.inFlight) {
+    answering.stale = true;
+    return;
+  }
+  session.answeringAsk = null;
+  leaveAskUnanswered(id);
+}
+
 export async function sendMessage() {
   const text = inputEl.value.trim();
   const images = attachedImages.map((img) => ({
@@ -625,15 +640,40 @@ export async function sendMessage() {
   // keeps four canned options from being a dead end: the right answer is
   // often "neither, do X", and a dialog that could not carry it would
   // force cancelling the turn to say so.
+  //
+  // An answer that fails puts the question back while the daemon may
+  // still be waiting on it, as a permission request is put back: the box
+  // is armed again under the line that invites the reply. Not once the
+  // daemon has said nobody is waiting (askNobodyWaiting), which says so on
+  // the line instead, and not when the question was resolved meanwhile. A
+  // 404 says the daemon is not waiting now, which an answer from another
+  // window also produces: what became of the question is left to its
+  // resolution.
   if (session.pendingAsk) {
     const id = session.pendingAsk;
     session.pendingAsk = null;
+    const answering = { id, inFlight: true, stale: false };
+    session.answeringAsk = answering;
     inputEl.value = '';
     autoResizeInput();
     try {
       await apiClient.answerQuestion(session.sessionID, id, text);
+      if (session.answeringAsk === answering) session.answeringAsk = null;
     } catch (err) {
       appendTool(`[could not answer: ${err}]`);
+      if (session.answeringAsk === answering) {
+        answering.inFlight = false;
+        if (answering.stale) {
+          session.answeringAsk = null;
+          leaveAskUnanswered(id);
+        } else if (!apiClient.isNotPending(err)) {
+          session.answeringAsk = null;
+          if (!session.pendingAsk) {
+            session.pendingAsk = id;
+            renderCommDot();
+          }
+        }
+      }
     }
     return;
   }

@@ -170,6 +170,12 @@ export function freshSessionState(id) {
   // The id of a question the model asked mid-turn, or null. The next
   // message typed into the box answers it instead of starting a prompt.
   pendingAsk: null,
+  // {id, inFlight, stale} for an answer typed here, from when it is sent
+  // until what became of its question is known, or null. A failure puts
+  // the question back while the daemon may still be waiting on it, as a
+  // permission request is put back; once nobody is (stale), its line
+  // says it was left unanswered. See sendMessage and askNobodyWaiting.
+  answeringAsk: null,
     // Model output streams as markdown, so it renders as one growing bubble
     // per model message rather than raw text nodes: currentModelEl is that
     // bubble, currentModelBuffer the raw markdown accumulated for it so far.

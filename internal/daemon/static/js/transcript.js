@@ -359,10 +359,25 @@ export function appendAsk(text) { return appendDiv('msg-tool msg-ask', text); }
 export const askReplyHint = '  (reply in the box below, in your own words or with a number)';
 export const askLeftHint = '  (left unanswered)';
 
-// askLeftUnanswered rewrites a question's line drawn inviting a reply to
-// say it was left unanswered. A line drawn any other way is left alone.
-export function askLeftUnanswered(el) {
-  if (!el || !el.textContent.endsWith(askReplyHint)) return;
+// askLine is the line of the model question the box was last armed for,
+// kept until the question is done with, so it can be made to say it was
+// left unanswered rather than go on inviting a reply nobody will take.
+let askLine = null;
+
+export function noteAskLine(id, el) { askLine = { id, el }; }
+
+export function forgetAskLine(id) {
+  if (askLine && askLine.id === id) askLine = null;
+}
+
+// leaveAskUnanswered rewrites the line of question id, drawn inviting a
+// reply, to say it was left unanswered. A line drawn any other way, or a
+// question this page holds no line for, is left alone.
+export function leaveAskUnanswered(id) {
+  if (!askLine || askLine.id !== id) return;
+  const { el } = askLine;
+  askLine = null;
+  if (!el.textContent.endsWith(askReplyHint)) return;
   change(() => { el.textContent = el.textContent.slice(0, -askReplyHint.length) + askLeftHint; });
 }
 export function appendError(err) { return appendDiv('msg-error', 'Error: ' + String(err)); }
