@@ -299,13 +299,13 @@ func TestAQuestionAskedAfterTheBacklogIsNotMarked(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var live []events.Event
-	for len(live) < 2 {
+	// Questions only: a daemon-wide event can arrive on the same stream.
+	var got []string
+	for len(got) < 2 {
 		if ev, ok := stream.next(); ok {
-			live = append(live, ev)
+			got = append(got, questionsIn([]events.Event{ev})...)
 		}
 	}
-	got := questionsIn(live)
 	want := []string{"permission.request p-live", "input.request i-live"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("live questions sent as:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
