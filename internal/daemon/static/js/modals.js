@@ -703,9 +703,16 @@ function showPermissionRequest(req, waiting) {
 // A stale request is not shown at all. The daemon marks one it is not
 // waiting on when it replays the log (a question left open by a daemon
 // that has since stopped, or copied into a fork): nothing will resolve
-// it, and an answer gets the daemon's 404.
+// it, and an answer gets the daemon's 404. A stale copy of a request
+// already held puts it away: a page that saw it live from a daemon that
+// has since stopped is given the copy when it loads the whole
+// conversation, which replays the log without starting the page over.
 export function enqueuePermissionRequest(req) {
-  if (!req || !req.id || req.stale === true) return;
+  if (!req || !req.id) return;
+  if (req.stale === true) {
+    settlePermissionRequest(req.id);
+    return;
+  }
   if (!session.pendingPermissionID) {
     showPermissionRequest(req, session.pendingPermissionQueue.length);
     return;

@@ -103,3 +103,72 @@ test('a task window says a stale permission request was left unanswered', async 
   s.emit(permission(4, 'd2-p1', 'go test ./...', false));
   assert.match(body.textContent, /waiting for permission: \[bash\] go test/);
 });
+
+// A page that saw a question live from a daemon that has since stopped
+// still holds it: the stream resumes after it, so no copy arrives, and a
+// page only watching the turn is not told the turn was lost. Loading the
+// whole conversation replays the log from the start without starting the
+// page over, and the new daemon sends the question stale. The page has to
+// put it away, or the transcript says "left unanswered" about a question
+// the box or the modal is still holding.
+async function heldAcrossARestart(question) {
+  const app = await load({ routes: { 'POST /api/sessions/sess-1/input/*': { status: 404, body: { error: 'not pending' } } } });
+  app.sse.emit({ seq: 400, type: 'message.user', data: { text: 'pick one' } });
+  app.sse.emit(question(401, false));
+  await app.settle();
+  app.sse.fail();
+  app.sse.reopen();
+  await app.settle();
+  return app;
+}
+
+async function showWholeConversation(app, ...frames) {
+  app.el('transcript').querySelector('.earlier-btn').click();
+  await app.settle();
+  assert.match(app.sse.url, /\/events$/, 'precondition: the whole log was asked for');
+  app.sse.emit({ seq: 1, type: 'message.user', data: { text: 'first' } });
+  app.sse.emit({ seq: 400, type: 'message.user', data: { text: 'pick one' } });
+  for (const f of frames) app.sse.emit(f);
+  await app.settle();
+}
+
+test('a stale copy of the question the box is armed for disarms it', async () => {
+  const q = (seq, stale) => ask(seq, 'd1-i1', 'which one?', stale);
+  const app = await heldAcrossARestart(q);
+  assert.equal(app.internals.session.pendingAsk, 'd1-i1', 'precondition: the live question armed the box');
+
+  await showWholeConversation(app, q(401, true));
+  assert.match(app.el('transcript').textContent, /\(left unanswered\)/);
+  assert.equal(app.internals.session.pendingAsk, null, 'the box is still armed for a question left unanswered');
+
+  app.el('input').value = 'hello';
+  app.el('send').click();
+  await app.settle();
+  assert.equal(app.callsTo('POST', /\/input\//).length, 0, 'the message went to the stale question');
+  assert.equal(app.callsTo('POST', /\/messages$/).length, 1, 'the message was not sent as a prompt');
+});
+
+test('a stale copy of the permission request on screen takes it down', async () => {
+  const q = (seq, stale) => permission(seq, 'd1-p1', 'rm -rf build/', stale);
+  const app = await heldAcrossARestart(q);
+  assert.equal(app.state.pendingPermissionID, 'd1-p1', 'precondition: the live request is on screen');
+
+  await showWholeConversation(app, q(401, true));
+  assert.equal(app.permissionRequest.isOpen, false, 'the modal stays up for a request nobody is asking');
+  assert.equal(app.state.pendingPermissionID, null);
+  assert.equal(app.el('input').disabled, false, 'the composer stays locked on it');
+  assert.equal(app.el('comm-dot').classList.contains('asking'), false, 'the light still says it is waiting for you');
+});
+
+test('a stale copy of another question leaves the one held alone', async () => {
+  const app = await load();
+  app.sse.emit(permission(1, 'd2-p1', 'go test ./...', false));
+  app.sse.emit(ask(2, 'd2-i1', 'which other one?', false));
+  app.sse.emit(permission(3, 'd1-p1', 'rm -rf build/', true));
+  app.sse.emit(ask(4, 'd1-i1', 'which one?', true));
+  await app.settle();
+
+  assert.equal(app.permissionRequest.isOpen, true);
+  assert.equal(app.state.pendingPermissionID, 'd2-p1', 'a stale copy of d1-p1 took down d2-p1');
+  assert.equal(app.internals.session.pendingAsk, 'd2-i1', 'a stale copy of d1-i1 disarmed the box for d2-i1');
+});

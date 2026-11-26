@@ -248,10 +248,13 @@ const handlers = {
   // A stale question (the daemon is not waiting on it: see
   // enqueuePermissionRequest) is drawn as the record of what was asked
   // and does not arm the box. Armed, it took the next message as an
-  // answer, which the daemon refused with a 404.
+  // answer, which the daemon refused with a 404. A stale copy of the
+  // question the box is armed for disarms it, for the reason
+  // enqueuePermissionRequest gives.
   'input.request': (d) => {
     const stale = d.stale === true;
     if (!stale) session.pendingAsk = d.id;
+    else if (session.pendingAsk === d.id) session.pendingAsk = null;
     const opts = Array.isArray(d.options) ? d.options : [];
     appendAsk([`[the model is asking] ${d.question}`,
       ...opts.map((o, i) => `  ${i + 1}. ${o}`),

@@ -142,6 +142,12 @@ func TestAQuestionNoDaemonIsAskingIsServedStale(t *testing.T) {
 		question(11, events.TypePermissionRequest, "p2"),
 		question(12, events.TypePermissionRequest, "p2"),
 		answer(13, events.TypePermissionResolved, "p2"),
+		// Two such daemons writing the log at once, each asking p3 and
+		// each answered: two answers, one for each request.
+		question(13, events.TypePermissionRequest, "p3"),
+		question(13, events.TypePermissionRequest, "p3"),
+		answer(14, events.TypePermissionResolved, "p3"),
+		answer(14, events.TypePermissionResolved, "p3"),
 		// A resolution for a permission does not answer a model question
 		// that happens to carry the same id.
 		question(14, events.TypeInputRequest, "x1"),
@@ -166,6 +172,8 @@ func TestAQuestionNoDaemonIsAskingIsServedStale(t *testing.T) {
 		"permission.request p1 stale",
 		"permission.request p2 stale",
 		"permission.request p2",
+		"permission.request p3",
+		"permission.request p3",
 		"input.request x1 stale",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {

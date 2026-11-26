@@ -124,7 +124,9 @@ func collapseFinishedDeltas(evs []events.Event) []events.Event {
 // stale there would read "left unanswered" above "permission granted".
 // The match is on the resolution after the request, because a log from
 // before ids were per daemon can hold one id twice, the first answered
-// and the second left open.
+// and the second left open. Resolutions are counted, not flagged: two
+// daemons writing one such log at once can ask one id twice before
+// either answer, and each answer belongs to one request.
 //
 // Called after the backlog is read, never before. Both brokers record a
 // question before they write it, so a request in the backlog that is
@@ -135,7 +137,7 @@ func collapseFinishedDeltas(evs []events.Event) []events.Event {
 // live channel.
 func (d *Daemon) markStaleQuestions(sessionID string, evs []events.Event) []events.Event {
 	var out []events.Event
-	answered := map[events.Type]map[string]bool{
+	answers := map[events.Type]map[string]int{
 		events.TypePermissionRequest: {},
 		events.TypeInputRequest:      {},
 	}
@@ -144,17 +146,17 @@ func (d *Daemon) markStaleQuestions(sessionID string, evs []events.Event) []even
 		id, _ := ev.Data["id"].(string)
 		switch ev.Type {
 		case events.TypePermissionResolved:
-			answered[events.TypePermissionRequest][id] = true
+			answers[events.TypePermissionRequest][id]++
 			continue
 		case events.TypeInputResolved:
-			answered[events.TypeInputRequest][id] = true
+			answers[events.TypeInputRequest][id]++
 			continue
 		case events.TypePermissionRequest, events.TypeInputRequest:
 		default:
 			continue
 		}
-		if answered[ev.Type][id] {
-			delete(answered[ev.Type], id)
+		if answers[ev.Type][id] > 0 {
+			answers[ev.Type][id]--
 			continue
 		}
 		if d.waitingOn(sessionID, ev.Type, id) {
