@@ -13,8 +13,6 @@ func (m *Model) resizeLayout() {
 	if inputHeight < 1 {
 		inputHeight = 1
 	}
-	m.input.SetHeight(inputHeight)
-	m.scrollInputToTop()
 
 	const chromeLines = 2 // status/permission line + blank separator
 	// What the band below the prompt box really takes, once it is more
@@ -27,9 +25,28 @@ func (m *Model) resizeLayout() {
 	if m.bandRows > reserved {
 		reserved = m.bandRows
 	}
+	// The transcript keeps three rows and the prompt box what it holds,
+	// except while a permission question is on screen. Then both give way,
+	// the transcript to none and the prompt box to one row, before the keys
+	// that answer the question go past the bottom of a short terminal.
+	floor := 3
+	if m.pending != nil {
+		floor = 0
+		if room := m.termHeight - reserved - borderLines - footerLines - floor; inputHeight > room {
+			inputHeight = max(1, room)
+		}
+	}
+	m.input.SetHeight(inputHeight)
+	m.scrollInputToTop()
 	vh := m.termHeight - reserved - borderLines - footerLines - inputHeight
-	if vh < 3 {
-		vh = 3
+	if vh < floor {
+		vh = floor
+	}
+	// A drag holds a place on a track of the old height. Ended, as a
+	// resize of the terminal ends it.
+	if vh != m.viewport.Height() {
+		m.scrollbarDragging = false
+		m.scrollbarDragGrab = 0
 	}
 	// Whether the reader was following the newest output has to survive the
 	// resize, and it does not survive on its own.
@@ -122,6 +139,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
 	if nm, ok := next.(Model); ok && nm.termHeight > 0 && nm.statusBandRows() != nm.bandRows {
 		nm.resizeLayout()
+		// The transcript is wrapped again for the height it now has: whether
+		// it overflows decides whether the scrollbar takes a column.
+		nm.refreshViewport()
 		return nm, cmd
 	}
 	return next, cmd

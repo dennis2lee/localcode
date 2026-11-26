@@ -162,6 +162,11 @@ func (m Model) View() tea.View {
 		body = m.pickerView(m.viewport.Width(), m.viewport.Height())
 	}
 	lines := strings.Split(body, "\n")
+	// A transcript given no rows draws none, rather than the one empty row
+	// an empty string splits into. See resizeLayout.
+	if m.viewport.Height() == 0 && m.picker == nil {
+		lines = nil
+	}
 
 	// The scrollbar beside the transcript, drawn only while the switch
 	// is on and the transcript overflows. With the switch off this
@@ -271,21 +276,15 @@ func (m Model) statusBand() []string {
 		// a question the reader cannot see coming: with a fanout of
 		// four the modal would otherwise clear three times with no
 		// warning of what each answer was for.
-		text := m.pending.prompt(strings.TrimSpace(m.input.Value()) != "")
-		switch len(m.pendingQueue) {
-		case 0:
-		case 1:
-			text += "\n(1 more permission request waiting)"
-		default:
-			text += fmt.Sprintf("\n(%d more permission requests waiting)", len(m.pendingQueue))
+		block := m.questionBlock(*m.pending)
+		// Too tall for the terminal: the rule goes first, since the question
+		// above names what it covers and the key that grants it stays.
+		if m.questionRoom() < strings.Count(block, "\n")+1 && m.pending.rule != "" {
+			p := *m.pending
+			p.rule = ""
+			block = m.questionBlock(p)
 		}
-		// Wrapped to the terminal rather than cut at its edge, so a question
-		// on a narrow terminal shows all of what it says. See longPermission.
-		style := modalStyle
-		if m.termWidth > 0 {
-			style = style.Width(m.termWidth)
-		}
-		out = append(out, style.Render(text))
+		out = append(out, m.fitQuestion(block))
 	}
 	if m.asking != nil {
 		out = append(out, modalStyle.Render(m.asking.prompt(strings.TrimSpace(m.input.Value()) != "")))
@@ -304,4 +303,56 @@ func (m Model) statusBandRows() int {
 		n += strings.Count(block, "\n") + 1
 	}
 	return n
+}
+
+// questionBlock is a permission question as the band draws it: the
+// question, its keys and the requests behind it, wrapped to the terminal
+// rather than cut at its edge. See longPermission.
+func (m Model) questionBlock(p pendingPermission) string {
+	// The queue behind it is named, or answering the modal answers a
+	// question the reader cannot see coming: with a fanout of four the
+	// modal would otherwise clear three times with no warning of what each
+	// answer was for.
+	text := p.prompt(strings.TrimSpace(m.input.Value()) != "")
+	switch len(m.pendingQueue) {
+	case 0:
+	case 1:
+		text += "\n(1 more permission request waiting)"
+	default:
+		text += fmt.Sprintf("\n(%d more permission requests waiting)", len(m.pendingQueue))
+	}
+	style := modalStyle
+	if m.termWidth > 0 {
+		style = style.Width(m.termWidth)
+	}
+	return style.Render(text)
+}
+
+// questionRoom is how many rows a permission question can have: what is
+// left of the terminal under a prompt box of one row, its borders, the
+// footer, and a busy line or an error when there is one. Zero when the
+// size is not known.
+func (m Model) questionRoom() int {
+	if m.termHeight <= 0 {
+		return 1 << 30
+	}
+	room := m.termHeight - borderLines - 1 - footerLines
+	if m.asking != nil || m.busy() || m.errMsg != "" {
+		room--
+	}
+	return room
+}
+
+// fitQuestion keeps a permission question inside a terminal too short for
+// all of it. The transcript and the prompt box have already given up their
+// rows (resizeLayout); what is left past that is the question's own start,
+// which is cut, and said to be, so the keys that answer it stay on screen.
+func (m Model) fitQuestion(block string) string {
+	room := m.questionRoom()
+	rows := strings.Split(block, "\n")
+	if room < 2 || len(rows) <= room {
+		return block
+	}
+	kept := rows[len(rows)-(room-1):]
+	return strings.Join(append([]string{modalStyle.Render("(question cut to fit)")}, kept...), "\n")
 }

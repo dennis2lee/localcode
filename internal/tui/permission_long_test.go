@@ -396,3 +396,129 @@ func TestAQuestionTheDaemonNoLongerHoldsIsForgotten(t *testing.T) {
 		t.Errorf("the question asked again after a not-pending answer is in the transcript %d times, want 2", n)
 	}
 }
+
+// On a short terminal, or under a prompt box holding several lines, the
+// transcript and the prompt box give up their rows before the keys do.
+func TestTheKeysStayOnAShortTerminal(t *testing.T) {
+	longRule := events.Event{Type: events.TypePermissionRequest, Data: map[string]any{
+		"id": "p1", "tool": "write_file", "description": "write /tmp/long\nsecond line",
+		"rule": "/Users/alice/workspace/project/internal/service/handler.go", "can_always": true,
+	}}
+	boundary := events.Event{Type: events.TypePermissionRequest, Data: map[string]any{
+		"id": "p1", "tool": "write_file", "description": "write /tmp/a.txt",
+		"outside": "write", "outside_dir": "/Users/alice/other-project", "workspace": "/Users/alice/my-project",
+	}}
+	for _, tc := range []struct {
+		name  string
+		w, h  int
+		ev    events.Event
+		draft int
+	}{
+		{"40x10", 40, 10, longRule, 0},
+		{"40x12", 40, 12, longRule, 0},
+		{"40x16 boundary", 40, 16, boundary, 0},
+		{"80x10", 80, 10, longRule, 0},
+		{"80x24 under a ten-line draft", 80, 24, boundary, 10},
+		{"40x24 under a five-line draft", 40, 24, boundary, 5},
+		// The prompt box has to give way here, not only the transcript.
+		{"40x16 under a ten-line draft", 40, 16, boundary, 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sized(t, tc.w, tc.h)
+			m.waiting = true
+			if tc.draft > 0 {
+				var ls []string
+				for i := 0; i < tc.draft; i++ {
+					ls = append(ls, fmt.Sprintf("draft %d", i+1))
+				}
+				m.input.SetValue(strings.Join(ls, "\n"))
+				m.resizeLayout()
+			}
+			m = deliver(t, m, tc.ev)
+			m = deliver(t, m, permissionEvent("p2", "second queued request"))
+			rows := strings.Split(m.View().Content, "\n")
+			if len(rows) > tc.h {
+				t.Fatalf("the frame is %d rows on a %d-row terminal", len(rows), tc.h)
+			}
+			shown := strings.Join(rows, "\n")
+			for _, want := range []string{"y: allow", "n: deny", "more permission request waiting"} {
+				if !strings.Contains(shown, want) {
+					t.Errorf("%q is not on screen:\n%s", want, shown)
+				}
+			}
+		})
+	}
+}
+
+// The rule an exact shell command grants is the command, lines and all.
+// It is drawn on one line, its breaks and tabs as escapes, and cut.
+func TestALongRuleIsOneLineOfTheKeys(t *testing.T) {
+	var cmd []string
+	for i := 0; i < 22; i++ {
+		cmd = append(cmd, fmt.Sprintf("\tprint(%d)", i))
+	}
+	rule := "python3 - <<'EOF'\n" + strings.Join(cmd, "\n") + "\nEOF"
+	m := sized(t, 80, 24)
+	m = deliver(t, m, events.Event{Type: events.TypePermissionRequest, Data: map[string]any{
+		"id": "p1", "tool": "bash", "description": "bash python3 -", "rule": rule, "can_always": true,
+	}})
+	m = deliver(t, m, permissionEvent("p2", "second queued request"))
+	prompt := m.pending.prompt(false)
+	_, keys, _ := strings.Cut(prompt, "\n")
+	if strings.ContainsAny(keys, "\t") || strings.Count(keys, "\n") > 0 {
+		t.Errorf("the keys line holds the rule's raw breaks or tabs: %q", keys)
+	}
+	if !strings.Contains(keys, "more characters)") {
+		t.Errorf("a long rule is not cut with a count: %q", keys)
+	}
+	if rows := strings.Split(m.View().Content, "\n"); len(rows) > 24 || !strings.Contains(strings.Join(rows, "\n"), "more permission request waiting") {
+		t.Errorf("the frame is %d rows, or the queue is off screen", len(rows))
+	}
+}
+
+// A tool name with a line break is cut to its first line in a long
+// question's head, so where the rest is stays the footer's second line.
+func TestAToolNameWithABreakKeepsTheHeadOneLine(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypePermissionRequest, Data: map[string]any{"id": "p1", "tool": "foo\nbar\nbaz", "description": "short"}})
+	lines := strings.Split(m.pending.prompt(false), "\n")
+	if len(lines) < 2 || lines[1] != "(the whole request is in the transcript above)" {
+		t.Errorf("the footer's second line is %q, want where the rest is", lines)
+	}
+}
+
+// With the mouse on, the scrollbar takes a column when the transcript
+// overflows. A question that changes the transcript's height changes
+// whether it does, and the width follows; a drag on the old track ends.
+func TestTheScrollbarFollowsTheBand(t *testing.T) {
+	m := New(client.New("http://unused.invalid"), "s1", "general-purpose", make(chan events.Event), true)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	for i := 0; i < 6; i++ {
+		m = deliver(t, m, events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": fmt.Sprintf("msg %d", i+1)}})
+	}
+	m.scrollbarDragging = true
+	check := func(when string) {
+		t.Helper()
+		rows := strings.Split(m.View().Content, "\n")
+		for i := 0; i <= m.viewport.Height() && i < len(rows); i++ {
+			if w := lipgloss.Width(rows[i]); w > 80 {
+				t.Errorf("%s: row %d is %d columns on an 80-column terminal", when, i, w)
+				return
+			}
+		}
+		if _, drawn := m.scrollbarLayout(); !drawn && m.viewport.Width() != 80 {
+			t.Errorf("%s: no scrollbar, and the transcript is %d columns, want 80", when, m.viewport.Width())
+		}
+	}
+	m = deliver(t, m, events.Event{Type: events.TypePermissionRequest, Data: map[string]any{
+		"id": "p1", "tool": "write_file", "description": "write /tmp/a.txt",
+		"outside": "write", "outside_dir": "/Users/alice/other-project", "workspace": "/Users/alice/my-project",
+	}})
+	check("with the question")
+	if m.scrollbarDragging {
+		t.Error("a drag survived the transcript changing height")
+	}
+	m = deliver(t, m, events.Event{Type: events.TypePermissionResolved, Data: map[string]any{"id": "p1"}})
+	check("after the answer")
+}

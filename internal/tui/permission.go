@@ -51,6 +51,8 @@ func (p pendingPermission) prompt(typing bool) string {
 	tool := expandTabs(p.tool)
 	head := fmt.Sprintf("Permission request [%s]: %s", tool, expandTabs(p.description))
 	if p.long {
+		// One line for the head, so where the rest is stays its second.
+		tool, _, _ = strings.Cut(tool, "\n")
 		head = fmt.Sprintf("Permission request [%s]: %s …\n(the whole request is in the transcript above)",
 			tool, footerLine(tool, p.description))
 	}
@@ -60,7 +62,11 @@ func (p pendingPermission) prompt(typing bool) string {
 	} else if p.canAlways {
 		// Quoted, not %q: the rule is already drawn safe (events.VisibleText),
 		// and %q would escape that escaping a second time.
-		keys += fmt.Sprintf("  a: always allow \"%s\"", p.rule)
+		if p.rule == "" {
+			keys += "  a: always allow"
+		} else {
+			keys += fmt.Sprintf("  a: always allow \"%s\"", ruleHint(p.rule))
+		}
 	}
 
 	if p.outside != "" {
@@ -114,6 +120,19 @@ func footerLine(tool, description string) string {
 		budget = 10
 	}
 	return ansi.Truncate(expandTabs(line), budget, "")
+}
+
+// ruleHint is the rule "always allow" would write, on one line: a line
+// break or a tab in it shown as its escape, and past 120 characters cut
+// with a count of the rest. An exact shell rule is the whole command,
+// which the question above already shows in full, and a command of twenty
+// lines drawn as twenty rows pushed the keys off the screen.
+func ruleHint(rule string) string {
+	rule = strings.NewReplacer("\n", `\n`, "\t", `\t`).Replace(rule)
+	if r := []rune(rule); len(r) > 120 {
+		return string(r[:120]) + fmt.Sprintf("… (%d more characters)", len(r)-120)
+	}
+	return rule
 }
 
 // expandTabs draws a tab as four spaces, so a width is the width shown.
