@@ -60,6 +60,7 @@ test('a stale model question is drawn as the record and does not take the next m
   assert.equal(app.internals.session.pendingAsk, null, 'the box was armed for a question nobody will take');
   const text = app.el('transcript').textContent;
   assert.match(text, /\[the model is asking\] which one\?/, 'what the model asked is part of the record');
+  assert.match(text, / {2}1\. a\n {2}2\. b/, 'the options it offered are part of the record');
   assert.match(text, /\(left unanswered\)/);
   assert.doesNotMatch(text, /reply in the box below/, 'the line invites an answer nobody will take');
 
@@ -171,4 +172,75 @@ test('a stale copy of another question leaves the one held alone', async () => {
   assert.equal(app.permissionRequest.isOpen, true);
   assert.equal(app.state.pendingPermissionID, 'd2-p1', 'a stale copy of d1-p1 took down d2-p1');
   assert.equal(app.internals.session.pendingAsk, 'd2-i1', 'a stale copy of d1-i1 disarmed the box for d2-i1');
+});
+
+// A stale copy of a request queued behind the one on screen takes it out
+// of the queue too. The queue's order is not always the log's: an answer
+// that fails to reach the daemon puts its question back behind the one
+// now on screen, and a daemon that has just stopped is what makes an
+// answer fail.
+test('a stale copy of a queued permission request takes it out of the queue', async () => {
+  const app = await load({
+    routes: { 'POST /api/sessions/*/permissions/*': { status: 502, body: { error: 'daemon unreachable' } } },
+  });
+  app.sse.emit({ seq: 400, type: 'message.user', data: { text: 'pick one' } });
+  app.sse.emit(permission(401, 'd1-p1', 'rm -rf build/', false));
+  app.sse.emit(permission(402, 'd1-p2', 'rm -rf dist/', false));
+  await app.settle();
+  app.el('permission-allow').click();
+  await app.settle();
+  assert.equal(app.state.pendingPermissionID, 'd1-p2', 'precondition: d1-p2 is on screen');
+  assert.deepEqual([...app.state.pendingPermissionQueue].map((q) => q.id), ['d1-p1'], 'precondition: d1-p1 is queued');
+  app.sse.fail();
+  app.sse.reopen();
+  await app.settle();
+
+  await showWholeConversation(app, permission(401, 'd1-p1', 'rm -rf build/', true), permission(402, 'd1-p2', 'rm -rf dist/', true));
+  assert.equal(app.permissionRequest.isOpen, false, `the modal is up for ${app.state.pendingPermissionID}, a request nobody is asking`);
+  assert.equal(app.state.pendingPermissionID, null);
+  assert.deepEqual([...app.state.pendingPermissionQueue], []);
+  assert.equal(app.el('input').disabled, false, 'the composer is locked on a stale request');
+});
+
+// A stale copy of the request on screen brings up the one queued behind
+// it, as a resolution does: here a question the new daemon asked.
+test('a stale copy of the request on screen brings up the live one queued behind it', async () => {
+  const app = await heldAcrossARestart((seq, stale) => permission(seq, 'd1-p1', 'rm -rf build/', stale));
+  app.sse.emit(permission(402, 'd2-p1', 'go test ./...', false));
+  await app.settle();
+  assert.equal(app.state.pendingPermissionID, 'd1-p1', 'precondition: the held request is on screen');
+  assert.deepEqual([...app.state.pendingPermissionQueue].map((q) => q.id), ['d2-p1'], 'precondition: the live one is queued');
+
+  await showWholeConversation(app, permission(401, 'd1-p1', 'rm -rf build/', true), permission(402, 'd2-p1', 'go test ./...', false));
+  assert.equal(app.state.pendingPermissionID, 'd2-p1');
+  assert.deepEqual([...app.state.pendingPermissionQueue].map((q) => q.id), [], 'd2-p1 is on screen and still queued behind itself');
+  assert.doesNotMatch(app.el('permission-text').textContent, /more permission request/);
+});
+
+// An answer on its way when the stale copy arrives is to a question the
+// daemon says it is not waiting on, so its failure does not bring the
+// question back, as with a resolution.
+test('a stale copy of a request being answered keeps it away when the answer fails', async () => {
+  let rejectPost;
+  const app = await load({
+    routes: {
+      'POST /api/sessions/*/permissions/*': () => new Promise((_, reject) => { rejectPost = reject; }),
+    },
+  });
+  app.sse.emit({ seq: 400, type: 'message.user', data: { text: 'pick one' } });
+  app.sse.emit(permission(401, 'd1-p1', 'rm -rf build/', false));
+  await app.settle();
+  app.el('permission-allow').click();
+  await app.settle();
+  assert.equal(app.state.pendingPermissionID, null, 'precondition: answered here');
+  app.sse.fail();
+  app.sse.reopen();
+  await app.settle();
+
+  await showWholeConversation(app, permission(401, 'd1-p1', 'rm -rf build/', true));
+  rejectPost(new Error('network error'));
+  await app.settle();
+  assert.equal(app.permissionRequest.isOpen, false, 'the failed answer brought back a request nobody is asking');
+  assert.equal(app.state.pendingPermissionID, null);
+  assert.equal(app.el('input').disabled, false);
 });

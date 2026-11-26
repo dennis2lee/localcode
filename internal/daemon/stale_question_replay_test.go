@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,22 +28,50 @@ type sseReader struct {
 // closed when the test ends.
 func openStream(t *testing.T, srv *httptest.Server, id string) *sseReader {
 	t.Helper()
+	return openStreamAs(t, srv, id, "", "")
+}
+
+// openStreamAs opens it the way a client does: with the query it sends
+// and, for a browser's own reconnect, a Last-Event-ID.
+func openStreamAs(t *testing.T, srv *httptest.Server, id, query, lastEventID string) *sseReader {
+	t.Helper()
 	prev := heartbeatInterval
 	heartbeatInterval = 30 * time.Millisecond
 	t.Cleanup(func() { heartbeatInterval = prev })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/sessions/"+id+"/events", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/sessions/"+id+"/events"+query, nil)
+	if lastEventID != "" {
+		req.Header.Set("Last-Event-ID", lastEventID)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("open stream of %s: %v", id, err)
+		t.Fatalf("open stream of %s%s: %v", id, query, err)
 	}
 	t.Cleanup(func() { resp.Body.Close() })
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("open stream of %s: %s", id, resp.Status)
+		t.Fatalf("open stream of %s%s: %s", id, query, resp.Status)
 	}
 	return &sseReader{t: t, scanner: bufio.NewScanner(resp.Body)}
+}
+
+// drain reads r until the daemon ends the stream.
+func (r *sseReader) drain() []events.Event {
+	r.t.Helper()
+	var out []events.Event
+	for r.scanner.Scan() {
+		payload, ok := strings.CutPrefix(r.scanner.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var ev events.Event
+		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+			r.t.Fatalf("bad frame %q: %v", payload, err)
+		}
+		out = append(out, ev)
+	}
+	return out
 }
 
 // next returns the next event, or false at a heartbeat. The backlog is
@@ -192,6 +222,77 @@ func TestAQuestionNoDaemonIsAskingIsServedStale(t *testing.T) {
 	}
 }
 
+// leftOpen is a daemon over a log whose daemon stopped while asking both
+// kinds of question, and the log's own copy of its events.
+func leftOpen(t *testing.T, id string) (*httptest.Server, []events.Event) {
+	t.Helper()
+	dir := t.TempDir()
+	writeSessionLog(t, dir, id, []events.Event{
+		logEvent(1, events.TypeUserMessage, "clean up"),
+		question(2, events.TypePermissionRequest, "d1-p1"),
+		question(3, events.TypeInputRequest, "d1-i1"),
+	})
+	store, _, err := session.LoadAllFromDisk(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	d := newTestDaemonOver(t, store, "http://127.0.0.1:1")
+	srv := httptest.NewServer(d.Handler())
+	t.Cleanup(srv.Close)
+	logged, err := store.Events(id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, logged
+}
+
+// Every stream a client opens is marked, not only one with no query,
+// which is what the Web UI's "show earlier" sends. The TUI sends ?since=
+// (0 on a session switch), the Web UI opens with ?tail= and resumes with
+// ?since=, and a browser reconnecting on its own sends Last-Event-ID.
+func TestEveryStreamAClientOpensIsMarked(t *testing.T) {
+	const id = "s-shapes"
+	srv, _ := leftOpen(t, id)
+	want := "permission.request d1-p1 stale\ninput.request d1-i1 stale"
+	for _, tc := range []struct{ name, query, lastEventID string }{
+		{"TUI session switch", "?since=0", ""},
+		{"TUI reattach", "?since=1", ""},
+		{"Web UI open", "?tail=400", ""},
+		{"Web UI resume", "?since=1", ""},
+		{"browser reconnect", "?tail=400", "1"},
+	} {
+		got := strings.Join(questionsIn(openStreamAs(t, srv, id, tc.query, tc.lastEventID).backlog()), "\n")
+		if got != want {
+			t.Errorf("%s (%s, Last-Event-ID %q) was served:\n%s\nwant:\n%s", tc.name, tc.query, tc.lastEventID, got, want)
+		}
+	}
+}
+
+// A stale copy is the request with "stale": true added and nothing else
+// changed: the Web UI draws the model's question and its options from
+// it, and the task window "[tool] description".
+func TestAStaleCopyIsTheRequestAsLogged(t *testing.T) {
+	const id = "s-fields"
+	srv, logged := leftOpen(t, id)
+	for i, ev := range openStream(t, srv, id).backlog() {
+		if ev.Type != events.TypePermissionRequest && ev.Type != events.TypeInputRequest {
+			continue
+		}
+		if ev.Seq != logged[i].Seq {
+			t.Errorf("%s %v served with seq %d, logged with %d", ev.Type, ev.Data["id"], ev.Seq, logged[i].Seq)
+		}
+		for k, v := range logged[i].Data {
+			if got, ok := ev.Data[k]; !ok || got != v {
+				t.Errorf("%s %v: %q served as %v, logged as %v", ev.Type, ev.Data["id"], k, got, v)
+			}
+		}
+		if len(ev.Data) != len(logged[i].Data)+1 {
+			t.Errorf("%s %v served with %d keys, want the logged %d plus stale", ev.Type, ev.Data["id"], len(ev.Data), len(logged[i].Data))
+		}
+	}
+}
+
 // waitForRequest waits until session id's log holds a request of type typ
 // and returns its id.
 func waitForRequest(t *testing.T, store *session.Store, id string, typ events.Type) string {
@@ -317,5 +418,75 @@ func TestAQuestionAskedAfterTheBacklogIsNotMarked(t *testing.T) {
 	want := []string{"permission.request p-live", "input.request i-live"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("live questions sent as:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A question the retiring daemon of an in-place update asked during the
+// drain and left open reaches the successor's clients on the reconnect
+// the takeover forces: Reload ends every stream of the session, and the
+// browser comes back to the same ?tail= URL with Last-Event-ID. That
+// backlog carries the question stale. The successor's own question,
+// asked once it owns the session, is served as asked.
+func TestATakeoverServesTheRetiringDaemonsQuestionStale(t *testing.T) {
+	dir := t.TempDir()
+	old, err := session.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.CreateSession("S1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	old.Append("S1", events.TypeUserMessage, map[string]any{"text": "clean up"})
+	old.Close()
+	writeManifest(t, dir, "S1")
+	d, store := daemonOver(t, dir)
+	srv := httptest.NewServer(d.Handler())
+	t.Cleanup(srv.Close)
+
+	// A browser opens S1 on the successor during the drain.
+	stream := openStreamAs(t, srv, "S1", "?tail=400", "")
+	if got := questionsIn(stream.backlog()); len(got) != 0 {
+		t.Fatalf("questions before the retiring daemon asked any: %v", got)
+	}
+	// The retiring daemon asks, stops without an answer, and lets go.
+	appendOnDisk(t, dir, "S1", events.Event{Seq: 2, Type: events.TypePermissionRequest, Timestamp: time.Unix(0, 0).UTC(),
+		Data: map[string]any{"id": "old-p1", "tool": "bash", "description": "make test"}})
+	if err := os.Remove(filepath.Join(dir, handoffFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.claimSession("S1"); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	stream.drain() // Reload ends the stream
+
+	got := strings.Join(questionsIn(openStreamAs(t, srv, "S1", "?tail=400", "1").backlog()), "\n")
+	if want := "permission.request old-p1 stale"; got != want {
+		t.Errorf("the reconnect after the takeover was served:\n%s\nwant:\n%s", got, want)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.Broker.Func()(agent.WithSessionID(context.Background(), "S1"),
+			tools.Ask{Tool: "bash", Subject: "go test ./...", Description: "go test ./..."})
+	}()
+	var mine string
+	deadline := time.Now().Add(5 * time.Second)
+	for mine == "" {
+		evs, _ := store.Events("S1", 2)
+		for _, ev := range evs {
+			if ev.Type == events.TypePermissionRequest {
+				mine, _ = ev.Data["id"].(string)
+			}
+		}
+		if mine == "" && time.Now().After(deadline) {
+			t.Fatal("the successor never asked")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Cleanup(func() { d.Broker.Resolve(mine, false, ""); <-done })
+	got = strings.Join(questionsIn(openStreamAs(t, srv, "S1", "?tail=400", "1").backlog()), "\n")
+	if want := "permission.request old-p1 stale\npermission.request " + mine; got != want {
+		t.Errorf("after the successor asked, the reconnect was served:\n%s\nwant:\n%s", got, want)
 	}
 }
