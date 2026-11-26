@@ -2,12 +2,13 @@
 
 ## Summary
 
-Open and partial work remains in orchestration, client behavior, desktop window verification, and SSH terminals. The numbered records below retain completed fixes and their release versions.
+Open and partial work remains in orchestration, client behavior, permission prompts, desktop window verification, and SSH terminals. The numbered records below retain completed fixes and their release versions.
 
 | Area | Recorded remaining work |
 |---|---|
 | Orchestration | Child-session retention and concurrent permission display (item 36) |
 | Client behavior | The open UI ideas below |
+| Permission prompts | Text a model wrote is drawn as it is given, and `Schedule` and `Debate` show only its first line (item 68) |
 | Coverage | Links and drags in the macOS window are unverified (item 64) |
 | SSH terminals | A prompt that answers a Ctrl+C is taken for the end of a line sent before it arrived, and a `run` then can be typed onto text (item 67) |
 
@@ -633,6 +634,16 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Fixed with it in v0.179.3, and older than it: a `run` typed on the alternate screen a killed program left on, onto a line at a prompt that leaves nothing on its row (a line that wraps), onto a line with a line break in it whose last row reads as the prompt (a bracketed paste of text copied with a prompt in it), and onto text a smaller terminal cut off. Also older, and closed: the model could not clear its own text from a line you had typed on and erased.
     * Accepted, and older than v0.179.3: the prompt is recorded once and not again while the line counts as typed on. A prompt the shell draws differently after a new size (a right prompt in zsh, a prompt wider than the new width) no longer matches the record. A line you typed on and erased before the resize is then refused until your Enter or Ctrl+C. Found by review of v0.179.3.
     * The person's line is judged empty by comparing the cursor's row, and the rows under it, with the prompt as it was recorded. A screen that makes text of theirs look like that prompt, other than the shapes closed above, would be read as empty.
+
+68. **Permission prompts: text a model wrote is drawn as it is given. Open.**
+
+    * Four tools build their own permission text from decoded model input: `Schedule`, `Debate`, `Browser` and `Orchestrate` (`Describe` in `internal/agent`). Every other tool shows the call's JSON text, in which valid JSON escapes a control character. Only `Schedule` was probed.
+    * `Schedule` and `Debate` draw the model's text up to its first line break and then ` …` (`promptSummary`). A prompt of two paragraphs is confirmed as its first. The second is booked, runs unattended under the conversation's permission switches, and is shown only after booking, in the booking's details. A model steered by text it read can book a prompt of that shape.
+    * Nothing cleans the text. A carriage return, the ANSI conceal sequence (`ESC [ 8 m`) and a right-to-left override (U+202E) in a `Schedule` prompt reach the description unchanged, and each reached the drawn modal in the TUI (`modalStyle.Render` in `internal/tui/view.go`, with no filter between). `Browser` draws the URL it was given the same way. `Orchestrate` quotes the first line of its goal with `%q`, which escapes them.
+    * The Web UI sets the text with `textContent` in a paragraph with no wrapping rule: a line break collapses and a long unbroken run is not wrapped. The TUI puts it in its footer with no width or scroll rule of its own.
+    * Found by review of how a scheduled prompt is shown, and reproduced with a probe of `Describe` and of the TUI modal. It predates the author mark on scheduled prompts and is not part of it. `Subject`, the text permission rules match against, shares `promptSummary` and must not change with the confirmation.
+    * `/permission-skip-tools` removes the `Schedule` confirmation altogether. This item is about the case where it is asked.
+    * A fix, where the request is drawn so that a tool added later is covered: draw control and bidirectional characters as visible escapes, keep line breaks, show a bounded preview with the exact count of what is left out, give a way to read the whole text before answering, and wrap and scroll in both clients. USAGE says what the confirmation shows until then.
 
 ## UI ideas
 
