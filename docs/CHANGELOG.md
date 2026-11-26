@@ -1,15 +1,17 @@
 # Changelog
 
-## Unreleased
+## v0.180.8
+
+A scheduled prompt says whose it is: the run names a prompt the model booked as its task, the list marks it, and the reply to a `!` booking says it runs in the shell.
 
 **Changed**
 
-* The prompt a model booked for a scheduled run listed by `/context all` and the turn log's manifest as a task its parent handed down (`child.input.<agent>`, trust `delegated`), as a sub-agent's task is; a prompt you booked stays unlisted
-* `/show-scheduled-task` marking a booking the model made as `(booked by the model)`; a booking with no recorded author is not marked
+* A prompt the model booked named in its scheduled run's manifest (`/context all`, the turn log) as a task handed down, `child.input.<agent>` with trust `delegated`; a prompt you booked is not
+* `/show-scheduled-task` marking a booking the model made `(booked by the model)`
 
 **Fixed**
 
-* The `/schedule` reply that said a `!` booking would work under the conversation's permission settings: a `!` line runs in the shell and consults no rule. The reply now says so, and that `!!` books the text instead
+* The `/schedule` reply to a `!` booking, which promised the conversation's permission settings: a `!` line runs in the shell with no rule asked, and the reply now says so, with `!!` to book the text instead
 
 ## v0.180.7
 
