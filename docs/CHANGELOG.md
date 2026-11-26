@@ -5,6 +5,11 @@
 **Changed**
 
 * The prompt a model booked for a scheduled run listed by `/context all` and the turn log's manifest as a task its parent handed down (`child.input.<agent>`, trust `delegated`), as a sub-agent's task is; a prompt you booked stays unlisted
+* `/show-scheduled-task` marking a booking the model made as `(booked by the model)`; a booking with no recorded author is not marked
+
+**Fixed**
+
+* The `/schedule` reply that said a `!` booking would work under the conversation's permission settings: a `!` line runs in the shell and consults no rule. The reply now says so, and that `!!` books the text instead
 
 ## v0.180.7
 

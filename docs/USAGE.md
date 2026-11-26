@@ -3479,9 +3479,9 @@ Unsupported time inputs return a specific reason:
 | `10초마다`, `every 5 seconds` | Interval shorter than the one-minute minimum. |
 | Anything else it cannot read | Refused with the examples above. |
 
-Review the full parsed time and task in the confirmation.
+The confirmation shows the parsed time and the task up to its first line break. The rest of a longer prompt is shown only after booking, in the booking's details.
 
-Each scheduled run uses a separate session with the booking conversation's workspace and four permission switches. Confirmation names the workspace.
+Each scheduled run uses a separate session with the booking conversation's workspace and four permission switches. The `/schedule` reply and the `Schedule` tool's result name the workspace.
 
 Scheduled permission requests appear in the booking conversation and expire after five minutes. Expiry stops the run and names the blocked tool. Configure `/permission-skip-tools`, `/read-outside`, and `/write-outside` in advance if unattended access is required.
 
@@ -3489,7 +3489,7 @@ Who wrote the prompt decides how it runs:
 
 | Booked by | The prompt runs |
 |---|---|
-| You, with `/schedule` or the **schedule** button | As you wrote it. A leading `/` or `!` is a command, as when you type it. `/schedule in 1 hour !make test` runs the [shell escape](#shell-escape), which does not consult the permission rules. |
+| You, with `/schedule` or the **schedule** button | As you wrote it. A leading `/` or `!` is a command, as when you type it. `/schedule in 1 hour !make test` runs the [shell escape](#shell-escape), which does not consult the permission rules. The `/schedule` reply says so when it books one, and `!!` books the text instead. |
 | The model, with the `Schedule` tool or a `/schedule` line it runs through the `Command` tool | As plain text. A leading `/` or `!` does not run a command, whatever `/model-invocable` is set to. The model is told so when it books such a prompt. In the run, [`/context all`](#context) lists it as a task the booking conversation handed down (`child.input.<agent>`, trust `delegated`), not as something you typed. |
 | An earlier version | As written. A booking made before the author was recorded has no author on record, including one the model made. `/show-scheduled-task` lists them. |
 
@@ -3499,7 +3499,7 @@ To run a command later, book it yourself with `/schedule`. The model cannot book
 |---|---|
 | **schedule** button | Separate time and task fields with parsed-time preview. |
 | Right panel | Task rows: blinking green while waiting or running, amber while a run waits on a permission request (an unattended run asks no questions), solid green for an unread result, grey after reading. Each run's result is unread until read, so a repeat's later run turns its row solid green again. Blinking does not stop when the system asks for less motion. Click for results; double-click for booking details. Rename changes the label. Delete removes the booking and run transcript. |
-| `/show-scheduled-task` | The same list as text, for the TUI. |
+| `/show-scheduled-task` | The same list as text, for the TUI. A booking the model made is marked `(booked by the model)`. A booking with no recorded author is not marked. |
 | `/schedule cancel <id>` | Removes one. Ids are short and belong to the conversation: `s1`, `s2`. |
 | `/schedule rename <id> <name>` | Labels one; an empty name clears it. |
 
