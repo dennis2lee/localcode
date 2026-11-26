@@ -244,3 +244,65 @@ test('a stale copy of a request being answered keeps it away when the answer fai
   assert.equal(app.state.pendingPermissionID, null);
   assert.equal(app.el('input').disabled, false);
 });
+
+// The resolutions a daemon sends a resuming stream for questions before
+// its resume point that nobody is waiting on: no seq, marked stale (see
+// staleResolutions in the daemon). A page that saw the question live from
+// a daemon that has since stopped holds it until one arrives.
+function staleResolution(type, id) {
+  return type === 'permission'
+    ? { type: 'permission.resolved', data: { id, allow: false, unanswered: true, stale: true } }
+    : { type: 'input.resolved', data: { id, cancelled: true, stale: true } };
+}
+
+test('a resumed stream puts away the questions the page held', async () => {
+  const app = await load();
+  app.sse.emit({ seq: 400, type: 'message.user', data: { text: 'pick one' } });
+  app.sse.emit(permission(401, 'd1-p1', 'rm -rf build/', false));
+  app.sse.emit(ask(402, 'd1-i1', 'which one?', false));
+  app.sse.emit(permission(403, 'd1-p2', 'go test ./...', false));
+  await app.settle();
+  assert.equal(app.state.pendingPermissionID, 'd1-p1', 'precondition: d1-p1 is on screen');
+  assert.equal(app.internals.session.pendingAsk, 'd1-i1', 'precondition: the box is armed');
+  app.sse.fail();
+  app.sse.reopen();
+  await app.settle();
+  const before = app.el('transcript').textContent;
+
+  app.sse.emit(staleResolution('permission', 'd0-p9'));
+  app.sse.emit(staleResolution('permission', 'd1-p1'));
+  app.sse.emit(staleResolution('input', 'd1-i1'));
+  await app.settle();
+  assert.equal(app.state.pendingPermissionID, 'd1-p2', 'd1-p1 should be put away and d1-p2 brought up');
+  assert.deepEqual([...app.state.pendingPermissionQueue], []);
+  assert.equal(app.internals.session.pendingAsk, null, 'the box is still armed for a question nobody is waiting on');
+  assert.equal(app.el('transcript').textContent, before, 'putting a question away drew something');
+
+  app.sse.emit(staleResolution('permission', 'd1-p2'));
+  await app.settle();
+  assert.equal(app.permissionRequest.isOpen, false);
+  assert.equal(app.el('input').disabled, false);
+  assert.equal(app.el('comm-dot').classList.contains('asking'), false);
+});
+
+test('a task window says a request it showed waiting was left unanswered, once', async () => {
+  const app = await load();
+  app.sse.emit({ seq: 1, type: 'task.spawned', data: { task_id: 'task-1', agent: 'explore' } });
+  app.sse.emit({ seq: 2, type: 'task.status', data: { task_id: 'task-1', status: 'running' } });
+  app.el('tasks').children[0].click();
+  await app.settle();
+  const s = app.streamFor('/api/sessions/task-1/events');
+  assert.ok(s, 'the task window opened no stream on the task session');
+  const body = app.el('task-modal-body');
+  const count = (re) => (body.textContent.match(re) || []).length;
+
+  s.emit(permission(3, 'd1-p1', 'rm -rf build/', false));
+  assert.match(body.textContent, /waiting for permission/);
+  // Every resume brings the resolutions again, and for every question
+  // before the resume point, drawn here or not.
+  s.emit(staleResolution('permission', 'd0-p9'));
+  s.emit(staleResolution('permission', 'd1-p1'));
+  s.emit(staleResolution('permission', 'd1-p1'));
+  assert.equal(count(/permission left unanswered/g), 1, 'the window should say it once, for the request it showed waiting');
+  assert.doesNotMatch(body.textContent, /permission not answered|permission denied/);
+});

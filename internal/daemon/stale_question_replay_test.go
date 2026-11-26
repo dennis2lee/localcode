@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -488,5 +489,138 @@ func TestATakeoverServesTheRetiringDaemonsQuestionStale(t *testing.T) {
 	got = strings.Join(questionsIn(openStreamAs(t, srv, "S1", "?tail=400", "1").backlog()), "\n")
 	if want := "permission.request old-p1 stale\npermission.request " + mine; got != want {
 		t.Errorf("after the successor asked, the reconnect was served:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// resolutionsIn returns, for each transient resolution in evs (no seq,
+// marked stale), its type, id and the fields a client reads from it.
+func resolutionsIn(evs []events.Event) []string {
+	var out []string
+	for _, ev := range evs {
+		if ev.Type != events.TypePermissionResolved && ev.Type != events.TypeInputResolved {
+			continue
+		}
+		if stale, _ := ev.Data["stale"].(bool); !stale {
+			continue
+		}
+		id, _ := ev.Data["id"].(string)
+		line := fmt.Sprintf("%s %s seq=%d", ev.Type, id, ev.Seq)
+		if ev.Type == events.TypePermissionResolved {
+			line += fmt.Sprintf(" allow=%v unanswered=%v", ev.Data["allow"], ev.Data["unanswered"])
+		} else {
+			line += fmt.Sprintf(" cancelled=%v", ev.Data["cancelled"])
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// A client that resumes a stream is told which questions before its
+// resume point nobody is waiting on, so it can put away one it still
+// holds: it saw the question live, the daemon that asked stopped, and the
+// backlog after the resume point carries no copy of it to mark.
+//
+// Each is a resolution with no seq, sent to this stream alone and not
+// written anywhere. Not for a question answered anywhere in the log, one
+// with no id, one this daemon is waiting on, or one after the resume
+// point, which the backlog carries marked. And not to a stream that is
+// not a resume: a fresh client holds nothing.
+func TestAResumingStreamIsToldWhichQuestionsNobodyIsWaitingOn(t *testing.T) {
+	dir := t.TempDir()
+	const id = "s-resume-stale"
+	writeSessionLog(t, dir, id, []events.Event{
+		logEvent(1, events.TypeUserMessage, "go"),
+		question(2, events.TypePermissionRequest, "d1-p1"),
+		question(3, events.TypeInputRequest, "d1-i1"),
+		question(4, events.TypePermissionRequest, "d1-p2"),
+		answer(5, events.TypePermissionResolved, "d1-p2"),
+		question(6, events.TypePermissionRequest, "d1-p3"),
+		question(7, events.TypePermissionRequest, ""),
+		logEvent(8, events.TypeUserMessage, "next"),
+		answer(9, events.TypePermissionResolved, "d1-p3"),
+		question(10, events.TypePermissionRequest, "d1-p4"),
+	})
+	store, _, err := session.LoadAllFromDisk(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	d := newTestDaemonOver(t, store, "http://127.0.0.1:1")
+	srv := httptest.NewServer(d.Handler())
+	t.Cleanup(srv.Close)
+
+	// A question this daemon is asking, at seq 11.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.Broker.Func()(agent.WithSessionID(context.Background(), id),
+			tools.Ask{Tool: "bash", Subject: "go test ./...", Description: "go test ./..."})
+	}()
+	var live string
+	deadline := time.Now().Add(5 * time.Second)
+	for live == "" {
+		evs, _ := store.Events(id, 10)
+		for _, ev := range evs {
+			if ev.Type == events.TypePermissionRequest {
+				live, _ = ev.Data["id"].(string)
+			}
+		}
+		if live == "" && time.Now().After(deadline) {
+			t.Fatal("this daemon never asked")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Cleanup(func() { d.Broker.Resolve(live, false, ""); <-done })
+
+	join := func(s []string) string { return strings.Join(s, "\n") }
+	for _, tc := range []struct {
+		name, query, lastEventID string
+		resolutions, questions   []string
+	}{
+		{
+			name: "resume after seq 8", query: "?since=8",
+			resolutions: []string{
+				"permission.resolved d1-p1 seq=0 allow=false unanswered=true",
+				"input.resolved d1-i1 seq=0 cancelled=true",
+			},
+			questions: []string{"permission.request d1-p4 stale", "permission.request " + live},
+		},
+		{
+			name: "browser reconnect after seq 11", query: "?tail=400", lastEventID: "11",
+			resolutions: []string{
+				"permission.resolved d1-p1 seq=0 allow=false unanswered=true",
+				"input.resolved d1-i1 seq=0 cancelled=true",
+				"permission.resolved d1-p4 seq=0 allow=false unanswered=true",
+			},
+		},
+		{name: "fresh open", query: ""},
+		{
+			// A cut after d1-p1 and d1-i1, so the stream starts past
+			// questions it is not told about.
+			name: "fresh open at the end", query: "?tail=2",
+			questions: []string{"permission.request d1-p4 stale", "permission.request " + live},
+		},
+		{name: "fresh open from the start", query: "?since=0"},
+	} {
+		served := openStreamAs(t, srv, id, tc.query, tc.lastEventID).backlog()
+		if got := resolutionsIn(served); join(got) != join(tc.resolutions) {
+			t.Errorf("%s (%s, Last-Event-ID %q) was told:\n%s\nwant:\n%s", tc.name, tc.query, tc.lastEventID, join(got), join(tc.resolutions))
+		}
+		if tc.questions != nil {
+			if got := questionsIn(served); join(got) != join(tc.questions) {
+				t.Errorf("%s was served questions:\n%s\nwant:\n%s", tc.name, join(got), join(tc.questions))
+			}
+		}
+	}
+
+	// Nothing was written.
+	evs, err := store.Events(id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range evs {
+		if stale, _ := ev.Data["stale"].(bool); stale {
+			t.Errorf("seq %d %s in the log carries stale: a resolution was written", ev.Seq, ev.Type)
+		}
 	}
 }

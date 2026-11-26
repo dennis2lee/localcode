@@ -290,23 +290,6 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 		b.mark(where.all())
 		defer b.unmark(where.all())
 
-		for _, target := range where.mirrors {
-			b.store.Append(target, events.TypePermissionRequest, outsideFields(ask, map[string]any{
-				"id":   id,
-				"tool": toolName,
-				// Prefixed rather than carried in a separate field so both
-				// clients say where it came from without needing to know
-				// about tasks: the request is for work the user started
-				// but is not watching, and answering it as if it came from
-				// the conversation on screen would be misleading.
-				"description":  fmt.Sprintf("[background task %s] %s", sessionID, description),
-				"rule":         rule.Match,
-				"can_always":   b.ConfigPath != "" && !ask.Once,
-				"once":         ask.Once,
-				"task_session": sessionID,
-			}))
-		}
-
 		request := map[string]any{
 			"id":          id,
 			"tool":        toolName,
@@ -324,8 +307,31 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 			// rebuilds that grant from here.
 			request["line"] = strings.TrimSpace(subject)
 		}
+		// The asking session's copy first, and nothing more if it fails. A
+		// mirror written ahead of a failed write was a question in the
+		// conversation that nothing would ever resolve, and the pending
+		// entry outlived the call.
 		if _, err := b.store.Append(sessionID, events.TypePermissionRequest, outsideFields(ask, request)); err != nil {
+			b.mu.Lock()
+			delete(b.pending, id)
+			b.mu.Unlock()
 			return false, err
+		}
+		for _, target := range where.mirrors {
+			b.store.Append(target, events.TypePermissionRequest, outsideFields(ask, map[string]any{
+				"id":   id,
+				"tool": toolName,
+				// Prefixed rather than carried in a separate field so both
+				// clients say where it came from without needing to know
+				// about tasks: the request is for work the user started
+				// but is not watching, and answering it as if it came from
+				// the conversation on screen would be misleading.
+				"description":  fmt.Sprintf("[background task %s] %s", sessionID, description),
+				"rule":         rule.Match,
+				"can_always":   b.ConfigPath != "" && !ask.Once,
+				"once":         ask.Once,
+				"task_session": sessionID,
+			}))
 		}
 
 		// A turn nobody is watching cannot wait forever, and until this

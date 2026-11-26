@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -137,6 +138,36 @@ func collapseFinishedDeltas(evs []events.Event) []events.Event {
 // live channel.
 func (d *Daemon) markStaleQuestions(sessionID string, evs []events.Event) []events.Event {
 	var out []events.Event
+	for _, i := range unanswered(evs) {
+		ev := evs[i]
+		id, _ := ev.Data["id"].(string)
+		if d.waitingOn(sessionID, ev.Type, id) {
+			continue
+		}
+		if out == nil {
+			out = append([]events.Event(nil), evs...)
+		}
+		// A new map: the event is the store's, shared with every other
+		// reader of the log.
+		data := make(map[string]any, len(ev.Data)+1)
+		for k, v := range ev.Data {
+			data[k] = v
+		}
+		data["stale"] = true
+		out[i].Data = data
+	}
+	if out == nil {
+		return evs
+	}
+	return out
+}
+
+// unanswered returns the index in evs of each permission.request and
+// input.request that no resolution after it in evs answers, in log
+// order. See markStaleQuestions for why a resolution has to come after
+// its request, and why resolutions are counted.
+func unanswered(evs []events.Event) []int {
+	var open []int
 	answers := map[events.Type]map[string]int{
 		events.TypePermissionRequest: {},
 		events.TypeInputRequest:      {},
@@ -159,23 +190,50 @@ func (d *Daemon) markStaleQuestions(sessionID string, evs []events.Event) []even
 			answers[ev.Type][id]--
 			continue
 		}
-		if d.waitingOn(sessionID, ev.Type, id) {
+		open = append(open, i)
+	}
+	slices.Reverse(open)
+	return open
+}
+
+// staleResolutions puts away the questions a resuming client may still
+// hold. It returns one transient resolution, carrying "stale": true, for
+// each question in log at or before since that this daemon is not
+// waiting on and that nothing in log answers.
+//
+// A client that saw a question live goes on holding it until a
+// resolution arrives. When the daemon that asked stops, none ever does,
+// and the client resumes after the question, so the backlog does not
+// carry it to be marked. The TUI and the Web UI put a question away on
+// any resolution with its id. Neither is written to the log, which is
+// why they go to this stream alone and carry no seq. A question after
+// since is in the backlog, which markStaleQuestions marks.
+//
+// Called after log is read, for the reason markStaleQuestions gives.
+func (d *Daemon) staleResolutions(sessionID string, log []events.Event, since uint64) []events.Event {
+	var out []events.Event
+	for _, i := range unanswered(log) {
+		ev := log[i]
+		if ev.Seq > since {
 			continue
 		}
-		if out == nil {
-			out = append([]events.Event(nil), evs...)
+		id, _ := ev.Data["id"].(string)
+		// Neither client holds a question with no id.
+		if id == "" || d.waitingOn(sessionID, ev.Type, id) {
+			continue
 		}
-		// A new map: the event is the store's, shared with every other
-		// reader of the log.
-		data := make(map[string]any, len(ev.Data)+1)
-		for k, v := range ev.Data {
-			data[k] = v
+		res := events.Event{Session: sessionID, Timestamp: time.Now().UTC()}
+		if ev.Type == events.TypePermissionRequest {
+			// "unanswered" as the unattended timeout writes it, so a
+			// client that does not know "stale" says the question was
+			// not answered rather than that it was denied.
+			res.Type = events.TypePermissionResolved
+			res.Data = map[string]any{"id": id, "allow": false, "unanswered": true, "stale": true}
+		} else {
+			res.Type = events.TypeInputResolved
+			res.Data = map[string]any{"id": id, "cancelled": true, "stale": true}
 		}
-		data["stale"] = true
-		out[i].Data = data
-	}
-	if out == nil {
-		return evs
+		out = append(out, res)
 	}
 	return out
 }
@@ -230,13 +288,18 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 		tailN = n
 	}
 	since := uint64(0)
+	// resumed is a client coming back to a stream it had: the questions
+	// it may still hold are before since. See staleResolutions.
+	resumed := false
 	lastEventID, lastErr := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64)
 	switch {
 	case r.Header.Get("Last-Event-ID") != "" && lastErr == nil:
 		since = lastEventID
+		resumed = true
 
 	case hasSince:
 		since = sinceQ
+		resumed = true
 
 	case tailN >= 0:
 		// ?tail=N opens a long conversation at its end rather than its
@@ -276,6 +339,12 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
+	}
+	var stale []events.Event
+	if resumed && since > 0 {
+		if whole, err := d.Loop.Store.Events(id, 0); err == nil {
+			stale = d.staleResolutions(id, whole, since)
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -335,7 +404,13 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// is the event's own sequence, exactly as before.
 	//
 	// Stale questions are marked here, after the read, and only here: see
-	// markStaleQuestions. writeSSE sends the live events as they are.
+	// markStaleQuestions. writeSSE sends the live events as they are. A
+	// resuming client is first told which questions before its resume
+	// point nobody is waiting on, with no `id:` line: see
+	// staleResolutions.
+	for _, ev := range stale {
+		send(ev, 0)
+	}
 	for _, ev := range d.markStaleQuestions(id, collapseFinishedDeltas(backlog)) {
 		if ev.Seq > lastSeq {
 			lastSeq = ev.Seq

@@ -108,6 +108,12 @@ function isDoneStatus(status) {
 // finished, which is the half you are usually waiting for.
 const taskToolRows = new Map();
 
+// waitingFor holds the ids of the permission requests this window drew as
+// waiting, so a stale resolution is said only for one of them. The daemon
+// sends one on every resume for every question before the resume point
+// that nobody is waiting on, drawn or not.
+const waitingFor = new Set();
+
 // toolRow is the task window's version of the transcript's tool block:
 // the same classes, so it is styled by the same rules, and the same
 // shape, so a task's tools read like the main conversation's.
@@ -218,10 +224,25 @@ function applyTaskEvent(ev) {
     // The task is not waiting for it, so the line does not say it is.
     case 'permission.request':
       currentEl = null;
-      if (d.stale === true) line('msg-tool', `⏹ permission left unanswered: [${d.tool || '?'}] ${d.description || ''}`);
-      else line('msg-error', `⏸ waiting for permission: [${d.tool || '?'}] ${d.description || ''}`);
+      if (d.stale === true) {
+        line('msg-tool', `⏹ permission left unanswered: [${d.tool || '?'}] ${d.description || ''}`);
+      } else {
+        line('msg-error', `⏸ waiting for permission: [${d.tool || '?'}] ${d.description || ''}`);
+        if (d.id) waitingFor.add(d.id);
+      }
       break;
+    // A stale resolution is the daemon putting away a question this
+    // window may still show as waiting: the daemon that asked stopped
+    // while the window was open.
     case 'permission.resolved':
+      if (d.stale === true) {
+        if (waitingFor.delete(d.id)) {
+          currentEl = null;
+          line('msg-tool', '⏹ permission left unanswered');
+        }
+        break;
+      }
+      waitingFor.delete(d.id);
       currentEl = null;
       if (d.allow) line('msg-tool', '▶ permission granted');
       else if (d.unanswered || d.cancelled) line('msg-tool', '⏹ permission not answered');
@@ -310,6 +331,7 @@ export function openTaskView(taskID, about) {
     : (t && t.agent ? `${t.agent} — ${taskID}` : taskID);
   taskModalBody.innerHTML = '';
   taskToolRows.clear();
+  waitingFor.clear();
   // A newly opened task starts at its newest output, whatever the last
   // one this modal showed was left scrolled to.
   follower.force();

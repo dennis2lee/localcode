@@ -2,11 +2,14 @@
 
 ## Unreleased
 
-A question a stopped daemon left open is no longer shown again when the conversation is opened.
+A question a stopped daemon left open is no longer shown again when the conversation is opened or its client reconnects.
 
 **Fixed**
 
 * A permission question or a model question left open by a stopped daemon shown on every open of the conversation and of its forks, in the TUI, the Web UI and the task window
+* A question shown live when its localcode stopped kept on screen after the client reconnected to the next one, in the TUI, the Web UI and the task window
+* TUI: a model question kept across a switch to another conversation, where the next Enter was sent as its answer and refused
+* A background task's permission question left unresolved in its conversation when the task's own log could not be written
 
 ## v0.180.7
 

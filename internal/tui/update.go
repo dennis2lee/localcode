@@ -576,6 +576,10 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	m.pending = nil
 	m.pendingQueue = nil
 	m.answering = nil
+	// The model's question too: kept, it sat under the box in the
+	// conversation opened, and the next Enter answered it there, which
+	// the daemon refused because it was not asked in that session.
+	m.asking = nil
 	m.pendingHintShown = false
 	m.scrollbarDragging = false
 	m.scrollbarDragGrab = 0

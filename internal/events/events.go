@@ -256,7 +256,9 @@ const (
 	// A replay can carry "stale": true on this and on permission.request:
 	// a question the serving daemon is not waiting on, which nothing
 	// after it answers. It is never in the log. See markStaleQuestions in
-	// internal/daemon.
+	// internal/daemon. A resuming stream is also sent resolutions with
+	// "stale": true and no seq, for such questions before its resume
+	// point; see staleResolutions there.
 	//
 	// Distinct from permission.request, which looks similar and is not:
 	// that answer is a policy decision with a scope and a persisted
