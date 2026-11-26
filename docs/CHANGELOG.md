@@ -8,6 +8,25 @@ A question a stopped daemon left open is no longer shown again when the conversa
 
 * A permission question or a model question left open by a stopped daemon shown on every open of the conversation and of its forks, in the TUI, the Web UI and the task window
 
+## v0.180.7
+
+An SSH or PowerShell terminal no longer takes text you typed while a command ran for part of the prompt.
+
+**Fixed**
+
+* Output drawn after that text, ending as the text does (`step 1` after `rm -rf 1`), no longer read as the text: once you erased that end, `run` was typed onto the rest
+* A prompt ending in a character the terminal draws in one cell with the text's first (a flag's first half, a Hangul syllable before a final consonant) keeping the line yours the same way
+
+## v0.180.6
+
+A conversation taken over by an in-place update keeps what the previous localcode wrote and answered while it finished.
+
+**Fixed**
+
+* A message sent while an in-place update re-read its conversation starting a turn without the conversation before it, or answered 404
+* A booking made during an in-place update never listed or run, and one cancelled then still armed
+* An "allow for this session" answered during an in-place update asked again after it
+
 ## v0.180.5
 
 An SSH or PowerShell terminal no longer types a `run` onto what you typed while the command before it ran.

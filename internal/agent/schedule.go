@@ -188,6 +188,9 @@ type Scheduler struct {
 	counters map[string]int
 	entries  map[string]*Scheduled
 	timers   map[string]*time.Timer
+	// disarmed says Disarm has run, and nothing is armed after it. See
+	// Disarm.
+	disarmed bool
 }
 
 // key namespaces an id by the conversation it belongs to, since "s1"
@@ -337,7 +340,7 @@ func (s *Scheduler) arm(sessionID, id string, at time.Time) {
 	k := key(sessionID, id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.entries[k]; !ok {
+	if _, ok := s.entries[k]; !ok || s.disarmed {
 		return
 	}
 	s.timers[k] = time.AfterFunc(d, func() { s.fire(sessionID, id) })
@@ -352,9 +355,16 @@ func (s *Scheduler) arm(sessionID, id string, at time.Time) {
 // something — the run would start in a process that is stopping, and
 // the new daemon, which restored the same booking as pending, would
 // start it a second time.
+//
+// And nothing is armed afterwards. The retiring daemon goes on running
+// the turns it has, and a turn can book work, or finish a run of a
+// booking that repeats and arm the next one. Those used to be armed
+// here as usual, so they fired in the daemon that was stopping and again
+// in the one that re-read them on taking the session over.
 func (s *Scheduler) Disarm() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.disarmed = true
 	n := 0
 	for k, t := range s.timers {
 		if t.Stop() {
@@ -794,8 +804,25 @@ func (s *Scheduler) status(sessionID, id, status, runID, errText string) {
 // something nobody asked for, at a moment they did not choose. The row
 // says so instead.
 func (s *Scheduler) Restore(sessions []string, now time.Time) {
-	s.restore(sessions, now, func(at time.Time) string {
+	s.restore(sessions, now, false, func(at time.Time) string {
 		return "localcode was not running at " + at.Format("2006-01-02 15:04")
+	})
+}
+
+// Reread rebuilds one conversation's books from its log as it is now, for
+// a daemon taking the conversation over from the one it replaced.
+//
+// Restore read that log at startup, while the retiring daemon was still
+// writing it. What that daemon booked afterwards was never listed here
+// and never fired, and what it cancelled stayed armed. So the books are
+// rebuilt, and a row the log no longer has is dropped with its timer.
+//
+// A moment that passed in between was one nobody was going to fire: the
+// retiring daemon disarmed at the start of its drain. It is marked
+// missed, with the reason.
+func (s *Scheduler) Reread(sessionID string, now time.Time) {
+	s.restore([]string{sessionID}, now, true, func(at time.Time) string {
+		return "localcode was being updated at " + at.Format("2006-01-02 15:04")
 	})
 }
 
@@ -809,12 +836,16 @@ func (s *Scheduler) Restore(sessions []string, now time.Time) {
 // the machine that is very often false. What is true in every case here
 // is that the conversation was archived at that moment.
 func (s *Scheduler) RestoreRetrieved(sessions []string, now time.Time) {
-	s.restore(sessions, now, func(at time.Time) string {
+	s.restore(sessions, now, false, func(at time.Time) string {
 		return "the conversation this was scheduled in was archived at " + at.Format("2006-01-02 15:04")
 	})
 }
 
-func (s *Scheduler) restore(sessions []string, now time.Time, missed func(time.Time) string) {
+// restore is the rebuild behind Restore, RestoreRetrieved and Reread.
+// replace drops, for each session, the rows the log does not have. Only
+// Reread asks for it: everything else restores into books that hold
+// nothing for the session yet, or only what the same log already says.
+func (s *Scheduler) restore(sessions []string, now time.Time, replace bool, missed func(time.Time) string) {
 	for _, sessionID := range sessions {
 		evs, err := s.loop.Store.Events(sessionID, 0)
 		if err != nil {
@@ -913,6 +944,18 @@ func (s *Scheduler) restore(sessions []string, now time.Time, missed func(time.T
 		for _, id := range order {
 			if n := idNumber(id); n > s.counters[sessionID] {
 				s.counters[sessionID] = n
+			}
+		}
+		if replace {
+			for k, e := range s.entries {
+				if e.SessionID != sessionID || byID[e.ID] != nil {
+					continue
+				}
+				if t := s.timers[k]; t != nil {
+					t.Stop()
+				}
+				delete(s.timers, k)
+				delete(s.entries, k)
 			}
 		}
 		s.mu.Unlock()

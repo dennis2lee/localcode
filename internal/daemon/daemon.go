@@ -98,11 +98,13 @@ type Daemon struct {
 
 	// The daemon this one replaced may still be writing some sessions.
 	// ownedAtStart is which ones it listed when this daemon started;
-	// tookOver marks each as re-read once the old daemon let go of it.
-	// See handoff.go.
+	// tookOver marks each as re-read once the old daemon let go of it,
+	// and takingOver holds each whose re-read is running, for the writes
+	// that have to wait for it. See handoff.go.
 	takeoverMu   sync.Mutex
 	ownedAtStart map[string]bool
 	tookOver     map[string]bool
+	takingOver   map[string]*takeover
 	// UpdateAPI overrides GitHub's API address for the update check. Empty
 	// in every real build; set by tests.
 	UpdateAPI string

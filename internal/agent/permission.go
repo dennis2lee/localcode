@@ -109,6 +109,9 @@ type PermissionBroker struct {
 	// hydrated marks the sessions whose granted and outside entries have
 	// been rebuilt from the log. See hydrate.
 	hydrated map[string]bool
+	// rereads counts each session's Reread calls, so a hydrate that read
+	// the log before one installs nothing after it.
+	rereads map[string]int
 	// outside remembers the directories a session has approved leaving
 	// the workspace for, per class. Separate from granted because it is
 	// matched by containment rather than by an exact pattern, and keyed
@@ -226,6 +229,7 @@ func NewPermissionBroker(store *session.Store) *PermissionBroker {
 		shownIn:  map[string][]string{},
 		asking:   map[string]int{},
 		hydrated: map[string]bool{},
+		rereads:  map[string]int{},
 		granted:  map[string]map[string]bool{},
 		outside:  map[string]map[tools.OutsideClass][]string{},
 	}
@@ -565,6 +569,11 @@ func (b *PermissionBroker) isGranted(sessionID, toolName, pattern string) bool {
 //
 // Replayed in log order, so a forget that came after a remember clears
 // it, and one that came before does not.
+//
+// Replayed into a broker of its own and installed in one step, and not at
+// all once the session has been re-read since the log was: what it read
+// is the copy Reread was called to replace, a directory forgotten since
+// included. The next lookup reads the session again.
 func (b *PermissionBroker) hydrate(sessionID string) {
 	b.mu.Lock()
 	if b.hydrated[sessionID] {
@@ -572,12 +581,46 @@ func (b *PermissionBroker) hydrate(sessionID string) {
 		return
 	}
 	b.hydrated[sessionID] = true
+	reread := b.rereads[sessionID]
 	b.mu.Unlock()
 
 	evs, err := b.store.Events(sessionID, 0)
 	if err != nil {
 		return
 	}
+	if hydrateBarrier != nil {
+		hydrateBarrier()
+	}
+	read := &PermissionBroker{
+		granted: map[string]map[string]bool{},
+		outside: map[string]map[tools.OutsideClass][]string{},
+	}
+	read.replay(sessionID, evs)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.rereads[sessionID] != reread {
+		return
+	}
+	for k := range read.granted[sessionID] {
+		if b.granted[sessionID] == nil {
+			b.granted[sessionID] = map[string]bool{}
+		}
+		b.granted[sessionID][k] = true
+	}
+	for class, dirs := range read.outside[sessionID] {
+		for _, dir := range dirs {
+			b.rememberOutsideLocked(sessionID, class, dir)
+		}
+	}
+}
+
+// hydrateBarrier is test-only. It fires inside hydrate, after the log has
+// been read and before anything from it is installed.
+var hydrateBarrier func()
+
+// replay is hydrate's reading of the log, into b.
+func (b *PermissionBroker) replay(sessionID string, evs []events.Event) {
 	requests := map[string]map[string]any{}
 	for _, ev := range evs {
 		switch ev.Type {
@@ -626,11 +669,16 @@ func (b *PermissionBroker) hydrate(sessionID string) {
 // covered by one remembered earlier, so approving a tree and then a leaf
 // inside it does not grow the list with an entry that changes nothing.
 func (b *PermissionBroker) rememberOutside(sessionID string, class tools.OutsideClass, dir string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rememberOutsideLocked(sessionID, class, dir)
+}
+
+// rememberOutsideLocked is rememberOutside with b.mu already held.
+func (b *PermissionBroker) rememberOutsideLocked(sessionID string, class tools.OutsideClass, dir string) {
 	if dir == "" {
 		return
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.outside[sessionID] == nil {
 		b.outside[sessionID] = map[tools.OutsideClass][]string{}
 	}
@@ -754,6 +802,26 @@ func (b *PermissionBroker) persist(toolName string, rule config.PermissionRule) 
 		return fmt.Errorf("no config path configured for permanent permissions")
 	}
 	return config.AddPermissionRuleToFile(b.ConfigPath, toolName, rule)
+}
+
+// Reread drops what the broker has read from a session's log, so the next
+// lookup reads it again: for a daemon taking the session over from the
+// one it replaced, which went on writing it after this one loaded it.
+//
+// A session is read once, at its first lookup. When that was during the
+// drain (a client opening the session's permissions does it), an "allow
+// for this session" answered in the retiring daemon afterwards was never
+// read, and the next call asked again.
+//
+// Everything is dropped, not only the mark: the log holds every answer
+// these were built from, so the next read rebuilds them whole.
+func (b *PermissionBroker) Reread(sessionID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.hydrated, sessionID)
+	delete(b.granted, sessionID)
+	delete(b.outside, sessionID)
+	b.rereads[sessionID]++
 }
 
 // ForgetSession drops a session's remembered approvals, so a deleted

@@ -310,14 +310,9 @@ func (s *Store) loadDeferred(sessionID string) error {
 	path := st.logPath
 	s.mu.Unlock()
 
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read session log: %w", err)
-	}
-	var log []events.Event
-	var nextSeq uint64
-	if err == nil {
-		log, nextSeq = parseLog(data)
+	log, nextSeq, err := readLog(path)
+	if err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -331,6 +326,20 @@ func (s *Store) loadDeferred(sessionID string) error {
 		st.loaded = true
 	}
 	return nil
+}
+
+// readLog reads a session's log from disk. A file that is not there is an
+// empty log.
+func readLog(path string) ([]events.Event, uint64, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("read session log: %w", err)
+	}
+	log, nextSeq := parseLog(data)
+	return log, nextSeq, nil
 }
 
 // parseLog reads an event log into memory.
@@ -1494,23 +1503,73 @@ func (s *Store) Subscribe(sessionID string) (<-chan events.Event, <-chan struct{
 // Subscribers are told the way a lagging one is told, because the log
 // they were reading is being replaced under them; they reconnect from
 // their last sequence and replay from the fresh copy.
+//
+// The fresh copy is opened and read first, and put in place of the old
+// one in a single step, so the session is in the store and whole
+// throughout. It used to be deleted and then added back, and anything
+// that looked in between was told it did not exist: a send got 404, and
+// a client opening the session or listing sessions did not find it. Put
+// in unread, as startup does, it was there and empty: a caller that had
+// checked the old copy just before it was replaced read no events, or
+// appended one numbered from one into a file that went past it. A copy
+// that cannot be opened or read leaves the old one in place.
+//
+// And one that is behind by the time it is ready is read again. A write
+// here while the file was being read went to the old copy and the file,
+// so the fresh copy lacks it and would hand its sequence number out a
+// second time. A takeover keeps this daemon's writers out of the session
+// until the read is done, so this is the case that should not happen; a
+// session that goes on changing is reported rather than corrupted.
 func (s *Store) Reload(id string) error {
 	if s.dir == "" {
 		return nil
 	}
-	s.mu.Lock()
-	if st, ok := s.sessions[id]; ok {
-		if st.file != nil {
-			_ = st.file.Close()
+	for range reloadAttempts {
+		s.mu.Lock()
+		before := s.sessions[id]
+		var mark uint64
+		if before != nil {
+			mark = before.nextSeq
 		}
-		for _, sub := range st.subs {
-			sub.markLost()
+		s.mu.Unlock()
+
+		fresh, err := openOne(s.dir, id)
+		if err != nil {
+			return err
 		}
-		delete(s.sessions, id)
+		if fresh.log, fresh.nextSeq, err = readLog(fresh.logPath); err != nil {
+			_ = fresh.file.Close()
+			return err
+		}
+		fresh.loaded = true
+
+		s.mu.Lock()
+		if cur := s.sessions[id]; cur != before || (cur != nil && cur.nextSeq != mark) {
+			s.mu.Unlock()
+			_ = fresh.file.Close()
+			continue
+		}
+		if before != nil {
+			if before.file != nil {
+				_ = before.file.Close()
+			}
+			for _, sub := range before.subs {
+				sub.markLost()
+			}
+		}
+		s.sessions[id] = fresh
+		s.mu.Unlock()
+		return nil
 	}
-	s.mu.Unlock()
-	return s.restoreOne(s.dir, id)
+	return fmt.Errorf("session %s: %w", id, ErrReloadRaced)
 }
+
+// reloadAttempts is how many times Reload reads a session that changes
+// while it is read before it gives up.
+const reloadAttempts = 3
+
+// ErrReloadRaced says a session kept being written while Reload read it.
+var ErrReloadRaced = errors.New("kept changing while it was re-read")
 
 // EndAllStreams tells every subscriber of every session to reconnect.
 //
@@ -1706,13 +1765,26 @@ func (s *Store) readLog(st *sessionState) error {
 // in append mode so future Append calls continue the same file. The
 // events themselves are read later; see LoadAllFromDisk.
 func (s *Store) restoreOne(dir, id string) error {
+	st, err := openOne(dir, id)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.sessions[id] = st
+	s.mu.Unlock()
+	return nil
+}
+
+// openOne reads one session's metadata and opens its log for appending,
+// for restoreOne and Reload to put in the store.
+func openOne(dir, id string) (*sessionState, error) {
 	metaData, err := os.ReadFile(filepath.Join(dir, id+".meta.json"))
 	if err != nil {
-		return fmt.Errorf("read meta: %w", err)
+		return nil, fmt.Errorf("read meta: %w", err)
 	}
 	var meta Session
 	if err := json.Unmarshal(metaData, &meta); err != nil {
-		return fmt.Errorf("parse meta: %w", err)
+		return nil, fmt.Errorf("parse meta: %w", err)
 	}
 	if meta.ID == "" {
 		meta.ID = id
@@ -1720,25 +1792,21 @@ func (s *Store) restoreOne(dir, id string) error {
 
 	f, err := os.OpenFile(filepath.Join(dir, id+".jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, logFileMode)
 	if err != nil {
-		return fmt.Errorf("open session log: %w", err)
+		return nil, fmt.Errorf("open session log: %w", err)
 	}
 
-	st := &sessionState{
-		meta:    meta,
-		subs:    map[int]*subscriber{},
-		file:    f,
-		logPath: filepath.Join(dir, id+".jsonl"),
-	}
 	// The events are not read here. Whether they are wanted at all
 	// depends on whether this session is under a conversation somebody
 	// put away, and that is not knowable until every metadata file has
 	// been read — see LoadAllFromDisk, which reads the logs of everything
 	// outside the shelved set as soon as it can answer that, and
 	// loadDeferred, which reads the rest on the first request for them.
-	s.mu.Lock()
-	s.sessions[id] = st
-	s.mu.Unlock()
-	return nil
+	return &sessionState{
+		meta:    meta,
+		subs:    map[int]*subscriber{},
+		file:    f,
+		logPath: filepath.Join(dir, id+".jsonl"),
+	}, nil
 }
 
 // TailSince returns the seq to replay from so a client sees roughly the
