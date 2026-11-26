@@ -81,6 +81,11 @@ type Result struct {
 	// text on one of the three wires (OpenAI's), so the images ride
 	// beside the results rather than inside one. See view_image.go.
 	Images []provider.Block
+	// Snapshot is an image file this call saved that the transcript
+	// shows under the call, for the person to see what the model saw.
+	// The browser tool's captures. Recorded in the tool's end event, so it
+	// is shown again after a restart.
+	Snapshot string
 }
 
 // ResultSource is one contributor's material inside a Result's Content:
@@ -543,6 +548,9 @@ func (r *Registry) gate(ctx context.Context, name string, t Tool, input json.Raw
 				describe = fmt.Sprintf("%s %s", name, string(input))
 			}
 		}
+		if outcome.Reason != "" {
+			describe += "\n" + outcome.Reason
+		}
 		allowed, err := r.permission(ctx, Ask{
 			Tool:        name,
 			Subject:     subject,
@@ -550,7 +558,7 @@ func (r *Registry) gate(ctx context.Context, name string, t Tool, input json.Raw
 			Outside:     outcome.Outside,
 			Dir:         outcome.Dir,
 			Workspace:   outcome.Workspace,
-			Once:        once,
+			Once:        once || outcome.GitDir,
 		})
 		var refused *RefusedError
 		if errors.As(err, &refused) {
@@ -611,6 +619,30 @@ func (r *Registry) permit(ctx context.Context, name, subject, describe string, o
 	}
 	return true, ""
 }
+
+// PermitNamed asks the permission question under name, a rule name that
+// need not be a registered tool: the ssh tool asks about connecting
+// ("ssh_connect") and typing ("ssh_input") under names of their own, and
+// about its remote commands ("ssh") with the command as the subject. The
+// question is asked as a tool that requires permission does: a rule, a
+// session or always approval, or the person answers it. once asks it for
+// this use only (see Ask.Once).
+func (r *Registry) PermitNamed(ctx context.Context, name, subject, describe string, once bool) (bool, string) {
+	if refusal := r.gate(ctx, name, askOnly{name}, nil, subject, describe, once); refusal != nil {
+		return false, refusal.Content
+	}
+	return true, ""
+}
+
+// askOnly stands for a question PermitNamed asks: it requires permission
+// and runs nothing.
+type askOnly struct{ name string }
+
+func (a askOnly) Name() string                                  { return a.name }
+func (askOnly) Description() string                             { return "" }
+func (askOnly) InputSchema() json.RawMessage                    { return nil }
+func (askOnly) RequiresPermission(json.RawMessage) bool         { return true }
+func (askOnly) Execute(context.Context, json.RawMessage) Result { return Result{IsError: true} }
 
 func schema(properties string, required ...string) json.RawMessage {
 	req, _ := json.Marshal(required)

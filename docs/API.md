@@ -46,8 +46,12 @@ client to the same release when both are yours.
     over the network. `404` unknown session, task, schedule, or pending
     prompt. `409` a turn (or delete-all, or the old daemon still draining
     a session after an update) holds the session; both shipped clients
-    queue on it. `500` the change applied but did not persist, or the
-    operation failed mid-way. `501` shutdown is not wired in this daemon.
+    queue on it. `500` the operation failed mid-way. `501` shutdown is not
+    wired in this daemon.
+  * A setting or permission rule that was applied and could not be
+    written to `config.json` is not an error status. Its route answers
+    `200` with `"applied": true`, `"persisted": false` and the reason in
+    `"error"`, and the daemon runs the new value until it restarts.
 * A write whose path is not canonical (a `.` or `..` segment, or a
   doubled slash) is answered `400` rather than redirected
   (`CanonicalWrites` in `internal/daemon/canonical.go`, in front of the
@@ -131,33 +135,78 @@ A session object in answers is `{"id", "agent", "title", "workspace",
 `GET /api/settings` answers the whole snapshot, so a client applies
 state instead of merging events: `auto_compact_enabled`,
 `auto_compact_percent`, `keep_going`, `fold_thinking`, `muse_profiles`,
-`repeat_limit`, `smart_agent`, `orchestrate`, `model_invocable`,
+`repeat_limit`, `smart_agent`, `browser`, `browser_available`,
+`browser_import`, `ssh`, `ssh_available`, `orchestrate`, `model_invocable`,
 `model_commands`, `orchestrate_roster`, `show_tps`, `show_thinking`,
 `show_timestamps`, `auto_delegate`, `auto_delegate_agent`,
 `auto_delegate_match`, `skip_permissions`, `permission_rules`,
 `can_edit_permissions`. `muse_profiles` lists the profiles whose model ID
-contains `muse`, sorted, and is `[]` when none does. Changes are announced
+contains `muse`, sorted, and is `[]` when none does. `browser_available`
+is whether a Chrome or Edge was found to run. `ssh_available` is whether
+the daemon has an SSH manager. `browser_import` is
+`{"from", "profile", "skipped"}` for the last copy of the person's
+profile, or `null` before the first. Changes are announced
 on the broadcast as `settings.changed`; a client that was not connected
 re-reads this endpoint on load.
 
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
 | `GET /api/settings` | nothing | `200` the snapshot above | none |
-| `POST /api/settings/auto-delegate` | `{"enabled"?, "agent"?, "match"?}`; pointers, so one field can move alone | `204` | `400` unknown agent or fewer than two agents configured; `400` bad body (text error); `500` applied for this run but not persisted (text error) |
+| `POST /api/settings/auto-delegate` | `{"enabled"?, "agent"?, "match"?}`; pointers, so one field can move alone | `200 {"auto_delegate", "auto_delegate_agent", "auto_delegate_match", "applied": true, "persisted", "error"?}`: the whole setting as the daemon now holds it. The switch and the target (agent and patterns) are written separately: `persisted` is false when either was not written, and `error` names each | `400` unknown agent or fewer than two agents configured; `400` bad body (text error) |
 | `POST /api/settings/smart-agent` | `{"enabled"}` | `200 {"smart_agent", "applied": true, "persisted", "error"?}`; `applied` is always true, `persisted` is the part that can fail | `400` bad body (text error) |
+| `POST /api/settings/browser` | `{"enabled"}`; off also quits the browser | `200 {"browser", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
+| `POST /api/settings/ssh` | `{"enabled"}`; off also closes every SSH connection | `200 {"ssh", "applied": true, "persisted", "error"?}` | `400` bad body (text error); `403` refused by the SSH request guard (see SSH below) |
+| `GET /api/ssh` | nothing | `200 [{"session", "title", "id", "target", "state"}]`: every SSH connection open now, in any conversation | `403` refused by the SSH request guard (see SSH below) |
+| `POST /api/settings/powershell` | `{"enabled"}`; off also closes every PowerShell terminal. Saved where there is no PowerShell (anywhere but Windows) too | `200 {"powershell", "applied": true, "persisted", "error"?}` | `400` bad body (text error); `403` refused by the SSH request guard (see SSH below) |
+| `GET /api/powershell` | nothing | `200 [{"session", "title", "id", "target", "state"}]`: every PowerShell terminal open now, in any conversation | `403` refused by the SSH request guard (see SSH below); `404` no PowerShell (anywhere but Windows) |
+| `POST /api/browser/import` | nothing | `200 {"from", "profile", "skipped"}`: copies the person's Chrome or Edge profile in again and restarts the browser, closing every tab | `404` no browser in this daemon; `409` the browser setting is off; `400` no profile to copy |
 | `POST /api/settings/orchestrate` | `{"enabled"}` | `200 {"orchestrate", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/model-invocable` | `{"enabled"}` | `200 {"model_invocable", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
-| `POST /api/settings/keep-going` | `{"enabled"}` | `204` | `400` bad body (text error); `500` applied but not persisted (text error) |
+| `POST /api/settings/keep-going` | `{"enabled"}` | `200 {"keep_going", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/fold-thinking` | `{"enabled"}` | `200 {"fold_thinking", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
-| `POST /api/settings/repeat-limit` | `{"limit"}`; 0 turns the guard off | `204` | `400` outside 0..max (text error); `500` applied but not persisted (text error) |
+| `POST /api/settings/repeat-limit` | `{"limit"}`; 0 turns the guard off | `200 {"repeat_limit", "applied": true, "persisted", "error"?}` | `400` bad body, or a limit outside 0..max (text error) |
+
+### The desktop window's own settings
+
+What the page keeps for itself (faces, text sizes, zoom, panel widths,
+which panels a conversation shows, folded groups) lives in the browser's
+`localStorage`. The desktop window's page also writes each change here,
+and reads the set back before it draws, because the window's
+`localStorage` is tied to a port the window does not always get back.
+The file is `~/.localcode/window-state.json`. A browser tab calls neither
+route.
+
+Three names hold several items each: `localcode.panelWidths`,
+`localcode.panelViews` and `localcode.collapsedGroups`. The page writes
+each whole. It calls `GET` again before it changes one item and starts
+from the value the file has then. The items a second open window wrote
+are sent back unchanged.
+
+The page starts from its own copy in two cases:
+
+* A write of the same name from this page has not been answered with
+  `204` yet. The page then makes no `GET`.
+* The `GET` gives no answer the page can read.
+
+The read and the write are two requests. Each window has its own daemon.
+Two windows that change the same name within those two requests keep the
+value written last.
+
+Both routes pass the SSH request guard (see SSH below) and answer `403`
+when it refuses.
+
+| Method and path | Takes | Answers | Errors |
+|---|---|---|---|
+| `GET /api/window/state` | nothing | `200 {"available", "kept"}`. `kept` is an object of name to string, or `null` when nothing has been written yet (no file, or a file that is not an object of settings). `available` is false for a daemon started without a path | `403` refused by the request guard; `500` the file is there and could not be read |
+| `PUT /api/window/state` | an object of name to string or `null`: a string keeps the name, `null` forgets it, names not in the body are left alone. Names are `archiveOpen` or `localcode.` followed by 1 to 64 letters, digits, `.`, `_` or `-`, starting with a letter or digit. At most 64 names, 256 KiB a value, 1 MiB in all | `204`, with the file on disk | `400` a body that is not one object (`null`, or anything after the object), a name outside the rule, a value that is not a string or `null`, or more than 64 names; `403` refused by the request guard; `404` a daemon started without a path; `413` a body, a value or the resulting file too large; `500` the file could not be written, or is there and could not be read (nothing is written then) |
 
 ### Daemon-wide permission defaults
 
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
-| `POST /api/permissions/skip` | `{"enabled"}` | `204` | `400` bad body (text error); `500` applied but not persisted (text error) |
-| `POST /api/permissions/rules` | `{"tool", "match", "decision"}`; all three required | `204` | `400` a field missing, or a `decision` that is not a known one (text error); `500` applied but not persisted (text error) |
-| `POST /api/permissions/rules/remove` | `{"tool", "match", "decision"}`; the exact rule to remove | `204` | `400` a field missing, or a `decision` that is not a known one (text error); `500` applied but not persisted (text error) |
+| `POST /api/permissions/skip` | `{"enabled"}` | `200 {"skip_permissions", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
+| `POST /api/permissions/rules` | `{"tool", "match", "decision"}`; all three required | `200 {"permission_rules", "applied": true, "persisted", "error"?}`: every rule the daemon now holds, as `GET /api/settings` reports them | `400` a field missing, or a `decision` that is not a known one (text error) |
+| `POST /api/permissions/rules/remove` | `{"tool", "match", "decision"}`; the exact rule to remove | `200 {"permission_rules", "applied": true, "persisted", "error"?}`, as for adding one | `400` a field missing, or a `decision` that is not a known one (text error) |
 
 ### Workspace
 
@@ -233,6 +282,99 @@ follows the `schedule.*` events on that conversation's own stream.
 | `POST /api/sessions/{id}/schedules/{sid}/rename` | `{"name"}`; empty clears it | `200` the entry | `400` bad body (text error); `404` no scheduler or no such booking |
 | `DELETE /api/sessions/{id}/schedules/{sid}` | nothing | `204`; also removes the run session it left behind, best effort | `404` no scheduler or no such booking |
 
+### Browser (per session)
+
+The desktop window's browser panel. The frame stream is also how the
+daemon knows a window is showing the conversation: the model is offered
+the `browser` tool only while one is open. Every route but the snapshot
+route answers `404` when the daemon has no browser, and every route
+answers `404` when the session is unknown. The stream, navigate and
+input routes answer `409` while the browser setting is off, so nothing
+starts the browser and no stream counts as watching.
+
+The daemon answers `403` to any request, on every route, whose
+User-Agent contains `LocalcodeBrowser`. That is every request the
+model's browser sends, so a page it opens cannot drive the API.
+
+| Method and path | Takes | Answers | Errors |
+|---|---|---|---|
+| `GET /api/sessions/{id}/browser` | nothing | `200 {"has_tab", "url"?, "title"?, "tabs"?, "width", "height"}`; `url` and `title` are the active tab's; `tabs` is every tab in the order opened, each `{"id", "url", "title", "active"}`; `width` and `height` are the page size every coordinate is in: the active tab's, or the height the conversation's next tab opens at | `404` |
+| `GET /api/sessions/{id}/browser/stream` | nothing | `200 multipart/x-mixed-replace`, one JPEG per part, as long as the client holds it open. Waits while the conversation has no tab, and starts no browser | `404`; `409` the setting is off |
+| `POST /api/sessions/{id}/browser/size` | `{"width", "height"}`: the room the panel has for the page, in any one unit | `200 {"width", "height"}`: the conversation's tabs, and the tabs it opens after, are 1280 wide and as tall as fills that room at that width, from 320 to 2560. Starts no browser | `400` a size that is not one (either side 0 or less); `404`; `503` a tab the browser did not answer for, which is told the height again with the next size |
+| `POST /api/sessions/{id}/browser/navigate` | `{"url"}` (`http`, `https`, or `about:blank`), or `{"action": "back"\|"forward"\|"reload"}`; starts the browser and opens the tab when there is none | `200 {"url", "title"}` | `400` the page could not load, an address of another scheme, or an unknown action; `403` a deny rule for `browser` covers the page or one a redirect led to, and it was not loaded; `409` the setting is off; `503` the browser could not start |
+| `POST /api/sessions/{id}/browser/tabs` | nothing | `200 {"tabs"}`: opens an empty tab and makes it the active one, starting the browser if it is not running | `409` the setting is off; `503` the browser could not start |
+| `POST /api/sessions/{id}/browser/tabs/{tab}/activate` | nothing | `200 {"tabs"}`: the tab is the one the model's browser tool acts on and the stream shows | `404` no such tab; `409` the setting is off |
+| `DELETE /api/sessions/{id}/browser/tabs/{tab}` | nothing | `200 {"tabs"}`: the tab is closed; when it was the active one, the one before it is | `404` no such tab; `409` the setting is off |
+| `POST /api/sessions/{id}/browser/input` | one of `{"mouse": {"type", "x", "y", "button"?, "buttons"?, "clickCount"?, "deltaX"?, "deltaY"?, "modifiers"?}}`, `{"key": {"type", "key", "code", "text"?, "keyCode"?, "modifiers"?, "commands"?}}`, `{"text"}`, in page pixels. `buttons` is the held buttons as a mask (left 1, right 2, middle 4); a move with one held is a drag. `commands` is editing commands for the key: `selectAll`, `copy`, `cut`, `paste`, `undo`, `redo` | `204` | `400` bad event or another command; `409` the setting is off, or no tab |
+| `GET /api/sessions/{id}/snapshots/{name}` | nothing | `200 image/png`: a snapshot the `browser` tool saved, from `.localcode/snapshots/` under the conversation's working directory, or under the home directory for a conversation with none. A snapshot saved before the conversation moved to another working directory is found where its `tool.end` says it was saved. `name` is the file name `tool.end` gave in `snapshot` | `404` no such conversation, a name not in the tool's own shape (`YYYYMMDD-HHMMSS-NNN.png`), no such file, or a file that is not a regular one |
+
+### SSH (per session)
+
+The SSH panel. Every route answers `404` when the daemon has no SSH
+manager or the session is unknown, and `404` for an unknown terminal.
+Connect, input and reconnect answer `409` while the ssh setting is off
+and `403` for an archived conversation.
+
+Every SSH route, `GET /api/ssh` and `POST /api/settings/ssh` pass a request guard first and
+answers `403` when it refuses: a `POST` or `DELETE` whose
+`Content-Type` is not `application/json`; a `Sec-Fetch-Site` other than
+`same-origin` or `none`; an `Origin` whose host is not the request's
+`Host`; or a `Host` that is a name other than `localhost` and the name
+the daemon was started to listen on (an address is accepted). The guard
+refuses what another website could send. It cannot tell the panel from a
+local program: the daemon has no authentication.
+
+A terminal's `Info` is `{"id", "epoch", "spec", "target"?, "state":
+"connecting"|"connected"|"ended", "reason"?, "server"?, "shell"?,
+"integrated", "running", "alt", "held", "opener": "model"|"person",
+"question"?, "title"?, "cols", "rows", "input_lost"?, "scroll_first",
+"scroll_next"}`. `question` is `{"id", "kind":
+"host_key"|"password"|"passphrase"|"prompts", "for", "host_key"?:
+{"host", "key_type", "fingerprint"}, "key"?, "name"?, "instruction"?,
+"prompts"?: [{"text", "echo"}]}`.
+
+| Method and path | Takes | Answers | Errors |
+|---|---|---|---|
+| `GET /api/sessions/{id}/ssh` | nothing | `200 {"enabled", "terminals": [Info], "wants"}`; `wants` counts the times a terminal wanted the person (a question, a command at a password prompt) | `403`; `404` |
+| `GET /api/sessions/{id}/ssh/stream` | query `viewer`, `terminal`, `epoch`, `from` | `200 text/event-stream`. Every frame is an unnamed event `{"kind", "data"}`: `state` (as the route above, sent when it changes), `screen` `{"terminal", "epoch", "screen": {"cols", "rows", "lines", "cx", "cy", "cursor", "alt", "title"?}}` for the terminal named, and `scroll` `{"terminal", "epoch", "from", "lines"}`, the lines that scrolled off its top, numbered from `from`. A line is runs `{"t", "f"?, "b"?, "a"?, "w"?}`: text, colours (`"0"` to `"15"` or `#rrggbb`), flags (bold 1, faint 2, italic 4, underline 8, reverse 16, strike 32, conceal 64, blink 128), and a wide character. With `epoch` and `from` the scrollback resumes there; otherwise the last 1000 lines come first. Ending the stream forgets the viewer's size | `403`; `404` |
+| `POST /api/sessions/{id}/ssh/connect` | `{"target"}`: `[user@]host[:port]` or a `Host` from `~/.ssh/config` | `200 {"terminal"}`: the terminal, connecting; questions arrive as its `question` | `400` a target that does not parse, or the limit; `403`; `409` the setting is off |
+| `POST /api/sessions/{id}/ssh/{term}/input` | one of `{"key": {"key", "ctrl"?, "alt"?, "shift"?, "meta"?}}`, `{"text"}`, `{"paste"}`. `key` is a DOM key name; a key with `meta` is the window's and is dropped. A paste is bracketed when the shell asked for it | `204` | `403`; `409` the terminal is not connected or the setting is off |
+| `POST /api/sessions/{id}/ssh/{term}/size` | `{"viewer", "cols", "rows"}`; `cols` 0 forgets the viewer. The terminal takes the smallest size among its viewers, 40 to 300 columns and 10 to 120 rows | `204` | `400` no viewer; `403` |
+| `POST /api/sessions/{id}/ssh/{term}/hold` | `{"on"}` | `204`: while held, the model's every action on the terminal is refused, `read` and `wait` included | `403` |
+| `POST /api/sessions/{id}/ssh/{term}/answer` | `{"question", "accept", "values"?, "fingerprint"?}`: `values` for a password, a passphrase or prompts, one per prompt; `fingerprint`, the one the question showed, to accept a host key | `204` | `403`; `409` the question is no longer asked, the fingerprint does not match, or the wrong number of values |
+| `POST /api/sessions/{id}/ssh/{term}/reconnect` | `{}` | `200 {"terminal"}`: a new connection to the same place under the same id and a new `epoch` | `403`; `409` the terminal is still connected, or the setting is off |
+| `DELETE /api/sessions/{id}/ssh/{term}` | `{}` | `204`: the connection is closed and the terminal removed | `403`; `404` |
+
+### PowerShell (per session)
+
+The PowerShell panel, on Windows. Its terminals are the SSH panel's, each
+a PowerShell on this computer under a pseudo console instead of a
+connection, so its routes are the SSH routes above under
+`/api/sessions/{id}/powershell`, with the same request guard, the same
+`Info` and the same answers, except:
+
+* `open` takes the place of `connect`: it takes `{}` and starts a
+  PowerShell (`powershell.exe`, or `powershell_path`) in the
+  conversation's working directory.
+* There is no `answer`: a PowerShell terminal asks the person nothing
+  through the panel. A program's own question is on its screen.
+* Every route answers `404` on a daemon with no PowerShell (anywhere but
+  Windows), and `open`, input and reconnect answer `409` while the
+  powershell setting is off.
+* `Info.shell` is `powershell` or `pwsh`. `Info.target` is empty and
+  `spec` is `PowerShell`.
+
+| Method and path | Takes | Answers | Errors |
+|---|---|---|---|
+| `GET /api/sessions/{id}/powershell` | nothing | as `GET /api/sessions/{id}/ssh` | `403`; `404` |
+| `GET /api/sessions/{id}/powershell/stream` | as the SSH stream | as the SSH stream | `403`; `404` |
+| `POST /api/sessions/{id}/powershell/open` | `{}` | `200 {"terminal"}`: the terminal, starting | `400` the limit; `403`; `404`; `409` the setting is off |
+| `POST /api/sessions/{id}/powershell/{term}/input` | as the SSH route | `204` | `403`; `404`; `409` |
+| `POST /api/sessions/{id}/powershell/{term}/size` | as the SSH route | `204` | `400`; `403`; `404` |
+| `POST /api/sessions/{id}/powershell/{term}/hold` | `{"on"}` | `204` | `403`; `404` |
+| `POST /api/sessions/{id}/powershell/{term}/reconnect` | `{}` | `200 {"terminal"}`: a new PowerShell under the same id and a new `epoch` | `403`; `404`; `409` still running, or the setting is off |
+| `DELETE /api/sessions/{id}/powershell/{term}` | `{}` | `204`: the shell is ended and the terminal removed | `403`; `404` |
+
 ### Effort and model (per session)
 
 Both are GET-the-view plus POST-the-change, and both announce on the
@@ -298,7 +440,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `message.user` | `{"text", "model_text"?, "local"?, "auto"?, "images"?}`. `local: true` was answered without a model call and is skipped rebuilding history. `auto: true` marks a message localcode sent for the user: the keep_going nudge, or a debate's reviews handed to the author. Clients do not draw it as typed. `images` is `[{"media_type", "data"}]`, the images sent with the message |
 | `message.part.delta` | `{"text"}` fragment of a streaming reply |
 | `message.part.end` | `{"text", "failed"?, "shell_command"?}` the finished reply text; one turn has several when tools ran. `failed: true` closes a reply whose stream died before it finished: the text is on the record and not in the history, which is rebuilt without it. `text` is empty when the stream died after a tool call and before any text; the calls a failed reply started never ran. A log written before this key existed rebuilds such a reply into the history as finished. `shell_command` names the `!` command whose output `text` is |
-| `tool.start`, `tool.end` | a tool call and its result |
+| `tool.start`, `tool.end` | a tool call and its result. `tool.end` carries `snapshot`, the saved file's path, when the call was a `browser` snapshot; a client shows it from the snapshot route |
 | `permission.request` | a tool approval question; answered at `POST /api/sessions/{id}/permissions/{permId}` |
 | `permission.resolved` | how it was answered |
 | `permission.forgotten` | `{"class": "read" or "write"}`; remembered directories dropped |
@@ -326,7 +468,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `rewound` | `{"from_seq", "turn_text", "restored", "skipped", "created"}` |
 | `redone` | `{"rewind_seq", "turn_text", "written", "skipped"}` |
 | `checkpoint` | `{"tool", "path", "sha256", "mode", "existed", "too_large"}`; bytes live content-addressed beside the log, not here |
-| `schedule.created` | `{"id", "at", "prompt", "agent"}` |
+| `schedule.created` | `{"id", "at", "prompt", "agent", "by"?}`. `by` is `"person"` or `"model"`: whose words the prompt holds, which decides whether a leading `/` or `!` in it runs as a command when it fires (a person's does, a model's is sent as text). Absent in logs written before it existed, and read as a person's |
 | `schedule.status` | `{"id", "status", "run_session"?, "error"?}` |
 | `schedule.seen` | `{"id"}` |
 | `schedule.renamed` | `{"id", "name"}` |

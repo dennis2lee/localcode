@@ -84,6 +84,7 @@ export const delegateMatchListEl = document.getElementById('delegate-match-list'
 export const delegateMatchInput = document.getElementById('delegate-match-input');
 export const delegateMatchAddBtn = document.getElementById('delegate-match-add');
 export const delegateNote = document.getElementById('delegate-note');
+export const delegateWarn = document.getElementById('delegate-warn');
 export const delegateCloseBtn = document.getElementById('delegate-close');
 export const permissionStatusBtn = document.getElementById('permission-status-btn');
 export const effortBtn = document.getElementById('effort-btn');
@@ -112,6 +113,7 @@ export const ruleToolInput = document.getElementById('rule-tool-input');
 export const ruleMatchInput = document.getElementById('rule-match-input');
 export const ruleDecisionSelect = document.getElementById('rule-decision-select');
 export const ruleAddBtn = document.getElementById('rule-add-btn');
+export const permissionRulesWarn = document.getElementById('permission-rules-warn');
 export const permissionSettingsNote = document.getElementById('permission-settings-note');
 export const permissionSettingsCloseBtn = document.getElementById('permission-settings-close');
 export const workspaceBtn = document.getElementById('workspace-btn');
@@ -134,10 +136,19 @@ export const leftPanel = document.getElementById('left-panel');
 export const rightPanel = document.getElementById('right-panel');
 export const resizeLeftHandle = document.getElementById('resize-left');
 export const resizeRightHandle = document.getElementById('resize-right');
+export const browserPanel = document.getElementById('browser-panel');
+export const resizeBrowserHandle = document.getElementById('resize-browser');
 export const stopBtn = document.getElementById('stop-btn');
 export const detachBtn = document.getElementById('detach-btn');
 export const toggleLeftBtn = document.getElementById('toggle-left');
 export const toggleRightBtn = document.getElementById('toggle-right');
+export const toggleBrowserBtn = document.getElementById('toggle-browser');
+export const sshPanel = document.getElementById('ssh-panel');
+export const resizeSshHandle = document.getElementById('resize-ssh');
+export const toggleSshBtn = document.getElementById('toggle-ssh');
+export const psPanel = document.getElementById('ps-panel');
+export const resizePsHandle = document.getElementById('resize-ps');
+export const togglePsBtn = document.getElementById('toggle-ps');
 export const appVersionEl = document.getElementById('app-version');
 
 // The settings window.
@@ -156,6 +167,11 @@ export const windowMinimizeBtn = document.getElementById('window-minimize');
 export const windowMaximizeBtn = document.getElementById('window-maximize');
 export const windowCloseBtn = document.getElementById('window-close');
 export const smartAgentCheckbox = document.getElementById('smart-agent-checkbox');
+export const browserSettingsEl = document.getElementById('browser-settings');
+export const browserCheckbox = document.getElementById('browser-checkbox');
+export const browserNoteEl = document.getElementById('browser-note');
+export const browserWarnEl = document.getElementById('browser-warn');
+export const browserImportBtn = document.getElementById('browser-import-btn');
 export const keepGoingCheckbox = document.getElementById('keep-going-checkbox');
 export const keepGoingWarnEl = document.getElementById('keep-going-warn');
 export const foldThinkingCheckbox = document.getElementById('fold-thinking-checkbox');
@@ -182,7 +198,7 @@ export const updateNoteEl = document.getElementById('update-note');
 // The settings tabs. One entry per tab, in the order the tablist shows
 // them: the first is where the window always opens, and settings.js
 // reads the panels' visibility from the Modal flag, never from the DOM.
-export const settingsTabs = ['agents', 'turns', 'muse', 'updates', 'typography'].map((name) => ({
+export const settingsTabs = ['tools', 'behavior', 'appearance', 'updates'].map((name) => ({
   name,
   tab: document.getElementById('settings-tab-' + name),
   panel: document.getElementById('settings-panel-' + name),

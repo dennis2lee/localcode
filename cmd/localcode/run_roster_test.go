@@ -33,6 +33,12 @@ var leftOutOfARun = map[string]string{
 	"Verdict": "a debate reviewer's tool, and a run cannot hold a debate",
 	"ask_user": "there is nobody at the keyboard in a pipe, so the question " +
 		"could only block until the turn gave up",
+	"browser": "offered only to a conversation a GUI window is showing, " +
+		"and a run has no window",
+	"ssh": "its host keys and passwords are answered in a panel a run does " +
+		"not have, and a connection outliving the run would be one nobody owns",
+	"powershell": "its terminals are shown in a panel a run does not have, " +
+		"and a shell outliving the run would be one nobody owns",
 }
 
 func TestTheOneShotRosterDiffersFromTheDaemonsOnlyOnPurpose(t *testing.T) {

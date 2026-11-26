@@ -50,21 +50,32 @@ func WorkingDir(ctx context.Context) string {
 // resolve turns a tool's path argument into one that means the same thing
 // no matter what the process's working directory happens to be.
 //
-// Absolute paths are returned untouched: the model asked for a specific
-// place and gets it. A relative path is joined onto the session's
-// directory, which is the whole point — "src/main.go" has to mean the
-// src/main.go of the workspace this turn belongs to, not of whichever
-// directory the daemon was started in.
+// An absolute path keeps its place: the model asked for a specific one
+// and gets it. A relative path is joined onto the session's directory,
+// which is the whole point — "src/main.go" has to mean the src/main.go of
+// the workspace this turn belongs to, not of whichever directory the
+// daemon was started in.
+//
+// Both come back cleaned, so ".." is taken off the text before the file
+// system sees it. The permission checks (OutsideWorkspace, IntoGitDir)
+// judge the cleaned path, and the file system reads "link/.." as the
+// directory above wherever link points: an absolute "<ws>/h/../config"
+// with h a link to .git/hooks was judged as <ws>/config and written to
+// .git/config. A relative path joined onto the directory was always
+// cleaned, by Join.
 //
 // An empty path stays empty rather than becoming the directory itself, so
 // a tool that treats "" as "unset" keeps doing so.
 func resolve(ctx context.Context, path string) string {
-	if path == "" || filepath.IsAbs(path) {
+	if path == "" {
 		return path
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
 	}
 	dir := WorkingDir(ctx)
 	if dir == "" {
-		return path
+		return filepath.Clean(path)
 	}
 	return filepath.Join(dir, path)
 }
@@ -182,6 +193,12 @@ func resolvePhysical(path string) (string, error) {
 			// The component exists and is a symlink — its *target* is
 			// what's missing. Follow it; the target is where a write
 			// through this path would land.
+			//
+			// Not cleaned: a target is read the way the file system reads
+			// it, and that is not by its text. "h/../info/attributes"
+			// with h a link to .git/hooks is .git/info/attributes, and
+			// EvalSymlinks, on the next pass, follows h before it applies
+			// the "..". Cleaning first made it <ws>/info/attributes.
 			if links++; links > maxDanglingLinkHops {
 				return "", errors.New("too many links")
 			}
@@ -190,18 +207,45 @@ func resolvePhysical(path string) (string, error) {
 				return "", rerr
 			}
 			if !filepath.IsAbs(dest) {
-				dest = filepath.Join(filepath.Dir(p), dest)
+				parent, _ := splitLastElement(p)
+				dest = strings.TrimSuffix(parent, string(filepath.Separator)) + string(filepath.Separator) + dest
 			}
-			p = filepath.Clean(dest)
+			p = dest
 			continue
 		}
-		parent := filepath.Dir(p)
-		if parent == p {
+		// Peeled by its text for the same reason: filepath.Dir would
+		// clean what is left. A missing ".." or "." is not a name to
+		// peel; the path does not resolve.
+		parent, base := splitLastElement(p)
+		if parent == p || base == "" || base == "." || base == ".." {
 			return "", err
 		}
-		tail = filepath.Join(filepath.Base(p), tail)
+		tail = filepath.Join(base, tail)
 		p = parent
 	}
+}
+
+// splitLastElement is filepath.Split without the cleaning filepath.Dir
+// does: the parent is the text before the last separator, the root kept
+// whole, and "." for a relative path of one element. Trailing separators
+// are not an element: a link to "newdir/" names newdir.
+func splitLastElement(p string) (parent, base string) {
+	vol := len(filepath.VolumeName(p))
+	for len(p) > vol+1 && os.IsPathSeparator(p[len(p)-1]) {
+		p = p[:len(p)-1]
+	}
+	i := len(p) - 1
+	for i >= vol && !os.IsPathSeparator(p[i]) {
+		i--
+	}
+	if i < vol {
+		return ".", p[vol:]
+	}
+	parent = p[:i]
+	if len(parent) == vol {
+		parent = p[:i+1]
+	}
+	return parent, p[i+1:]
 }
 
 // maxDanglingLinkHops bounds how many dangling symlinks resolution will
@@ -226,6 +270,22 @@ type Policy struct {
 	// OutsideAllowed answers whether this session has already said yes to
 	// leaving the workspace for reads, or for writes.
 	OutsideAllowed func(ctx context.Context, class OutsideClass) bool
+}
+
+// firmAskKey marks a question the skip switches do not answer.
+type firmAskKey struct{}
+
+// WithFirmAsk marks ctx's question as one a person answers even with
+// skip_permissions or skip_tools on: a tool whose deny rules cannot be
+// held to what it will run asks instead (the powershell tool, for a line
+// that is more than one plain command). A deny still denies.
+func WithFirmAsk(ctx context.Context) context.Context {
+	return context.WithValue(ctx, firmAskKey{}, true)
+}
+
+func firmAsk(ctx context.Context) bool {
+	v, _ := ctx.Value(firmAskKey{}).(bool)
+	return v
 }
 
 // Query is one permission question as the registry asks it.
@@ -253,6 +313,16 @@ type Outcome struct {
 	// unless Outside is set.
 	Dir       string
 	Workspace string
+	// GitDir is set when the question is a write into a git directory.
+	// It is asked every time (Ask.Once): a remembered answer is keyed by
+	// how a path is spelled, and a file approved for the session can be
+	// replaced by a link into .git, which git's own allowed commands can
+	// check out. An answer covers the one write.
+	GitDir bool
+	// Reason is what the question says on top of the tool's own
+	// description, for a question the call alone would not explain: the
+	// path the model typed can be a link, and nothing in it says .git.
+	Reason string
 }
 
 // ComposeResolver is the whole permission pipeline in its required order.
@@ -264,7 +334,10 @@ type Outcome struct {
 //     asked whatever the rules said — a rule that allows write_file
 //     everywhere is a statement about this project, not a licence to
 //     edit the one next door.
-//  3. skip_tools over whatever ask is left, then skip_all over
+//  3. A write into a git directory, which is asked whatever the rules
+//     said; see IntoGitDir. After the boundary, which asks its own
+//     question for a .git outside the project.
+//  4. skip_tools over whatever ask is left, then skip_all over
 //     everything.
 //
 // The order is the contract and it has been wrong twice. The boundary
@@ -282,11 +355,21 @@ func ComposeResolver(
 		if d == DecisionDeny {
 			return Outcome{Decision: d}
 		}
+		gitWrite := q.Class == OutsideWrite && IntoGitDir(ctx, q.Subject)
 
 		if q.Class != OutsideNone && OutsideWorkspace(ctx, q.Subject) &&
 			!p.OutsideAllowed(ctx, q.Class) {
 			if p.SkipAll(ctx) {
 				return Outcome{Decision: DecisionAllow}
+			}
+			if gitWrite {
+				// Asked as a plain question, not as a boundary one. A
+				// boundary question is answered for a directory, and
+				// "allow writes in other-project", given for its
+				// main.go, would cover other-project/.git/config too;
+				// asked here, it would cover the whole .git. A plain
+				// answer covers the one write.
+				return Outcome{Decision: DecisionAsk, GitDir: true, Reason: gitWriteReason(ctx, q.Subject)}
 			}
 			return Outcome{
 				Decision:  DecisionAsk,
@@ -296,9 +379,27 @@ func ComposeResolver(
 			}
 		}
 
-		if d == DecisionAsk && (p.SkipAll(ctx) || p.SkipTools(ctx)) {
+		// A write the boundary let through, because it is inside the
+		// project or because writing outside is allowed, whose path does
+		// not resolve. The kernel may still follow it: a link whose
+		// expansion is longer than the path limit, which git's own allowed
+		// commands can check out, leads into .git with nothing in its text
+		// to say so. Inside the project such a path is outside to the
+		// boundary, so this is the write-outside case.
+		reason := ""
+		if q.Class == OutsideWrite && !gitWrite && !resolves(ctx, q.Subject) {
+			gitWrite = true
+			reason = "Where this write lands cannot be worked out: its path does not resolve, and it could lead into .git."
+		} else if gitWrite {
+			reason = gitWriteReason(ctx, q.Subject)
+		}
+		if gitWrite {
+			d = DecisionAsk
+		}
+
+		if d == DecisionAsk && (p.SkipAll(ctx) || p.SkipTools(ctx)) && !firmAsk(ctx) {
 			return Outcome{Decision: DecisionAllow}
 		}
-		return Outcome{Decision: d}
+		return Outcome{Decision: d, GitDir: gitWrite, Reason: reason}
 	}
 }

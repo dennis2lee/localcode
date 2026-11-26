@@ -1,12 +1,401 @@
 # Changelog
 
-## Unreleased
+## v0.180.6
+
+A conversation taken over by an in-place update keeps what the previous localcode wrote and answered while it finished.
 
 **Fixed**
 
 * A message sent while an in-place update re-read its conversation starting a turn without the conversation before it, or answered 404
 * A booking made during an in-place update never listed or run, and one cancelled then still armed
 * An "allow for this session" answered during an in-place update asked again after it
+
+## v0.180.5
+
+An SSH or PowerShell terminal no longer types a `run` onto what you typed while the command before it ran.
+
+**Fixed**
+
+* What you type while a command runs, and do not send, counted on the next prompt's line where the shell puts it: `run` no longer typed onto it (`echo typedecho hi`)
+* That text yours on the line until you erase it, send it or press Ctrl+C, and the line empty again once it is erased
+* Text the command read (`q` to a pager, a key to a question) leaving the line empty
+* A key that is not text, typed while a command ran, keeping the line yours until your Enter or Ctrl+C: the screen cannot say what the shell made of it, and Escape left for the shell took the first character of the `run`
+* Text with a character no shell draws as typed (a zero-width space, a combining accent), or one drawn in the cell before it (an emoji's skin tone), keeping the line yours the same way
+* A paste of nothing but control characters sending nothing: its bracketed paste marks alone were sent, and bash 3.2 drew them (`0~1~`)
+
+## v0.180.4
+
+Closing the browser on Windows leaves its profile free for the next start.
+
+**Fixed**
+
+* A browser killed on closing is waited for until it has exited (up to 30 seconds), so the next start or a profile import finds its profile free on Windows
+
+## v0.180.3
+
+A browser slow to start finishes starting.
+
+**Fixed**
+
+* A browser slow to start no longer stopped after 30 seconds and started again at the next click: the start runs up to 3 minutes, and a request that cannot wait for it is told the browser is still starting
+
+## v0.180.2
+
+The browser panel's page as tall as the panel.
+
+**Changed**
+
+* The page in the browser panel as tall as the panel below its address bar, following the window and the panel as they are resized, from 320 to 2,560 pixels; still 1280 pixels wide
+* A conversation's new tabs, and a tab a link opens, at its panel's height
+* The `browser` tool's description, its click bounds and its screenshots at the page's height
+* `POST /api/sessions/{id}/browser/size`: the panel's room for the page
+
+## v0.180.1
+
+A background task's window shows its replies as markdown, set apart from the workings around them, with its result marked.
+
+**Changed**
+
+* A task's replies in its window rendered as markdown, as in the conversation: headings, lists, code blocks and tables
+* Each reply a block of its own in the reading face, and the instructions, tool calls and status lines in a smaller, muted voice
+* The last reply of a completed task marked **Result**
+* Tool calls in the task window folded to one line until clicked, as in the conversation: they showed their whole input and output
+
+## v0.180.0
+
+PowerShell terminals on Windows that the model works in and you share, and the settings window's switches regrouped into four tabs.
+
+**Added**
+
+* PowerShell panel on Windows: terminals on this computer, beside the SSH panel in the desktop window and the Web UI, that the model opens and works in through the `powershell` tool and you type in too
+* Each PowerShell command's output and exit status, read off the screen, on Windows PowerShell 5.1 and PowerShell 7
+* `powershell` and `powershell_path` in config.json, `/powershell`, and a PowerShell switch on the settings window's Tools tab, shown only on Windows
+* `powershell` and `powershell_input` permission keys
+* Deny rules for `powershell` matched against a line as PowerShell reads it, and a line that is more than one plain command asked about under `skip_permissions` while a deny rule is set
+
+**Changed**
+
+* Settings window: four tabs (Tools, Behavior, Appearance, Updates) in place of Agents, Turns, Muse, Updates and Typography, with every setting kept
+* Each switch as one row: its name, one line on what it reaches, and the switch on the right, with a note only where the switch alone cannot say it
+* Muse switches grouped under Behavior, apart from the switches for every model
+
+**Fixed**
+
+* The model's `ctrl+c`, `ctrl+\` or `ctrl+z` to a running command no longer counted as text typed ahead, which left the next `run` refused
+* A "for this session" grant in an SSH terminal whose shell is not bash or zsh no longer covers a line that shell runs as two commands (`echo a\;rm x`)
+* The refusal for a held terminal no longer names the SSH panel
+* A settings switch whose save failed shown as the daemon has it, when another window moved it while the request was out: Browser, SSH, Smart Agent, Orchestration and the model-run commands switch showed the opposite
+* The SSH switch held while its request is out: the daemon's announcement opened it again
+* A list of open SSH connections that arrived after the switch went off no longer drawn under it
+* The Reasoning switch's refusal told once, not kept after the switch was moved elsewhere or the window reopened
+
+## v0.179.3
+
+An SSH terminal no longer takes text typed after Ctrl+C as gone, nor a slow prompt or a slow answer to Ctrl+C as text left on the command line.
+
+**Fixed**
+
+* Keys the model presses after its own `ctrl+c` counted as on the command line: `key` with `ctrl+c r m` no longer leaves `rm` for the next `run` to be typed onto
+* The same for anything typed after a Ctrl+C, the model's text and yours, whoever pressed the key and however late the prompt it brings arrives
+* Your Ctrl+C taken as clearing the line when the prompt it brings arrives, as the model's is: no longer at the key, which a shell with `stty intr undef` reads as a character
+* A pasted line end counted as the shell reads it: sent where a paste is typing (bash 3.2), with what follows it on the next line, and kept on the line where the paste is bracketed
+* `run` refused on the alternate screen a killed full-screen program left on, where the terminal does not follow the command line
+* A line you typed on no longer read as empty where the screen cannot say: at a prompt that leaves nothing on its row, with a line break in the line, and after a smaller terminal cut the text off
+* The model's `ctrl+c` no longer refused on its own text, on a line you had typed on and erased
+* The model's `run` waiting for a prompt that takes a while to draw (a prompt command, a status line from git), up to 2 seconds of nothing drawn: on bash without `PS0` the output no longer carries the prompt and the command's own echo
+* A line you typed on and erased after such a prompt no longer read as yours until your Enter or Ctrl+C
+* `run` after a Ctrl+C waiting up to 10 seconds for the prompt that answers it, up from 2: no longer refused on a slow remote for text the shell had dropped
+* The refusal saying so when no prompt followed the model's `ctrl+c`
+
+## v0.179.2
+
+A setting the daemon applied and could not save is shown as applied, with a warning, in the four places that called it not changed.
+
+**Fixed**
+
+* The keep-going box and the repeat guard in the settings window no longer put back and marked "Not changed" when the daemon applied the change and could not write `config.json`: the applied value shown, with the warning that it lasts only until the daemon restarts
+* That warning kept under each of the two until it is saved, or until the setting is moved from another window or with `/keep-going` or `/repeat-limit`
+* The auto-delegation panel showing the switch, agent and patterns the daemon is running after a save that failed, with one warning for the switch and one for the agent and patterns
+* The rules in the permissions window listing a rule that was added, and not one that was removed, after a save that failed, with each such rule named in a warning until it is saved
+* A control in the auto-delegation panel put back to what the daemon has when the daemon refuses the change
+* Changes made one after the other in the auto-delegation panel and the rules list sent one at a time: the older value no longer left on screen, a rule no longer missing or listed out of order, and the second of two patterns added quickly no longer dropping the first
+* The repeat guard's number held while a change to it is being sent
+* The permissions window naming each switch that could not be changed, where a second one replaced the first
+* An auto-delegation switch sent with an agent or patterns that could not be saved now applied, and announced to every window
+
+**Changed**
+
+* `POST /api/settings/keep-going`, `repeat-limit` and `auto-delegate`, and `POST /api/permissions/skip`, `rules` and `rules/remove`, answer `200` with the value, `"applied": true`, `"persisted"` and an `"error"` when not saved, where they answered `204`, and `500` for a save that failed
+
+## v0.179.1
+
+Two desktop windows open at once no longer undo each other's panel and group changes.
+
+**Fixed**
+
+* A conversation's panels changed in one desktop window no longer putting back what a second open window saved for another conversation
+* The same for one panel's width against another's, and one group's fold against another's
+* A conversation opened in a second window shown with the panels the first window left it
+* The conversation forgotten at the limit of 200 now the oldest in the file
+* A conversation deleted in one window forgotten in the file when another window had saved its panels
+* A folded group renamed in one window kept folded when another window had folded it
+* The fold another window makes for a group not in this window's list left alone
+* With browser storage that refuses writes, a change in the desktop window still written to the file whole
+
+## v0.179.0
+
+Settings made in the desktop window are still there after it is closed and opened again.
+
+**Fixed**
+
+* The desktop window's typography, zoom, panel widths, shown panels, folded groups and archive section kept in `~/.localcode/window-state.json`, written as each is changed and read back before the page draws
+* Those settings no longer back at their defaults when the window comes up on another port: another program on the last one, a port Windows reserved at boot, or a second window open
+* The same settings kept when the program runs under another file name
+* What the window's own storage already holds copied into that file on the first start
+* A key added to a `config.json` that has comments, at the end of the object with every comment left where it was: a switch turned on in the settings window no longer off again after a restart
+* The repeat guard on the settings window's Turns tab drawn when the window opens: no longer shown unticked and empty after a restart or a reload, whatever was saved
+* The settings window drawn again when the daemon's settings arrive, if it was opened before they did
+* The warning that a switch was applied and not saved to `config.json` kept under the switch until it is saved: no longer erased when another setting changes
+
+**Added**
+
+* `GET /api/window/state` and `PUT /api/window/state`, which the window's page keeps those settings through
+
+## v0.178.0
+
+Each conversation keeps which panels are shown beside it.
+
+**Added**
+
+* The panels shown right of the conversation (browser, SSH, tasks and MCP) kept for each conversation and put back when it is opened again, after a reload too
+* A conversation opened for the first time starting with the panels on screen
+
+**Fixed**
+
+* The room for the browser and SSH panels counted in the page's own pixels: in a zoomed window both were shown where only one fits
+
+## v0.177.1
+
+The SSH panel's screen no longer jumps while you type in a zoomed window.
+
+**Fixed**
+
+* The SSH panel's screen jumping up and back on every second key typed, with the window zoomed above 100% and the cursor on the lower rows: the typing box placed at the cursor in the page's own pixels
+* The typing box kept inside the terminal's box and the window: no sideways jump in a panel narrower than the terminal's forty columns, or in a panel partly outside a narrow window
+* The room for the SSH panel's scrollbar kept from the start where a scrollbar takes width (Windows, Linux): the last two columns no longer under the bar once lines scroll off
+
+## v0.177.0
+
+The model can open SSH connections and work in them, in terminals shown in an SSH panel of their own that you share with it.
+
+**Added**
+
+* The `ssh` tool: `connect`, `run`, `type`, `key`, `read`, `wait`, `list` and `close`, in terminals that stay connected between turns for as long as the conversation exists
+* The SSH panel, in the desktop window and the Web UI: a column after the browser panel with its own header toggle, one tab per terminal, the terminal's screen, typing, copy and paste, Korean input, and `+` to open a connection
+* Questions only the person answers, in the panel: host keys (accepted into `~/.localcode/ssh/known_hosts`), passwords, passphrases and one-time codes
+* Hold, which keeps the model out of a terminal, its screen and a waiting `run` included, until the person lets go
+* Exit statuses and the end of a command from bash and zsh, through a line typed into the shell once, with marks only that terminal knows; history expansion off in that shell
+* Commands at a shell's prompt only through `run`: `type` and `key` there take text and line-editing keys
+* Permission keys `ssh_connect`, `ssh` and `ssh_input`; remote commands decided as `bash` lines are; host names matched in lower case
+* `~/.ssh/config` with `Host`, `Match`, `Include`, `ProxyJump`, `IdentityAgent`, `CertificateFile` and `HostKeyAlias`; `/etc/ssh/ssh_config`; the SSH agent; encrypted keys asked for only when the server accepts them
+* The `ssh` setting, `/ssh on|off`, and the settings window's SSH section with every open connection and a Close button for each
+* `/update` and the settings window's Install button naming the SSH connections they would close, and updating when asked again within two minutes
+* `third_party/vt`, a patched copy of the terminal emulator: wide characters at the right margin, cursors and margins kept on the screen, and repeat and scroll counts bounded
+
+**Fixed**
+
+* A browser panel test reading a tab's address before a page opened behind had reported it
+
+## v0.176.3
+
+A link opened in a tab or a window of its own from the browser panel is one of the conversation's tabs, and a page opened from a popup window covers no other conversation's page.
+
+**Fixed**
+
+* A link on the browser panel opened with the wheel, or with Ctrl, Cmd or Shift held, and Enter on a focused link with one of them held, opening a page that was in no tab strip and could not be closed: the page is a tab of the conversation, behind the tab shown for Ctrl, Cmd or the wheel, and the tab shown with Shift
+* The browser panel left on a still picture that took no click after a link was opened in front of the page (Ctrl+Shift+click, Cmd+Shift+click, Shift with the wheel): the page opened is the tab shown
+* A page a script opened from a click with Ctrl or Cmd held made the tab shown although the browser had opened it behind and did not draw it: its tab is added behind
+* A page that opened a dialog as it loaded, before it was one of the conversation's tabs, standing still until it was closed with no tab made for it: the dialog is answered OK
+* Every request of a conversation's page held and let go twice by the deny rules' check, and the handlers of each frame from another site kept after its tab closed
+* The browser tool's `key` action refusing `ctrl++` and `ctrl+plus`, and pressing a punctuation key (`ctrl+=`, `ctrl+-`, `ctrl+/`) with no key code for a page to read
+* `ctrl+Enter` and `cmd+Enter` from the `key` action typing a line break as well as pressing the key
+* Ctrl+Shift or Cmd+Shift with A, C, X or Y carrying an editing command (select all, copy, cut, redo) to the page, from the panel and from the `key` action
+* A page opened from a popup window (a link in a sign-in window that opens a new tab, for instance) put in the window of whichever conversation had opened a tab last, where it covered that conversation's page and left its panel on a still picture: such a page gets a window of its own
+* On macOS, the browser aborted at start ("the browser exited at once") when another Chrome was starting or quitting at that moment: it is started without the copy of itself Chrome makes at every start, and the message says how the process ended
+
+## v0.176.2
+
+A click or a key on the browser panel reaches the page where it was aimed: the browser's own zoom and shortcuts no longer move, hide or close the page.
+
+**Fixed**
+
+* A click on the browser panel landing away from where it was aimed, and the typing after it reaching no field, when the copied Chrome or Edge profile had pages zoomed, by default or for the site: the profile's zoom is removed at every start, and every page is at 100%
+* A key pressed on the browser panel, or by the browser tool's `key` action, running the browser's own shortcut when the page did not use it. On Windows and Linux: F1, Ctrl+T, Ctrl+H, Ctrl+J and Ctrl+U opening a page in front of the conversation's, which left the panel on a still picture; Ctrl+W closing the conversation's tab; Ctrl+plus zooming the page for good, with every click on that site missing from then on. On macOS: Shift alone, Escape, Page Down and the function keys opening the browser's settings in front
+* Ctrl+plus, Ctrl+minus, Ctrl+0 and Ctrl with the wheel on the browser panel sent to the page as well as zooming the window: they zoom the window only
+
+## v0.176.1
+
+One conversation waiting on the browser no longer holds up the others' browser work, and archiving a conversation closes its browser tabs.
+
+**Fixed**
+
+* The browser's lock held while waiting on the browser: opening a tab, attaching a tab a link opened, starting the browser or copying the profile kept every other conversation's browser panel, tab switches and browser tool waiting behind it
+* An archived conversation's browser tabs, left open and running on the shelf: closed when it is archived, none opened for it while it is archived, and none brought back when it is retrieved
+* A browser page that opened but failed to set up, or whose request stopped waiting while it opened, left open in the browser with no tab showing it: closed
+
+## v0.176.0
+
+The desktop window's browser panel takes clicks and keys at any window zoom, holds several tabs per conversation, and hides from a button in the header.
+
+**Added**
+
+* Tabs in the browser panel: one per page the conversation has open, a click to switch, `×` to close, `+` to open an empty one; the model's browser tool acts on the tab shown, and closing it shows the tab that opened it, or else the one before it
+* A header button, right of the session name, that hides and shows the browser panel; the page goes on running while it is hidden
+
+**Fixed**
+
+* A click on the browser panel landing away from where it was aimed when the window was zoomed (Ctrl+wheel), by the zoom factor: a field clicked never took the focus, so typing reached nothing
+
+## v0.175.0
+
+A prompt the model books for later reaches the run as text when it fires, not as a command you typed.
+
+**Fixed**
+
+* A scheduled prompt the model booked, through the Schedule tool or a `/schedule` line the Command tool ran, treated as typed when it fired: a `!` line ran in the shell with no permission rule asked, and a `/` command changed a setting. A prompt you book with `/schedule` or the **schedule** button still runs as written
+* A scheduled run booking its own successor in its own conversation through a `/schedule` line the Command tool ran, past the per-conversation limit
+* A booking made before this release: no recorded author, so it runs as written, the model's included; `/show-scheduled-task` lists them
+
+## v0.174.0
+
+Every web address the model writes is a link that opens in your own browser, and a permission decision can no longer stall every later one.
+
+**Added**
+
+* A link for every bare `http://` or `https://` address in the model's output, in prose, inline code and code blocks, without the quote, bracket, sentence punctuation or Korean particle around it
+
+**Fixed**
+
+* A link in the desktop window on macOS or Linux doing nothing when clicked: opened in the system's default browser, held to the same rules as on Windows
+* A `[text](address)` link whose text is another web address: shown with the address it opens beside it, each opening itself
+* A `[text](address)` address cut at its first `)` (`/wiki/Function_(mathematics)`)
+* A code block written inside a `[text](address)` address, which put the block's HTML inside the link's `href` and let model text add attributes to the link
+* Inline code holding a double-backtick span (`` `a``b``c` ``), which left a placeholder character in the output
+* `$\toString$` and other names every object inherits, printed as JavaScript source by the math reader
+* A permission decision taking the permission lock twice: a settings change (a rule added, Smart Agent, skip permissions or the browser switched) made between the two left every later permission decision waiting, the browser's check of each request a page made included
+
+## v0.173.0
+
+The desktop window's browser has a column of its own, and each conversation's browser panel shows only that conversation's page.
+
+**Changed**
+
+* The browser panel: a column of its own between the conversation and the right panel, 600px wide, resizable from 360px to 1307px by its left edge, double-click for the default
+* A panel drag: stopped where the transcript would go below 280px; a side panel's drag can take the browser panel's width above 360px
+* A window too narrow for every panel while the browser panel is shown: the browser panel narrowed first, down to 360px, then the side panels, down to 160px; the transcript kept at 280px
+
+**Fixed**
+
+* The last frame of the conversation before, shown in the browser panel of the next conversation opened: until that conversation's first frame, and for good when it has no page
+* An address bar answer or error, or a location poll, written into the panel of a conversation opened while it was on its way, the same conversation opened again included
+* An older address bar failure, or a location poll asked before an address bar answer, covering the page a newer one had opened
+* An address bar error, left in the empty note of every conversation opened after it
+* "No page yet" shown over a page the address bar, back, forward or reload had just opened, until the next location poll
+* A tab's last frame after the tab closed (the browser restarted, or the profile was copied again): shown through "No page yet", and again when the next tab opened, before that tab sent a frame
+* The browser panel one frame behind the page: the last frame of a page that stopped changing, or the only frame a tab had sent, never shown
+
+## v0.172.0
+
+A conversation goes on when a model's server takes fewer images in a request than the conversation holds.
+
+**Added**
+
+* A server's own cap on images in one request, read from its refusal (vLLM's `--limit-mm-per-prompt`, in either of its wordings) and kept per provider and model: the refused request sent again with the newest images within it, and every later one held to it
+* A notice when a message has more images attached than its model's server takes, naming how many were left out
+
+## v0.171.0
+
+A model that can see is sent images whatever its name, and no image a server refuses stays in a conversation.
+
+**Added**
+
+* A test image for a model whose profile leaves `vision` unset and whose id does not contain `claude`: a red square shown once per provider and model, and the model is sent images when it names the colour
+* Scaling of a pasted or dropped image past 3.75 MB or 8000 pixels a side, in the page, to 2576 pixels on its long side, as PNG or else JPEG
+
+**Changed**
+
+* `vision` unset on a model other than Claude: decided by the test image instead of off
+* A request carries at most 10 MB of images, besides at most 20
+* The notice for images left out names the reason: the profile's `vision`, or the model's answer to the test image
+* `view_image` refuses an image past 8000 pixels a side, and the daemon refuses a message image past 3.75 MB or 8000 pixels a side
+
+**Fixed**
+
+* An image Bedrock refuses (over 3.75 MB, or 8000 pixels a side), kept in a conversation and failing every request after it: left out with a note
+* A conversation of large images over Bedrock's 20 MB request limit
+* A refusal of an image for its size read as a model without vision, with a hint to set `"vision": false`
+* `view_image` not offered to a fallback model that can see, after a first model that cannot
+* An agent allowed only `view_image`, falling back to a model that cannot see, offered every tool, `bash` included
+* Two images pasted together passing the 10 MB message limit between them
+
+## v0.170.0
+
+The model can work a web page in a browser shown in the desktop window's right panel.
+
+**Added**
+
+* A `browser` tool: open, read, click, type, key and scroll in Chrome or Edge, offered in a conversation open in the desktop window
+* Browser snapshots: the visible page, the whole page, or one element, saved under `.localcode/snapshots/` (kept out of git) and shown under the call in the conversation
+* A browser panel at the top of the right panel: the page as it changes, an address bar, and clicks, drags, keys, shortcuts and paste passed to the page
+* The `browser` setting (settings window, `/browser`, config.json) and `browser_path`
+* A copy of your Chrome or Edge profile in `~/.localcode/browser`, logins included, and "copy Chrome profile again"
+* `deny` rules for `browser`, top-level and every agent's, enforced on every HTTP request the browser makes: a matching URL gets no request, by any route (WebSockets are not checked)
+* Preloading (prefetch, speculation rules, prerender) and Background Fetch off in the browser, and service workers bypassed by its pages
+* A refusal, on every daemon route, of requests from the model's own browser
+
+**Changed**
+
+* A request carries the newest 20 images of a conversation, with a note in place of each older one
+
+## v0.169.7
+
+A bash deny rule reaches the command behind a prefix, a wrapper, a command string or a substitution.
+
+**Fixed**
+
+* A bash deny rule bypassed under `skip_all` by a prefix, wrapper, command string, `find -exec` or substitution: `then rm -rf x`, `nohup rm -rf x`, `sh -c 'rm -rf x'`, `echo $(rm -rf x)`, `/bin/rm -rf x`
+
+**Changed**
+
+* Every word after a wrapper tried against deny rules, so `xargs echo rm -rf x` is denied by `rm *`
+
+## v0.169.6
+
+A file written into `.git` is asked, each time, before the next ordinary git command can run it.
+
+**Fixed**
+
+* A `write_file` or `edit` into `.git` or `~/.gitconfig` allowed by a rule, such as `core.fsmonitor` written into `.git/config` and run by the next `git status`
+* An absolute file tool path with `..` after a symlink (`/proj/link/../x`) written or read where the link leads, not at the path the workspace boundary judged
+* A glob pattern with a wildcard before `..` (`*/../../secret/*`) listing files outside the project without a question
+
+**Changed**
+
+* An absolute file tool path has `..` and trailing separators taken off its text, as a relative one already had
+* A question that is asked each time is not answered by an earlier "allow for session" for the same text
+
+## v0.169.5
+
+The built-in `git *` rule no longer lets git run another command without a question.
+
+**Fixed**
+
+* Git options and subcommands that run a command, allowed by the built-in `git *` rule: `git -c alias.x='!cmd' x`, `git -c core.fsmonitor=cmd status`, `git rebase --exec cmd`, `git submodule foreach cmd`, `git config alias.x '!cmd'` and others
+* The same lines allowed by a `git *` rule in config.json, which "always" writes, or by an "allow for session" answer on another git line
+
+**Changed**
+
+* `git config` writes, `git -c` with a key outside a short safe list (`user.name`, `user.email`, `core.quotepath` and a few more), and a git line whose options or subcommand come from a variable or a glob are asked
 
 ## v0.169.4
 

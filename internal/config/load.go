@@ -482,6 +482,23 @@ func (c *Config) merge(other *Config) {
 	if other.SmartAgent != nil {
 		c.SmartAgent = other.SmartAgent
 	}
+	if other.Browser != nil {
+		c.Browser = other.Browser
+	}
+	if other.SSH != nil {
+		c.SSH = other.SSH
+	}
+	if other.PowerShell != nil {
+		c.PowerShell = other.PowerShell
+	}
+	if other.PowerShellPath != "" {
+		c.PowerShellPath = other.PowerShellPath
+	}
+	// A program to run, from a file that can already name the shell, the
+	// hooks and the verify command, so no more trusted than those.
+	if other.BrowserPath != "" {
+		c.BrowserPath = other.BrowserPath
+	}
 	if other.TraceMaxAgeDays != 0 {
 		c.TraceMaxAgeDays = other.TraceMaxAgeDays
 	}

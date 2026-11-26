@@ -131,10 +131,7 @@ func (t ScheduleTool) Execute(ctx context.Context, input json.RawMessage) tools.
 	// is per conversation, which a chain of them would walk straight
 	// past by starting a new conversation each time.
 	if Unattended(ctx) {
-		return tools.Result{
-			Content: "this turn is itself a scheduled task, and a scheduled task cannot book another one",
-			IsError: true, Refused: true,
-		}
+		return tools.Result{Content: scheduledTurnCannotBook, IsError: true, Refused: true}
 	}
 
 	args := t.parse(input)
@@ -159,16 +156,20 @@ func (t ScheduleTool) Execute(ctx context.Context, input json.RawMessage) tools.
 	if agentName == "" {
 		agentName = "general-purpose"
 	}
-	entry, err := t.loop.Schedules.Add(sessionID, agentName, args.Prompt, at, opts)
+	entry, err := t.loop.Schedules.AddByModel(sessionID, agentName, args.Prompt, at, opts)
 	if err != nil {
 		return tools.Result{Content: err.Error(), IsError: true}
 	}
-	return tools.Result{Content: fmt.Sprintf(
+	out := fmt.Sprintf(
 		"Scheduled as %s for %s, working in %s.\n"+
 			"It runs only while localcode is running; if localcode is closed at that moment "+
 			"the task is reported as missed rather than run late.\n"+
 			"Tell the user when it will run, and that it needs localcode to be running.",
-		entry.ID, when.Format(at, now), t.loop.SessionDir(sessionID))}
+		entry.ID, when.Format(at, now), t.loop.SessionDir(sessionID))
+	if commandShaped(args.Prompt) {
+		out += "\n" + sentAsText
+	}
+	return tools.Result{Content: out}
 }
 
 // repeatOptions turns the tool's two optional fields into the booking's

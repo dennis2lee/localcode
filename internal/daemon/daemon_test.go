@@ -1249,8 +1249,23 @@ func TestDaemonSetAutoDelegate(t *testing.T) {
 			t.Fatalf("POST auto-delegate: %v", err)
 		}
 		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusNoContent {
-			t.Fatalf("POST auto-delegate status = %d, want 204", resp.StatusCode)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST auto-delegate status = %d, want 200", resp.StatusCode)
+		}
+		// The answer is the whole setting as the daemon now holds it:
+		// the switch that was sent, and the target that was not.
+		var answered map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&answered); err != nil {
+			t.Fatalf("decode the answer: %v", err)
+		}
+		if answered["auto_delegate"] != enabled || answered["applied"] != true || answered["persisted"] != true {
+			t.Errorf("answered %v, want auto_delegate %t applied and persisted", answered, enabled)
+		}
+		if match, _ := answered["auto_delegate_match"].([]any); answered["auto_delegate_agent"] != "plan" || len(match) != 1 || match[0] != "what is *" {
+			t.Errorf("answered %v, want the target the switch left alone", answered)
+		}
+		if _, said := answered["error"]; said {
+			t.Errorf("a save that worked carries an error: %v", answered["error"])
 		}
 	}
 
@@ -1558,8 +1573,8 @@ func TestDaemonSetAutoDelegateTarget(t *testing.T) {
 
 	// A config with no auto_delegate block at all can be configured from
 	// scratch — that's the case a fresh install is in.
-	if got := post(`{"agent":"plan","match":["what is *","where is *"]}`); got != http.StatusNoContent {
-		t.Fatalf("configuring the target = %d, want 204", got)
+	if got := post(`{"agent":"plan","match":["what is *","where is *"]}`); got != http.StatusOK {
+		t.Fatalf("configuring the target = %d, want 200", got)
 	}
 	block := d.Loop.Config.AutoDelegateSnapshot()
 	if block == nil || block.Agent != "plan" {
@@ -1587,8 +1602,8 @@ func TestDaemonSetAutoDelegateTarget(t *testing.T) {
 
 	// Sending only "enabled" must not disturb the target, and vice versa:
 	// the pill and the panel post different subsets of the same endpoint.
-	if got := post(`{"enabled":true}`); got != http.StatusNoContent {
-		t.Fatalf("enabling = %d, want 204", got)
+	if got := post(`{"enabled":true}`); got != http.StatusOK {
+		t.Fatalf("enabling = %d, want 200", got)
 	}
 	if block := d.Loop.Config.AutoDelegateSnapshot(); block.Agent != "plan" || len(block.Match) != 2 {
 		t.Errorf("target = %+v after an enabled-only patch, want it untouched", block)
@@ -1596,8 +1611,8 @@ func TestDaemonSetAutoDelegateTarget(t *testing.T) {
 	if !d.Loop.AutoDelegateEnabled() {
 		t.Error("the loop still reports auto-delegate off after enabling it")
 	}
-	if got := post(`{"match":["only this *"]}`); got != http.StatusNoContent {
-		t.Fatalf("changing match = %d, want 204", got)
+	if got := post(`{"match":["only this *"]}`); got != http.StatusOK {
+		t.Fatalf("changing match = %d, want 200", got)
 	}
 	if !d.Loop.AutoDelegateEnabled() {
 		t.Error("a match-only patch turned the switch off")
@@ -2128,12 +2143,11 @@ func TestKeepGoingSyncsBetweenTheCommandAndTheCheckbox(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// The checkbox's endpoint moves the switch and every client hears.
-	resp, err := http.Post(httpSrv.URL+"/api/settings/keep-going", "application/json",
-		strings.NewReader(`{"enabled":false}`))
-	if err != nil {
-		t.Fatalf("POST keep-going: %v", err)
+	status, answered := postSetting(t, httpSrv.URL+"/api/settings/keep-going", `{"enabled":false}`)
+	// No config.json in this daemon, so there was nothing to fail to save.
+	if status != http.StatusOK || answered["keep_going"] != false || answered["applied"] != true || answered["persisted"] != true {
+		t.Errorf("POST keep-going answered %d %v, want 200 with the switch off and applied", status, answered)
 	}
-	resp.Body.Close()
 	if data := waitForSettings(t, evCh); data["keep_going"] != false {
 		t.Errorf("keep_going = %v after the checkbox turned it off", data["keep_going"])
 	}

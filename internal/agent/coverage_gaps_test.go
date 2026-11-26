@@ -128,13 +128,13 @@ func TestTheWorkPolicyGoesToATopLevelTurnAndNotToADelegatedOne(t *testing.T) {
 // singular for one.
 func TestTheLeftOutNoticeCountsTheImages(t *testing.T) {
 	run := modelRun{profileName: "onprem", profile: config.Profile{Model: "deepseek-v4.1-flash"}}
-	if got := imagesLeftOutNotice(run, 1); !strings.Contains(got, "the image attached to this message was left out") {
+	if got := imagesLeftOutNotice(run, 1, ""); !strings.Contains(got, "the image attached to this message was left out") {
 		t.Errorf("one image: %q", got)
 	}
-	if got := imagesLeftOutNotice(run, 3); !strings.Contains(got, "the 3 images attached to this message were left out") {
+	if got := imagesLeftOutNotice(run, 3, ""); !strings.Contains(got, "the 3 images attached to this message were left out") {
 		t.Errorf("three images: %q", got)
 	}
-	if got := imagesLeftOutNotice(modelRun{profile: config.Profile{Model: "m"}}, 1); !strings.Contains(got, `"vision": true on its profile`) {
+	if got := imagesLeftOutNotice(modelRun{profile: config.Profile{Model: "m"}}, 1, ""); !strings.Contains(got, `"vision": true on its profile`) {
 		t.Errorf("no profile name: %q", got)
 	}
 }

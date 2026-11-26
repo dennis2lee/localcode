@@ -16,7 +16,10 @@ import {
   applyEffort,
 } from './modals.js';
 import { applyScheduleEvent, applyRunActivity } from './schedules.js';
-import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen, refreshModelInvocableIfOpen } from './settings.js';
+import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen, refreshModelInvocableIfOpen, refreshBrowserIfOpen, refreshSSHIfOpen, refreshPowerShellIfOpen, movedElsewhere } from './settings.js';
+import { renderBrowserPanel } from './browser.js';
+import { renderSSHPanel } from './ssh.js';
+import { renderPowerShellPanel } from './powershell.js';
 import { refreshTaskViewStatus, taskDeleted } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
@@ -212,7 +215,7 @@ const handlers = {
   },
   'tool.end': (d) => {
     session.runningTool = '';
-    finishToolCall(d.tool_use_id, d.content, d.is_error);
+    finishToolCall(d.tool_use_id, d.content, d.is_error, d.snapshot);
   },
   // The screen always holds the oldest unresolved request: a newer
   // arrival queues behind it, and a resolution for any other id leaves
@@ -435,6 +438,7 @@ const handlers = {
     if (typeof d.show_thinking === 'boolean') app.showThinking = d.show_thinking;
     if (typeof d.show_timestamps === 'boolean') app.showTimestamps = d.show_timestamps;
     if (typeof d.auto_delegate === 'boolean') {
+      if (d.auto_delegate !== app.autoDelegate) movedElsewhere('auto_delegate');
       app.autoDelegate = d.auto_delegate;
       renderAutoDelegate();
       refreshDelegatePanelIfOpen();
@@ -443,13 +447,40 @@ const handlers = {
     // panel is only redrawn if it happens to be open — there is no status
     // bar pill for this one, deliberately: it is a way of working that is
     // chosen once, not a thing to flip between messages.
+    //
+    // A switch that arrives with another value than this page has was
+    // moved by somebody else, and a "not saved" warning this page put
+    // under it no longer says anything about it (movedElsewhere). This
+    // page's own change arrives here too, and either way round it is
+    // right: before the reply to the save it reads as moved, and the
+    // reply then sets the warning; after it the values are equal.
     if (typeof d.orchestrate === 'boolean') {
+      if (d.orchestrate !== app.orchestrate) movedElsewhere('orchestrate');
       app.orchestrate = d.orchestrate;
       refreshOrchestrateIfOpen();
     }
     if (typeof d.smart_agent === 'boolean') {
+      if (d.smart_agent !== app.smartAgent) movedElsewhere('smart_agent');
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
+    }
+    if (typeof d.browser === 'boolean' && d.browser !== app.browser) {
+      movedElsewhere('browser');
+      app.browser = d.browser;
+      renderBrowserPanel();
+      refreshBrowserIfOpen();
+    }
+    if (typeof d.ssh === 'boolean' && d.ssh !== app.ssh) {
+      movedElsewhere('ssh');
+      app.ssh = d.ssh;
+      renderSSHPanel();
+      refreshSSHIfOpen();
+    }
+    if (typeof d.powershell === 'boolean' && d.powershell !== app.powershell) {
+      movedElsewhere('powershell');
+      app.powershell = d.powershell;
+      renderPowerShellPanel();
+      refreshPowerShellIfOpen();
     }
     if (rosterMayHaveChanged) loadAgents();
   },
@@ -471,31 +502,58 @@ const handlers = {
     if (typeof d.show_thinking === 'boolean') app.showThinking = d.show_thinking;
     if (typeof d.show_timestamps === 'boolean') app.showTimestamps = d.show_timestamps;
     if (typeof d.auto_delegate === 'boolean') {
+      if (d.auto_delegate !== app.autoDelegate) movedElsewhere('auto_delegate');
       app.autoDelegate = d.auto_delegate;
       renderAutoDelegate();
       refreshDelegatePanelIfOpen();
     }
     if (typeof d.orchestrate === 'boolean') {
+      if (d.orchestrate !== app.orchestrate) movedElsewhere('orchestrate');
       app.orchestrate = d.orchestrate;
       refreshOrchestrateIfOpen();
     }
     if (typeof d.smart_agent === 'boolean') {
+      if (d.smart_agent !== app.smartAgent) movedElsewhere('smart_agent');
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
     }
+    if (typeof d.browser === 'boolean' && d.browser !== app.browser) {
+      movedElsewhere('browser');
+      app.browser = d.browser;
+      renderBrowserPanel();
+      refreshBrowserIfOpen();
+    }
+    if (typeof d.ssh === 'boolean' && d.ssh !== app.ssh) {
+      movedElsewhere('ssh');
+      app.ssh = d.ssh;
+      renderSSHPanel();
+      refreshSSHIfOpen();
+    }
+    if (typeof d.powershell === 'boolean' && d.powershell !== app.powershell) {
+      movedElsewhere('powershell');
+      app.powershell = d.powershell;
+      renderPowerShellPanel();
+      refreshPowerShellIfOpen();
+    }
     if (typeof d.keep_going === 'boolean') {
+      if (d.keep_going !== app.keepGoing) movedElsewhere('keep_going');
       app.keepGoing = d.keep_going;
       refreshKeepGoingIfOpen();
     }
     if (typeof d.model_invocable === 'boolean') {
+      if (d.model_invocable !== app.modelInvocable) movedElsewhere('model_invocable');
       app.modelInvocable = d.model_invocable;
       refreshModelInvocableIfOpen();
     }
-    if (typeof d.fold_thinking === 'boolean') app.foldThinking = d.fold_thinking;
+    if (typeof d.fold_thinking === 'boolean') {
+      if (d.fold_thinking !== app.foldThinking) movedElsewhere('fold_thinking');
+      app.foldThinking = d.fold_thinking;
+    }
     // Redrawn on either, since the note says when show_thinking is
     // hiding the reasoning this switch would label.
     if (typeof d.fold_thinking === 'boolean' || typeof d.show_thinking === 'boolean') refreshFoldThinkingIfOpen();
     if (typeof d.repeat_limit === 'number') {
+      if (d.repeat_limit !== app.repeatLimit) movedElsewhere('repeat_limit');
       app.repeatLimit = d.repeat_limit;
       refreshRepeatLimitIfOpen();
     }

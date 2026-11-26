@@ -5,7 +5,9 @@
 // like the ctrl+wheel zoom in zoom.js: somebody who sized the text once
 // does not do it again in the next window, and a daemon reached over
 // --server from another machine has no say in which font this screen
-// uses. Nothing here touches config.json or /api/settings.
+// uses. Nothing here touches config.json or /api/settings. In the
+// desktop window, where the screen and the daemon are one machine, a
+// change is also kept in ~/.localcode/window-state.json: see js/prefs.js.
 //
 // Applying a value writes the custom property on the root element, so
 // it takes effect on the next frame with no reload. The stored values
@@ -25,6 +27,7 @@ import {
   typoMonoSelect, typoMonoCustom, typoSizeSelect,
   typoSizeReadSelect, typoSizeUiSelect, typoSizeCodeSelect,
 } from './dom.js';
+import { readPref, writePref } from './prefs.js';
 
 // The fallback behind every choice for its role. Each is the stack the
 // stylesheet already uses, so a custom name that resolves to nothing
@@ -121,20 +124,10 @@ function rootEl() {
   return (typeof document !== 'undefined' && document.documentElement) || null;
 }
 
-function readStored(key) {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeStored(key, value) {
-  try {
-    if (value) localStorage.setItem(key, value);
-    else localStorage.removeItem(key);
-  } catch { /* storage refused: this window keeps the choice, the next starts at default */ }
-}
+// Through js/prefs.js, which also writes a change to the daemon when the
+// page is in the desktop window. An empty value forgets the key.
+const readStored = readPref;
+const writeStored = writePref;
 
 // readScale parses the stored multiplier. Anything unparseable or out
 // of range is the default: a hostile or stale value must not set type

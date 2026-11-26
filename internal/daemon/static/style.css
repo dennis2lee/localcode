@@ -57,6 +57,12 @@
   --run: #e09a4e;
   --warn: #e9c46b;
   --err: #e0796a;
+  /* The SSH terminal's sixteen colours, as a remote program names them
+     (0 to 7, then their bright forms), tuned for --ink behind them. */
+  --ansi-0: #45403b;  --ansi-1: #e0796a;  --ansi-2: #8fbf7f;  --ansi-3: #e5c07b;
+  --ansi-4: #7f9fe0;  --ansi-5: #c58fd8;  --ansi-6: #67bfc6;  --ansi-7: #d8d2ca;
+  --ansi-8: #78716a;  --ansi-9: #f2958a;  --ansi-10: #a9d69b; --ansi-11: #f2d48f;
+  --ansi-12: #9db8f2; --ansi-13: #dba9ea; --ansi-14: #86d6dd; --ansi-15: #fbf7f0;
 
   /* Faces, all three of them already on the machine: this page is served
      from the binary and never asks the network for anything.
@@ -563,7 +569,8 @@ mark.find-hit.current {
 /* A tool call: one quiet line, deliberately quieter than the conversation
    around it. It is there so a long turn is legible while it runs, not to
    compete with what the model actually said. */
-#transcript .msg-toolcall { margin-bottom: 4px; }
+#transcript .msg-toolcall,
+#task-modal-body .msg-toolcall { margin-bottom: 4px; }
 /* A turn's workings, set as apparatus.
    The Document direction puts these in the margin beside the prose. The
    transcript is one column of siblings in DOM order, and a grid cannot
@@ -573,11 +580,13 @@ mark.find-hit.current {
    face at the smallest reading size, quiet, against a hairline that runs
    down the side of the run. A turn reads as prose with its workings set
    apart from it. */
-#transcript .msg-toolcall {
+#transcript .msg-toolcall,
+#task-modal-body .msg-toolcall {
   border-left: 1px solid var(--border);
   padding-left: 10px;
 }
-#transcript .msg-toolcall .head {
+#transcript .msg-toolcall .head,
+#task-modal-body .msg-toolcall .head {
   display: flex;
   gap: 8px;
   align-items: baseline;
@@ -587,8 +596,10 @@ mark.find-hit.current {
   font-size: var(--t-fine);
   line-height: 1.7;
 }
-#transcript .msg-toolcall .head:hover { color: var(--text); }
-#transcript .msg-toolcall .name { font-family: var(--f-mono); }
+#transcript .msg-toolcall .head:hover,
+#task-modal-body .msg-toolcall .head:hover { color: var(--text); }
+#transcript .msg-toolcall .name,
+#task-modal-body .msg-toolcall .name { font-family: var(--f-mono); }
 /* Thinking is the model's, not the machine's: it stays in the reading
    face and simply steps back a size. */
 #transcript .msg-thinking {
@@ -659,16 +670,20 @@ mark.find-hit.current {
 @media (prefers-reduced-motion: reduce) {
   #transcript .msg-thinking.fold.live .marker { animation: none; }
 }
-#transcript .msg-toolcall .head:hover { color: var(--text); }
-#transcript .msg-toolcall .marker { flex: none; width: 1em; }
-#transcript .msg-toolcall .name {
+#transcript .msg-toolcall .head:hover,
+#task-modal-body .msg-toolcall .head:hover { color: var(--text); }
+#transcript .msg-toolcall .marker,
+#task-modal-body .msg-toolcall .marker { flex: none; width: 1em; }
+#transcript .msg-toolcall .name,
+#task-modal-body .msg-toolcall .name {
   flex: none;
   font-family: var(--f-mono);
   font-weight: 600;
 }
 /* The argument gets whatever room is left and is cut off rather than
    wrapped: a long shell command must not turn one line into five. */
-#transcript .msg-toolcall .arg {
+#transcript .msg-toolcall .arg,
+#task-modal-body .msg-toolcall .arg {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -677,11 +692,16 @@ mark.find-hit.current {
   font-family: var(--f-mono);
   opacity: 0.85;
 }
-#transcript .msg-toolcall .state { flex: none; opacity: 0.7; }
-#transcript .msg-toolcall.running .state { color: var(--run); opacity: 1; }
-#transcript .msg-toolcall.running .marker { animation: toolpulse 1s ease-in-out infinite; }
-#transcript .msg-toolcall.failed .marker, #transcript .msg-toolcall.failed .state { color: var(--err); }
-#transcript .msg-toolcall .detail {
+#transcript .msg-toolcall .state,
+#task-modal-body .msg-toolcall .state { flex: none; opacity: 0.7; }
+#transcript .msg-toolcall.running .state,
+#task-modal-body .msg-toolcall.running .state { color: var(--run); opacity: 1; }
+#transcript .msg-toolcall.running .marker,
+#task-modal-body .msg-toolcall.running .marker { animation: toolpulse 1s ease-in-out infinite; }
+#transcript .msg-toolcall.failed .marker, #transcript .msg-toolcall.failed .state,
+#task-modal-body .msg-toolcall.failed .marker, #task-modal-body .msg-toolcall.failed .state { color: var(--err); }
+#transcript .msg-toolcall .detail,
+#task-modal-body .msg-toolcall .detail {
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--raised);
@@ -699,7 +719,8 @@ mark.find-hit.current {
    transcript already speaks — a diff is a result, and results elsewhere
    are ✓/green and ✗/red — while context and the truncation count step
    back into the muted voice. */
-#transcript .msg-toolcall .todiff {
+#transcript .msg-toolcall .todiff,
+#task-modal-body .msg-toolcall .todiff {
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--raised);
@@ -712,24 +733,36 @@ mark.find-hit.current {
   font-family: var(--f-mono);
   font-size: 0.88em;
 }
-#transcript .msg-toolcall .diff-del { color: var(--err); }
-#transcript .msg-toolcall .diff-add { color: var(--ok); }
-#transcript .msg-toolcall .diff-ctx { color: var(--muted); }
-#transcript .msg-toolcall .diff-more { color: var(--muted); font-style: italic; }
+#transcript .msg-toolcall .diff-del,
+#task-modal-body .msg-toolcall .diff-del { color: var(--err); }
+#transcript .msg-toolcall .diff-add,
+#task-modal-body .msg-toolcall .diff-add { color: var(--ok); }
+#transcript .msg-toolcall .diff-ctx,
+#task-modal-body .msg-toolcall .diff-ctx { color: var(--muted); }
+#transcript .msg-toolcall .diff-more,
+#task-modal-body .msg-toolcall .diff-more { color: var(--muted); font-style: italic; }
 @keyframes toolpulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.25 } }
 
-#transcript .msg-model { margin-bottom: 4px; }
-#transcript .msg-model > *:first-child { margin-top: 0; }
-#transcript .msg-model > *:last-child { margin-bottom: 0; }
-#transcript .msg-model p { margin: 0 0 10px; }
+#transcript .msg-model,
+#task-modal-body .msg-model { margin-bottom: 4px; }
+#transcript .msg-model > *:first-child,
+#task-modal-body .msg-model > *:first-child { margin-top: 0; }
+#transcript .msg-model > *:last-child,
+#task-modal-body .msg-model > *:last-child { margin-bottom: 0; }
+#transcript .msg-model p,
+#task-modal-body .msg-model p { margin: 0 0 10px; }
 #transcript .msg-model h1, #transcript .msg-model h2, #transcript .msg-model h3,
-#transcript .msg-model h4, #transcript .msg-model h5, #transcript .msg-model h6 {
+#transcript .msg-model h4, #transcript .msg-model h5, #transcript .msg-model h6,
+#task-modal-body .msg-model h1, #task-modal-body .msg-model h2, #task-modal-body .msg-model h3, #task-modal-body .msg-model h4, #task-modal-body .msg-model h5, #task-modal-body .msg-model h6 {
   margin: 14px 0 8px;
   line-height: 1.3;
 }
-#transcript .msg-model ul, #transcript .msg-model ol { margin: 0 0 10px; padding-left: 22px; }
-#transcript .msg-model li { margin-bottom: 2px; }
-#transcript .msg-model code {
+#transcript .msg-model ul, #transcript .msg-model ol,
+#task-modal-body .msg-model ul, #task-modal-body .msg-model ol { margin: 0 0 10px; padding-left: 22px; }
+#transcript .msg-model li,
+#task-modal-body .msg-model li { margin-bottom: 2px; }
+#transcript .msg-model code,
+#task-modal-body .msg-model code {
   background: var(--raised);
   border: 1px solid var(--border);
   border-radius: var(--r-ctl);
@@ -737,7 +770,8 @@ mark.find-hit.current {
   font-family: var(--f-mono);
   font-size: 0.9em;
 }
-#transcript .msg-model pre {
+#transcript .msg-model pre,
+#task-modal-body .msg-model pre {
   background: var(--raised);
   border: 1px solid var(--border);
   border-radius: var(--r-ctl);
@@ -745,16 +779,22 @@ mark.find-hit.current {
   overflow-x: auto;
   margin: 0 0 10px;
 }
-#transcript .msg-model pre code { background: none; border: none; padding: 0; }
+#transcript .msg-model pre code,
+#task-modal-body .msg-model pre code { background: none; border: none; padding: 0; }
 /* Highlighted code tokens. These four reuse the palette's existing
    voices rather than adding new ones: keywords speak in the interactive
    ink, strings in the ok green, numbers in the warn gold, comments in
    the muted aside voice. */
-#transcript .msg-model .tok-kw { color: var(--interactive); font-weight: 600; }
-#transcript .msg-model .tok-str { color: var(--ok); }
-#transcript .msg-model .tok-num { color: var(--warn); }
-#transcript .msg-model .tok-com { color: var(--muted); font-style: italic; }
-#transcript .msg-model blockquote {
+#transcript .msg-model .tok-kw,
+#task-modal-body .msg-model .tok-kw { color: var(--interactive); font-weight: 600; }
+#transcript .msg-model .tok-str,
+#task-modal-body .msg-model .tok-str { color: var(--ok); }
+#transcript .msg-model .tok-num,
+#task-modal-body .msg-model .tok-num { color: var(--warn); }
+#transcript .msg-model .tok-com,
+#task-modal-body .msg-model .tok-com { color: var(--muted); font-style: italic; }
+#transcript .msg-model blockquote,
+#task-modal-body .msg-model blockquote {
   border-left: 3px solid var(--border);
   color: var(--muted);
   margin: 0 0 10px;
@@ -763,28 +803,35 @@ mark.find-hit.current {
 /* The transcript is a fixed column between two panels, so a table wider
    than it scrolls inside its own wrapper rather than stretching the
    layout and pushing the panels off screen. */
-#transcript .msg-model .table-wrap { overflow-x: auto; margin: 0 0 10px; }
-#transcript .msg-model table {
+#transcript .msg-model .table-wrap,
+#task-modal-body .msg-model .table-wrap { overflow-x: auto; margin: 0 0 10px; }
+#transcript .msg-model table,
+#task-modal-body .msg-model table {
   border-collapse: collapse;
   font-size: var(--t-code);
   /* Not width:100% — a two-column table stretched across the whole
      transcript puts a hand-span of empty space between its columns. */
   min-width: min(100%, 320px);
 }
-#transcript .msg-model th, #transcript .msg-model td {
+#transcript .msg-model th, #transcript .msg-model td,
+#task-modal-body .msg-model th, #task-modal-body .msg-model td {
   border: 1px solid var(--border);
   padding: 5px 10px;
   text-align: left;
   vertical-align: top;
 }
-#transcript .msg-model th { background: var(--raised); font-weight: 600; }
+#transcript .msg-model th,
+#task-modal-body .msg-model th { background: var(--raised); font-weight: 600; }
 /* Cells hold short values far more often than prose, and a wrapped cell
    in a dense table is harder to scan than a scroll. Long prose cells
    still wrap, because nowrap plus the scrolling wrapper above would let
    one sentence make the whole table scroll sideways. */
-#transcript .msg-model td code { white-space: nowrap; }
-#transcript .msg-model a { color: var(--interactive); }
-#transcript .msg-model hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+#transcript .msg-model td code,
+#task-modal-body .msg-model td code { white-space: nowrap; }
+#transcript .msg-model a,
+#task-modal-body .msg-model a { color: var(--interactive); }
+#transcript .msg-model hr,
+#task-modal-body .msg-model hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
 aside {
   width: 280px;
   /* Stated rather than inherited from body, so the panel/centre contrast
@@ -849,6 +896,236 @@ aside.left {
 .side-section { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
 .side-section:last-child { border-bottom: 0; margin-bottom: 0; }
 .side-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+/* The browser, in its own column between the transcript and the tasks
+   panel. The frame takes what the panel has below the tabs and the
+   address bar, as the terminal panels' terminals do, and the page is as
+   tall as fills it at its 1280-pixel width (js/browser.js sendSize). The
+   image is the page at its own proportions scaled down to fit the frame,
+   never stretched, so one point on the image is one point on the page:
+   js/browser.js pagePoint relies on it. The frame is never wider than
+   the page (resize.js BROWSER_BOUNDS.max), so the page is only scaled
+   down.
+   While it is shown, a window too narrow for every panel takes the room
+   from the panels, not from the transcript, which keeps resize.js
+   CENTER_MIN. The browser panel gives first, down to the minimum
+   resize.js BROWSER_BOUNDS holds a drag to: its flex-shrink is a hundred
+   times the side panels', so they give almost nothing until it is there.
+   Then the side panels give, down to resize.js SIDE_BOUNDS.min. Every
+   panel at its minimum is 972px with the handles, which the desktop
+   window's default 1100px holds (internal/gui chrome_test.go). */
+#browser-panel {
+  width: 600px;
+  min-width: 360px;
+  flex-shrink: 100;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#browser-panel[hidden], #resize-browser[hidden] { display: none; }
+/* Its own display (a column) outranks aside.collapsed; collapsing it
+   has to say so again. */
+#browser-panel.collapsed { display: none; }
+#browser-panel > .side-section { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 0; margin-bottom: 0; }
+main:has(> #browser-panel:not([hidden]):not(.collapsed)) > #center { min-width: 280px; }
+main:has(> #browser-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #right-panel) { flex-shrink: 1; min-width: 160px; }
+#toggle-browser[hidden] { display: none; }
+/* The conversation's tabs, above the address bar. Each is its title, cut
+   to the room there is, and its own close button; the strip scrolls
+   sideways once they no longer fit at their narrowest. */
+.browser-tabs { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
+.browser-tab-list { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
+.browser-tab {
+  display: flex; align-items: center; flex: 0 1 180px; min-width: 72px;
+  border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--bg);
+}
+.browser-tab.active { background: var(--raised); border-color: var(--interactive); }
+.browser-tab-open {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: transparent; border: 0; color: var(--muted); font: inherit; font-size: var(--t-ui);
+  padding: 2px 2px 2px 8px; text-align: left;
+}
+.browser-tab.active .browser-tab-open { color: var(--text); }
+.browser-tab-close { background: transparent; border: 0; color: var(--faint); padding: 0 6px; font-size: 14px; line-height: 1; }
+.browser-tab-close:hover { color: var(--text); }
+.browser-tab-new { padding: 2px 6px; }
+.browser-bar { display: flex; gap: 4px; align-items: center; margin: 6px 0 8px; }
+.browser-bar .browser-nav { padding: 2px 6px; }
+.ico-flip { transform: scaleX(-1); }
+#browser-url {
+  flex: 1; min-width: 0;
+  background: var(--raised); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-ctl);
+  padding: 2px 6px; font: inherit; font-size: var(--t-ui);
+}
+/* The frame's own ground shows while the view is stale: just after a
+   switch to another conversation, the <img> would go on showing the last
+   frame of the conversation before until the new stream sends one. */
+.browser-frame { position: relative; flex: 1; min-height: 0; background: var(--ink); border-radius: var(--r-ctl); }
+#browser-view.stale { opacity: 0; }
+/* Its own size, the frame's, scaled down to fit inside the frame at its
+   proportions (a replaced element with auto sizes keeps them under both
+   limits). Top and centred, for the moment a page has not yet been given
+   the frame's height, or is held at MaxViewportHeight. */
+#browser-view {
+  position: absolute; top: 0; left: 0; right: 0; margin: 0 auto;
+  display: block; width: auto; height: auto; max-width: 100%; max-height: 100%;
+  background: var(--ink); border: 1px solid var(--border); border-radius: var(--r-ctl);
+  outline: none;
+}
+#browser-view:focus { border-color: var(--interactive); }
+/* Opaque, so a page the view still holds (the tab closed, or another
+   conversation's last frame) is not read through "No page yet". */
+.browser-empty {
+  position: absolute; inset: 0; margin: 0; padding: 12px;
+  background: var(--ink); border-radius: var(--r-ctl);
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  pointer-events: none;
+}
+.browser-empty[hidden] { display: none; }
+/* The SSH panel, in its own column after the browser panel, and the
+   PowerShell panel after it: the same terminal (js/termpanel.js), so
+   every rule here is for both. Its terminal fills what the panel has
+   below the strip and the status line, so the panel is a column rather
+   than a scrolling list. Like the browser panel it gives way first in a
+   narrow window (flex-shrink), down to resize.js SSH_BOUNDS.min and
+   PS_BOUNDS.min; when the browser, SSH and PowerShell panels together do
+   not fit, showing one hides the others (resize.js makeRoomFor). */
+#ssh-panel, #ps-panel {
+  width: 560px;
+  min-width: 320px;
+  flex-shrink: 100;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#ssh-panel[hidden], #resize-ssh[hidden], #ps-panel[hidden], #resize-ps[hidden] { display: none; }
+/* Its own display (a column) outranks aside.collapsed; collapsing it
+   has to say so again. */
+#ps-panel.collapsed, #ssh-panel.collapsed { display: none; }
+#ssh-panel > .side-section, #ps-panel > .side-section { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 0; }
+main:has(> #ssh-panel:not([hidden]):not(.collapsed)) > #center,
+main:has(> #ps-panel:not([hidden]):not(.collapsed)) > #center { min-width: 280px; }
+main:has(> #ssh-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #right-panel),
+main:has(> #ps-panel:not([hidden]):not(.collapsed)) > :is(#left-panel, #right-panel) { flex-shrink: 1; min-width: 160px; }
+#toggle-ssh[hidden], #toggle-ps[hidden] { display: none; }
+/* Something in a hidden terminal panel wants you: a host key, a password. */
+#toggle-ssh.attention, #toggle-ps.attention { color: var(--warn); }
+.ssh-tabs { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
+.ssh-tab-list { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
+.ssh-tab {
+  display: flex; align-items: center; flex: 0 1 200px; min-width: 80px;
+  border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--bg);
+}
+.ssh-tab.active { background: var(--raised); border-color: var(--interactive); }
+.ssh-tab-open {
+  display: flex; align-items: center; gap: 6px;
+  flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
+  background: transparent; border: 0; color: var(--muted); font: inherit; font-size: var(--t-ui);
+  padding: 2px 2px 2px 8px; text-align: left;
+}
+.ssh-tab-open > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.ssh-tab.active .ssh-tab-open { color: var(--text); }
+.ssh-tab-close { background: transparent; border: 0; color: var(--faint); padding: 0 6px; font-size: 14px; line-height: 1; }
+.ssh-tab-close:hover { color: var(--text); }
+.ssh-tab-new { padding: 2px 6px; }
+/* A state is a shape as well as a colour: a ring while connecting, a
+   filled dot when connected, a dash when ended, a ring in --warn when it
+   waits for you. */
+.ssh-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--faint); }
+.ssh-dot.connected { background: var(--ok); border-color: var(--ok); }
+.ssh-dot.ended { border-radius: 1px; height: 2px; border-width: 0; background: var(--faint); }
+.ssh-dot.asking { border-color: var(--warn); background: transparent; }
+.ssh-dot.held { background: var(--warn); border-color: var(--warn); border-radius: 1px; }
+.ssh-connect { display: flex; gap: 4px; margin-top: 6px; }
+.ssh-connect[hidden] { display: none; }
+#ssh-target {
+  flex: 1; min-width: 0;
+  background: var(--raised); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-ctl);
+  padding: 2px 6px; font: inherit; font-size: var(--t-ui);
+}
+.ssh-bar { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+.ssh-bar[hidden] { display: none; }
+.ssh-status { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--t-ui); }
+#ssh-hold[aria-pressed="true"], #ps-hold[aria-pressed="true"] { border-color: var(--warn); color: var(--warn); }
+/* A question from localcode, not from the remote: drawn as the app's own
+   dialog, so text a remote program prints cannot pass for one. */
+.ssh-question {
+  border: 1px solid var(--interactive); border-radius: var(--r-ctl);
+  background: var(--raised); padding: 8px 10px; margin: 0 0 8px;
+  display: flex; flex-direction: column; gap: 6px; font-size: var(--t-ui);
+}
+.ssh-question[hidden] { display: none; }
+.ssh-question .ssh-q-who { color: var(--muted); }
+.ssh-question .ssh-q-fp { font-family: var(--f-mono); font-size: var(--t-code); overflow-wrap: anywhere; color: var(--text); }
+.ssh-question label { display: flex; flex-direction: column; gap: 2px; color: var(--text); }
+.ssh-question input {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-ctl);
+  padding: 3px 6px; font: inherit;
+}
+.ssh-question .ssh-q-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.ssh-term {
+  position: relative; flex: 1; min-height: 120px; margin-bottom: 12px;
+  background: var(--ink); border: 1px solid var(--border); border-radius: var(--r-ctl);
+  overflow: hidden; outline: none;
+}
+.ssh-term[hidden] { display: none; }
+.ssh-term:focus-within { border-color: var(--interactive); }
+/* No horizontal scroll: a scrollbar there takes a row's height, and the
+   screen is sized to the panel, so its top row went under the bar. Lines
+   from when the terminal was wider are cut at the edge, as a terminal
+   cuts them. */
+.ssh-lines {
+  position: absolute; inset: 0; overflow-x: hidden; overflow-y: auto; padding: 4px 6px;
+  /* Where a scrollbar takes width (Windows, Linux), the room for it is
+     kept from the start: the terminal is sized to the width beside it,
+     and the first line that scrolls off does not put the last two
+     columns under the bar. */
+  scrollbar-gutter: stable;
+  font-family: var(--f-mono); font-size: var(--t-code); line-height: 1.3;
+  color: var(--text); cursor: text;
+}
+.ssh-row { height: 1.3em; white-space: pre; }
+.ssh-screen { position: relative; }
+.ssh-cursor { position: absolute; left: 0; top: 0; width: 1ch; height: 1.3em; background: var(--text); opacity: 0.55; pointer-events: none; }
+.ssh-cursor[hidden] { display: none; }
+.ssh-term:not(:focus-within) .ssh-cursor { background: transparent; outline: 1px solid var(--muted); opacity: 1; }
+/* Where typing goes: invisible, at the cursor, so an input method's
+   candidate window opens beside the text it composes. */
+.ssh-input {
+  position: absolute; left: 0; top: 0; width: 2ch; height: 1.3em;
+  opacity: 0; border: 0; padding: 0; margin: 0; resize: none; overflow: hidden;
+  font-family: var(--f-mono); font-size: var(--t-code); color: transparent; background: transparent;
+}
+.ssh-w { display: inline-block; width: 2ch; text-align: center; }
+.ssh-bold { font-weight: 700; }
+.ssh-faint { opacity: 0.6; }
+.ssh-italic { font-style: italic; }
+.ssh-under { text-decoration: underline; }
+.ssh-strike { text-decoration: line-through; }
+.ssh-under.ssh-strike { text-decoration: underline line-through; }
+.ssh-conceal { color: transparent; }
+.f0 { color: var(--ansi-0); }   .f1 { color: var(--ansi-1); }   .f2 { color: var(--ansi-2); }   .f3 { color: var(--ansi-3); }
+.f4 { color: var(--ansi-4); }   .f5 { color: var(--ansi-5); }   .f6 { color: var(--ansi-6); }   .f7 { color: var(--ansi-7); }
+.f8 { color: var(--ansi-8); }   .f9 { color: var(--ansi-9); }   .f10 { color: var(--ansi-10); } .f11 { color: var(--ansi-11); }
+.f12 { color: var(--ansi-12); } .f13 { color: var(--ansi-13); } .f14 { color: var(--ansi-14); } .f15 { color: var(--ansi-15); }
+.b0 { background: var(--ansi-0); }   .b1 { background: var(--ansi-1); }   .b2 { background: var(--ansi-2); }   .b3 { background: var(--ansi-3); }
+.b4 { background: var(--ansi-4); }   .b5 { background: var(--ansi-5); }   .b6 { background: var(--ansi-6); }   .b7 { background: var(--ansi-7); }
+.b8 { background: var(--ansi-8); }   .b9 { background: var(--ansi-9); }   .b10 { background: var(--ansi-10); } .b11 { background: var(--ansi-11); }
+.b12 { background: var(--ansi-12); } .b13 { background: var(--ansi-13); } .b14 { background: var(--ansi-14); } .b15 { background: var(--ansi-15); }
+/* Reverse video with the terminal's own colours. */
+.ssh-rev-fg { color: var(--ink); }
+.ssh-rev-bg { background: var(--text); }
+.ssh-empty[hidden] { display: none; }
+.ssh-live { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.ssh-live-row { display: flex; align-items: center; gap: 8px; font-size: var(--t-ui); }
+.ssh-live-row > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+
+/* A capture the browser tool saved, under the call that took it. */
+.tool-snapshot {
+  display: block; max-width: min(100%, 640px); margin: 6px 0 2px;
+  border: 1px solid var(--border); border-radius: var(--r-ctl);
+}
 aside h2 {
   font-size: var(--t-cap);
   letter-spacing: .14em;
@@ -903,7 +1180,7 @@ aside h2 {
   width: min(560px, calc(90vw / var(--zoom, 1)));
 }
 #schedule-modal h3, #debate-modal h3, #prompt-modal h3 { margin-top: 0; }
-#schedule-modal .field-label, #debate-modal .field-label, #settings-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: var(--t-ui); }
+#schedule-modal .field-label, #debate-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: var(--t-ui); }
 #schedule-modal input, #schedule-modal textarea, #debate-modal input, #debate-modal textarea, #prompt-modal input {
   width: 100%;
   background: var(--bg);
@@ -962,6 +1239,53 @@ aside h2 {
 #task-modal .note { color: var(--muted); font-size: var(--t-fine); margin-top: 8px; }
 #task-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
 #task-modal .danger-btn { background: transparent; color: var(--err); border-color: var(--err); }
+/* The task window: a task's transcript, opened to read what it found.
+   The replies are the point, and they were set in the same small voice
+   as everything around them: the instructions, every tool call with its
+   whole input and result, the status lines. Now the workings step back
+   into the interface face at the fine size, tool calls fold to one line
+   as in the transcript (the markdown and tool rules above are shared),
+   and each reply is a block of its own in the reading face. The reply
+   that ends a turn is the task's result, and says so. */
+#task-modal #task-modal-body { font-family: var(--f-ui); font-size: var(--t-ui); line-height: 1.5; }
+#task-modal-body .msg-user {
+  white-space: pre-wrap;
+  color: var(--muted);
+  font-size: var(--t-fine);
+  border-left: 2px solid var(--border);
+  padding: 2px 0 2px 10px;
+  margin: 0 0 10px;
+  max-height: calc(8 * 1.5em);
+  overflow-y: auto;
+}
+#task-modal-body .msg-tool,
+#task-modal-body .msg-error { white-space: pre-wrap; font-size: var(--t-fine); margin: 4px 0; }
+#task-modal-body .msg-tool { color: var(--muted); font-style: italic; }
+#task-modal-body .msg-error { color: var(--err); }
+#task-modal-body .msg-model {
+  font-family: var(--f-doc);
+  font-size: var(--t-read-s);
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--r-ctl);
+  padding: 10px 14px;
+  margin: 8px 0;
+}
+#task-modal-body .msg-model pre { background: var(--bg); }
+#task-modal-body .msg-model.final { border-left-color: var(--ok); }
+#task-modal-body .msg-model.final::before {
+  content: "Result";
+  display: block;
+  margin-bottom: 6px;
+  font-family: var(--f-ui);
+  font-size: var(--t-cap);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ok);
+}
 /* The session filter: one line above the list, full width, in the same
    voice as the dialog fields — a box that is clearly for typing into,
    not another row. */
@@ -1726,9 +2050,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    see .comm-dot. */
 
 /* The settings window. Same box as the other modals; the additions are
-   the section heading and the per-field grouping, which exist so that
-   adding a setting later is adding a block rather than rebalancing a
-   layout. */
+   the group heading and the row, which exist so that adding a setting
+   later is adding a row rather than rebalancing a layout. */
 /* The scheduled-task details window is the Settings window's shape: the
    request was for "the window Settings opens in", and matching it here
    rather than restating it is what keeps the two from drifting. Its own
@@ -1781,17 +2104,150 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Two controls that belong together on one line — the update panel's
    check and install buttons. */
 #settings-modal .field-row { display: flex; gap: 8px; }
-/* A checkbox and its label on one line, the label wrapping under itself
-   rather than under the box. */
-#settings-modal .check-row { display: flex; align-items: flex-start; gap: 8px; }
-#settings-modal .check-row input[type="checkbox"] { margin-top: 3px; flex: 0 0 auto; }
+/* A note: what a switch cannot say for itself. Quieter than the line
+   that says what the switch reaches, and wrapped anywhere, since it can
+   hold a path. */
+#settings-modal .note {
+  margin: 4px 0 0;
+  color: var(--faint);
+  font-size: var(--t-fine);
+  overflow-wrap: anywhere;
+}
+/* A note with nothing to say takes no space. settings.js empties a note
+   rather than hiding it, so this one rule is what keeps an empty note
+   from leaving a gap under its switch. */
+#settings-modal .note:empty { display: none; }
 /* A note that has to be noticed rather than merely available. */
 #settings-modal .note.warn { color: var(--warn); }
+/* A group: a small heading, then one box of rows divided by a rule, so
+   the group reads as a list and not as separate sections. Square
+   corners: the box is not something you press. */
+#settings-modal h4.settings-group {
+  margin: 18px 0 6px;
+  color: var(--muted);
+  font-size: var(--t-cap);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+#settings-modal .group-note { margin: 0 0 8px; }
+#settings-modal .setting-list { border: 1px solid var(--border); }
+/* The rule between rows, drawn above every row that has a shown row
+   before it, so a hidden first row (the browser outside the desktop
+   window) leaves no rule at the top of the box. */
+#settings-modal .setting-list > :not([hidden]) ~ * { border-top: 1px solid var(--border); }
+/* One switch, one row: the text on the left, the switch on the right. */
+#settings-modal .setting-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 10px 12px;
+}
+#settings-modal .setting-text { flex: 1 1 auto; min-width: 0; }
+#settings-modal .setting-name {
+  display: block;
+  color: var(--text);
+  font-size: var(--t-ui);
+  font-weight: 600;
+  cursor: pointer;
+}
+#settings-modal .setting-desc {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: var(--t-fine);
+}
+/* The repeat guard's number, inline in its line. */
+#settings-modal .setting-number {
+  width: 4em;
+  padding: 1px 4px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  font: inherit;
+}
+#settings-modal .setting-number:disabled { opacity: 0.5; }
+/* Fixed detail about a switch, folded until asked for. */
+#settings-modal .setting-more { margin-top: 4px; color: var(--muted); font-size: var(--t-fine); }
+#settings-modal .setting-more summary { width: fit-content; cursor: pointer; }
+#settings-modal .setting-more summary:hover { color: var(--text); }
+#settings-modal .setting-more summary:focus-visible { outline: 2px solid var(--interactive); outline-offset: 1px; }
+#settings-modal .setting-more p { margin: 4px 0 0; overflow-wrap: anywhere; }
+#settings-modal #browser-import-btn { margin-top: 6px; }
+#settings-modal .ssh-live:empty { display: none; }
+/* The switch: the same checkbox, drawn as a track and a knob. Checked is
+   the second ink drawing it, an outline and a knob, never a filled track:
+   the palette's accent draws and does not flood. */
+#settings-modal .setting-switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 16px;
+  margin: 1px 0 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  cursor: pointer;
+}
+#settings-modal .setting-switch::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.12s ease;
+}
+#settings-modal .setting-switch:checked { border-color: var(--interactive); }
+#settings-modal .setting-switch:checked::before {
+  background: var(--interactive);
+  transform: translateX(14px);
+}
+#settings-modal .setting-switch:hover { border-color: var(--text); }
+#settings-modal .setting-switch:checked:hover { border-color: var(--interactive); }
+#settings-modal .setting-switch:focus-visible { outline: 2px solid var(--interactive); outline-offset: 2px; }
+#settings-modal .setting-switch:disabled { opacity: 0.5; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) {
+  #settings-modal .setting-switch::before { transition: none; }
+}
+/* A picker row on the Appearance tab: what it sets on the left, the
+   picker on the right, the same two columns in every row so the pickers
+   line up. One column where the window is too narrow for two. */
+#settings-modal .setting-grid { container-type: inline-size; }
+#settings-modal .setting-pick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px 16px;
+  align-items: start;
+  padding: 10px 12px;
+}
+#settings-modal .setting-pick .setting-name { cursor: default; }
+#settings-modal .setting-control { min-width: 0; }
+#settings-modal .setting-control select,
+#settings-modal .setting-control input[type="text"] {
+  padding: 4px 6px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  font: inherit;
+}
+@container (max-width: 380px) {
+  #settings-modal .setting-pick { grid-template-columns: minmax(0, 1fr); }
+}
+#settings-panel-appearance #typo-note { margin-top: 10px; }
+#settings-modal .close-row { margin-top: 16px; }
 /* The settings tabs: one row of plain buttons under the title, the
    current one marked with the select colour rather than a fill. No new
-   hue: the palette has already spent both of its accents. */
+   hue: the palette has already spent both of its accents. Wrapped onto a
+   second line rather than scrolled where the window is narrow. */
 #settings-modal .settings-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 4px;

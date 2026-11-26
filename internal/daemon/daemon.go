@@ -19,10 +19,13 @@ import (
 	"os"
 
 	"localcode/internal/agent"
+	"localcode/internal/browser"
 	"localcode/internal/events"
 	"localcode/internal/mcp"
 	"localcode/internal/provider"
+	"localcode/internal/sshterm"
 	"sync"
+	"time"
 )
 
 type Daemon struct {
@@ -30,6 +33,23 @@ type Daemon struct {
 	Broker  *agent.PermissionBroker
 	Tasks   *agent.TaskManager
 	Version string
+
+	// Browser is the browser the model works in, shown in the GUI's
+	// browser panel. Nil when the daemon was built without one.
+	Browser        *browser.Manager
+	browserViewers browserViewers
+	// SSH holds the conversations' SSH terminals, shown in the SSH panel.
+	// Nil when the daemon was built without one.
+	SSH *sshterm.Manager
+	// PowerShell holds the conversations' PowerShell terminals, shown in
+	// the PowerShell panel. Nil where there is none (anywhere but Windows).
+	PowerShell *sshterm.Manager
+	// ListenHost is the host name the daemon was started to listen on,
+	// which the SSH routes accept as well as an address and localhost.
+	ListenHost string
+	// updateConfirm is when "/update" last refused for open SSH
+	// connections: a second "/update" soon after goes ahead.
+	updateConfirm time.Time
 
 	// mcpMu guards MCP, which "/reset-mcp" can swap while requests are
 	// reading it.
@@ -100,6 +120,12 @@ type Daemon struct {
 	// runs, and a panel that says so is better than a control that
 	// silently forgets.
 	ConfigPath string
+
+	// WindowStatePath is the file the desktop window's page keeps its own
+	// settings in (see windowstate.go), or "" for a daemon that keeps
+	// none. windowStateMu is held across a read and the write after it.
+	WindowStatePath string
+	windowStateMu   sync.Mutex
 
 	// PickDirectory opens a native folder picker on the machine the daemon
 	// runs on, and is nil unless that machine is also the one looking at
@@ -232,7 +258,9 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 	return d
 }
 
-func (d *Daemon) Handler() http.Handler { return CanonicalWrites(d.ownershipGate(d.mux)) }
+func (d *Daemon) Handler() http.Handler {
+	return refuseTheModelsBrowser(CanonicalWrites(d.ownershipGate(d.mux)))
+}
 
 func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/version", d.handleVersion)
@@ -242,8 +270,44 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/trace", d.handleTrace)
 	d.mux.HandleFunc("GET /api/usage", d.handleUsage)
 	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)
+	d.mux.HandleFunc("GET /api/window/state", d.handleGetWindowState)
+	d.mux.HandleFunc("PUT /api/window/state", d.handleSetWindowState)
 	d.mux.HandleFunc("POST /api/settings/auto-delegate", d.handleSetAutoDelegate)
 	d.mux.HandleFunc("POST /api/settings/smart-agent", d.handleSetSmartAgent)
+	d.mux.HandleFunc("POST /api/settings/ssh", d.handleSetSSH)
+	d.mux.HandleFunc("GET /api/ssh", d.on(sshRoutes, d.handleTermLive))
+	d.mux.HandleFunc("GET /api/sessions/{id}/ssh", d.on(sshRoutes, d.handleTermState))
+	d.mux.HandleFunc("GET /api/sessions/{id}/ssh/stream", d.on(sshRoutes, d.handleTermStream))
+	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/connect", d.handleSSHConnect)
+	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/input", d.on(sshRoutes, d.handleTermInput))
+	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/size", d.on(sshRoutes, d.handleTermSize))
+	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/hold", d.on(sshRoutes, d.handleTermHold))
+	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/answer", d.on(sshRoutes, d.handleTermAnswer))
+	d.mux.HandleFunc("POST /api/sessions/{id}/ssh/{term}/reconnect", d.on(sshRoutes, d.handleTermReconnect))
+	d.mux.HandleFunc("DELETE /api/sessions/{id}/ssh/{term}", d.on(sshRoutes, d.handleTermClose))
+	// The PowerShell panel: the same routes over the PowerShell terminals,
+	// and open in place of connect. See ssh.go.
+	d.mux.HandleFunc("POST /api/settings/powershell", d.handleSetPowerShell)
+	d.mux.HandleFunc("GET /api/powershell", d.on(powershellRoutes, d.handleTermLive))
+	d.mux.HandleFunc("GET /api/sessions/{id}/powershell", d.on(powershellRoutes, d.handleTermState))
+	d.mux.HandleFunc("GET /api/sessions/{id}/powershell/stream", d.on(powershellRoutes, d.handleTermStream))
+	d.mux.HandleFunc("POST /api/sessions/{id}/powershell/open", d.handlePowerShellOpen)
+	d.mux.HandleFunc("POST /api/sessions/{id}/powershell/{term}/input", d.on(powershellRoutes, d.handleTermInput))
+	d.mux.HandleFunc("POST /api/sessions/{id}/powershell/{term}/size", d.on(powershellRoutes, d.handleTermSize))
+	d.mux.HandleFunc("POST /api/sessions/{id}/powershell/{term}/hold", d.on(powershellRoutes, d.handleTermHold))
+	d.mux.HandleFunc("POST /api/sessions/{id}/powershell/{term}/reconnect", d.on(powershellRoutes, d.handleTermReconnect))
+	d.mux.HandleFunc("DELETE /api/sessions/{id}/powershell/{term}", d.on(powershellRoutes, d.handleTermClose))
+	d.mux.HandleFunc("POST /api/settings/browser", d.handleSetBrowser)
+	d.mux.HandleFunc("POST /api/browser/import", d.handleBrowserImport)
+	d.mux.HandleFunc("GET /api/sessions/{id}/browser", d.handleBrowserState)
+	d.mux.HandleFunc("GET /api/sessions/{id}/browser/stream", d.handleBrowserStream)
+	d.mux.HandleFunc("POST /api/sessions/{id}/browser/size", d.handleBrowserSize)
+	d.mux.HandleFunc("POST /api/sessions/{id}/browser/navigate", d.handleBrowserNavigate)
+	d.mux.HandleFunc("POST /api/sessions/{id}/browser/input", d.handleBrowserInput)
+	d.mux.HandleFunc("POST /api/sessions/{id}/browser/tabs", d.handleBrowserNewTab)
+	d.mux.HandleFunc("POST /api/sessions/{id}/browser/tabs/{tab}/activate", d.handleBrowserActivateTab)
+	d.mux.HandleFunc("DELETE /api/sessions/{id}/browser/tabs/{tab}", d.handleBrowserCloseTab)
+	d.mux.HandleFunc("GET /api/sessions/{id}/snapshots/{name}", d.handleSnapshot)
 	d.mux.HandleFunc("POST /api/settings/orchestrate", d.handleSetOrchestrate)
 	d.mux.HandleFunc("POST /api/settings/model-invocable", d.handleSetModelInvocable)
 	d.mux.HandleFunc("POST /api/settings/keep-going", d.handleSetKeepGoing)
@@ -332,6 +396,9 @@ func (d *Daemon) announceSettings() {
 			"show_tps":             d.Loop.ShowTPS(),
 			"auto_delegate":        d.Loop.AutoDelegateEnabled(),
 			"smart_agent":          d.Loop.SmartAgentEnabled(),
+			"browser":              d.Loop.Config.BrowserLive(),
+			"ssh":                  d.Loop.Config.SSHLive(),
+			"powershell":           d.Loop.Config.PowerShellLive(),
 			"skip_permissions":     d.Loop.Config.PermissionsSkipped(),
 			"keep_going":           d.Loop.KeepGoingEnabled(),
 			"fold_thinking":        d.Loop.FoldThinkingEnabled(),

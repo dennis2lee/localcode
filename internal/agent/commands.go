@@ -116,6 +116,17 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 	if d, ok := delegatedTaskFrom(ctx); ok && d.task == text {
 		delegated = true
 	}
+	// A prompt the model booked for later is the same kind of text, and it
+	// arrives by a third route. The Schedule tool takes whatever the model
+	// passes, and the run that fires it reached this door with no sign of
+	// who wrote it: with model_invocable off, "/orchestrate on" in it
+	// flipped a switch and "!touch x" ran a shell command no permission
+	// rule was asked about. A prompt a person booked is not marked, so what
+	// they typed after /schedule or in the Schedule dialog still runs as
+	// they wrote it. See Scheduler.AddByModel.
+	if modelWrittenPrompt(ctx, text) {
+		delegated = true
+	}
 
 	// Tried in order; the first match wins. This order is the precedence
 	// contract: the "!" shell escape, then built-in commands, then custom
@@ -204,6 +215,9 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeMemory(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeConfig(sessionID, text) },
 		func() (bool, error) { return l.routeSmartAgent(sessionID, text) },
+		func() (bool, error) { return l.routeBrowser(sessionID, text) },
+		func() (bool, error) { return l.routeSSH(sessionID, text) },
+		func() (bool, error) { return l.routePowerShell(sessionID, text) },
 		func() (bool, error) { return l.routeOrchestrate(sessionID, text) },
 		func() (bool, error) { return l.routeWorkflow(ctx, sessionID, text) },
 		func() (bool, error) { return l.routeAutoDelegate(sessionID, text) },
@@ -214,7 +228,7 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeDebate(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeEffort(sessionID, agentName, text) },
 		func() (bool, error) { return l.routeModel(sessionID, text) },
-		func() (bool, error) { return l.routeSchedule(sessionID, agentName, text) },
+		func() (bool, error) { return l.routeSchedule(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeShowScheduled(sessionID, text) },
 		func() (bool, error) { return l.routeKeepGoing(sessionID, agentName, text) },
 		func() (bool, error) { return l.routeThinking(sessionID, text) },

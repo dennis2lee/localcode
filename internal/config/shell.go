@@ -64,7 +64,7 @@ func (c *Config) resolveShellCommandUnder(ctx context.Context, command string, s
 		// question nobody was in a position to ask.
 		return DecisionAsk
 	}
-	if worst == DecisionAllow && hasUnsafeShellConstruct(command) {
+	if worst == DecisionAllow && (hasUnsafeShellConstruct(command) || lineRunsGitCommand(command)) {
 		// skip_permissions reaches this ask too.
 		//
 		// It did not, and the result was that turning "skip all
@@ -112,13 +112,17 @@ var unsafeShellConstructs = []string{"$(", "`", "<(", ">(", ">"}
 // literal text cannot start matching it now.
 func (c *Config) resolveSegment(ctx context.Context, segment string, staticRequiresPermission bool) Decision {
 	ctx = context.WithValue(ctx, shellSegmentKey{}, strings.TrimSpace(segment))
-	raw := c.resolveOne(ctx, BashToolName, segment, staticRequiresPermission)
+	tool := shellToolOf(ctx)
+	raw := c.resolveOne(ctx, tool, segment, staticRequiresPermission)
 	unquoted := unquoteShellText(segment)
-	if unquoted == segment {
-		return raw
+	norm := raw
+	if unquoted != segment {
+		norm = c.resolveOne(ctx, tool, unquoted, staticRequiresPermission)
 	}
-	norm := c.resolveOne(ctx, BashToolName, unquoted, staticRequiresPermission)
 	if raw == DecisionDeny || norm == DecisionDeny {
+		return DecisionDeny
+	}
+	if c.denyReaches(ctx, segment, staticRequiresPermission) {
 		return DecisionDeny
 	}
 	if raw == DecisionAllow && norm == DecisionAllow {
@@ -188,7 +192,8 @@ func unquoteShellText(segment string) string {
 // cover, one by one, for a bash line other than the one answered: each
 // command of it, as written and with its quoting removed, the two
 // readings resolveSegment requires of a config rule. False for a line no
-// grant may cover: one with a substitution or a redirect, which
+// grant may cover: one with a substitution, a redirect or a Git command
+// that runs another command, which
 // resolveShellCommand never allows either. Under a shell that does not
 // split the POSIX way only a line made of plain characters is covered,
 // whole, since the pieces this would cut it into are not that shell's,
@@ -197,8 +202,26 @@ func GrantSegments(command string) ([]string, bool) {
 	return grantSegmentsUnder(command, shell.IsPOSIX())
 }
 
+// GrantSegmentsFor is GrantSegments for a line of toolName's shell, which
+// is not always localcode's own: an ssh line is for the terminal's shell,
+// POSIX only as WithRemoteShell says, and a powershell line is never
+// POSIX. Splitting either by the host's shell let a grant cover what the
+// line's shell runs as two commands: under a POSIX host, "echo a\;
+// Remove-Item x" is one command to the split and two to PowerShell, whose
+// backslash escapes nothing.
+func GrantSegmentsFor(ctx context.Context, toolName, command string) ([]string, bool) {
+	switch toolName {
+	case SSHToolName:
+		posix, _ := ctx.Value(remoteShellKey{}).(bool)
+		return grantSegmentsUnder(command, posix)
+	case PowerShellToolName:
+		return grantSegmentsUnder(command, false)
+	}
+	return GrantSegments(command)
+}
+
 func grantSegmentsUnder(command string, posix bool) ([]string, bool) {
-	if hasUnsafeShellConstruct(command) {
+	if hasUnsafeShellConstruct(command) || lineRunsGitCommand(command) {
 		return nil, false
 	}
 	if !posix {

@@ -296,6 +296,74 @@ func TestAFallbackToAModelThatCanSeeSaysNothingWasLeftOut(t *testing.T) {
 	}
 }
 
+// Found in review (agy): the tool list a fallback is derived from was the
+// first model's own, so a turn that started on a model that cannot see
+// offered view_image to no fallback, including one that can. Both ways
+// round, and a fallback that cannot see after one that can drops it again.
+func TestAFallbackToAModelThatCanSeeIsOfferedViewImage(t *testing.T) {
+	reg := tools.NewRegistry(nil)
+	reg.Register(tools.ReadFile{})
+	reg.Register(tools.ViewImage{})
+	dead := []provider.StreamEvent{{Type: provider.EventError, Err: fmt.Errorf("openai-compat endpoint returned 404: model not found")}}
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{dead, dead, textReply("ok")}}
+	loop, sessionID := scriptedLoop(t, p, reg)
+	loop.Config.Profiles["blind"] = config.Profile{Provider: "local", Model: "deepseek-v4.1-flash", Fallback: []string{"seeing", "blind2"}}
+	loop.Config.Profiles["seeing"] = config.Profile{Provider: "local", Model: "claude-sonnet-5-5"}
+	loop.Config.Profiles["blind2"] = config.Profile{Provider: "local", Model: "qwen3-coder-30b"}
+	loop.Config.Agents["general-purpose"] = config.AgentConfig{Profile: "blind"}
+	loop.SetSmartAgentEnabled(true)
+
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "look"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	reqs := requestsOf(p)
+	if len(reqs) != 3 {
+		t.Fatalf("%d requests, want three models in turn", len(reqs))
+	}
+	for i, want := range []bool{false, true, false} {
+		if got := offersTool(reqs[i], tools.ViewImageName); got != want {
+			t.Errorf("request %d (%s): view_image offered %v, want %v", i, reqs[i].Model, got, want)
+		}
+		if !offersTool(reqs[i], "read_file") {
+			t.Errorf("request %d (%s): read_file not offered", i, reqs[i].Model)
+		}
+	}
+}
+
+// Found in review (agy): an agent allowed only view_image fell back to a
+// model that cannot see with an empty allowlist, which means every tool,
+// bash included.
+func TestAFallbackThatLosesItsOnlyToolIsOfferedNone(t *testing.T) {
+	reg := tools.NewRegistry(nil)
+	reg.Register(tools.ReadFile{})
+	reg.Register(tools.ViewImage{})
+	dead := []provider.StreamEvent{{Type: provider.EventError, Err: fmt.Errorf("openai-compat endpoint returned 404: model not found")}}
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{dead, textReply("ok")}}
+	loop, sessionID := scriptedLoop(t, p, reg)
+	loop.Config.Profiles["seeing"] = config.Profile{Provider: "local", Model: "claude-sonnet-5-5", Fallback: []string{"blind"}}
+	loop.Config.Profiles["blind"] = config.Profile{Provider: "local", Model: "qwen3-coder-30b"}
+	loop.Config.Agents["general-purpose"] = config.AgentConfig{Profile: "seeing", Tools: []string{"view_image"}}
+	loop.SetSmartAgentEnabled(true)
+
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "look"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	reqs := requestsOf(p)
+	if len(reqs) != 2 {
+		t.Fatalf("%d requests, want two models in turn", len(reqs))
+	}
+	if !offersTool(reqs[0], tools.ViewImageName) || len(reqs[0].Tools) != 1 {
+		t.Errorf("the first model: %d tools", len(reqs[0].Tools))
+	}
+	if len(reqs[1].Tools) != 0 {
+		var names []string
+		for _, tool := range reqs[1].Tools {
+			names = append(names, tool.Name)
+		}
+		t.Errorf("the fallback that cannot see was offered %v, want nothing", names)
+	}
+}
+
 // The forced trim, the rescue of last resort for a conversation that no
 // longer fits, cuts the history as the model is sent it. A model that is
 // not sent images was charged 1,600 tokens for each one still in the

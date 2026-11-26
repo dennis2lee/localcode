@@ -216,8 +216,11 @@ func TestStoppingATurnParkedOnAPermissionFreesTheWorkspace(t *testing.T) {
 		// carries it — without it the broker refuses rather than asking,
 		// and nothing parks.
 		allow, _ := d.Broker.Func()(agent.WithSessionID(ctx, busy), tools.Ask{Tool: "bash", Subject: "rm -rf /", Description: "delete everything"})
-		answered <- allow
+		// The turn ends before the answer is told: told first, the switch
+		// below could arrive while the session was still marked busy, and
+		// did on CI (Ubuntu, race lane, twice).
 		d.turns.end(busy)
+		answered <- allow
 	}()
 	<-asked
 

@@ -31,13 +31,24 @@ test('index.html loads the split-out stylesheet and the ES module entry point', 
   // pre-paint read must run before the stylesheet first applies, which
   // no deferred module can guarantee, so it lives inline in the head.
   // Anything else inline is the drift this guard exists to catch.
-  const inline = [...html.matchAll(/<script(?!\s+type="module")[\s>]([\s\S]*?)<\/script>/g)];
+  const classic = [...html.matchAll(/<script(?!\s+type="module")([^>]*)>([\s\S]*?)<\/script>/g)];
+  const inline = classic.filter((m) => !/\bsrc=/.test(m[1]));
   assert.ok(inline.length <= 1, 'index.html has a non-module inline <script> block again');
   if (inline.length === 1) {
-    assert.match(inline[0][1], /Typography before first paint/);
-    assert.match(inline[0][1], /localcode\.textScale/);
-    assert.ok(!/fetch\s*\(|XMLHttpRequest|document\.write/.test(inline[0][1]),
+    assert.match(inline[0][2], /Typography before first paint/);
+    assert.match(inline[0][2], /localcode\.textScale/);
+    assert.ok(!/fetch\s*\(|XMLHttpRequest|document\.write/.test(inline[0][2]),
       'the pre-paint script reaches past localStorage and the root element');
+  }
+  // And one classic script with a file of its own, pinned the same way:
+  // js/kept.js puts back what the desktop window remembered, and it has to
+  // have run before the pre-paint script reads localStorage, which no
+  // module can promise either.
+  const files = classic.filter((m) => /\bsrc=/.test(m[1]));
+  assert.deepEqual(files.map((m) => m[1].trim()), ['src="js/kept.js"'],
+    'index.html loads a classic script other than js/kept.js');
+  if (inline.length === 1) {
+    assert.ok(files[0].index < inline[0].index, 'js/kept.js must come before the pre-paint script');
   }
 });
 

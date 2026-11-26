@@ -6,8 +6,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"localcode/internal/agent"
+	"localcode/internal/browser"
 	"localcode/internal/commands"
 	"localcode/internal/config"
 	"localcode/internal/credentials"
@@ -21,6 +23,7 @@ import (
 	"localcode/internal/session"
 	"localcode/internal/shell"
 	"localcode/internal/skills"
+	"localcode/internal/sshterm"
 	"localcode/internal/tools"
 	"localcode/internal/trace"
 	"localcode/internal/userdirs"
@@ -253,6 +256,10 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		}
 		return prober.ContextWindow(ctx, model)
 	}
+	// Ask a model whether it can see when its profile does not say and it
+	// is not a Claude model: shown a test image once, through the
+	// provider its turns use. See agent.ProbeVisionWith.
+	loop.ProbeVision = agent.ProbeVisionWith(providers)
 	// Restores conversation history and /usage totals for every session
 	// just loaded from disk — the event log survives a restart on its
 	// own, but Loop's in-memory history/usage maps don't, so without this
@@ -336,8 +343,79 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// "/reset-skills" can change, neither of which a registry read at
 	// startup can answer. See Loop.hiddenTools.
 	registry.Register(agent.NewCommandTool(loop))
+	// The browser shown in the GUI's right panel. Registered
+	// unconditionally and hidden per turn, like the tools above: whether
+	// it is offered depends on a setting that moves and on a GUI window
+	// showing the conversation. Nothing starts until it is used.
+	//
+	// Block is the browser's own guard: a page the "browser" deny rules
+	// name is never loaded, whatever led there (a redirect, a click, a
+	// frame, the panel's address bar).
+	browserManager := browser.NewManager(browser.Options{
+		ChromePath: cfg.BrowserPath,
+		DataDir:    filepath.Join(e.home, ".localcode", "browser"),
+		Block:      agent.BrowserBlock(loop),
+	})
+	registry.Register(agent.NewBrowserTool(loop, browserManager))
 
 	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
+	d.Browser = browserManager
+	loop.BrowserViewing = d.BrowserViewing
+	loop.CloseBrowser = browserManager.Close
+
+	// SSH connections the model and the person work in, shown in the SSH
+	// panel. Registered unconditionally and hidden per turn: it is offered
+	// while the setting is on. Nothing connects until it is used.
+	sshManager := sshterm.NewManager(sshterm.Options{
+		Home:      e.home,
+		DataDir:   filepath.Join(e.home, ".localcode", "ssh"),
+		SystemDir: sshSystemDir(),
+		LocalUser: localUserName(),
+		Agent:     sshterm.DefaultAgent(os.Getenv),
+		Env:       sshterm.LocaleEnv(os.Environ()),
+		Permits:   cfg.EgressPolicy().Permits,
+		// A connection the model asked for is checked again where it
+		// resolved to, just before it is made: ~/.ssh/config can change
+		// between the question and the dial.
+		CheckTarget: func(conv string, by sshterm.Opener, r sshterm.Route, approved string) error {
+			if by != sshterm.ByModel {
+				return nil
+			}
+			subject := agent.SSHConnectSubject(r)
+			if loop.Config.DeniedAnywhere(config.SSHConnectToolName, subject) {
+				return fmt.Errorf("a permission rule for %q denies %s", config.SSHConnectToolName, r.Target.Host)
+			}
+			if approved != "" && subject != approved {
+				return fmt.Errorf("~/.ssh/config changed after the connection was approved: it was approved for %s and now goes to %s; connect again", approved, subject)
+			}
+			return nil
+		},
+		OnAsking: d.AnnounceActivity,
+	})
+	registry.Register(agent.NewSSHTool(loop))
+	d.SSH = sshManager
+	loop.SSH = sshManager
+	loop.CloseSSH = func() { sshManager.CloseAll("SSH was turned off", false) }
+
+	// PowerShell on this computer, shown in the PowerShell panel. The
+	// same terminals as SSH's, started under a pseudo console instead of
+	// over a connection, so Windows only: elsewhere there is no manager,
+	// the tool is never offered and the panel is never drawn. Each starts
+	// in its conversation's working directory.
+	registry.Register(agent.NewPowerShellTool(loop))
+	if runtime.GOOS == "windows" {
+		psPath := cfg.PowerShellPath
+		if psPath == "" {
+			psPath = "powershell.exe"
+		}
+		psManager := sshterm.NewManager(sshterm.Options{
+			Local:    &sshterm.LocalShell{Path: psPath, Dir: loop.SessionDir},
+			OnAsking: d.AnnounceActivity,
+		})
+		d.PowerShell = psManager
+		loop.PowerShell = psManager
+		loop.ClosePowerShell = func() { psManager.CloseAll("PowerShell was turned off", false) }
+	}
 
 	// "/update": the same install the settings window's button performs,
 	// reached from the prompt box so the TUI has it too. The daemon owns
@@ -467,6 +545,14 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		if loop.Schedules != nil {
 			loop.Schedules.Disarm()
 		}
+		// The browser is a child process, and one left running holds its
+		// profile directory locked against the next daemon's.
+		browserManager.Close()
+		// SSH connections end with the daemon that holds them.
+		sshManager.CloseAll("localcode stopped", true)
+		if loop.PowerShell != nil {
+			loop.PowerShell.CloseAll("localcode stopped", true)
+		}
 		closeMCPServers()
 		if loop.Trace != nil {
 			loop.Trace.Close()
@@ -479,6 +565,11 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	if path, err := resolvedConfigPath(configPath); err == nil {
 		d.ConfigPath = path
 	}
+	// What the desktop window's page remembers for itself, beside the
+	// config and not in it. Every daemon gets the path: the one behind a
+	// window after an update is a successor that does not know there is
+	// a window, and only a window's page ever asks.
+	d.WindowStatePath = filepath.Join(e.home, ".localcode", "window-state.json")
 
 	return d, cleanup, nil
 }

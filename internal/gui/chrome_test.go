@@ -367,6 +367,48 @@ func boundNames(t *testing.T) map[string]string {
 	return bound
 }
 
+// initValues is every window.lc* value an Init script in this package
+// sets, such as window.lcGUI, keyed to the file that sets it. A value the
+// window puts on every page, not a function it binds: the page reads it.
+var initAssign = regexp.MustCompile(`window\.(lc[A-Z]\w*)\s*=`)
+
+func initValues(t *testing.T) map[string]string {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := map[string]string{}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), f, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", f, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) != 1 {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Init" {
+				return true
+			}
+			if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if js, err := strconv.Unquote(lit.Value); err == nil {
+					for _, m := range initAssign.FindAllStringSubmatch(js, -1) {
+						set[m[1]] = f
+					}
+				}
+			}
+			return true
+		})
+	}
+	return set
+}
+
 // And the function the page calls is the one Go binds.
 //
 // The command strings are checked above; the name they travel through is
@@ -403,11 +445,65 @@ func TestTheFunctionsThePageCallsAreTheOnesGoBinds(t *testing.T) {
 	if len(called) == 0 {
 		t.Fatal("no window.lc* in the page scripts; this test no longer reads what it thinks it reads")
 	}
+	// A value an Init script sets (window.lcGUI) is the other half of the
+	// same contract: the page reads it, and nothing binds it.
+	initSet := initValues(t)
+	for name, file := range initSet {
+		if !strings.Contains(js, "window."+name) {
+			t.Errorf("%s sets window.%s on every page and no page script reads it", file, name)
+		}
+	}
 	reported := map[string]bool{}
 	for _, m := range called {
+		if _, ok := initSet[m[1]]; ok {
+			continue
+		}
 		if _, ok := bound[m[1]]; !ok && !reported[m[1]] {
 			reported[m[1]] = true
 			t.Errorf("the page calls window.%s and this package does not bind it", m[1])
 		}
+	}
+}
+
+// The browser panel is drawn only in this window, beside the session panel,
+// the transcript and the tasks panel. The window opens at winW, and with
+// every panel at the narrowest the stylesheet lets a window squeeze it to,
+// all four and their three handles have to fit in that: a panel that does
+// not is pushed off the window's right edge, under a horizontal scroll.
+//
+// Untagged for the same reason as the colour check above.
+func TestTheDefaultWindowHoldsEveryPanelWithTheBrowser(t *testing.T) {
+	src, err := os.ReadFile("gui.go")
+	if err != nil {
+		t.Fatalf("read gui.go: %v", err)
+	}
+	css, err := os.ReadFile("../daemon/static/style.css")
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	num := func(what, pattern string, in []byte) int {
+		t.Helper()
+		m := regexp.MustCompile(pattern).FindSubmatch(in)
+		if m == nil {
+			t.Fatalf("cannot find %s (%s)", what, pattern)
+		}
+		n, err := strconv.Atoi(string(m[1]))
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		return n
+	}
+	const shown = `main:has\(> #browser-panel:not\(\[hidden\]\):not\(\.collapsed\)\) > `
+	winW := num("the window's default width", `winW\s*=\s*(\d+)`, src)
+	handle := num("a handle's width", `\.resizer \{\s*flex: 0 0 (\d+)px`, css)
+	browser := num("the browser panel's minimum", `#browser-panel \{[^}]*min-width: (\d+)px`, css)
+	center := num("the transcript's minimum beside it", shown+`#center \{ min-width: (\d+)px; \}`, css)
+	side := num("the side panels' minimum beside it", shown+`:is\(#left-panel, #right-panel\) \{[^}]*min-width: (\d+)px`, css)
+	if !regexp.MustCompile(shown + `:is\(#left-panel, #right-panel\) \{[^}]*flex-shrink: 1;`).Match(css) {
+		t.Fatal("the side panels do not shrink while the browser panel is shown, so their minimum is not what a window squeezes them to")
+	}
+	if need := 2*side + center + browser + 3*handle; need > winW {
+		t.Errorf("every panel at its minimum needs %dpx (side %d x2, transcript %d, browser %d, handles 3 x %d); the window opens at %dpx",
+			need, side, center, browser, handle, winW)
 	}
 }

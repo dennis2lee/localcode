@@ -328,6 +328,100 @@ const SUPPORTED_IMAGE_TYPES = new Set([
 ]);
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
 
+// The most one image may be on every wire the daemon sends to: Bedrock's
+// 3.75 MB, and 8000 pixels a side. The daemon refuses past these
+// (provider.ImageTooBig), and an image a server refused stayed in the
+// conversation and failed every request after it.
+const MAX_ONE_IMAGE_BYTES = 3750000;
+const MAX_IMAGE_SIDE = 8000;
+// The long side an image past those limits is scaled down to: the most
+// the newest Claude models read at full resolution. A larger image is
+// scaled down by the model's server anyway, so nothing is lost there.
+const SHRINK_SIDE = 2576;
+
+// fitWithin is w x h scaled down, keeping its shape, so neither side is
+// over maxSide. An image already within it is returned as it is.
+export function fitWithin(w, h, maxSide) {
+  if (w <= maxSide && h <= maxSide) return { w, h };
+  const scale = maxSide / Math.max(w, h);
+  return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
+}
+
+// newCanvas is a canvas of w x h with a way to encode it, in whichever
+// form this page has: OffscreenCanvas where there is one, a document
+// canvas otherwise.
+function newCanvas(w, h) {
+  if (typeof OffscreenCanvas === 'function') {
+    const c = new OffscreenCanvas(w, h);
+    return { ctx: c.getContext('2d'), encode: (type, quality) => c.convertToBlob({ type, quality }) };
+  }
+  if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+    const c = document.createElement('canvas');
+    if (typeof c.getContext !== 'function' || typeof c.toBlob !== 'function') return null;
+    c.width = w;
+    c.height = h;
+    return { ctx: c.getContext('2d'), encode: (type, quality) => new Promise((r) => c.toBlob(r, type, quality)) };
+  }
+  return null;
+}
+
+// fitImage is file as it can be sent: the file itself when it is within
+// the limits, a smaller copy when it is not, or an error saying why there
+// is none. A copy is PNG when that fits, and JPEG when only that does.
+//
+// A page that cannot read an image's size (no createImageBitmap) judges
+// it on its bytes alone, and the daemon checks the pixels.
+async function fitImage(file, mediaType) {
+  const size = file.size || 0;
+  let bitmap = null;
+  if (typeof createImageBitmap === 'function') {
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch (_) {
+      bitmap = null;
+    }
+  }
+  const tooWide = bitmap && (bitmap.width > MAX_IMAGE_SIDE || bitmap.height > MAX_IMAGE_SIDE);
+  if (size <= MAX_ONE_IMAGE_BYTES && !tooWide) {
+    if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+    return { file, mediaType };
+  }
+  const what = tooWide ? `${bitmap.width}x${bitmap.height} pixels` : `${size} bytes`;
+  const limit = `the limits are ${MAX_ONE_IMAGE_BYTES} bytes and ${MAX_IMAGE_SIDE} pixels a side`;
+  const cannot = { error: `image not attached: it is ${what} (${limit}), and this page cannot make a smaller copy` };
+  if (!bitmap) return cannot;
+  const { w, h } = fitWithin(bitmap.width, bitmap.height, SHRINK_SIDE);
+  // The decoded bitmap is released however this ends: a 9000x4000 one is
+  // over 100 MB, and the likeliest failure here is running out of room.
+  let canvas;
+  try {
+    canvas = newCanvas(w, h);
+    if (!canvas || !canvas.ctx) return cannot;
+    canvas.ctx.drawImage(bitmap, 0, 0, w, h);
+  } finally {
+    if (typeof bitmap.close === 'function') bitmap.close();
+  }
+  // Each encoding on its own: a page that cannot write one (PNG at this
+  // size, or a type it lacks) may still write the next.
+  let lastError = null;
+  let encoded = false;
+  for (const [type, quality] of [['image/png', undefined], ['image/jpeg', 0.9], ['image/jpeg', 0.75]]) {
+    let blob = null;
+    try {
+      blob = await canvas.encode(type, quality);
+    } catch (err) {
+      lastError = err;
+      continue;
+    }
+    encoded = encoded || !!blob;
+    if (blob && blob.size <= MAX_ONE_IMAGE_BYTES) return { file: blob, mediaType: type, scaled: { w, h } };
+  }
+  // Nothing written at all is a failure to report as one; a copy written
+  // and too big is the message below.
+  if (!encoded && lastError) throw lastError;
+  return { error: `image not attached: it is ${what} (${limit}), and a ${w}x${h} copy is still too big` };
+}
+
 const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 function bytesToBase64(bytes) {
   let result = '';
@@ -475,17 +569,35 @@ export async function addImageFile(file, fallbackName) {
     return false;
   }
 
-  const currentTotal = attachedImages.reduce((sum, img) => sum + (img.size || 0), 0);
-  const fileSize = file.size || 0;
-  if (fileSize + currentTotal > MAX_IMAGE_BYTES) {
+  let fitted;
+  try {
+    fitted = await fitImage(file, rawType);
+  } catch (err) {
+    appendError(`could not read image: ${err}`);
+    return false;
+  }
+  if (fitted.error) {
+    appendError(fitted.error);
+    return false;
+  }
+
+  const fileSize = fitted.file.size || 0;
+  const overTotal = () => fileSize + attachedImages.reduce((sum, img) => sum + (img.size || 0), 0) > MAX_IMAGE_BYTES;
+  if (overTotal()) {
     appendError(`image exceeds the 10MB limit (${fileSize} bytes)`);
     return false;
   }
 
   try {
-    const b64 = await readFileBase64(file);
+    const b64 = await readFileBase64(fitted.file);
+    // Asked again after the read: two images pasted together each passed
+    // the check above before either was added, and together went over.
+    if (overTotal()) {
+      appendError(`image exceeds the 10MB limit (${fileSize} bytes)`);
+      return false;
+    }
     attachedImages.push({
-      mediaType: rawType,
+      mediaType: fitted.mediaType,
       data: b64,
       size: fileSize || (b64 ? Math.floor(b64.length * 0.75) : 0),
       name: file.name || fallbackName || 'image',

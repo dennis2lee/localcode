@@ -47,10 +47,13 @@ func (Glob) Subject(input json.RawMessage) string {
 	var args struct {
 		Pattern string `json:"pattern"`
 	}
-	if err := json.Unmarshal(input, &args); err != nil {
+	if err := json.Unmarshal(input, &args); err != nil || args.Pattern == "" {
 		return ""
 	}
-	return globSubject(args.Pattern)
+	// Cleaned first, as resolve cleans the pattern Execute globs: "*/.."
+	// is taken off the text there, so "<ws>/*/../../secret/*" lists
+	// <ws>/../secret. Judged raw, its fixed part was <ws>.
+	return globSubject(filepath.Clean(args.Pattern))
 }
 
 // maxGlobResults bounds one listing. "**/*" at the root of a repository

@@ -53,10 +53,10 @@ function css() {
   return fs.readFileSync(CSS_PATH, 'utf8');
 }
 
-async function openTypography(app) {
+async function openAppearance(app) {
   app.el('settings-btn').click();
   await app.settle();
-  app.el('settings-tab-typography').click();
+  app.el('settings-tab-appearance').click();
   return app;
 }
 
@@ -83,10 +83,10 @@ test('each trim reaches exactly its own steps in the stylesheet', () => {
 for (const group of ['read', 'ui', 'code']) {
   test(`the ${group} trim moves its steps and leaves the other trims alone`, async () => {
     const app = await load();
-    await openTypography(app);
+    await openAppearance(app);
 
     const select = app.el(`typo-size-${group}-select`);
-    assert.ok(select, `the typography tab has no ${group} trim control`);
+    assert.ok(select, `the Appearance tab has no ${group} trim control`);
     select.value = '1.25';
     select.fire('change');
 
@@ -109,7 +109,7 @@ for (const group of ['read', 'ui', 'code']) {
 
 test('the master and a trim compose instead of overwriting each other', async () => {
   const app = await load();
-  await openTypography(app);
+  await openAppearance(app);
 
   const master = app.el('typo-size-select');
   master.value = '1.25';
@@ -135,7 +135,7 @@ test('a setting stored before the trims still sizes everything', async () => {
   // must size all nine steps the way it did, which it does because every
   // step still reads the master.
   const app = await load({ localStorage: { 'localcode.textScale': '1.25' } });
-  await openTypography(app);
+  await openAppearance(app);
 
   assert.equal(rootProp(app, '--t-scale'), '1.25', 'the stored master did not apply');
   for (const group of ['read', 'ui', 'code']) {
@@ -163,7 +163,7 @@ test('each trim survives a reload and lands before first paint', async () => {
   assert.equal(rootProp(app, '--t-scale-code'), '1.4', 'the stored code trim missed the first paint');
   assert.equal(rootProp(app, '--t-scale'), '', 'no stored master, yet its property is set');
   await app.settle();
-  await openTypography(app);
+  await openAppearance(app);
   assert.equal(app.el('typo-size-read-select').value, '1.25', 'init undid the stored reading trim');
   assert.equal(app.el('typo-size-ui-select').value, '0.875', 'init undid the stored interface trim');
   assert.equal(app.el('typo-size-code-select').value, '1.4', 'init undid the stored code trim');
@@ -173,7 +173,7 @@ test('resetting a trim to the default removes it instead of writing it', async (
   const app = await load({
     localStorage: { 'localcode.textScale.ui': '1.25' },
   });
-  await openTypography(app);
+  await openAppearance(app);
   assert.equal(rootProp(app, '--t-scale-ui'), '1.25');
 
   const select = app.el('typo-size-ui-select');

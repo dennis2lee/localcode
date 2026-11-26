@@ -80,6 +80,11 @@ func Launch(title string, start func(progress func(string), setVersion func(stri
 	if cmd := windowControls(uintptr(w.Window())); cmd != nil {
 		w.Bind("lcWindowCommand", cmd)
 	}
+	// Every page this window loads knows it is in the desktop window, which
+	// is the one place the Web UI draws the browser panel: the browser is
+	// a GUI feature, shown beside the conversation it works for. Not
+	// lcWindowCommand, which a window that keeps its OS frame never binds.
+	w.Init("window.lcGUI = true;")
 
 	// Written by the start goroutine, read after Run returns — the window
 	// closing is what synchronizes them, since Run does not return until
@@ -124,6 +129,13 @@ func Launch(title string, start func(progress func(string), setVersion func(stri
 		// the remembered one is taken, so a collision costs a preference
 		// rather than a window that will not open. Loopback only either
 		// way, so nothing is exposed off the machine.
+		//
+		// It no longer costs a preference either. The remembered port is
+		// lost for good whenever another program has it, the system has
+		// reserved it, or a second window is open, and each of those was
+		// measured to bring the settings back at their defaults. The page
+		// now keeps them in a file as well (internal/daemon/windowstate.go),
+		// so this is only what keeps the address the same when it can be.
 		ln, lerr := listenRemembered()
 		if lerr != nil {
 			startErr = fmt.Errorf("bind loopback port: %w", lerr)
