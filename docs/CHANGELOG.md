@@ -11,6 +11,19 @@ A question a stopped daemon left open is no longer shown again when the conversa
 * TUI: a model question kept across a switch to another conversation, where the next Enter was sent as its answer and refused
 * A background task's permission question left unresolved in its conversation when the task's own log could not be written
 
+## v0.180.8
+
+A scheduled prompt says whose it is: the run names a prompt the model booked as its task, the list marks it, and the reply to a `!` booking says it runs in the shell.
+
+**Changed**
+
+* A prompt the model booked named in its scheduled run's manifest (`/context all`, the turn log) as a task handed down, `child.input.<agent>` with trust `delegated`; a prompt you booked is not
+* `/show-scheduled-task` marking a booking the model made `(booked by the model)`
+
+**Fixed**
+
+* The `/schedule` reply to a `!` booking, which promised the conversation's permission settings: a `!` line runs in the shell with no rule asked, and the reply now says so, with `!!` to book the text instead
+
 ## v0.180.7
 
 An SSH or PowerShell terminal no longer takes text you typed while a command ran for part of the prompt.

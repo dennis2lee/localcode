@@ -124,15 +124,30 @@ type Scheduled struct {
 	// prunes from the back.
 	History []string `json:"history,omitempty"`
 
-	// byModel is whether the model composed the prompt: it was booked by
-	// the Schedule tool, or by a "/schedule" line the Command tool ran.
-	// Unexported, so no client is shown it, and read back from the "by"
-	// field of schedule.created so that a restart keeps it.
+	// author is who composed the prompt, as schedule.created recorded it:
+	// "model" for one booked by the Schedule tool or by a "/schedule" line
+	// the Command tool ran, "person" for the rest, and "" for a booking
+	// made before the field existed. Unexported, so no client is sent it.
 	//
 	// It decides one thing, and it is the thing the booking has no other
 	// way to say: whether the prompt is handed to the run as text or as
-	// something a person typed. See modelWrittenPrompt.
-	byModel bool
+	// something a person typed. See modelWrote and modelWrittenPrompt.
+	//
+	// The recorded word rather than the answer to that question, because
+	// the answer is lossy: a value this version does not know reads as the
+	// model's, and a list that says "booked by the model" for it would say
+	// something nobody recorded.
+	author string
+}
+
+// modelWrote reports whether the prompt reaches the run as text.
+//
+// The model's, and any author this version does not know: the safe reading
+// of a word it cannot interpret is that a person did not type the prompt.
+// A person's, and none recorded, run as written, which is what a booking
+// from before the field existed always did.
+func (e *Scheduled) modelWrote() bool {
+	return e.author != "" && e.author != bookedByPerson
 }
 
 // RepeatOptions is everything about a booking that repeats, so Add keeps
@@ -282,11 +297,15 @@ func (s *Scheduler) book(sessionID, agentName, prompt string, at time.Time, rep 
 	// s1 used to be is the one way a short id can mislead.
 	s.counters[sessionID]++
 	id := fmt.Sprintf("s%d", s.counters[sessionID])
+	by := bookedByPerson
+	if byModel {
+		by = bookedByModel
+	}
 	entry := &Scheduled{
 		ID: id, SessionID: sessionID, At: at, Prompt: prompt,
 		Agent: agentName, Status: SchedulePending,
 		Repeat: rep.Rule, StopAt: rep.StopAt, StopAfter: rep.StopAfter,
-		Keep: rep.Keep, byModel: byModel,
+		Keep: rep.Keep, author: by,
 	}
 	s.entries[key(sessionID, id)] = entry
 	s.mu.Unlock()
@@ -299,10 +318,6 @@ func (s *Scheduler) book(sessionID, agentName, prompt string, at time.Time, rep 
 	// rebuilds the books from this log, and a model's prompt whose author
 	// is forgotten across a restart is one that runs as typed text from
 	// then on.
-	by := bookedByPerson
-	if byModel {
-		by = bookedByModel
-	}
 	created := map[string]any{
 		"id": id, "at": at.Format(time.RFC3339), "prompt": prompt, "agent": agentName,
 		"by": by,
@@ -495,7 +510,7 @@ func (s *Scheduler) fire(sessionID, id string) {
 		return
 	}
 	entry.Status = ScheduleRunning
-	agentName, prompt, byModel := entry.Agent, entry.Prompt, entry.byModel
+	agentName, prompt, byModel := entry.Agent, entry.Prompt, entry.modelWrote()
 	entryName, stopAfter := entry.Name, entry.StopAfter
 	repeatWords := entry.Repeat.String()
 	delete(s.timers, k)
@@ -613,6 +628,27 @@ func commandShaped(prompt string) bool {
 // The last sentence is the way to what the user probably meant.
 const sentAsText = "A prompt a model books is sent to the run as plain text, so a leading / or ! does not " +
 	"run a command. A command to run later is one the user books themselves, with /schedule."
+
+// runNote says where a booking will work and under what, for the reply to a
+// "/schedule" line.
+//
+// "Under this conversation's permission settings" is true of a prompt that
+// reaches a model and false of a shell escape. A "!" line is run by the
+// shell directly and never asks a rule, a deny included, which is the
+// documented difference between typing one and asking the model for one.
+// The reply used to say the permission sentence for both, so a person who
+// booked "!make test" was told the opposite of what would happen.
+//
+// A shell escape only when it runs as one: parseBang reads "!!" as ordinary
+// text, and a prompt the model booked is text whatever it starts with.
+func runNote(dir, prompt string, byModel bool) string {
+	if _, shell := parseBang(prompt); shell && !byModel {
+		return "It starts with !, so it runs as a shell command in " + dir + " when it fires,\n" +
+			"and no permission rule is consulted, as when you type it. Start it with !!\n" +
+			"to send the text to the model instead."
+	}
+	return "It will work in " + dir + " under this conversation's\npermission settings."
+}
 
 // scheduledTurnCannotBook is what a scheduled turn is told when it tries to
 // book another, by the Schedule tool or by a "/schedule" line the Command
@@ -864,17 +900,15 @@ func (s *Scheduler) restore(sessions []string, now time.Time, replace bool, miss
 				if terr != nil {
 					continue
 				}
-				// A person's prompt runs as typed, and so does one with no
-				// author on record: a booking from before the field existed
-				// ran that way, and nothing in the log says whose words it
-				// holds. A value this version does not know is some other
-				// author's, and the safe reading of that is the model's.
-				by := str(ev.Data["by"])
+				// The word as recorded. What it means for the run is
+				// modelWrote's to say: a person's prompt runs as typed, and
+				// so does one with no author on record, which is what a
+				// booking from before the field existed always did.
 				e := &Scheduled{
 					ID: id, SessionID: sessionID, At: at,
 					Prompt: str(ev.Data["prompt"]), Agent: str(ev.Data["agent"]),
-					Status:  SchedulePending,
-					byModel: by != "" && by != bookedByPerson,
+					Status: SchedulePending,
+					author: str(ev.Data["by"]),
 				}
 				// The rule and its limits, if this one repeats. Rebuilt
 				// from the log rather than stored anywhere else, which is
@@ -1053,6 +1087,11 @@ func Describe(e Scheduled, now time.Time) string {
 	}
 	if e.Name != "" {
 		line += "  " + e.Name
+	}
+	// Only what was recorded: a booking with no author, or one whose author
+	// this version does not know, is not said to be anybody's.
+	if e.author == bookedByModel {
+		line += "  (booked by the model)"
 	}
 	line += "\n    " + promptSummary(e.Prompt)
 	if e.Error != "" {

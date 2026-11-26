@@ -903,8 +903,7 @@ func (l *Loop) routeSchedule(ctx context.Context, sessionID, agentName, text str
 	// not make and the one people assume it does.
 	b.WriteString("\n\nIt runs only while localcode is running. If this machine is asleep or" +
 		"\nlocalcode is closed at that moment, the task is reported as missed rather than" +
-		"\nrun late. It will work in " + l.SessionDir(sessionID) + " under this conversation's" +
-		"\npermission settings.")
+		"\nrun late. " + runNote(l.SessionDir(sessionID), prompt, byModel))
 	if byModel && commandShaped(prompt) {
 		b.WriteString("\n\n" + sentAsText)
 	}
