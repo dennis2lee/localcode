@@ -284,7 +284,7 @@ const handlers = {
     if (stale) {
       askNobodyWaiting(d.id);
     } else {
-      if (session.answeringAsk && session.answeringAsk.id === d.id) session.answeringAsk = null;
+      session.answeringAsks.delete(d.id);
       forgetAskLine(d.id);
     }
     if (d.answer) appendTool(`[answered] ${d.answer}`);
@@ -950,8 +950,12 @@ async function resyncAfterReconnect() {
   // An answer still on its way is to a question no daemon will wait on
   // again, so its failure must not bring the question back.
   session.answeringPermissions.clear();
+  // The model's question the box holds is one nobody will wait on again,
+  // and its line says so rather than go on inviting a reply the box no
+  // longer takes.
+  if (session.pendingAsk) leaveAskUnanswered(session.pendingAsk);
   session.pendingAsk = null;
-  if (session.answeringAsk) askNobodyWaiting(session.answeringAsk.id);
+  for (const id of [...session.answeringAsks.keys()]) askNobodyWaiting(id);
   session.promptQueue = [];
   setWaiting(false);
   if (!session.pendingPermissionID) setInputLocked(false);

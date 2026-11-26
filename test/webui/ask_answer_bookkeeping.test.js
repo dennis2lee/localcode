@@ -1,6 +1,6 @@
 'use strict';
 
-// The record of an answer typed for a model question (session.answeringAsk):
+// The record of an answer typed for a model question (session.answeringAsks):
 // which question it belongs to, which conversation, and which answer.
 
 const test = require('node:test');
@@ -193,5 +193,5 @@ test('an answer refused after the stale resolution says its question was left un
   assert.match(app.el('transcript').textContent, /\[could not answer:/, 'precondition: the answer failed');
   assert.ok(askLine(app).textContent.endsWith('\n  (left unanswered)'),
     `the question reads ${JSON.stringify(askLine(app).textContent.split('\n').pop())}`);
-  assert.equal(app.internals.session.answeringAsk, null, 'the refused answer is still recorded, waiting for a resolution already given');
+  assert.equal(app.internals.session.answeringAsks.has('d1-i1'), false, 'the refused answer is still recorded, waiting for a resolution already given');
 });

@@ -617,13 +617,13 @@ inputEl.addEventListener('paste', handlePaste);
 // here still on its way leaves it to that answer's outcome, since it may
 // have got through; one the daemon refused says it now, on the line.
 export function askNobodyWaiting(id) {
-  const answering = session.answeringAsk;
-  if (!answering || answering.id !== id) return;
+  const answering = session.answeringAsks.get(id);
+  if (!answering) return;
   if (answering.inFlight) {
     answering.stale = true;
     return;
   }
-  session.answeringAsk = null;
+  session.answeringAsks.delete(id);
   leaveAskUnanswered(id);
 }
 
@@ -652,22 +652,33 @@ export async function sendMessage() {
   if (session.pendingAsk) {
     const id = session.pendingAsk;
     session.pendingAsk = null;
-    const answering = { id, inFlight: true, stale: false };
-    session.answeringAsk = answering;
+    // Looked up again when the answer comes back: a switch to another
+    // conversation in the meantime starts its own record, and nothing of
+    // this answer's belongs in it.
+    const answering = { inFlight: true, stale: false };
+    session.answeringAsks.set(id, answering);
     inputEl.value = '';
     autoResizeInput();
     try {
       await apiClient.answerQuestion(session.sessionID, id, text);
-      if (session.answeringAsk === answering) session.answeringAsk = null;
+      // The daemon took the answer, so it is not waiting on the question
+      // any more, whatever else was sent for it: a second answer, typed
+      // after loading the whole conversation armed the box for it again,
+      // is not put back when it fails, and the box is not left armed.
+      session.answeringAsks.delete(id);
+      if (session.pendingAsk === id) {
+        session.pendingAsk = null;
+        renderCommDot();
+      }
     } catch (err) {
       appendTool(`[could not answer: ${err}]`);
-      if (session.answeringAsk === answering) {
+      if (session.answeringAsks.get(id) === answering) {
         answering.inFlight = false;
         if (answering.stale) {
-          session.answeringAsk = null;
+          session.answeringAsks.delete(id);
           leaveAskUnanswered(id);
         } else if (!apiClient.isNotPending(err)) {
-          session.answeringAsk = null;
+          session.answeringAsks.delete(id);
           if (!session.pendingAsk) {
             session.pendingAsk = id;
             renderCommDot();

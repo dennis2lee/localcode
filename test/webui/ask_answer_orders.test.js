@@ -27,6 +27,11 @@
 // * light: the light says a question waits exactly when the box is armed.
 //   Not checked right after a send, which never redraws it (before this
 //   change too).
+//
+// It does not walk a turn declared lost (the page never sends the prompt,
+// so the turn is never its own), two answers on their way at once, or a
+// replay that holds another question. ask_answer_lost_turn,
+// ask_answer_two_answers and ask_answer_other_question hold those.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
