@@ -28,9 +28,17 @@ person's everyday browser. It does not stop a program on the machine.
 | A `Host` that is not an address, `localhost`, a name under `.localhost`, this machine's own name (with or without `.local`), or the `--listen` host | A page on a name pointed at this machine (DNS rebinding) |
 | `Sec-Fetch-Site` other than `same-origin` or `none` | A request another site's page made. One exception: a top-level `GET` of a Web UI page (not `/api/`) from a link |
 | An `Origin` that does not name the request's host, `null` included | A request from another origin, on any method |
+| On `/api/`, a `Referer` that does not name the request's host | A browser without Fetch Metadata (Safari before 16.4) sends no `Origin` on an image or a plain `GET`, and some `GET`s change something: the browser frame stream, a notice the event stream hands out once |
 
 A client that is not a browser sends neither `Sec-Fetch-Site` nor
-`Origin`, so only the `Host` rule applies to it. To reach a daemon by a
+`Origin`, so only the `Host` rule applies to it. Limits:
+
+* A page in a browser without Fetch Metadata that suppresses its
+  `Referer` cannot be told from such a client, and is let through. The
+  browser frame stream refuses it all the same (see its row).
+* `Origin` and `Referer` are compared by host and port, not by scheme,
+  so a TLS proxy in front still works. An `https` page on the same host
+  and port as the daemon passes. To reach a daemon by a
 name the table does not list, start it with that name in `--listen`.
 
 There is no stated API stability. The surface has changed release to
@@ -330,7 +338,7 @@ model's browser sends, so a page it opens cannot drive the API.
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
 | `GET /api/sessions/{id}/browser` | nothing | `200 {"has_tab", "url"?, "title"?, "tabs"?, "width", "height"}`; `url` and `title` are the active tab's; `tabs` is every tab in the order opened, each `{"id", "url", "title", "active"}`; `width` and `height` are the page size every coordinate is in: the active tab's, or the height the conversation's next tab opens at | `404` |
-| `GET /api/sessions/{id}/browser/stream` | `Sec-Fetch-Site`, or a `Referer` on the daemon's own origin | `200 multipart/x-mixed-replace`, one JPEG per part, as long as the client holds it open. Waits while the conversation has no tab, and starts no browser | `404`; `409` the setting is off; `403` the request names neither header: an open stream offers the model the browser tool, and another site's `<img>` in a browser without Fetch Metadata sends neither |
+| `GET /api/sessions/{id}/browser/stream` | `Sec-Fetch-Site`, or a `Referer` on the daemon's own host | `200 multipart/x-mixed-replace`, one JPEG per part, as long as the client holds it open. Waits while the conversation has no tab, and starts no browser | `404`; `409` the setting is off; `403` the request has neither header: an open stream offers the model the browser tool, and another site's `<img>` in a browser without Fetch Metadata can suppress its `Referer` |
 | `POST /api/sessions/{id}/browser/size` | `{"width", "height"}`: the room the panel has for the page, in any one unit | `200 {"width", "height"}`: the conversation's tabs, and the tabs it opens after, are 1280 wide and as tall as fills that room at that width, from 320 to 2560. Starts no browser | `400` a size that is not one (either side 0 or less); `404`; `503` a tab the browser did not answer for, which is told the height again with the next size |
 | `POST /api/sessions/{id}/browser/navigate` | `{"url"}` (`http`, `https`, or `about:blank`), or `{"action": "back"\|"forward"\|"reload"}`; starts the browser and opens the tab when there is none | `200 {"url", "title"}` | `400` the page could not load, an address of another scheme, or an unknown action; `403` a deny rule for `browser` covers the page or one a redirect led to, and it was not loaded; `409` the setting is off; `503` the browser could not start |
 | `POST /api/sessions/{id}/browser/tabs` | nothing | `200 {"tabs"}`: opens an empty tab and makes it the active one, starting the browser if it is not running | `409` the setting is off; `503` the browser could not start |

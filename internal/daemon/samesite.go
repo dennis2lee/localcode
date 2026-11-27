@@ -33,6 +33,10 @@ import (
 //   - Origin, when present, must name the host the request was sent to.
 //     The scheme is not compared, so a TLS proxy in front still works.
 //     "null" (a sandboxed frame, a file: or data: page) names none.
+//   - Referer, when present on the API, must name it too. This is for a
+//     browser without Fetch Metadata, whose image or plain GET carries no
+//     Origin. A page there that suppresses its Referer cannot be told
+//     from a client that is not a browser, and is let through.
 //
 // A client that is not a browser (the TUI, `localcode run`, curl) sends
 // neither header and is let through on the first rule alone. The desktop
@@ -66,6 +70,13 @@ func otherSite(r *http.Request, listenHost string) string {
 	if o := r.Header.Get("Origin"); o != "" && !sameOrigin(o, r) {
 		return "a request from another origin"
 	}
+	// A browser without Fetch Metadata (Safari before 16.4) sends no
+	// Origin on an image or a plain GET, and some GETs change something
+	// (a stream that is a window watching, a notice handed out once). It
+	// does name the page in Referer, unless the page asked it not to.
+	if ref := r.Referer(); ref != "" && strings.HasPrefix(r.URL.Path, "/api/") && !sameOrigin(ref, r) {
+		return "a request from another site's page"
+	}
 	return ""
 }
 
@@ -79,7 +90,8 @@ func openingAPage(r *http.Request) bool {
 		!strings.HasPrefix(r.URL.Path, "/api/")
 }
 
-// sameOrigin is whether the Origin header o names the host r was sent to.
+// sameOrigin is whether o, an Origin header or a Referer, names the host r
+// was sent to.
 func sameOrigin(o string, r *http.Request) bool {
 	u, err := url.Parse(o)
 	return err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host)
@@ -102,8 +114,7 @@ func fromThisPage(r *http.Request) bool {
 	if r.Header.Get("Sec-Fetch-Site") != "" {
 		return true
 	}
-	u, err := url.Parse(r.Referer())
-	return err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host)
+	return r.Referer() != "" && sameOrigin(r.Referer(), r)
 }
 
 // requestHost is the host r was sent to, without its port or brackets.

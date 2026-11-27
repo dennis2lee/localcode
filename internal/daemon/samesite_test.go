@@ -57,15 +57,16 @@ func TestAnotherSitesRequestIsRefusedOnEveryRoute(t *testing.T) {
 	skip := `{"enabled":true}`
 
 	for name, h := range map[string]map[string]string{
-		"a form post from another site":       {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"},
-		"a no-cors fetch from another site":   {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"},
-		"another origin, no Sec-Fetch-Site":   {"Origin": "https://evil.example"},
-		"another site, no Origin":             {"Sec-Fetch-Site": "cross-site"},
-		"another port on this machine":        {"Origin": "http://localhost:3000", "Sec-Fetch-Site": "same-site"},
-		"a sandboxed frame or a file: page":   {"Origin": "null", "Sec-Fetch-Site": "cross-site"},
-		"a null origin, no Sec-Fetch-Site":    {"Origin": "null"},
-		"a name pointed at this machine":      {"Host": "rebind.example:4096", "Origin": "http://rebind.example:4096", "Sec-Fetch-Site": "same-origin"},
-		"a name pointed at it, no browser id": {"Host": "rebind.example:4096"},
+		"a form post from another site":         {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"},
+		"a no-cors fetch from another site":     {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"},
+		"another origin, no Sec-Fetch-Site":     {"Origin": "https://evil.example"},
+		"another site, no Origin":               {"Sec-Fetch-Site": "cross-site"},
+		"another port on this machine":          {"Origin": "http://localhost:3000", "Sec-Fetch-Site": "same-site"},
+		"a sandboxed frame or a file: page":     {"Origin": "null", "Sec-Fetch-Site": "cross-site"},
+		"a null origin, no Sec-Fetch-Site":      {"Origin": "null"},
+		"a name pointed at this machine":        {"Host": "rebind.example:4096", "Origin": "http://rebind.example:4096", "Sec-Fetch-Site": "same-origin"},
+		"a name pointed at it, no browser id":   {"Host": "rebind.example:4096"},
+		"a legacy browser, another site's page": {"Referer": "http://evil.example/form.html"},
 	} {
 		if resp := sameSiteRequest(t, srv, "POST", "/api/permissions/skip", skip, h); resp.StatusCode != http.StatusForbidden {
 			t.Errorf("%s: %d, want 403", name, resp.StatusCode)
@@ -86,6 +87,20 @@ func TestAnotherSitesRequestIsRefusedOnEveryRoute(t *testing.T) {
 	// makes still runs; a GET on the API is refused as well.
 	if resp := sameSiteRequest(t, srv, "GET", "/api/sessions", "", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"}); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("another site's GET on the API: %d, want 403", resp.StatusCode)
+	}
+	// A browser without Fetch Metadata names the page in Referer: another
+	// site's <img> of an API route, a stream included, is refused, and a
+	// link from another site to the Web UI's page is not.
+	for path, want := range map[string]int{"/api/sessions": http.StatusForbidden, "/api/sessions/s1/events": http.StatusForbidden} {
+		if resp := sameSiteRequest(t, srv, "GET", path, "", map[string]string{"Referer": "http://evil.example/"}); resp.StatusCode != want {
+			t.Errorf("a legacy browser's GET %s from another site's page: %d, want %d", path, resp.StatusCode, want)
+		}
+	}
+	if resp := sameSiteRequest(t, srv, "GET", "/", "", map[string]string{"Referer": "http://evil.example/"}); resp.StatusCode == http.StatusForbidden {
+		t.Error("a legacy browser's link from another site to the Web UI was refused")
+	}
+	if resp := sameSiteRequest(t, srv, "GET", "/api/sessions", "", map[string]string{"Referer": srv.URL + "/"}); resp.StatusCode != http.StatusOK {
+		t.Errorf("a legacy browser's GET from the Web UI's own page: %d, want 200", resp.StatusCode)
 	}
 	// A link on another site may open the Web UI in a tab; it may not put
 	// it in a frame, or open the API.
