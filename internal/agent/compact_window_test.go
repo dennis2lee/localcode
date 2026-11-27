@@ -169,7 +169,7 @@ func TestSummarySizeFitsTheWindow(t *testing.T) {
 				instr := instructionTokens(compactionPrompt, len(msgs))
 				maxTokens, budget, err := summarySize(window, system, instr, msgs)
 				if err != nil {
-					if room := window - estimateTokens(system, nil) - instr - contextHeadroom; room >= minOutputTokens {
+					if room := window - estimateTokens(system, nil) - instr - contextHeadroom; room > minOutputTokens {
 						t.Errorf("window %d, system %d: refused with %d of room: %v", window, systemTokens, room, err)
 					}
 					continue
@@ -210,5 +210,29 @@ func TestRetriesStopWhenNoHistoryFitsBesideTheSystemPrompt(t *testing.T) {
 	}
 	if asked, _ := p.counts(); asked >= maxCompactAttempts+1 {
 		t.Errorf("%d requests, the last ones carrying no history; want the retries to stop when none fits", asked)
+	}
+}
+
+// At the least reply and not a token over, no history fits beside it, and
+// a history budget of nothing is what forceFit reads as no window: the
+// whole history went out, a 11,148-token request on a 3,223 window. From
+// the review of the summary sizing.
+func TestASummaryWithRoomForNoHistoryIsNotAskedFor(t *testing.T) {
+	msgs := exchange(40000)
+	instr := instructionTokens(compactionPrompt, len(msgs))
+	window := instr + contextHeadroom + minOutputTokens
+	if _, _, err := summarySize(window, "", instr, msgs); err == nil {
+		t.Error("summarySize sized a request with room for no history")
+	}
+	if _, budget, err := summarySize(window+1, "", instr, msgs); err != nil || budget <= 0 {
+		t.Errorf("a token more: budget %d, %v", budget, err)
+	}
+	loop, profile := windowLoop(t, window, msgs)
+	p := &windowProvider{window: window}
+	if err := loop.compactHistory(context.Background(), "s1", p, profile, "", nil, "", CompactManual); err == nil {
+		t.Error("/compact with room for no history compacted")
+	}
+	if asked, _ := p.counts(); asked != 0 {
+		t.Errorf("%d requests sent with room for no history", asked)
 	}
 }

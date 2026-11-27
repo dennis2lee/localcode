@@ -555,6 +555,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					})
 					l.runRetryHook(ctx, sessionID, run, newRun, err)
 					run = newRun
+					// The next request is the fallback's, under its own
+					// system prompt and tools.
+					l.rebaseUsage(sessionID, run.system, l.Tools.SpecsFor(ctx, allowedTools))
 					// A model that cannot see is sent no image from here
 					// on. One already in the history stays there.
 					ctx = withViewsImages(ctx, l.seesImages(ctx, run.profile, "").sees)
@@ -632,6 +635,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 						})
 						l.runRetryHook(ctx, sessionID, run, newRun, err)
 						run = newRun
+						l.rebaseUsage(sessionID, run.system, l.Tools.SpecsFor(ctx, allowedTools))
 						ctx = withViewsImages(ctx, l.seesImages(ctx, run.profile, "").sees)
 						ctx = withImageLimit(ctx, l.imageLimitFor(run.profile))
 						sameTries = 0
@@ -770,6 +774,12 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// exotic — and unexplained, someone reasonably concludes the
 			// model is broken rather than that a number needs raising.
 			if stopReason == "max_tokens" {
+				// What of the reply the next request carries, where this
+				// call's count said: a reasoning model's cut-off reply is
+				// mostly reasoning, which is not sent back.
+				if u, ok := l.getUsage(sessionID); ok && usage.hasUsage && u.CarriedKnown {
+					sizing.carried = u.Carried
+				}
 				l.Store.Append(sessionID, events.TypeError, map[string]any{
 					"error":     cutOffNotice(sizing, run.profileName, run.profile.Model),
 					"recovered": true,

@@ -621,7 +621,10 @@ func summarySize(window int, system string, instruction int, history []provider.
 	}
 	fixed := estimateTokens(system, nil) + instruction
 	room := window - fixed - contextHeadroom
-	if room < minOutputTokens {
+	// More than the least reply, or the history's budget is nothing, and
+	// a budget of nothing is what forceFit reads as no window at all: the
+	// whole history went out.
+	if room <= minOutputTokens {
 		return 0, 0, fmt.Errorf("no room for a summary in the %d-token context window: the system prompt and the summarization instruction take about %d tokens, and a summary needs at least %d more beside the %d held back", window, fixed, minOutputTokens, contextHeadroom)
 	}
 	maxTokens = clampMaxTokens(defaultMaxTokens, window, fixed+min(estimateTokens("", history), room/2))

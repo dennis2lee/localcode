@@ -196,6 +196,9 @@ func (l *Loop) handleContextCommand(ctx context.Context, sessionID, agentName, d
 	// system prompt and tool definitions are in the request. Printed
 	// with the shrunk figure, so the line can be checked against the
 	// window rather than taken on faith.
+	// The count rebased first, as the next turn will: it may have been
+	// taken under another agent's prompt and tools.
+	l.rebaseUsage(sessionID, env.SystemText(), specs)
 	if inUse := l.inputEstimate(sessionID, env.SystemText(), history); clampMaxTokens(maxTokens, window, inUse) < maxTokens {
 		fmt.Fprintf(&b, "  %-24s %d tokens, because the window is nearly full: about %d of %d in use\n",
 			"  but the next reply gets", clampMaxTokens(maxTokens, window, inUse), inUse, window)

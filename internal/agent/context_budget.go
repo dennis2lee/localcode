@@ -584,8 +584,12 @@ type requestSizing struct {
 	wanted int // the profile's max_tokens, or the default
 	sent   int // what the request actually asked for
 	input  int // the input estimate the request was sized against
-	window int
-	source windowSource
+	// carried is what of a cut-off reply the next request carries, where
+	// the call's count said (sessionUsage.Carried); zero means all of
+	// sent. A reasoning model's reply is mostly reasoning, not sent back.
+	carried int
+	window  int
+	source  windowSource
 	// system is what the system prompt alone measures, hook text
 	// included. It is the part of a conversation a compaction cannot
 	// remove, so it is where the notice starts when it prices one.
@@ -762,7 +766,11 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 	// empty summary would have done, and an empty summary is a failed
 	// compaction: the person waited through a summarization call that
 	// could not have helped.
-	raised := clampMaxTokens(math.MaxInt, s.window, s.input+s.sent)
+	reply := s.sent
+	if s.carried > 0 {
+		reply = min(s.carried, s.sent)
+	}
+	raised := clampMaxTokens(math.MaxInt, s.window, s.input+reply)
 	compactRoom := s.summaryRoom(s.wanted, s.sent)
 	bothRoom := s.summaryRoom(math.MaxInt, s.sent)
 	inUse := fmt.Sprintf("about %d of %d tokens were in use", s.input, s.window)
