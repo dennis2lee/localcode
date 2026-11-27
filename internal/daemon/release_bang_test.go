@@ -125,7 +125,7 @@ func TestBangEscapeSendsAnOrdinaryMessage(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "escaped-marker.txt")
 	h.modelReqs.Store(0)
 	ctx := context.Background()
-	if err := h.client.SendMessage(ctx, h.session.ID, "!!touch "+marker); err != nil {
+	if _, err := h.client.SendMessage(ctx, h.session.ID, "!!touch "+marker); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	timeout := time.After(5 * time.Second)
@@ -207,7 +207,7 @@ func TestBangChangesNoExistingRoute(t *testing.T) {
 
 	ctx := context.Background()
 	h.modelReqs.Store(0)
-	if err := h.client.SendMessage(ctx, h.session.ID, "hello"); err != nil {
+	if _, err := h.client.SendMessage(ctx, h.session.ID, "hello"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	timeout := time.After(5 * time.Second)

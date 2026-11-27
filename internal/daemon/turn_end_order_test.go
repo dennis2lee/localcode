@@ -158,7 +158,7 @@ func TestInjectReportsNoTurnWhileItsEndIsWritten(t *testing.T) {
 	tr.begin("s1", cancel)
 
 	var injected bool
-	tr.finishOrTake("s1", func() { injected = tr.inject("s1", "late") })
+	tr.finishOrTake("s1", func() { injected = tr.inject("s1", "late", nil) })
 	if injected {
 		t.Fatal("inject accepted a message into a turn that had finished deciding to end; nobody would take it")
 	}
@@ -308,7 +308,7 @@ func nextTurnAfterEnd(t *testing.T, way string) {
 		}
 		once.Do(func() {
 			defer close(hooked)
-			if err := c.SendMessage(ctx, sess.ID, "second"); err != nil {
+			if _, err := c.SendMessage(ctx, sess.ID, "second"); err != nil {
 				t.Errorf("second SendMessage: %v", err)
 				return
 			}
@@ -320,7 +320,7 @@ func nextTurnAfterEnd(t *testing.T, way string) {
 		})
 	}
 
-	if err := c.SendMessage(ctx, sess.ID, "first"); err != nil {
+	if _, err := c.SendMessage(ctx, sess.ID, "first"); err != nil {
 		t.Fatalf("first SendMessage: %v", err)
 	}
 	switch way {

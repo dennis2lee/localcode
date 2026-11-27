@@ -417,7 +417,7 @@ func TestASentLineResolvesWhenTheModelGetsIt(t *testing.T) {
 	m := newTestModel()
 	m.appendSent("[sent — the model will pick this up at its next step] also check the tests")
 	m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "also check the tests"}})
-	m.abandonPendingUsers()
+	m.abandonPendingUsers(0)
 	text := m.transcriptText()
 	if strings.Contains(text, "[sent") || strings.Contains(text, "[not sent") {
 		t.Errorf("a message the model was given is still drawn as sent or as not sent:\n%s", text)

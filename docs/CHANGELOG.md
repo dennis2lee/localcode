@@ -15,6 +15,9 @@ A question a stopped daemon left open is no longer shown again when the conversa
 * Web UI: stopping a conversation's turn taking a background task's mirrored permission question off screen while the task still waited on it
 * A question from a turn that began as the turn before it was ending taken off screen by that earlier turn's end: a model question in the TUI and the Web UI, a permission question in the Web UI
 * A prompt sent as a turn was being stopped marked "not sent" when localcode started the next turn for it and the model answered it, in the TUI and the Web UI
+* A stop replayed after a reconnect marking prompts sent after it as "not sent", in the TUI and the Web UI
+* A prompt's "sent" line taken away by an earlier message with the same words replayed after a reconnect, in the TUI and the Web UI
+* `seq` in the `202` for a message: the log's last seq when the daemon took it
 
 ## v0.180.11
 

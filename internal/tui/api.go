@@ -61,9 +61,14 @@ func listenForEvent(ch <-chan events.Event, gen uint64) tea.Cmd {
 }
 
 func (m Model) sendMessage(text string, startsTurn bool, echo int) tea.Cmd {
+	var receipt client.Receipt
 	return callErr(func(ctx context.Context) error {
-		return m.client.SendMessage(ctx, m.sessionID, text)
-	}, func(err error) tea.Msg { return turnDoneMsg{text: text, err: err, startsTurn: startsTurn, echo: echo} })
+		var err error
+		receipt, err = m.client.SendMessage(ctx, m.sessionID, text)
+		return err
+	}, func(err error) tea.Msg {
+		return turnDoneMsg{text: text, err: err, startsTurn: startsTurn, echo: echo, receipt: receipt}
+	})
 }
 
 // cancelTurn asks the daemon to stop the running turn. The transcript

@@ -15,7 +15,7 @@ import (
 func TestInjectOnlyWhileATurnIsRunning(t *testing.T) {
 	tr := newTurnTracker()
 
-	if tr.inject("s1", "too early") {
+	if tr.inject("s1", "too early", nil) {
 		t.Error("accepted a message for a session with no turn running; the caller must start one instead")
 	}
 
@@ -24,7 +24,7 @@ func TestInjectOnlyWhileATurnIsRunning(t *testing.T) {
 	if !tr.begin("s1", cancel) {
 		t.Fatal("begin")
 	}
-	if !tr.inject("s1", "hello") {
+	if !tr.inject("s1", "hello", nil) {
 		t.Error("refused a message while a turn was running")
 	}
 
@@ -44,7 +44,7 @@ func TestInjectedMessagesKeepTheirOrder(t *testing.T) {
 	tr.begin("s1", cancel)
 
 	for _, text := range []string{"first", "second", "third"} {
-		if !tr.inject("s1", text) {
+		if !tr.inject("s1", text, nil) {
 			t.Fatalf("inject %q", text)
 		}
 	}
@@ -75,7 +75,7 @@ func TestFinishOrTakeLeavesNoMessageStranded(t *testing.T) {
 		var accepted bool
 		go func() {
 			defer wg.Done()
-			accepted = tr.inject("s1", "late correction")
+			accepted = tr.inject("s1", "late correction", nil)
 		}()
 
 		var delivered bool
@@ -112,7 +112,7 @@ func TestFinishOrTakeClearsTheRegistrationWhenNothingIsQueued(t *testing.T) {
 	if busy := tr.anyBusy([]string{"s1"}); len(busy) > 0 {
 		t.Error("the session is still registered as running after its turn finished")
 	}
-	if tr.inject("s1", "next") {
+	if tr.inject("s1", "next", nil) {
 		t.Error("a message was still accepted into a turn that has ended")
 	}
 }
@@ -124,7 +124,7 @@ func TestCancellingATurnDropsWhatWasQueuedForIt(t *testing.T) {
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	tr.begin("s1", cancel)
-	tr.inject("s1", "and also update the docs")
+	tr.inject("s1", "and also update the docs", nil)
 
 	if !tr.cancel("s1") {
 		t.Fatal("cancel reported no turn running")
@@ -161,7 +161,7 @@ func TestBeginSucceedsOnceInjectHasReportedNoTurn(t *testing.T) {
 		t.Fatal("nothing was queued")
 	}
 
-	if tr.inject("s1", "hello") {
+	if tr.inject("s1", "hello", nil) {
 		t.Fatal("inject accepted a message with no turn running")
 	}
 	if !tr.begin("s1", cancel) {

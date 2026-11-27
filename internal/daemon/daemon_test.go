@@ -198,7 +198,7 @@ func TestDaemonEndToEnd(t *testing.T) {
 		}
 	}()
 
-	if err := c.SendMessage(ctx, sess.ID, "write a file"); err != nil {
+	if _, err := c.SendMessage(ctx, sess.ID, "write a file"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 
@@ -1052,7 +1052,7 @@ func TestCancelTurnStopsAStreamingTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := c.SendMessage(ctx, sess.ID, "hello"); err != nil {
+	if _, err := c.SendMessage(ctx, sess.ID, "hello"); err != nil {
 		t.Fatalf("send message: %v", err)
 	}
 
@@ -1091,7 +1091,7 @@ func TestCancelTurnStopsAStreamingTurn(t *testing.T) {
 	// Busy must be cleared, otherwise the session is wedged and every
 	// later message 409s.
 	for time.Now().Before(deadline) {
-		if err := c.SendMessage(ctx, sess.ID, "again"); err == nil {
+		if _, err := c.SendMessage(ctx, sess.ID, "again"); err == nil {
 			c.CancelTurn(ctx, sess.ID)
 			return
 		}
@@ -1174,13 +1174,13 @@ func TestTurnDoneMarksTheRealTurnBoundary(t *testing.T) {
 				// The property under test: react to turn.done with an
 				// immediate send. If busy were cleared after the event,
 				// this would intermittently 409.
-				sendAfterTurnDone = c.SendMessage(ctx, sess.ID, "follow-up")
+				_, sendAfterTurnDone = c.SendMessage(ctx, sess.ID, "follow-up")
 				return
 			}
 		}
 	}()
 
-	if err := c.SendMessage(ctx, sess.ID, "write the file"); err != nil {
+	if _, err := c.SendMessage(ctx, sess.ID, "write the file"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 
@@ -1871,7 +1871,7 @@ func TestDaemonForkCarriesHistoryIntoTheNextRequest(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&forked)
 	resp.Body.Close()
 
-	if err := c.SendMessage(ctx, forked.ID, "what number?"); err != nil {
+	if _, err := c.SendMessage(ctx, forked.ID, "what number?"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 
@@ -1970,7 +1970,7 @@ func TestASwitchChangedAnywhereReachesEveryClient(t *testing.T) {
 	// A daemon-wide switch. The four permission ones are per session as
 	// of v0.63.0 and announce on their own session instead, which is the
 	// scope of what they changed.
-	if err := c.SendMessage(ctx, other.ID, "/smart-agent on"); err != nil {
+	if _, err := c.SendMessage(ctx, other.ID, "/smart-agent on"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	data := waitForSettings(t, evCh)
@@ -2222,7 +2222,7 @@ func TestResetSkillsAppliesWithoutARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
-	if err := c.SendMessage(ctx, sess.ID, "/reset-skills"); err != nil {
+	if _, err := c.SendMessage(ctx, sess.ID, "/reset-skills"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	// The send is a 202 and the command runs on the turn's own goroutine,

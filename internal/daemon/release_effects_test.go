@@ -216,7 +216,7 @@ func sendMessageAndWait(t *testing.T, c *client.Client, d *Daemon, sessionID, te
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	prev := countTurnDone(d, sessionID)
-	if err := c.SendMessage(ctx, sessionID, text); err != nil {
+	if _, err := c.SendMessage(ctx, sessionID, text); err != nil {
 		t.Fatalf("SendMessage(%q): %v", text, err)
 	}
 	waitForTurn(t, d, sessionID, prev)
@@ -350,7 +350,7 @@ func TestWorkspaceMovesTheConversation(t *testing.T) {
 		t.Fatal("could not mark session busy")
 	}
 
-	moveErr := c.SendMessage(ctx, sess.ID, "/workspace "+initialWorkspace)
+	_, moveErr := c.SendMessage(ctx, sess.ID, "/workspace "+initialWorkspace)
 	if moveErr == nil {
 		t.Fatal("expected /workspace <path> to be refused while turn is running, got nil")
 	}
@@ -380,7 +380,7 @@ func TestWorkspaceMovesTheConversation(t *testing.T) {
 	if !d.turns.beginExclusive(sess2.ID, func() {}) {
 		t.Fatal("could not mark session exclusive")
 	}
-	busyErr := c.SendMessage(ctx, sess2.ID, "an ordinary message")
+	_, busyErr := c.SendMessage(ctx, sess2.ID, "an ordinary message")
 	if busyErr == nil {
 		t.Fatal("expected ordinary message to 409 while session is exclusively held")
 	}
@@ -645,7 +645,7 @@ func TestRewindAndRedoTravelTheHTTPPath(t *testing.T) {
 	}
 	defer d.turns.end(sess.ID)
 	for _, cmd := range []string{"/rewind", "/redo"} {
-		err := c.SendMessage(ctx, sess.ID, cmd)
+		_, err := c.SendMessage(ctx, sess.ID, cmd)
 		if err == nil {
 			t.Fatalf("%s was accepted while a turn was running", cmd)
 		}

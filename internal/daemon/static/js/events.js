@@ -4,7 +4,7 @@ import {
   appendUser, appendTool, appendAsk, askReplyHint, askLeftHint, noteAskLine, forgetAskLine, askLineIds, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
   appendReview, appendThinking, endThinking, foldThinking, clearTranscript, showEarlierBanner,
-  abandonPendingUsers, takeBackUnsent, forgetUnsentLines, settleThinkingBlock, hasLiveThinking, landBeforeSeq,
+  abandonPendingUsers, settleThinkingBlock, hasLiveThinking, landBeforeSeq,
 } from './transcript.js';
 import { findRefresh } from './find.js';
 import { renderStatusBar, renderTasks, renderTaskProgress, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
@@ -121,11 +121,10 @@ const handlers = {
     // A message this client sent already has a placeholder standing in for
     // it; this is that message finally reaching the model, so the
     // placeholder goes rather than sitting above a duplicate. Unconditional
-    // because every prompt gets one now, not just the mid-turn ones.
-    // With no placeholder, the text can be a prompt the last stop marked as
-    // never sent and the daemon started a turn for after all, and that line
-    // goes instead (see takeBackUnsent). Text with neither changes nothing.
-    if (!resolvePendingUser(d.text)) takeBackUnsent(d.text);
+    // because every prompt gets one now, not just the mid-turn ones — and
+    // it is a no-op for text no placeholder was made for (another client's
+    // message, or a replayed one).
+    resolvePendingUser(d.text, applyingSeq);
     // A new turn's prompt: any reasoning block still open belongs to a
     // turn that ended without saying so, and the next reasoning must not
     // be written into it above this prompt.
@@ -194,8 +193,6 @@ const handlers = {
   // cleared — safe to stop waiting and let the queue drain.
   'turn.done': () => {
     putAwayHeldAsks();
-    // A prompt that raced the last stop has had its message.user by now.
-    forgetUnsentLines();
     app.turnMoves++;
     session.runningTool = '';
     setWaiting(false);
@@ -768,11 +765,10 @@ const handlers = {
     abandonRunningToolCalls('stopped');
     foldThinking(0);
     // The queue went with the turn: the daemon drops it in
-    // turnTracker.cancel, so anything still showing as sent was never
-    // handed to anybody. Except a prompt that reached the daemon as the
-    // turn was ending, which can start the next turn: takeBackUnsent
-    // takes its line back when its message.user arrives.
-    abandonPendingUsers();
+    // turnTracker.cancel, so a prompt still showing as sent was never
+    // handed to anybody, unless the daemon took it after this stop: see
+    // abandonPendingUsers.
+    abandonPendingUsers(applyingSeq);
     appendTool('[cancelled]');
     renderCommDot();
   },

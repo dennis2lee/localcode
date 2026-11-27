@@ -183,7 +183,12 @@ func (t *turnTracker) awaitEnd(id string) {
 // inject hands text to the turn currently running for id, to be picked up
 // at its next tool call. Reports false when no turn is running, which
 // means the caller should just start one.
-func (t *turnTracker) inject(id, text string) bool {
+//
+// taken, when there is one, runs once the text is queued, before the lock
+// is released: the turn holding it is still registered, so its end is not
+// written yet, and every earlier end in the session was written before it
+// began. handleSendMessage reads the log's last seq there for its reply.
+func (t *turnTracker) inject(id, text string, taken func()) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if _, running := t.cancels[id]; !running {
@@ -196,6 +201,9 @@ func (t *turnTracker) inject(id, text string) bool {
 		return false
 	}
 	t.pending[id] = append(t.pending[id], text)
+	if taken != nil {
+		taken()
+	}
 	return true
 }
 
@@ -467,9 +475,11 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		if len(imgBlocks) == 0 && d.turns.inject(id, req.Text) {
+		var seq uint64
+		var seqErr error
+		if len(imgBlocks) == 0 && d.turns.inject(id, req.Text, func() { seq, seqErr = d.Loop.Store.LastSeq(id) }) {
 			cancel()
-			writeJSON(w, http.StatusAccepted, map[string]string{"status": "injected"})
+			writeJSON(w, http.StatusAccepted, sendReceipt("injected", seq, seqErr))
 			return
 		}
 	}
@@ -510,6 +520,10 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			logAppend(id, typ, err)
 		}
 	}
+
+	// Read before the turn starts, so nothing of it is in the log yet, and
+	// after begin, which waited for the end of the turn before it.
+	seq, seqErr := d.Loop.Store.LastSeq(id)
 
 	go func() {
 		text := req.Text
@@ -579,7 +593,25 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	writeJSON(w, http.StatusAccepted, sendReceipt("accepted", seq, seqErr))
+}
+
+// sendReceipt is the 202 for a message the daemon took. seq is the log's
+// last seq at the moment it was taken. The end of a turn that drops the
+// message is written after that, so its seq is larger; the end of a turn
+// that ended before the message was taken is at or below it. A client
+// tells a prompt a stop dropped from one that raced it by that alone (see
+// docs/API.md). It holds while one daemon writes the log: seqs are handed
+// out per process (see the note in sse.go).
+//
+// No seq when the log could not be read: a client then takes any stop to
+// have dropped the message, as it did before there was one.
+func sendReceipt(status string, seq uint64, err error) map[string]any {
+	out := map[string]any{"status": status}
+	if err == nil {
+		out["seq"] = seq
+	}
+	return out
 }
 
 // handleCancelTurn stops the turn currently running for a session, the

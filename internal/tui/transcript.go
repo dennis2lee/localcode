@@ -3,6 +3,8 @@ package tui
 import (
 	"encoding/json"
 	"strings"
+
+	"localcode/internal/client"
 )
 
 // argKeys are the tool arguments worth putting beside a tool's name — the
@@ -73,12 +75,26 @@ type transcriptEntry struct {
 	// send nothing took removes its own echo and no other. Zero for every
 	// other entry.
 	send int
-	// unsent is the text of an echo the last turn end rewrote as never
-	// sent (see abandonPendingUsers), so the model being handed it after
-	// all takes the line back. Empty for every other entry, and again at
-	// the next turn end (forgetUnsent).
-	unsent string
+	// took is what the daemon has said about that send, and at the log's
+	// last seq when it took it (tookAt). heldBy is the seq of the latest
+	// stop that came while the answer was still on its way, decided when
+	// it arrives. See abandonPendingUsers and noteReceipt.
+	took   tookState
+	at     uint64
+	heldBy uint64
 }
+
+// tookState is what an echo knows of its send.
+type tookState uint8
+
+const (
+	// tookAwaited: the daemon has not answered the send yet.
+	tookAwaited tookState = iota
+	// tookAt: the daemon took it when its log's last seq was the echo's at.
+	tookAt
+	// tookNoSeq: the daemon took it and said no seq, as an older one does.
+	tookNoSeq
+)
 
 // appendEntry is the single mutation point for the transcript. Every write
 // goes through here so transcriptRev can't fall behind: applyEvent uses that
@@ -99,13 +115,13 @@ func (m *Model) appendEntry(kind entryKind, text string) {
 // the transcript shows something the person did not type: a message that
 // carried an image is displayed with a note saying so, while the echo it
 // replaces has to be matched on what was actually typed.
-func (m *Model) appendUser(rawText, displayText string) {
+//
+// seq is the event's, for resolvePendingUser.
+func (m *Model) appendUser(rawText, displayText string, seq uint64) {
 	// A new prompt starts a new reply, whether or not the last one's end
 	// ever came.
 	m.streamOpen = false
-	if !m.resolvePendingUser(rawText) {
-		m.takeBackUnsent(rawText)
-	}
+	m.resolvePendingUser(rawText, seq)
 	m.appendEntry(entryUser, displayText)
 }
 
@@ -152,12 +168,20 @@ func (m *Model) appendPendingUser(text string) int {
 // message's own line is drawn. Left in place, it said "will pick this
 // up" about a message already picked up, and a later stop or lost turn
 // relabelled it as never seen.
-func (m *Model) resolvePendingUser(text string) bool {
+//
+// seq is the message's own, 0 when it has none. An echo whose send the
+// daemon took when the log had already reached seq is not that message's:
+// its own is written after it was taken. A backlog replayed on a
+// reconnect brings such a message, another client's with the same words.
+func (m *Model) resolvePendingUser(text string, seq uint64) bool {
 	for i, e := range m.transcript {
 		switch {
 		case e.kind == entryPending && e.text == text:
 		case e.kind == entrySent && sentText(e.text) == text:
 		default:
+			continue
+		}
+		if seq > 0 && e.took == tookAt && e.at >= seq {
 			continue
 		}
 		m.removeEntry(i)
@@ -190,33 +214,42 @@ func (m *Model) removeEntry(i int) {
 	}
 }
 
-// abandonPendingUsers answers a stopped turn: every prompt still drawn as
-// sent was in the queue the daemon has just dropped, and it was never
-// handed to the model.
+// abandonPendingUsers answers a stopped turn: a prompt still drawn as sent
+// that was in the queue the daemon has just dropped was never handed to
+// the model.
+//
+// stop is the seq of the stop's event, 0 for a turn lost with no event.
+// The daemon writes a stop after it took every message the stop drops,
+// and before it takes one for a turn that begins after it. So an echo
+// whose send was taken at or after stop is not one it dropped: the daemon
+// started the next turn for it, or handed it to that turn, and its
+// message.user resolves the echo as usual. An echo whose send has no
+// answer yet is held until the answer comes (noteReceipt). With no seq
+// to go by, from either side, every echo is taken as dropped.
 //
 // Rewritten rather than removed. What is on screen is text somebody
 // typed, and taking it away silently is the other half of the same
 // fault — they would be left knowing neither that it was discarded nor
 // what it said. The line keeps the words and stops claiming they went
 // anywhere.
-func (m *Model) abandonPendingUsers() {
-	// This end closes the window on the lines the one before rewrote.
-	m.forgetUnsent()
+func (m *Model) abandonPendingUsers(stop uint64) {
 	changed := false
 	for i, e := range m.transcript {
 		if e.kind != entryPending && e.kind != entrySent {
 			continue
 		}
-		m.transcript[i].kind = entryTool
-		// An entrySent line already carries its own "[sent — ...]"
-		// prefix; replacing it rather than prepending keeps the result a
-		// sentence rather than two contradicting ones.
-		text := e.text
-		if _, rest, found := strings.Cut(text, "] "); found && e.kind == entrySent {
-			text = rest
+		if stop > 0 {
+			if e.took == tookAt && e.at >= stop {
+				continue
+			}
+			if e.took == tookAwaited {
+				if stop > e.heldBy {
+					m.transcript[i].heldBy = stop
+				}
+				continue
+			}
 		}
-		m.transcript[i].text = "[not sent — the turn was stopped before the model saw this] " + text
-		m.transcript[i].unsent = text
+		m.markNotSent(i)
 		changed = true
 	}
 	if changed {
@@ -224,39 +257,46 @@ func (m *Model) abandonPendingUsers() {
 	}
 }
 
-// takeBackUnsent drops the newest line abandonPendingUsers rewrote for
-// text, when the model is handed that text after all: its message.user
-// arrives. A prompt sent as the turn was stopping is still drawn as sent
-// when the stop arrives, and the daemon can start a turn for it once the
-// stopped turn's end is written. Its message.user then comes after that
-// end, and the line said "not sent" above the model's answer to it.
-//
-// Only a line the last turn end rewrote, and only until the next one: the
-// prompt that raced a stop starts the turn after it or is handed to that
-// turn, so its message.user comes before that turn's end. A line with the
-// same words from an earlier stop is one that stop did drop. Of the lines
-// one stop rewrote, the newest, the one sent nearest the stop.
-//
-// Only for a message.user with no echo of its own: an echo stands for a
-// send still waiting, which that event answers first. Matched by text, as
-// an echo is, so another client's message with the same words, in that
-// window, takes the line back too.
-func (m *Model) takeBackUnsent(text string) {
-	for i := len(m.transcript) - 1; i >= 0; i-- {
-		if e := m.transcript[i]; e.unsent != "" && e.unsent == text {
-			m.removeEntry(i)
-			return
-		}
+// markNotSent rewrites the echo at i as a prompt nobody was handed. The
+// caller moves transcriptRev.
+func (m *Model) markNotSent(i int) {
+	e := m.transcript[i]
+	m.transcript[i].kind = entryTool
+	// An entrySent line already carries its own "[sent — ...]" prefix;
+	// replacing it rather than prepending keeps the result a sentence
+	// rather than two contradicting ones.
+	text := e.text
+	if _, rest, found := strings.Cut(text, "] "); found && e.kind == entrySent {
+		text = rest
 	}
+	m.transcript[i].text = "[not sent — the turn was stopped before the model saw this] " + text
 }
 
-// forgetUnsent ends the window in which takeBackUnsent can take a line
-// back: at the next turn end, the lines stay as they are and stop being
-// taken back. Nothing on screen changes, so the transcript's revision
-// does not move.
-func (m *Model) forgetUnsent() {
-	for i := range m.transcript {
-		m.transcript[i].unsent = ""
+// noteReceipt records what the daemon said about a send whose echo is
+// still drawn, and decides an echo a stop held while the answer was on
+// its way: a send taken before that stop was in the queue it dropped.
+func (m *Model) noteReceipt(send int, r client.Receipt) {
+	if send == 0 {
+		return
+	}
+	for i, e := range m.transcript {
+		if e.send != send {
+			continue
+		}
+		if e.kind != entryPending && e.kind != entrySent {
+			return
+		}
+		took, at := tookNoSeq, uint64(0)
+		if r.HasSeq {
+			took, at = tookAt, r.Seq
+		}
+		m.transcript[i].took, m.transcript[i].at = took, at
+		if e.heldBy > 0 && (took != tookAt || at < e.heldBy) {
+			m.markNotSent(i)
+			m.transcriptRev++
+			m.refreshViewport()
+		}
+		return
 	}
 }
 

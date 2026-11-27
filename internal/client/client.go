@@ -472,8 +472,34 @@ func (c *Client) UploadFile(ctx context.Context, sessionID, filename string, dat
 	return out.Path, nil
 }
 
-func (c *Client) SendMessage(ctx context.Context, sessionID, text string) error {
-	return c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/messages", map[string]string{"text": text}, nil)
+// Receipt is the daemon's answer to a message it took.
+type Receipt struct {
+	// Status is "accepted" (a turn starts for it) or "injected" (handed
+	// to the turn running).
+	Status string
+	// Seq is the log's last seq at the moment the daemon took the
+	// message, when HasSeq. A turn end with a larger seq was written
+	// after that, and a stop that drops the message is one of those; a
+	// turn end at or below it came first. An older daemon sends none.
+	Seq    uint64
+	HasSeq bool
+}
+
+// SendMessage posts a prompt, and says what the daemon did with it.
+func (c *Client) SendMessage(ctx context.Context, sessionID, text string) (Receipt, error) {
+	var out struct {
+		Status string  `json:"status"`
+		Seq    *uint64 `json:"seq"`
+	}
+	// An empty body is a message taken with nothing said about it.
+	if err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/messages", map[string]string{"text": text}, &out); err != nil && !errors.Is(err, io.EOF) {
+		return Receipt{}, err
+	}
+	r := Receipt{Status: out.Status}
+	if out.Seq != nil {
+		r.Seq, r.HasSeq = *out.Seq, true
+	}
+	return r, nil
 }
 
 // ResolvePermission answers a pending permission request. scope is one of

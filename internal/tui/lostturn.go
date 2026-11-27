@@ -84,7 +84,7 @@ func (m *Model) endLostTurn() {
 	m.endTurn()
 	if waited {
 		m.queue = nil
-		m.abandonPendingUsers()
+		m.abandonPendingUsers(0)
 		m.pending = nil
 		m.pendingQueue = nil
 		m.answering = nil

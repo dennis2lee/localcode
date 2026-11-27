@@ -391,6 +391,9 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 	// On success we leave m.waiting as-is: the daemon accepted the message
 	// and is streaming the actual turn via events; waiting clears when a
 	// turn.done/turn.cancelled/error event arrives.
+	if msg.err == nil {
+		m.noteReceipt(msg.echo, msg.receipt)
+	}
 	return m, nil
 }
 

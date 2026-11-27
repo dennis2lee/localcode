@@ -158,7 +158,7 @@ func (m *Model) applyEvent(ev events.Event) {
 			}
 		}
 		if displayText != "" {
-			m.appendUser(text, displayText)
+			m.appendUser(text, displayText, ev.Seq)
 		}
 	case events.TypeMessagePartDelta:
 		if text, ok := ev.Data["text"].(string); ok {
@@ -242,9 +242,6 @@ func (m *Model) applyEvent(ev events.Event) {
 		// cleared — safe to stop waiting and let the queue drain.
 		m.endTurn()
 		m.dropHeldAsk()
-		// A prompt that raced the last stop has had its message.user by
-		// now.
-		m.forgetUnsent()
 	case events.TypeToolStart:
 		// A line per call, as well as the busy indicator below the prompt
 		// box. The indicator alone says only what is running right now and
@@ -611,11 +608,9 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.endTurn()
 		m.dropHeldAsk()
 		// The queue went with the turn — turnTracker.cancel drops it — so
-		// anything still drawn as sent was never handed to anybody. Except
-		// a prompt that reached the daemon as the turn was ending, which
-		// can start the next turn: takeBackUnsent takes its line back when
-		// its message.user arrives.
-		m.abandonPendingUsers()
+		// a prompt still drawn as sent was never handed to anybody, unless
+		// the daemon took it after this stop: see abandonPendingUsers.
+		m.abandonPendingUsers(ev.Seq)
 		m.appendTool("[cancelled]")
 	case events.TypeError:
 		// A recovered condition is not the end of anything: the loop has

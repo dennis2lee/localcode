@@ -141,7 +141,7 @@ func (h *releaseTestHarness) sendCommand(t *testing.T, cmd string) string {
 	h.modelReqs.Store(0)
 
 	ctx := context.Background()
-	if err := h.client.SendMessage(ctx, h.session.ID, cmd); err != nil {
+	if _, err := h.client.SendMessage(ctx, h.session.ID, cmd); err != nil {
 		t.Fatalf("SendMessage(%q): %v", cmd, err)
 	}
 

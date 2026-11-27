@@ -1437,6 +1437,23 @@ func (s *Store) Events(sessionID string, since uint64) ([]events.Event, error) {
 	return out, nil
 }
 
+// LastSeq is the seq of the last event appended to sessionID's log, 0 for
+// a log with none. Every event appended after this returns has a larger
+// seq, within this process: see the note on another daemon appending to
+// the same log in internal/daemon/sse.go.
+func (s *Store) LastSeq(sessionID string) (uint64, error) {
+	if err := s.loadDeferred(sessionID); err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return 0, fmt.Errorf("session %s not found", sessionID)
+	}
+	return st.nextSeq, nil
+}
+
 // Subscribe returns a channel of live events, a channel closed if this
 // subscriber ever misses one, and an unsubscribe func.
 //

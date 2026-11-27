@@ -30,6 +30,8 @@ type turnDoneMsg struct {
 	startsTurn bool
 	// echo is the number of the send's echo, 0 for a send that drew none.
 	echo int
+	// receipt is the daemon's answer when err is nil.
+	receipt client.Receipt
 }
 
 // opErrMsg reports the outcome of a fire-and-forget daemon call whose

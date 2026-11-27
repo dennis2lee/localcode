@@ -232,7 +232,7 @@ func TestALineRemovedAboveAnOpenReplyMovesItUp(t *testing.T) {
 	m.appendPendingUser("first")
 	m.applyEvent(delta("Work"))
 	m.appendEntry(entryTool, "▸ glob")
-	m.resolvePendingUser("first")
+	m.resolvePendingUser("first", 0)
 	m.applyEvent(delta("ing."))
 	m.applyEvent(partEnd("Working."))
 	wantTranscript(t, m,
@@ -244,7 +244,7 @@ func TestALineRemovedAboveAnOpenReplyMovesItUp(t *testing.T) {
 	m = newTestModel()
 	m.applyEvent(delta("Work"))
 	m.appendPendingUser("second")
-	m.resolvePendingUser("second")
+	m.resolvePendingUser("second", 0)
 	m.applyEvent(delta("ing."))
 	m.applyEvent(partEnd("Working."))
 	wantTranscript(t, m, "model:Working.")

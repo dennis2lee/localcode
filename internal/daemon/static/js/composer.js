@@ -1,7 +1,7 @@
 import { inputEl, centerEl, sendBtn, commDotEl } from './dom.js';
 import { app, session, turnInFlight, tasksInFlight, historyLimit } from './state.js';
 import * as apiClient from './api.js';
-import { appendTool, appendError, appendPendingUser, resolvePendingUser, leaveAskUnanswered, forgetAskLine } from './transcript.js';
+import { appendTool, appendError, appendPendingUser, resolvePendingUser, noteReceipt, noteQueued, resendQueued, leaveAskUnanswered, forgetAskLine } from './transcript.js';
 import { renderStatusBar } from './render.js';
 import { isPlainPrompt, tryLocalCommand } from './commands.js';
 import { resetCompletion } from './complete.js';
@@ -250,10 +250,14 @@ export function dequeueNext(isRetry = false) {
   const item = typeof next === 'string' ? { text: next, images: [] } : next;
   setWaiting(true);
   app.turnSends++;
-  apiClient.sendChatMessage(session.sessionID, item.text, item.images).catch((err) => {
+  const parts = resendQueued(item.text);
+  apiClient.sendChatMessage(session.sessionID, item.text, item.images).then((reply) => {
+    if (parts) noteReceipt(parts, reply);
+  }, (err) => {
     if (apiClient.isBusy(err)) {
       // Still busy — put it back and wait for the next turn.done.
       session.promptQueue.unshift(next);
+      if (parts) noteQueued(parts);
       // Unless nothing is running, in which case that turn.done has
       // already fired and waiting for another is waiting forever. The
       // daemon returns this same 409 for "a turn ended between the two
@@ -715,13 +719,14 @@ export async function sendMessage() {
       // daemon writes when the model is actually given the text. Until
       // then this stands in for it, since the wait can be minutes; it is
       // removed when that event lands.
-      appendPendingUser(text, true);
+      const parts = appendPendingUser(text, true);
       app.turnSends++;
-      apiClient.sendChatMessage(session.sessionID, text).catch((err) => {
+      apiClient.sendChatMessage(session.sessionID, text).then((reply) => noteReceipt(parts, reply), (err) => {
         if (apiClient.isBusy(err)) {
           // The turn ended in the gap. Queue it for dequeueNext, which
           // fires on the turn.done that is already on its way.
           session.promptQueue.push(text);
+          noteQueued(parts);
           renderStatusBar();
           return;
         }
@@ -760,11 +765,11 @@ export async function sendMessage() {
   // daemon spends starting a turn (hooks, delegation, the first request),
   // and an Enter that leaves the screen unchanged for seconds reads as an
   // Enter that did not register.
-  appendPendingUser(text, false, images);
+  const parts = appendPendingUser(text, false, images);
   setWaiting(true);
   try {
     app.turnSends++;
-    await apiClient.sendChatMessage(session.sessionID, text, images);
+    noteReceipt(parts, await apiClient.sendChatMessage(session.sessionID, text, images));
   } catch (err) {
     if (apiClient.isBusy(err)) {
       // The daemon already has a turn running (a race window, or a turn
@@ -772,6 +777,7 @@ export async function sendMessage() {
       // turn's turn.done will drain it. waiting stays true so further
       // prompts queue too.
       session.promptQueue.unshift(images.length > 0 ? { text, images } : text);
+      noteQueued(parts);
       renderStatusBar();
       retryQueueSoon();
       return;

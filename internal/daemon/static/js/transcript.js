@@ -141,7 +141,14 @@ export function appendUser(text, images) {
 // the daemon confirms it. Before this the ordinary case drew nothing at
 // all, and a prompt typed into an idle session sat invisible until the
 // model started work on it.
-const sentPlaceholders = new Map(); // text -> [element]
+//
+// Each one also keeps what the daemon has said about its send, for a stop
+// to go by (see abandonPendingUsers): took is 'awaited' until the answer
+// comes, then 'at' (taken when the log's last seq was at), 'none' (taken,
+// and no seq said), or 'queued' (refused as busy, and held in this page's
+// queue). heldBy is the seq of the latest stop that came while the answer
+// was on its way.
+const sentPlaceholders = new Map(); // text -> [parts]
 
 export function appendPendingUser(text, midTurn = false, images = []) {
   // A mid-turn send is a note, not a turn: it is one line of explanation
@@ -150,8 +157,10 @@ export function appendPendingUser(text, midTurn = false, images = []) {
   const parts = midTurn
     ? { div: appendDiv('msg-tool', `[sent — the model will pick this up at its next step] ${text}`) }
     : appendUserBlock(text, true, images);
-  const div = parts.div;
   parts.text = text;
+  parts.took = 'awaited';
+  parts.at = 0;
+  parts.heldBy = 0;
   const list = sentPlaceholders.get(text) || [];
   list.push(parts);
   sentPlaceholders.set(text, list);
@@ -159,87 +168,113 @@ export function appendPendingUser(text, midTurn = false, images = []) {
   // bottom. Somebody who had scrolled up to re-read something and then
   // typed wants to watch the reply, not stay where they were.
   scrollToBottom();
-  return div;
+  return parts;
 }
 
-// resolvePendingUser removes the oldest placeholder for text, and reports
-// whether there was one.
-export function resolvePendingUser(text) {
+// resolvePendingUser removes the oldest placeholder for text.
+//
+// seq is the message's own, 0 when it has none. A placeholder whose send
+// the daemon took when the log had already reached seq is not that
+// message's: its own is written after it was taken. A backlog replayed on
+// a reconnect brings such a message, another client's with the same words.
+export function resolvePendingUser(text, seq = 0) {
   const list = sentPlaceholders.get(text);
-  if (!list || list.length === 0) return false;
+  if (!list || list.length === 0) return;
   // Oldest first: the same text can be sent twice, and each send owns one
   // placeholder.
-  const parts = list.shift();
+  const i = list.findIndex((p) => !(seq > 0 && p.took === 'at' && p.at >= seq));
+  if (i < 0) return;
+  const [parts] = list.splice(i, 1);
   if (list.length === 0) sentPlaceholders.delete(text);
   // Both halves, or the separator outlives the prompt it announced and
   // the transcript grows a boundary with nothing after it.
   if (parts.sep) parts.sep.remove();
   parts.div.remove();
-  return true;
 }
 
-// unsentLines holds the lines the last turn end rewrote in
-// abandonPendingUsers, by the text they carry, for takeBackUnsent. Until
-// the next turn end: see forgetUnsentLines.
-const unsentLines = new Map(); // text -> [element]
-
-// abandonPendingUsers answers a stopped turn: every prompt still showing
-// as sent was in the queue the daemon has just dropped, and it was never
-// handed to the model.
+// abandonPendingUsers answers a stopped turn: a prompt still showing as
+// sent that was in the queue the daemon has just dropped was never handed
+// to the model.
+//
+// stop is the seq of the stop's event, 0 for a turn lost with no event.
+// The daemon writes a stop after it took every message the stop drops,
+// and before it takes one for a turn that begins after it. So a
+// placeholder whose send was taken at or after stop is not one it
+// dropped: the daemon started the next turn for it, or handed it to that
+// turn, and its message.user resolves the placeholder as usual. One whose
+// send has no answer yet is held until the answer comes (noteReceipt).
+// With no seq to go by, from either side, every placeholder is taken as
+// dropped.
 //
 // Rewritten rather than removed. What is on screen is text somebody
 // typed, and taking it away silently is the other half of the same
 // fault — they would be left knowing neither that it was discarded nor
 // what it said. The line keeps the words and stops claiming they went
 // anywhere.
-export function abandonPendingUsers() {
-  // This end closes the window on the lines the one before rewrote.
-  forgetUnsentLines();
+export function abandonPendingUsers(stop = 0) {
   for (const [text, list] of sentPlaceholders) {
-    for (const parts of list) {
-      // The separator announced a turn boundary that never happened.
-      if (parts.sep) parts.sep.remove();
-      parts.div.className = 'msg-tool';
-      parts.div.textContent = `[not sent — the turn was stopped before the model saw this] ${parts.text}`;
-      const unsent = unsentLines.get(text) || [];
-      unsent.push(parts.div);
-      unsentLines.set(text, unsent);
-    }
+    const kept = list.filter((parts) => {
+      if (stop > 0 && parts.took === 'at' && parts.at >= stop) return true;
+      if (stop > 0 && parts.took === 'awaited') {
+        parts.heldBy = Math.max(parts.heldBy, stop);
+        return true;
+      }
+      markNotSent(parts);
+      return false;
+    });
+    if (kept.length > 0) sentPlaceholders.set(text, kept);
+    else sentPlaceholders.delete(text);
   }
-  sentPlaceholders.clear();
 }
 
-// takeBackUnsent removes the newest line abandonPendingUsers rewrote for
-// text, when the model is handed that text after all: the message.user
-// event for it arrives. A prompt sent as the turn was stopping is still
-// drawn as sent when the stop arrives, and the daemon can start a turn
-// for it once the stopped turn's end is written. Its message.user then
-// comes after that end, and the line said "not sent" above the model's
-// answer to it.
-//
-// Only a line the last turn end rewrote, and only until the next one: the
-// prompt that raced a stop starts the turn after it or is handed to that
-// turn, so its message.user comes before that turn's end. A line with the
-// same words from an earlier stop is one that stop did drop. Of the lines
-// one stop rewrote, the newest, the one sent nearest the stop.
-//
-// Only for a message.user with no placeholder of its own: a placeholder
-// stands for a send still waiting, which that event answers first.
-// Matched by text, as a placeholder is, so another client's message with
-// the same words, in that window, takes the line back too.
-export function takeBackUnsent(text) {
-  const list = unsentLines.get(text);
-  if (!list || list.length === 0) return;
-  const div = list.pop();
-  if (list.length === 0) unsentLines.delete(text);
-  div.remove();
+function markNotSent(parts) {
+  // The separator announced a turn boundary that never happened.
+  if (parts.sep) parts.sep.remove();
+  parts.div.className = 'msg-tool';
+  parts.div.textContent = `[not sent — the turn was stopped before the model saw this] ${parts.text}`;
 }
 
-// forgetUnsentLines ends the window in which takeBackUnsent can take a
-// line back: at the next turn end, the lines stay as they are and stop
-// being taken back.
-export function forgetUnsentLines() {
-  unsentLines.clear();
+// noteReceipt records what the daemon said about the send parts stands
+// for: reply is its 202 body. A placeholder a stop held while the answer
+// was on its way is decided here: a send taken before that stop was in
+// the queue it dropped.
+export function noteReceipt(parts, reply) {
+  if (reply && typeof reply.seq === 'number') settleReceipt(parts, 'at', reply.seq);
+  else settleReceipt(parts, 'none', 0);
+}
+
+// noteQueued records that the send parts stands for was refused as busy
+// and is in this page's queue: the daemon does not have it, so a stop
+// takes it as dropped, as it takes the queue.
+export function noteQueued(parts) {
+  settleReceipt(parts, 'queued', 0);
+}
+
+function settleReceipt(parts, took, at) {
+  const list = sentPlaceholders.get(parts.text);
+  const i = list ? list.indexOf(parts) : -1;
+  // Resolved or rewritten already: there is nothing left to decide.
+  if (i < 0) return;
+  parts.took = took;
+  parts.at = at;
+  if (parts.heldBy > 0 && !(took === 'at' && at >= parts.heldBy)) {
+    list.splice(i, 1);
+    if (list.length === 0) sentPlaceholders.delete(parts.text);
+    markNotSent(parts);
+  }
+}
+
+// resendQueued finds the placeholder of a prompt this page's queue is
+// sending again, and marks it as waiting for its answer once more. The
+// oldest queued one with the text: the queue sends in the order it took
+// them, and two queued sends of the same words stand for the same thing.
+export function resendQueued(text) {
+  const list = sentPlaceholders.get(text) || [];
+  const parts = list.find((p) => p.took === 'queued');
+  if (!parts) return null;
+  parts.took = 'awaited';
+  parts.heldBy = 0;
+  return parts;
 }
 
 // Moving between your own turns.
@@ -1006,8 +1041,4 @@ export function clearTranscript() {
   // detached nodes.
   session.toolRows.clear();
   sentPlaceholders.clear();
-  // Its lines went with the innerHTML too. Taking one back would change
-  // nothing on screen, and the next turn end forgets them anyway; this
-  // lets go of the nodes.
-  unsentLines.clear();
 }

@@ -155,7 +155,7 @@ func TestTheDisplaySwitchesReachEveryClientLive(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	if err := c.SendMessage(ctx, typed.ID, "/thinking off"); err != nil {
+	if _, err := c.SendMessage(ctx, typed.ID, "/thinking off"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	data := waitForSettings(t, evCh)

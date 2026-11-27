@@ -54,9 +54,8 @@ import (
 // mismatches the one it is now compared against, although none of its
 // text changed. Deliberately not detected. The removals in the package
 // are resolvePendingUser and resolveOwnEcho dropping the echo of a
-// prompt, which appendPendingUser or appendSent put at the end, and
-// takeBackUnsent dropping a line the last stop rewrote, which is near the
-// end too. What shifts is the handful of entries that arrived after it. At
+// prompt, which appendPendingUser or appendSent put at the end. What
+// shifts is the handful of entries that arrived after it. At
 // about 50us an entry that is microseconds, once per prompt, against
 // shift detection that would run on every event to find it. The output
 // is right either way; this is only about work.

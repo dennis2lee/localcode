@@ -727,7 +727,10 @@ func throughDaemon(ctx context.Context, o runOptions, url, prompt string, out io
 		return c.SessionUsage(uctx, sess.ID)
 	}
 	done := make(chan error, 1)
-	go func() { done <- c.SendMessage(ctx, sess.ID, prompt) }()
+	go func() {
+		_, err := c.SendMessage(ctx, sess.ID, prompt)
+		done <- err
+	}()
 
 	// The daemon answers the message with 202 the moment it has taken the
 	// turn, and the turn runs on after that. The run is over at the turn's
