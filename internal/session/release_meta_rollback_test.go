@@ -294,14 +294,16 @@ func TestAFailedMetaWriteLeavesTheSessionExactlyAsItWas(t *testing.T) {
 }
 
 // A write that fails partway through a reorder leaves every order as it
-// was.
+// was, in memory and on disk.
 //
 // SetOrder persists one file per session, so the failure can land after
-// some sessions were already rewritten on disk. The store cannot take
-// those bytes back, but it can refuse to claim them: every in-memory
-// order goes back, so the daemon answers with the list it had.
+// some sessions were already rewritten on disk. Those files are put back:
+// the directory holds byte for byte what it held before the call, and the
+// call reports the write error itself. Every session changes place, so
+// whichever file the map order writes first is one that has to go back.
 func TestAFailedReorderLeavesEveryOrderAsItWas(t *testing.T) {
-	s, err := NewStore(t.TempDir())
+	dir := t.TempDir()
+	s, err := NewStore(dir)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
@@ -309,7 +311,7 @@ func TestAFailedReorderLeavesEveryOrderAsItWas(t *testing.T) {
 	for _, id := range []string{"s1", "s2", "s3"} {
 		mustCreateRollbackSession(t, s, id, "", "general-purpose", true)
 	}
-	if err := s.SetOrder([]string{"s3", "s2", "s1"}); err != nil {
+	if err := s.SetOrder([]string{"s3", "s1", "s2"}); err != nil {
 		t.Fatalf("baseline SetOrder: %v", err)
 	}
 
@@ -321,14 +323,15 @@ func TestAFailedReorderLeavesEveryOrderAsItWas(t *testing.T) {
 		}
 		before[id] = *got
 	}
+	files := dirFiles(t, dir)
 
 	calls := 0
-	s.writeMeta = func(string, Session) error {
+	s.writeMeta = func(d string, m Session) error {
 		calls++
-		if calls >= 2 {
+		if calls == 2 {
 			return errInjectedWrite
 		}
-		return nil
+		return writeSessionMeta(d, m)
 	}
 	if err := s.SetOrder([]string{"s1", "s2", "s3"}); err != errInjectedWrite {
 		t.Fatalf("SetOrder under a failing write returned err = %v, want the write error itself", err)
@@ -341,6 +344,93 @@ func TestAFailedReorderLeavesEveryOrderAsItWas(t *testing.T) {
 		}
 		if !reflect.DeepEqual(before[id], *after) {
 			t.Errorf("failed SetOrder left %s changed in memory: before = %+v, after = %+v", id, before[id], *after)
+		}
+	}
+	if got := dirFiles(t, dir); !reflect.DeepEqual(got, files) {
+		t.Errorf("failed SetOrder changed the directory:\nbefore = %v\nafter  = %v", files, got)
+	}
+}
+
+// A reorder whose put-back fails too leaves the store saying what the
+// directory says, and names the session whose file kept its new place.
+//
+// The first file is rewritten, the second write fails, and so does every
+// write after it, the put-back included. The first session's file has
+// its new place, so the store gives it that place too: claiming the old
+// one would last only until the next restart read the file.
+func TestAReorderThatCannotBePutBackSaysWhatTheDirectorySays(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(s.Close)
+	ids := []string{"s1", "s2", "s3"}
+	for _, id := range ids {
+		mustCreateRollbackSession(t, s, id, "", "general-purpose", true)
+	}
+	if err := s.SetOrder([]string{"s3", "s1", "s2"}); err != nil {
+		t.Fatalf("baseline SetOrder: %v", err)
+	}
+	before := map[string]Session{}
+	for _, id := range ids {
+		got, err := s.Get(id)
+		if err != nil {
+			t.Fatalf("Get(%s) before: %v", id, err)
+		}
+		before[id] = *got
+	}
+
+	var first string
+	calls := 0
+	s.writeMeta = func(d string, m Session) error {
+		calls++
+		if calls == 1 {
+			first = m.ID
+			return writeSessionMeta(d, m)
+		}
+		return errInjectedWrite
+	}
+	err = s.SetOrder([]string{"s1", "s2", "s3"})
+	if !errors.Is(err, errInjectedWrite) {
+		t.Fatalf("SetOrder under a failing write returned err = %v, want it to carry the write error", err)
+	}
+	for _, id := range ids {
+		if named := strings.Contains(err.Error(), id); named != (id == first) {
+			t.Errorf("error %q names %s: %v, want it to name only %s, whose file kept the new place", err, id, named, first)
+		}
+	}
+
+	newPlace := map[string]int{"s1": 1, "s2": 2, "s3": 3}
+	for _, id := range ids {
+		after, err := s.Get(id)
+		if err != nil {
+			t.Fatalf("Get(%s) after: %v", id, err)
+		}
+		if id == first {
+			if after.Order != newPlace[id] {
+				t.Errorf("%s has order %d in memory, want %d, which its file holds", id, after.Order, newPlace[id])
+			}
+			continue
+		}
+		if !reflect.DeepEqual(before[id], *after) {
+			t.Errorf("failed SetOrder left %s changed in memory: before = %+v, after = %+v", id, before[id], *after)
+		}
+	}
+
+	restored, _, err := LoadAllFromDisk(dir)
+	if err != nil {
+		t.Fatalf("LoadAllFromDisk: %v", err)
+	}
+	t.Cleanup(restored.Close)
+	for _, id := range ids {
+		live, _ := s.Get(id)
+		back, err := restored.Get(id)
+		if err != nil {
+			t.Fatalf("restored Get(%s): %v", id, err)
+		}
+		if back.Order != live.Order {
+			t.Errorf("%s: a restart reads order %d, the store says %d", id, back.Order, live.Order)
 		}
 	}
 }
