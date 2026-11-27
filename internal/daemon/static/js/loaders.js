@@ -92,7 +92,7 @@ export async function loadSettings() {
     // The page opens the conversation's stream after this read today, so
     // no announcement is drawn before it; the read is numbered so that
     // holds whatever order the page starts in.
-    if (settingsCurrent(s.seq)) {
+    if (settingsCurrent(s)) {
       app.autoCompactEnabled = s.auto_compact_enabled;
       app.showTPS = s.show_tps;
       if (typeof s.show_thinking === 'boolean') app.showThinking = s.show_thinking;

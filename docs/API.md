@@ -149,15 +149,17 @@ profile, or `null` before the first. Changes are announced
 on the broadcast as `settings.changed`; a client that was not connected
 re-reads this endpoint on load.
 
-The settings are numbered. `seq` is in `GET /api/settings`, in every
-`settings.changed`, and in the answer to every route below that changes a
-daemon-wide setting (not the permission rules). Each change gets the next
-number: its `settings.changed` carries it, and so does the answer to the
-request that made it, with the same values. `GET /api/settings` carries
-the number of the last change. Announcements are sent in the order they
-are numbered. A client that hears of a change by both routes, which keep
-no order between them, drops whatever is numbered lower than what it has
-drawn.
+The settings are numbered. `seq` and `epoch` are in `GET /api/settings`,
+in every `settings.changed`, and in the answer to every route below that
+changes a daemon-wide setting (not the permission rules). Each change gets
+the next number: its `settings.changed` carries it, and so does the answer
+to the request that made it, with the same values. `GET /api/settings`
+carries the number of the last change. Announcements are sent in the order
+they are numbered. `epoch` names the daemon's count and is new at every
+start, when the count starts again. A client that hears of a change by
+both routes, which keep no order between them, drops whatever is numbered
+lower than what it has drawn within one epoch, and takes another epoch as
+current.
 
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
@@ -469,7 +471,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `session.renamed` | `{"title"}` |
 | `session.forked` | `{"from", "from_title", "copied"}`; reader note, ignored rebuilding history. `copied` is how many events after it are the copy of the source's log; usage totals skip them. Absent in logs written before it existed |
 | `session.scheduled` | `{"schedule", "name", "run", "run_total", "at", "repeat", "from"}`; reader note, ignored rebuilding history |
-| `settings.changed` | `{"seq", "auto_compact_enabled", "show_tps", "auto_delegate", "auto_delegate_agent", "auto_delegate_match", "smart_agent", "browser", "ssh", "powershell", "skip_permissions", "keep_going", "fold_thinking", "repeat_limit", "auto_compact_percent", "show_thinking", "show_timestamps", "orchestrate", "model_invocable"}` as a snapshot, daemon-wide. `seq` numbers it (see Settings above). The permission rules are not in it: re-read `GET /api/settings` for those |
+| `settings.changed` | `{"seq", "epoch", "auto_compact_enabled", "show_tps", "auto_delegate", "auto_delegate_agent", "auto_delegate_match", "smart_agent", "browser", "ssh", "powershell", "skip_permissions", "keep_going", "fold_thinking", "repeat_limit", "auto_compact_percent", "show_thinking", "show_timestamps", "orchestrate", "model_invocable"}` as a snapshot, daemon-wide. `seq` and `epoch` number it (see Settings above). The permission rules are not in it: re-read `GET /api/settings` for those |
 | `config.changed` | `{"auto_compact_enabled", "show_tps", "auto_delegate", "smart_agent", "orchestrate"?}`; per session. Written by `/config` and by the toggle commands; `orchestrate` comes only from the toggle commands |
 | `workspace.changed` | `{"path"}`; per session |
 | `usage` | `{"input_tokens", "output_tokens", "cached_input_tokens", "cache_read_tokens", "cache_write_tokens", "measured", "measured_images", "max_context", "percent", "tps", "show_tps", "model", "estimated"}`; from reported usage. The daemon also broadcasts live estimates during a stream, `{"tps", "show_tps", "estimated": true}`, which are not logged; the settled event carries `estimated: false`. `percent` is `input_tokens` plus `cached_input_tokens` plus `output_tokens` over `max_context`: the whole prompt the provider read and the reply it wrote, which the next request carries. `input_tokens` alone is what was billed at the full rate. `cache_read_tokens` and `cache_write_tokens` split `cached_input_tokens` the way it is billed: served from the prompt cache, or written to it. Logs written before the split carry `cached_input_tokens` alone. `measured` is the daemon's own character estimate of the same messages, for sizing after a restart, and `measured_images` the number of images among them. Draw a gauge from `percent`, not from `input_tokens` |

@@ -175,3 +175,52 @@ test('an announcement numbered lower than what the page has drawn is not drawn a
   assert.equal(app.el('keep-going-checkbox').checked, true);
   assert.equal(app.el('orchestrate-checkbox').checked, false);
 });
+
+// A daemon that replaced the one this page talked to (a restart, an
+// update's handover) counts from the start again, under a new epoch. Its
+// changes are drawn though their numbers are below what the page drew,
+// and from then on its numbers are the ones compared. Found by review: a
+// count taken from the clock, compared across daemons, dropped every
+// change of a daemon started with its clock set back.
+test('a daemon that replaced another is drawn, though it counts from the start again', async () => {
+  const app = await load({ globals: { lcGUI: true } });
+  await open(app);
+  announce(app, { keep_going: false, seq: 100, epoch: 'first' });
+  await app.settle();
+  announce(app, { keep_going: true, seq: 1, epoch: 'second' });
+  await app.settle();
+  assert.equal(app.el('keep-going-checkbox').checked, true, "the new daemon's change was dropped as older");
+  // Its own count orders it now.
+  announce(app, { keep_going: false, seq: 3, epoch: 'second' });
+  await app.settle();
+  announce(app, { keep_going: true, seq: 2, epoch: 'second' });
+  await app.settle();
+  assert.equal(app.el('keep-going-checkbox').checked, false, 'an older change of the new daemon was drawn');
+});
+
+// The delegation target is in the numbered snapshot. An answer to this
+// page's own target change that is older than an announcement is not
+// drawn, so the announcement's target has to be. Found by review.
+test('delegation: a target changed elsewhere is drawn, and loses the warning this window put under it', async () => {
+  const app = await load({
+    routes: {
+      'POST /api/settings/auto-delegate': (body) => ({
+        auto_delegate: false, auto_delegate_agent: body.agent || '', auto_delegate_match: [], seq: 1, applied: true, persisted: false, error: NOT_WRITTEN,
+      }),
+    },
+  });
+  app.el('auto-delegate-btn').click();
+  await app.settle();
+  const warn = app.el('delegate-warn');
+  const select = app.el('delegate-agent-select');
+  select.value = 'plan';
+  select.fire('change');
+  await app.settle();
+  assert.ok(warn.textContent.includes('The agent and patterns'), 'the unsaved target is not warned about');
+
+  announce(app, { auto_delegate: false, auto_delegate_agent: 'explore', auto_delegate_match: ['what is *'], seq: 2 });
+  await app.settle();
+  assert.equal(select.value, 'explore', 'the target another window chose is not drawn');
+  assert.equal(app.state.autoDelegateMatch.join(), 'what is *');
+  assert.equal(warn.textContent.includes('The agent and patterns'), false, 'a warning stayed under a target somebody else has since moved');
+});

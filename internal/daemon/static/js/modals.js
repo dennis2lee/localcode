@@ -203,7 +203,7 @@ async function sendAutoDelegate(patch) {
   // a change made elsewhere and already drawn, and is not drawn over it.
   // Its save outcome is kept for each half that still has the value this
   // answer reports, as takeAnswer does for the other switches.
-  const current = settingsCurrent(held.seq);
+  const current = settingsCurrent(held);
   const sameTarget = agent === app.autoDelegateAgent
     && Array.isArray(match) && match.length === app.autoDelegateMatch.length
     && match.every((m, i) => m === app.autoDelegateMatch[i]);

@@ -47,8 +47,10 @@ export const app = {
   liveActivity: new Map(),
   // The number of the daemon-wide settings this page has drawn: the
   // highest a settings.changed, an answer to a change, or
-  // GET /api/settings carried. See settingsCurrent.
+  // GET /api/settings carried, and the daemon count it is in. See
+  // settingsCurrent.
   settingsSeq: 0,
+  settingsEpoch: '',
   autoCompactEnabled: true,
   showTPS: true,
   autoDelegate: false,
@@ -327,9 +329,9 @@ export function resetSession(id) {
   session.historyIdx = session.history.length;
 }
 
-// settingsCurrent says whether a state of the daemon-wide settings
-// numbered n is at least as new as what this page has drawn, and records
-// it when it is.
+// settingsCurrent says whether a state of the daemon-wide settings (an
+// announcement, an answer, a read, each with its seq and epoch) is at
+// least as new as what this page has drawn, and records it when it is.
 //
 // The page hears of a change twice, by the answer to the request that
 // made it and by settings.changed, and the two keep no order between
@@ -338,11 +340,22 @@ export function resetSession(id) {
 // is older than what is drawn is told apart and not drawn. Equal is
 // current: an answer and its own announcement carry the same values.
 //
+// Numbers are compared within one epoch, which names a daemon's count
+// and is new at every start. Another epoch is a daemon that replaced the
+// one this page was talking to (a restart, an update's handover), whose
+// count starts again: it is current, and its count is the one compared
+// from then on. Found by review: a count from the clock, compared across
+// daemons, dropped everything a daemon started with its clock set back
+// announced, for good.
+//
 // Something with no number is current, as before numbers: an answer from
 // a route that does not carry one.
-export function settingsCurrent(n) {
+export function settingsCurrent(m) {
+  const n = m && m.seq;
   if (typeof n !== 'number') return true;
-  if (n < app.settingsSeq) return false;
+  const epoch = typeof m.epoch === 'string' ? m.epoch : '';
+  if (epoch === app.settingsEpoch && n < app.settingsSeq) return false;
+  app.settingsEpoch = epoch;
   app.settingsSeq = n;
   return true;
 }

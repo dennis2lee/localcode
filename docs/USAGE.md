@@ -2292,13 +2292,16 @@ Limits of the desktop window's file:
 
 A switch on the Tools tab, or Smart Agent, the repeat guard or keep going on the Behavior tab, that the daemon applied and could not write to `config.json` says so under the switch, and the setting lasts only until the daemon restarts. The switch shows the applied value. The warning stays until that switch is saved from this window, or moved from another window or a prompt.
 
-The window hears of each change twice: in the answer to its own request, and in the daemon's announcement to every window. The daemon numbers each change, and the window draws nothing older than what it has already drawn. So a late announcement of the window's own change does not take a warning its next change earned, and a slow answer does not put back a value another window has changed since. A slow answer still leaves its warning while the switch has the value that answer reports.
+The window hears of each change twice: in the answer to its own request, and in the daemon's announcement to every window. The daemon numbers each change, and the window draws nothing older than what it has already drawn. So a late announcement of the window's own change does not take a warning its next change earned, and a slow answer does not put back a value another window has changed since. A slow answer still leaves its warning while the switch has the value that answer reports. The delegation panel draws an agent and patterns chosen in another window, and its warning about them goes. A daemon that replaced the one the window was talking to (a restart, an update) counts its changes from the start again, and the window draws them.
 
 The auto-delegation panel and the rules in the permissions window say the same. The panel keeps one warning for the switch and one for the agent and patterns, because the two are written to `config.json` separately. The rules list names each rule that was added or removed and not saved, because rules are written one at a time: a later rule that is saved does not save an earlier one. A rule added and removed again without being saved is not named.
 
 These warnings are kept by the page. A reload, or the desktop window opened again, starts without them, and the settings they were about are still not saved.
 
-Limit: the page takes a switch as moved from somewhere else when the daemon announces a value for it that the page does not hold, and clears the warning. It cannot tell the announcement of its own earlier change from one made elsewhere. When the announcement of one change reaches the page after the answer to the next change of the same switch, the warning about that next change is cleared, and the switch is then in force, not saved and not warned about. The announcement normally arrives before the answer it belongs to.
+Limits:
+
+* A `/config` command typed at a prompt announces its switch to the conversation it was typed in without a number, and the page draws that as it arrives.
+* A slow answer keeps its warning when the switch was moved elsewhere and back to the value the answer reports.
 
 The Appearance tab is per person, not per daemon. The faces and the size apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
 

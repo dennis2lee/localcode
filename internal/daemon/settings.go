@@ -24,6 +24,7 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	delegateAgent, delegateMatch := d.autoDelegateTarget()
 	resp := map[string]any{
 		"seq":                  d.settingsSeq,
+		"epoch":                d.settingsEpoch,
 		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
 		"auto_compact_percent": d.Loop.CompactPercent(),
 		"keep_going":           d.Loop.KeepGoingEnabled(),
@@ -164,9 +165,9 @@ func (d *Daemon) handleSetAutoDelegate(w http.ResponseWriter, r *http.Request) {
 		"auto_delegate":       held["auto_delegate"],
 		"auto_delegate_agent": held["auto_delegate_agent"],
 		"auto_delegate_match": held["auto_delegate_match"],
-		"seq":                 seq,
-		"applied":             true,
-		"persisted":           true,
+		"seq":                 seq, "epoch": d.settingsEpoch,
+		"applied":   true,
+		"persisted": true,
 	}
 	if len(unsaved) > 0 {
 		resp["persisted"] = false
@@ -212,9 +213,9 @@ func (d *Daemon) handleSetSmartAgent(w http.ResponseWriter, r *http.Request) {
 	seq, held := d.settingsChanged()
 	resp := map[string]any{
 		"smart_agent": held["smart_agent"],
-		"seq":         seq,
-		"applied":     true,
-		"persisted":   true,
+		"seq":         seq, "epoch": d.settingsEpoch,
+		"applied":   true,
+		"persisted": true,
 	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetSmartAgentInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
@@ -248,9 +249,9 @@ func (d *Daemon) handleSetModelInvocable(w http.ResponseWriter, r *http.Request)
 	seq, held := d.settingsChanged()
 	resp := map[string]any{
 		"model_invocable": held["model_invocable"],
-		"seq":             seq,
-		"applied":         true,
-		"persisted":       true,
+		"seq":             seq, "epoch": d.settingsEpoch,
+		"applied":   true,
+		"persisted": true,
 	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetModelInvocableInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
@@ -283,9 +284,9 @@ func (d *Daemon) handleSetOrchestrate(w http.ResponseWriter, r *http.Request) {
 	seq, held := d.settingsChanged()
 	resp := map[string]any{
 		"orchestrate": held["orchestrate"],
-		"seq":         seq,
-		"applied":     true,
-		"persisted":   true,
+		"seq":         seq, "epoch": d.settingsEpoch,
+		"applied":   true,
+		"persisted": true,
 	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetOrchestrateInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
@@ -321,9 +322,9 @@ func (d *Daemon) handleSetKeepGoing(w http.ResponseWriter, r *http.Request) {
 	seq, held := d.settingsChanged()
 	resp := map[string]any{
 		"keep_going": held["keep_going"],
-		"seq":        seq,
-		"applied":    true,
-		"persisted":  true,
+		"seq":        seq, "epoch": d.settingsEpoch,
+		"applied":   true,
+		"persisted": true,
 	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetKeepGoingInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
@@ -355,9 +356,9 @@ func (d *Daemon) handleSetFoldThinking(w http.ResponseWriter, r *http.Request) {
 	seq, held := d.settingsChanged()
 	resp := map[string]any{
 		"fold_thinking": held["fold_thinking"],
-		"seq":           seq,
-		"applied":       true,
-		"persisted":     true,
+		"seq":           seq, "epoch": d.settingsEpoch,
+		"applied":   true,
+		"persisted": true,
 	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetFoldThinkingInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
@@ -391,9 +392,9 @@ func (d *Daemon) handleSetRepeatLimit(w http.ResponseWriter, r *http.Request) {
 	seq, held := d.settingsChanged()
 	resp := map[string]any{
 		"repeat_limit": held["repeat_limit"],
-		"seq":          seq,
-		"applied":      true,
-		"persisted":    true,
+		"seq":          seq, "epoch": d.settingsEpoch,
+		"applied":   true,
+		"persisted": true,
 	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetRepeatLimitInFile(d.Broker.ConfigPath, req.Limit); err != nil {
@@ -423,9 +424,9 @@ func (d *Daemon) handleSetSkipPermissions(w http.ResponseWriter, r *http.Request
 	seq, held := d.settingsChanged()
 	resp := map[string]any{
 		"skip_permissions": held["skip_permissions"],
-		"seq":              seq,
-		"applied":          true,
-		"persisted":        true,
+		"seq":              seq, "epoch": d.settingsEpoch,
+		"applied":   true,
+		"persisted": true,
 	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetSkipPermissionsInFile(d.Broker.ConfigPath, req.Enabled); err != nil {

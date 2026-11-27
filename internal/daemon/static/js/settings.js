@@ -204,7 +204,7 @@ function takeAnswer(res, field, prop, wanted, toValue = (v) => !!v) {
   const outcome = res && res.persisted === false
     ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
     : '';
-  if (settingsCurrent(res && res.seq)) {
+  if (settingsCurrent(res)) {
     app[prop] = value;
     return outcome;
   }

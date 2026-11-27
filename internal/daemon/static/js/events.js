@@ -500,7 +500,7 @@ const handlers = {
     // back. Compared as values, this page's own announcement arriving
     // after the answer to its next change of the same switch read as a
     // move made elsewhere and took the warning that answer had put up.
-    if (!settingsCurrent(d.seq)) return;
+    if (!settingsCurrent(d)) return;
     // Same roster rule as config.changed above: the snapshot always
     // carries orchestrate, so only an actual flip refetches.
     const rosterMayHaveChanged = typeof d.orchestrate === 'boolean' && d.orchestrate !== app.orchestrate;
@@ -508,6 +508,24 @@ const handlers = {
     if (typeof d.show_tps === 'boolean') app.showTPS = d.show_tps;
     if (typeof d.show_thinking === 'boolean') app.showThinking = d.show_thinking;
     if (typeof d.show_timestamps === 'boolean') app.showTimestamps = d.show_timestamps;
+    // The delegation target, which the snapshot carries since it is
+    // numbered: an answer to this page's own target change older than an
+    // announcement is not drawn, so the announcement has to be. Moved
+    // elsewhere, the target loses the warning this page put under it, as
+    // the switch does. Drawn with the switch below.
+    if (typeof d.auto_delegate_agent === 'string' || Array.isArray(d.auto_delegate_match)) {
+      const agent = typeof d.auto_delegate_agent === 'string' ? d.auto_delegate_agent : app.autoDelegateAgent;
+      const match = Array.isArray(d.auto_delegate_match) ? d.auto_delegate_match : app.autoDelegateMatch;
+      const same = agent === app.autoDelegateAgent && match.length === app.autoDelegateMatch.length
+        && match.every((m, i) => m === app.autoDelegateMatch[i]);
+      if (!same) movedElsewhere('auto_delegate_target');
+      app.autoDelegateAgent = agent;
+      app.autoDelegateMatch = match.slice();
+      if (typeof d.auto_delegate !== 'boolean') {
+        renderAutoDelegate();
+        refreshDelegatePanelIfOpen();
+      }
+    }
     if (typeof d.auto_delegate === 'boolean') {
       if (d.auto_delegate !== app.autoDelegate) movedElsewhere('auto_delegate');
       app.autoDelegate = d.auto_delegate;

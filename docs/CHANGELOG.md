@@ -6,7 +6,8 @@
 
 * The settings window and the delegation panel no longer losing a "not saved" warning to a late announcement of their own earlier change
 * An answer to a setting change that arrives after a later change made elsewhere no longer drawn over it
-* Daemon-wide settings numbered: `seq` in `settings.changed`, in each setting route's answer and in `GET /api/settings`
+* A delegation agent and patterns chosen in another window drawn in the delegation panel
+* Daemon-wide settings numbered: `seq` and `epoch` in `settings.changed`, in each setting route's answer and in `GET /api/settings`
 
 **Tests**
 

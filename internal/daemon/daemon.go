@@ -9,7 +9,9 @@ package daemon
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,6 +26,7 @@ import (
 	"localcode/internal/mcp"
 	"localcode/internal/provider"
 	"localcode/internal/sshterm"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -162,15 +165,17 @@ type Daemon struct {
 	// settingsMu numbers the daemon-wide settings: settingsSeq is the
 	// number the last settings.changed carried. See settingsChanged.
 	//
-	// It starts at the time the daemon started, in microseconds, not at
-	// zero. A page keeps the number it has drawn across a reconnect, and
-	// a daemon that replaced the one it was talking to (a restart, an
-	// update's handover) would otherwise number every change lower than
-	// that, and the page would draw none of them. A count from the start
-	// time is above anything an earlier daemon reached, and stays an
-	// exact number in a browser (under 2^53) for centuries.
-	settingsMu  sync.Mutex
-	settingsSeq uint64
+	// settingsEpoch names this daemon's count, and is new at every start.
+	// A page keeps the number it has drawn across a reconnect, and a
+	// daemon that replaced the one it was talking to (a restart, an
+	// update's handover) counts from the start again: compared as numbers
+	// alone, the page would draw none of its changes. The page compares
+	// numbers within one epoch and takes a new one as current. A count
+	// from the clock instead failed with a clock set back between the two
+	// starts. Found by review.
+	settingsMu    sync.Mutex
+	settingsSeq   uint64
+	settingsEpoch string
 
 	// daemonEvents fans out events that belong to the daemon rather than
 	// to a conversation (MCP status), which is why they bypass the
@@ -191,15 +196,15 @@ type Daemon struct {
 // (no MCP servers configured).
 func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskManager, mcpManager *mcp.Manager, webFS fs.FS, version string) *Daemon {
 	d := &Daemon{
-		Loop:         loop,
-		Broker:       broker,
-		Tasks:        tasks,
-		MCP:          mcpManager,
-		Version:      version,
-		mux:          http.NewServeMux(),
-		turns:        newTurnTracker(),
-		daemonEvents: newBroadcaster(),
-		settingsSeq:  uint64(time.Now().UnixMicro()),
+		Loop:          loop,
+		Broker:        broker,
+		Tasks:         tasks,
+		MCP:           mcpManager,
+		Version:       version,
+		mux:           http.NewServeMux(),
+		turns:         newTurnTracker(),
+		daemonEvents:  newBroadcaster(),
+		settingsEpoch: newSettingsEpoch(),
 	}
 	// The agent loop asks for mid-turn input at every tool call; the queue
 	// itself lives here, because only the daemon knows whether a turn is
@@ -432,8 +437,18 @@ func (d *Daemon) settingsChanged() (uint64, map[string]any) {
 		data[k] = v
 	}
 	data["seq"] = d.settingsSeq
+	data["epoch"] = d.settingsEpoch
 	d.daemonEvents.send(events.Event{Type: events.TypeSettingsChanged, Data: data})
 	return d.settingsSeq, held
+}
+
+// newSettingsEpoch is a name no earlier start of a daemon has used.
+func newSettingsEpoch() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // settingsSnapshot is what settings.changed carries.

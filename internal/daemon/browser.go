@@ -502,7 +502,7 @@ func (d *Daemon) handleSetBrowser(w http.ResponseWriter, r *http.Request) {
 		d.Browser.Close()
 	}
 	seq, held := d.settingsChanged()
-	resp := map[string]any{"browser": held["browser"], "seq": seq, "applied": true, "persisted": true}
+	resp := map[string]any{"browser": held["browser"], "seq": seq, "epoch": d.settingsEpoch, "applied": true, "persisted": true}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetBrowserInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false

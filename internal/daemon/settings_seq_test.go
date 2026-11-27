@@ -199,22 +199,28 @@ func TestSettingChangesMadeAtOnceAreAnnouncedInTheOrderTheyAreNumbered(t *testin
 	}
 }
 
-// A daemon that replaced another numbers its changes above every number
-// the one before it gave. A page keeps what it has drawn across the
-// reconnect, and would draw nothing the new daemon announced otherwise.
-func TestADaemonStartedLaterNumbersAboveAnEarlierOne(t *testing.T) {
-	_, first, _ := settingsDaemon(t, `{}`)
-	for i := 0; i < 3; i++ {
-		postSetting(t, first.URL+"/api/settings/keep-going", fmt.Sprintf(`{"enabled":%v}`, i%2 == 0))
+// A daemon that replaced another names its count anew. A page keeps what
+// it has drawn across the reconnect, and compares numbers only within one
+// count: the new daemon counts from the start again, and a count taken
+// from the clock was below the old one's with a clock set back.
+func TestADaemonStartedLaterNamesItsCountAnew(t *testing.T) {
+	d1, first, _ := settingsDaemon(t, `{}`)
+	stop := announcements(t, d1)
+	status, answered := postSetting(t, first.URL+"/api/settings/keep-going", `{"enabled":false}`)
+	if status != http.StatusOK {
+		t.Fatalf("answered %d", status)
 	}
-	before := settingNumber(t, readSettings(t, first.URL)["seq"])
-	time.Sleep(2 * time.Millisecond)
+	got := stop()
+	before := readSettings(t, first.URL)
+	epoch, _ := before["epoch"].(string)
+	if epoch == "" {
+		t.Fatalf("GET /api/settings carries no epoch: %v", before)
+	}
+	if answered["epoch"] != epoch || len(got) != 1 || got[0].Data["epoch"] != epoch {
+		t.Errorf("the answer (%v) and the announcement (%v) do not carry the epoch GET does (%q)", answered["epoch"], got, epoch)
+	}
 	_, second, _ := settingsDaemon(t, `{}`)
-	if after := settingNumber(t, readSettings(t, second.URL)["seq"]); after <= before {
-		t.Errorf("the later daemon starts at %d, at or below the earlier one's %d", after, before)
-	}
-	// And the number is exact in a browser, whose numbers are doubles.
-	if before >= 1<<53 {
-		t.Errorf("the number %d is past 2^53, where a browser rounds it", before)
+	if again, _ := readSettings(t, second.URL)["epoch"].(string); again == "" || again == epoch {
+		t.Errorf("the later daemon's epoch is %q, the earlier one's %q: want a new one", again, epoch)
 	}
 }

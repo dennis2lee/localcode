@@ -497,7 +497,7 @@ func (d *Daemon) handleSetSSH(w http.ResponseWriter, r *http.Request) {
 		d.SSH.CloseAll("SSH was turned off", false)
 	}
 	seq, held := d.settingsChanged()
-	resp := map[string]any{"ssh": held["ssh"], "seq": seq, "applied": true, "persisted": true}
+	resp := map[string]any{"ssh": held["ssh"], "seq": seq, "epoch": d.settingsEpoch, "applied": true, "persisted": true}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetSSHInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false
@@ -544,7 +544,7 @@ func (d *Daemon) handleSetPowerShell(w http.ResponseWriter, r *http.Request) {
 		d.PowerShell.CloseAll("PowerShell was turned off", false)
 	}
 	seq, held := d.settingsChanged()
-	resp := map[string]any{"powershell": held["powershell"], "seq": seq, "applied": true, "persisted": true}
+	resp := map[string]any{"powershell": held["powershell"], "seq": seq, "epoch": d.settingsEpoch, "applied": true, "persisted": true}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetPowerShellInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false
