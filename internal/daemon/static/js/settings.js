@@ -25,7 +25,7 @@ import {
 } from './dom.js';
 import { Modal } from './modal.js';
 import { askConfirm } from './prompt.js';
-import { app } from './state.js';
+import { app, settingsCurrent } from './state.js';
 import * as apiClient from './api.js';
 import { wireTypography, renderTypography } from './typography.js';
 import { inGUI, renderBrowserPanel } from './browser.js';
@@ -158,10 +158,7 @@ async function toggleFoldThinking() {
   foldThinkingCheckbox.disabled = true;
   try {
     const res = await apiClient.setFoldThinking(enabled);
-    app.foldThinking = res && 'fold_thinking' in res ? !!res.fold_thinking : enabled;
-    renderFoldThinking(res && res.persisted === false
-      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
-      : '');
+    renderFoldThinking(takeAnswer(res, 'fold_thinking', 'foldThinking', enabled));
   } catch (err) {
     // Nothing was applied. The box goes back to what the daemon has.
     renderFoldThinking(undefined, `Not changed: ${err}`);
@@ -188,6 +185,30 @@ const unsaved = {};
 export function unsavedWarning(name, outcome) {
   if (outcome !== undefined) unsaved[name] = outcome || '';
   return unsaved[name] || '';
+}
+
+// takeAnswer applies the two-part answer to a change of one setting and
+// returns the outcome its warning line is drawn with: the warning for a
+// save that did not reach config.json, '' for one that did, and
+// undefined to keep what is there.
+//
+// An answer numbered lower than what the page has drawn (settingsCurrent)
+// is older than a change it has already drawn, made somewhere else, and
+// its value is not drawn over that change. Its save outcome still holds
+// while the switch has the value this answer reports: nothing has moved
+// it since, so the daemon is still running what this page could not
+// save. Once the switch has another value the outcome says nothing about
+// it.
+function takeAnswer(res, field, prop, wanted, toValue = (v) => !!v) {
+  const value = res && field in res ? toValue(res[field]) : wanted;
+  const outcome = res && res.persisted === false
+    ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+    : '';
+  if (settingsCurrent(res && res.seq)) {
+    app[prop] = value;
+    return outcome;
+  }
+  return app[prop] === value ? outcome : undefined;
 }
 
 // movedElsewhere forgets the warning under a switch that somebody else
@@ -235,10 +256,7 @@ async function toggleKeepGoing() {
   keepGoingCheckbox.disabled = true;
   try {
     const res = await apiClient.setKeepGoing(enabled);
-    app.keepGoing = res && 'keep_going' in res ? !!res.keep_going : enabled;
-    renderKeepGoing(res && res.persisted === false
-      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
-      : '');
+    renderKeepGoing(takeAnswer(res, 'keep_going', 'keepGoing', enabled));
   } catch (err) {
     // Nothing was applied. The box goes back to what the daemon has.
     renderKeepGoing(undefined, `Not changed: ${err}`);
@@ -284,10 +302,7 @@ async function applyRepeatLimit() {
   repeatLimitInput.disabled = true;
   try {
     const res = await apiClient.setRepeatLimit(wanted);
-    app.repeatLimit = res && typeof res.repeat_limit === 'number' ? res.repeat_limit : wanted;
-    renderRepeatLimit(res && res.persisted === false
-      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
-      : '');
+    renderRepeatLimit(takeAnswer(res, 'repeat_limit', 'repeatLimit', wanted, (v) => (typeof v === 'number' ? v : wanted)));
   } catch (err) {
     // Nothing was applied. The box and the number go back to what the
     // daemon has.
@@ -357,10 +372,7 @@ async function toggleBrowser() {
   browserCheckbox.disabled = true;
   try {
     const res = await apiClient.setBrowser(enabled);
-    app.browser = res && 'browser' in res ? !!res.browser : enabled;
-    renderBrowserSetting(res && res.persisted === false
-      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
-      : '');
+    renderBrowserSetting(takeAnswer(res, 'browser', 'browser', enabled));
     renderBrowserPanel();
   } catch (err) {
     // Nothing was applied: the box shows what the daemon has, which
@@ -498,10 +510,7 @@ async function toggleSSH() {
   box.disabled = true;
   try {
     const res = await apiClient.setSSH(enabled);
-    app.ssh = res && 'ssh' in res ? !!res.ssh : enabled;
-    renderSSHSetting(res && res.persisted === false
-      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
-      : '');
+    renderSSHSetting(takeAnswer(res, 'ssh', 'ssh', enabled));
     renderSSHPanel();
   } catch (err) {
     box.checked = !!app.ssh;
@@ -560,10 +569,7 @@ async function togglePowerShell() {
   box.disabled = true;
   try {
     const res = await apiClient.setPowerShell(enabled);
-    app.powershell = res && 'powershell' in res ? !!res.powershell : enabled;
-    renderPowerShellSetting(res && res.persisted === false
-      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
-      : '');
+    renderPowerShellSetting(takeAnswer(res, 'powershell', 'powershell', enabled));
     renderPowerShellPanel();
   } catch (err) {
     box.checked = !!app.powershell;
@@ -640,10 +646,7 @@ async function toggleModelInvocable() {
   modelInvocableCheckbox.disabled = true;
   try {
     const res = await apiClient.setModelInvocable(enabled);
-    app.modelInvocable = res && 'model_invocable' in res ? !!res.model_invocable : enabled;
-    renderModelInvocable(res && res.persisted === false
-      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
-      : '');
+    renderModelInvocable(takeAnswer(res, 'model_invocable', 'modelInvocable', enabled));
   } catch (err) {
     modelInvocableCheckbox.checked = !!app.modelInvocable;
     modelInvocableNoteEl.textContent = `Not changed: ${err}`;
@@ -661,10 +664,7 @@ async function toggleOrchestrate() {
   orchestrateCheckbox.disabled = true;
   try {
     const res = await apiClient.setOrchestrate(enabled);
-    app.orchestrate = res && 'orchestrate' in res ? !!res.orchestrate : enabled;
-    renderOrchestrate(res && res.persisted === false
-      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
-      : '');
+    renderOrchestrate(takeAnswer(res, 'orchestrate', 'orchestrate', enabled));
   } catch (err) {
     orchestrateCheckbox.checked = !!app.orchestrate;
     orchestrateNoteEl.textContent = `Not changed: ${err}`;
@@ -693,10 +693,7 @@ async function toggleSmartAgent() {
     // thing this switch must never do: it decides which model answers and
     // which tools an agent may call.
     const res = await apiClient.setSmartAgent(enabled);
-    app.smartAgent = res && 'smart_agent' in res ? !!res.smart_agent : enabled;
-    renderSmartAgent(res && res.persisted === false
-      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
-      : '');
+    renderSmartAgent(takeAnswer(res, 'smart_agent', 'smartAgent', enabled));
   } catch (err) {
     // Nothing was applied. Put the box back where it was.
     smartAgentCheckbox.checked = !!app.smartAgent;

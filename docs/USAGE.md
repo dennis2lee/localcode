@@ -2292,6 +2292,8 @@ Limits of the desktop window's file:
 
 A switch on the Tools tab, or Smart Agent, the repeat guard or keep going on the Behavior tab, that the daemon applied and could not write to `config.json` says so under the switch, and the setting lasts only until the daemon restarts. The switch shows the applied value. The warning stays until that switch is saved from this window, or moved from another window or a prompt.
 
+The window hears of each change twice: in the answer to its own request, and in the daemon's announcement to every window. The daemon numbers each change, and the window draws nothing older than what it has already drawn. So a late announcement of the window's own change does not take a warning its next change earned, and a slow answer does not put back a value another window has changed since. A slow answer still leaves its warning while the switch has the value that answer reports.
+
 The auto-delegation panel and the rules in the permissions window say the same. The panel keeps one warning for the switch and one for the agent and patterns, because the two are written to `config.json` separately. The rules list names each rule that was added or removed and not saved, because rules are written one at a time: a later rule that is saved does not save an earlier one. A rule added and removed again without being saved is not named.
 
 These warnings are kept by the page. A reload, or the desktop window opened again, starts without them, and the settings they were about are still not saved.

@@ -501,8 +501,8 @@ func (d *Daemon) handleSetBrowser(w http.ResponseWriter, r *http.Request) {
 		// when the daemon next restarts.
 		d.Browser.Close()
 	}
-	d.announceSettings()
-	resp := map[string]any{"browser": req.Enabled, "applied": true, "persisted": true}
+	seq, held := d.settingsChanged()
+	resp := map[string]any{"browser": held["browser"], "seq": seq, "applied": true, "persisted": true}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetBrowserInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false

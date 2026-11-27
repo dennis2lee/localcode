@@ -1,5 +1,5 @@
 import { inputEl } from './dom.js';
-import { app, session, sessionWorking, noteActivity } from './state.js';
+import { app, session, sessionWorking, noteActivity, settingsCurrent } from './state.js';
 import {
   appendUser, appendTool, appendAsk, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
@@ -494,6 +494,13 @@ const handlers = {
   // harmless. This one is the only half that reaches a window looking at
   // another session, which is where the old state used to sit.
   'settings.changed': (d) => {
+    // Numbered: one older than what the page has drawn is the state
+    // before a change it has already drawn, the answer to its own next
+    // change or a later announcement, and drawing it put that change
+    // back. Compared as values, this page's own announcement arriving
+    // after the answer to its next change of the same switch read as a
+    // move made elsewhere and took the warning that answer had put up.
+    if (!settingsCurrent(d.seq)) return;
     // Same roster rule as config.changed above: the snapshot always
     // carries orchestrate, so only an actual flip refetches.
     const rosterMayHaveChanged = typeof d.orchestrate === 'boolean' && d.orchestrate !== app.orchestrate;

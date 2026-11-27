@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**Fixed**
+
+* The settings window and the delegation panel no longer losing a "not saved" warning to a late announcement of their own earlier change
+* An answer to a setting change that arrives after a later change made elsewhere no longer drawn over it
+* Daemon-wide settings numbered: `seq` in `settings.changed`, in each setting route's answer and in `GET /api/settings`
+
 **Tests**
 
 * `TestAStartClosesTheBrowserAnEarlierRunLeft` checks that the second start works and that the earlier browser stops answering on its debugging port, not that its process exits within 10 seconds: on a loaded macOS runner the system took up to 107 seconds to end a browser that had already closed

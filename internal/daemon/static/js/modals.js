@@ -12,7 +12,7 @@ import {
   workspaceModal, workspaceInput, workspaceNote, workspaceBrowseBtn, workspaceStopBusyBtn,
   effortModal, effortModelEl, effortLevelsEl, effortNoteEl, effortDefaultBtn, effortCloseBtn,
 } from './dom.js';
-import { app, session } from './state.js';
+import { app, session, settingsCurrent } from './state.js';
 import { visibleText } from './format.js';
 import * as apiClient from './api.js';
 import { appendError } from './transcript.js';
@@ -196,22 +196,27 @@ async function sendAutoDelegate(patch) {
     return false;
   }
   const held = res || {};
-  if (typeof patch.enabled === 'boolean') {
-    app.autoDelegate = typeof held.auto_delegate === 'boolean' ? held.auto_delegate : patch.enabled;
-  }
-  if (typeof patch.agent === 'string') {
-    app.autoDelegateAgent = typeof held.auto_delegate_agent === 'string' ? held.auto_delegate_agent : patch.agent;
-  }
-  if (Array.isArray(patch.match)) {
-    app.autoDelegateMatch = (Array.isArray(held.auto_delegate_match) ? held.auto_delegate_match : patch.match).slice();
-  }
+  const enabled = typeof held.auto_delegate === 'boolean' ? held.auto_delegate : patch.enabled;
+  const agent = typeof held.auto_delegate_agent === 'string' ? held.auto_delegate_agent : patch.agent;
+  const match = Array.isArray(held.auto_delegate_match) ? held.auto_delegate_match : patch.match;
+  // An answer numbered lower than what the page has drawn is older than
+  // a change made elsewhere and already drawn, and is not drawn over it.
+  // Its save outcome is kept for each half that still has the value this
+  // answer reports, as takeAnswer does for the other switches.
+  const current = settingsCurrent(held.seq);
+  const sameTarget = agent === app.autoDelegateAgent
+    && Array.isArray(match) && match.length === app.autoDelegateMatch.length
+    && match.every((m, i) => m === app.autoDelegateMatch[i]);
+  if (current && typeof patch.enabled === 'boolean') app.autoDelegate = enabled;
+  if (current && typeof patch.agent === 'string') app.autoDelegateAgent = agent;
+  if (current && Array.isArray(patch.match)) app.autoDelegateMatch = match.slice();
 
   // '' for a save that reached the file, which takes the warning away.
   const reason = held.persisted === false ? held.error || 'unknown error' : '';
-  if (typeof patch.enabled === 'boolean') {
+  if (typeof patch.enabled === 'boolean' && (current || app.autoDelegate === enabled)) {
     unsavedWarning('auto_delegate', reason && `The switch: ${NOT_SAVED}: ${reason}`);
   }
-  if (typeof patch.agent === 'string' || Array.isArray(patch.match)) {
+  if ((typeof patch.agent === 'string' || Array.isArray(patch.match)) && (current || sameTarget)) {
     unsavedWarning('auto_delegate_target', reason && `The agent and patterns: ${NOT_SAVED}: ${reason}`);
   }
   // A refusal was about an earlier request, and this one was applied.

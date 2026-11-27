@@ -159,6 +159,19 @@ type Daemon struct {
 	// announceActivity.
 	activityMu sync.Mutex
 
+	// settingsMu numbers the daemon-wide settings: settingsSeq is the
+	// number the last settings.changed carried. See settingsChanged.
+	//
+	// It starts at the time the daemon started, in microseconds, not at
+	// zero. A page keeps the number it has drawn across a reconnect, and
+	// a daemon that replaced the one it was talking to (a restart, an
+	// update's handover) would otherwise number every change lower than
+	// that, and the page would draw none of them. A count from the start
+	// time is above anything an earlier daemon reached, and stays an
+	// exact number in a browser (under 2^53) for centuries.
+	settingsMu  sync.Mutex
+	settingsSeq uint64
+
 	// daemonEvents fans out events that belong to the daemon rather than
 	// to a conversation (MCP status), which is why they bypass the
 	// session event log entirely — see broadcast.go.
@@ -186,6 +199,7 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 		mux:          http.NewServeMux(),
 		turns:        newTurnTracker(),
 		daemonEvents: newBroadcaster(),
+		settingsSeq:  uint64(time.Now().UnixMicro()),
 	}
 	// The agent loop asks for mid-turn input at every tool call; the queue
 	// itself lives here, because only the daemon knows whether a turn is
@@ -388,34 +402,71 @@ func (d *Daemon) routes(webFS fs.FS) {
 // session's log, because a setting belongs to the daemon and not to any
 // one conversation; a client that was not connected re-reads
 // GET /api/settings on load, which is the same shape.
-func (d *Daemon) announceSettings() {
-	d.daemonEvents.send(events.Event{
-		Type: events.TypeSettingsChanged,
-		Data: map[string]any{
-			"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
-			"show_tps":             d.Loop.ShowTPS(),
-			"auto_delegate":        d.Loop.AutoDelegateEnabled(),
-			"smart_agent":          d.Loop.SmartAgentEnabled(),
-			"browser":              d.Loop.Config.BrowserLive(),
-			"ssh":                  d.Loop.Config.SSHLive(),
-			"powershell":           d.Loop.Config.PowerShellLive(),
-			"skip_permissions":     d.Loop.Config.PermissionsSkipped(),
-			"keep_going":           d.Loop.KeepGoingEnabled(),
-			"fold_thinking":        d.Loop.FoldThinkingEnabled(),
-			"repeat_limit":         d.Loop.RepeatLimit(),
-			"auto_compact_percent": d.Loop.CompactPercent(),
-			// The display and orchestration switches, which the clients
-			// already apply from here and which were never sent: a
-			// "/thinking off" typed in the TUI left an open Web UI
-			// painting reasoning until it was reloaded.
-			"show_thinking":   d.Loop.ShowThinking(),
-			"show_timestamps": d.Loop.ShowTimestamps(),
-			"orchestrate":     d.Loop.OrchestrateEnabled(),
-			// Announced by its own endpoint and missing from what was
-			// announced, so a second window kept showing the old state.
-			"model_invocable": d.Loop.ModelInvocableEnabled(),
-		},
-	})
+func (d *Daemon) announceSettings() { d.settingsChanged() }
+
+// settingsChanged announces the settings and returns the number the
+// announcement carries and the snapshot it carried.
+//
+// Numbered, because a client hears of one change twice, by two routes
+// that keep no order between them: the answer to the request that made
+// it, and settings.changed on the broadcast. A page that compared values
+// took its own announcement, arriving after the answer to its next
+// change, for a move made somewhere else, and an answer arriving after
+// the announcement of a later change was drawn over it. Each
+// announcement now carries the next number, and so do the answer to the
+// change that caused it and GET /api/settings: a client drops whatever
+// is numbered lower than what it has drawn.
+//
+// The number, the snapshot and the send are taken under one lock, so the
+// announcements go out in the order they are numbered and a higher number
+// is always a later read. A handler answers from the snapshot its own
+// announcement carried, not from its request, so an answer and the
+// announcement with its number say the same.
+func (d *Daemon) settingsChanged() (uint64, map[string]any) {
+	d.settingsMu.Lock()
+	defer d.settingsMu.Unlock()
+	d.settingsSeq++
+	held := d.settingsSnapshot()
+	data := make(map[string]any, len(held)+1)
+	for k, v := range held {
+		data[k] = v
+	}
+	data["seq"] = d.settingsSeq
+	d.daemonEvents.send(events.Event{Type: events.TypeSettingsChanged, Data: data})
+	return d.settingsSeq, held
+}
+
+// settingsSnapshot is what settings.changed carries.
+func (d *Daemon) settingsSnapshot() map[string]any {
+	agent, match := d.autoDelegateTarget()
+	return map[string]any{
+		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
+		"show_tps":             d.Loop.ShowTPS(),
+		"auto_delegate":        d.Loop.AutoDelegateEnabled(),
+		// The target with the switch, so the answer to a delegation
+		// change can be taken from the same snapshot as the rest.
+		"auto_delegate_agent":  agent,
+		"auto_delegate_match":  match,
+		"smart_agent":          d.Loop.SmartAgentEnabled(),
+		"browser":              d.Loop.Config.BrowserLive(),
+		"ssh":                  d.Loop.Config.SSHLive(),
+		"powershell":           d.Loop.Config.PowerShellLive(),
+		"skip_permissions":     d.Loop.Config.PermissionsSkipped(),
+		"keep_going":           d.Loop.KeepGoingEnabled(),
+		"fold_thinking":        d.Loop.FoldThinkingEnabled(),
+		"repeat_limit":         d.Loop.RepeatLimit(),
+		"auto_compact_percent": d.Loop.CompactPercent(),
+		// The display and orchestration switches, which the clients
+		// already apply from here and which were never sent: a
+		// "/thinking off" typed in the TUI left an open Web UI
+		// painting reasoning until it was reloaded.
+		"show_thinking":   d.Loop.ShowThinking(),
+		"show_timestamps": d.Loop.ShowTimestamps(),
+		"orchestrate":     d.Loop.OrchestrateEnabled(),
+		// Announced by its own endpoint and missing from what was
+		// announced, so a second window kept showing the old state.
+		"model_invocable": d.Loop.ModelInvocableEnabled(),
+	}
 }
 
 // watchMCP forwards a manager's status changes to every connected
