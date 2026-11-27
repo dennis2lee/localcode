@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -138,5 +140,73 @@ func TestTheListenNameIsTheDaemonsOwn(t *testing.T) {
 		if resp := sameSiteRequest(t, srv, "GET", "/api/sessions", "", map[string]string{"Host": host}); resp.StatusCode != want {
 			t.Errorf("GET sent to %s: %d, want %d", host, resp.StatusCode, want)
 		}
+	}
+}
+
+// The browser panel's frame stream is an <img>, and opening it says a
+// window is watching, which is what offers the model the browser tool. A
+// browser without Fetch Metadata (Safari before 16.4) sends neither
+// Sec-Fetch-Site nor Origin on another site's <img>, so RefuseOtherSites
+// alone let it through and the conversation read as watched. From the
+// review of 720d215.
+func TestAnotherSitesImageDoesNotWatchTheBrowser(t *testing.T) {
+	d, srv, id := browserDaemon(t)
+	open := func(header map[string]string) (int, bool) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/sessions/"+id+"/browser/stream", nil)
+		for k, v := range header {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode, d.BrowserViewing(id)
+	}
+	for name, h := range map[string]map[string]string{
+		"another site's <img>, no Fetch Metadata": {"Referer": "http://evil.example/"},
+		"a page that sends no Referer":            nil,
+		"a Referer on another port":               {"Referer": "http://127.0.0.1:1/"},
+	} {
+		if code, watched := open(h); code != http.StatusForbidden || watched {
+			t.Errorf("%s: %d, watched %v; want 403, not watched", name, code, watched)
+		}
+	}
+	// The panel's own <img>, in a browser with Fetch Metadata and in one
+	// without.
+	for name, h := range map[string]map[string]string{
+		"the panel, Fetch Metadata": {"Sec-Fetch-Site": "same-origin"},
+		"the panel, Referer only":   {"Referer": srv.URL + "/"},
+	} {
+		if code, watched := open(h); code != http.StatusOK || !watched {
+			t.Errorf("%s: %d, watched %v; want 200, watched", name, code, watched)
+		}
+	}
+}
+
+// The machine's own name, as os.Hostname gives it, in any case and with or
+// without .local. From the review of 720d215: "BUILD.LOCAL" kept ".local"
+// on and refused "build".
+func TestTheMachinesOwnNameInAnyCase(t *testing.T) {
+	was := machineName
+	t.Cleanup(func() { machineName = was })
+	for name, cases := range map[string]map[string]bool{
+		"BUILD.LOCAL": {"build": true, "BUILD.local": true, "build.local.local": false, "builder": false},
+		"Build":       {"build": true, "build.local": true, "build.lan": false},
+		"build.":      {"build": true, "build.local": true},
+	} {
+		machineName = func() (string, error) { return name, nil }
+		for host, want := range cases {
+			if got := ownHost(host, ""); got != want {
+				t.Errorf("os.Hostname %q: ownHost(%q) = %v, want %v", name, host, got, want)
+			}
+		}
+	}
+	machineName = func() (string, error) { return "", errors.New("no name") }
+	if ownHost("build", "") {
+		t.Error("a machine with no name answered to one")
 	}
 }

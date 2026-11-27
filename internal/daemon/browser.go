@@ -169,6 +169,13 @@ func (d *Daemon) handleBrowserStream(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The stream is the panel's <img>, and an <img> on another site's page
+	// can open it as well. Open, it says a window is watching, and that is
+	// what offers the model the browser tool (BrowserViewing).
+	if !fromThisPage(r) {
+		writeError(w, http.StatusForbidden, errors.New("refused: the frame stream is the browser panel's, and this request does not say it came from the panel's page"))
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, errors.New("streaming unsupported"))

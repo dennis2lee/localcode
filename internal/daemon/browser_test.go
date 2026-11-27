@@ -105,6 +105,7 @@ func TestTheStreamIsWhatWatchingMeans(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/sessions/"+id+"/browser/stream", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin") // as the panel's <img> sends it
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

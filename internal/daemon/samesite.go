@@ -85,6 +85,27 @@ func sameOrigin(o string, r *http.Request) bool {
 	return err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host)
 }
 
+// fromThisPage says that r, a GET RefuseOtherSites let through, was made
+// by a page of this daemon's own origin, for a route where letting a
+// request through changes something even though another site's page
+// cannot read the answer.
+//
+// A current browser says where a request came from in Sec-Fetch-Site,
+// which RefuseOtherSites has already held to same-origin or none on the
+// API. A browser without Fetch Metadata (Safari before 16.4) sends no
+// Origin on an image or a plain GET either, and then the page's own
+// address in Referer is what tells this page's request from another
+// site's: no page can name another origin as its Referer. A request
+// that says neither is refused, which a client that is not a browser
+// has no reason to make to these routes.
+func fromThisPage(r *http.Request) bool {
+	if r.Header.Get("Sec-Fetch-Site") != "" {
+		return true
+	}
+	u, err := url.Parse(r.Referer())
+	return err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host)
+}
+
 // requestHost is the host r was sent to, without its port or brackets.
 func requestHost(r *http.Request) string {
 	host := r.Host
@@ -113,7 +134,7 @@ func ownHost(host, listenHost string) bool {
 		return true
 	}
 	if name, err := machineName(); err == nil && name != "" {
-		name = strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(name, "."), ".local"))
+		name = strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(name), "."), ".local")
 		if h == name || h == name+".local" {
 			return true
 		}
