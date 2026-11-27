@@ -51,6 +51,7 @@ export const app = {
   // settingsCurrent.
   settingsSeq: 0,
   settingsEpoch: '',
+  settingsLeftEpochs: new Set(),
   autoCompactEnabled: true,
   showTPS: true,
   autoDelegate: false,
@@ -348,14 +349,28 @@ export function resetSession(id) {
 // daemons, dropped everything a daemon started with its clock set back
 // announced, for good.
 //
+// An epoch the page has left is not drawn again. During an update's
+// handover the page keeps its stream to the daemon being replaced until
+// that daemon has finished, and a slow answer of its, or the announcement
+// of a command still running in it, can arrive after the page has taken
+// the new daemon's epoch. Taken as current, it put the replaced daemon's
+// state back over the new one's. A daemon the page has left does not come
+// back: an epoch is new at every start, and a reload starts over. Found by
+// review.
+//
 // Something with no number is current, as before numbers: an answer from
 // a route that does not carry one.
 export function settingsCurrent(m) {
   const n = m && m.seq;
   if (typeof n !== 'number') return true;
   const epoch = typeof m.epoch === 'string' ? m.epoch : '';
-  if (epoch === app.settingsEpoch && n < app.settingsSeq) return false;
-  app.settingsEpoch = epoch;
+  if (epoch === app.settingsEpoch) {
+    if (n < app.settingsSeq) return false;
+  } else {
+    if (app.settingsLeftEpochs.has(epoch)) return false;
+    if (app.settingsEpoch) app.settingsLeftEpochs.add(app.settingsEpoch);
+    app.settingsEpoch = epoch;
+  }
   app.settingsSeq = n;
   return true;
 }

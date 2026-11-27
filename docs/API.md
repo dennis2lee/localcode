@@ -158,8 +158,10 @@ carries the number of the last change. Announcements are sent in the order
 they are numbered. `epoch` names the daemon's count and is new at every
 start, when the count starts again. A client that hears of a change by
 both routes, which keep no order between them, drops whatever is numbered
-lower than what it has drawn within one epoch, and takes another epoch as
-current.
+lower than what it has drawn within one epoch, takes a new epoch as
+current, and drops an epoch it has left: during an update's handover the
+daemon being replaced can still answer or announce after its successor
+has.
 
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|

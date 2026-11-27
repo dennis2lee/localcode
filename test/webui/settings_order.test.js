@@ -224,3 +224,48 @@ test('delegation: a target changed elsewhere is drawn, and loses the warning thi
   assert.equal(app.state.autoDelegateMatch.join(), 'what is *');
   assert.equal(warn.textContent.includes('The agent and patterns'), false, 'a warning stayed under a target somebody else has since moved');
 });
+
+// During an update's handover the page keeps its stream to the daemon
+// being replaced until that daemon is done, so a message of the old
+// daemon can arrive after the page has taken the new one's epoch. An
+// epoch the page has left is not drawn again. Found by review.
+test('a message from the daemon that was replaced, arriving after the new one, is not drawn', async () => {
+  let seq = 0;
+  let held;
+  const app = await load({
+    globals: { lcGUI: true },
+    routes: {
+      'POST /api/settings/keep-going': (body) => new Promise((resolve) => {
+        seq += 1;
+        held = () => resolve({ keep_going: body.enabled, seq, epoch: 'old', applied: true, persisted: false, error: NOT_WRITTEN });
+      }),
+    },
+  });
+  await open(app);
+  const box = app.el('keep-going-checkbox');
+  const warn = app.el('keep-going-warn');
+  announce(app, { keep_going: true, seq: 7, epoch: 'old' });
+  await app.settle();
+  // A change made while the old daemon still answers on this connection.
+  box.checked = false;
+  box.fire('change');
+  await app.settle();
+  // The new daemon's first announcement lands first.
+  announce(app, { keep_going: true, seq: 1, epoch: 'new' });
+  await app.settle();
+  assert.equal(box.checked, true);
+
+  // Then the old daemon's: its answer, and an announcement of a command
+  // still running in it.
+  held();
+  await app.settle();
+  assert.equal(box.checked, true, "the replaced daemon's answer was drawn over the new daemon's state");
+  assert.equal(warn.textContent, '', 'the answer about a value the new daemon does not have left a warning');
+  announce(app, { keep_going: false, seq: 9, epoch: 'old' });
+  await app.settle();
+  assert.equal(box.checked, true, "the replaced daemon's announcement was drawn over the new daemon's state");
+  // The new daemon's count goes on ordering what it sends.
+  announce(app, { keep_going: false, seq: 2, epoch: 'new' });
+  await app.settle();
+  assert.equal(box.checked, false);
+});
