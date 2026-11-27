@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"localcode/internal/browser/browsertest"
+	"localcode/internal/cdp"
 )
 
 // testManager runs a real browser on a fresh profile directory, never the
@@ -340,6 +341,21 @@ func TestAPunctuationKeyCarriesItsKeyCode(t *testing.T) {
 
 // A browser a dead daemon left running on the profile is closed by the
 // next start, which would otherwise hand itself over to it and exit.
+//
+// What the start has to do is two things, and the test holds it to both.
+// The second start works, which it cannot while the earlier browser
+// holds the profile: a browser started on a profile in use exits at once
+// (status 21). And the earlier browser stops answering on its debugging
+// port, which says it was told to close and did, not only that the lock
+// came free.
+//
+// When its process exits is not asked. Measured on the macOS runner
+// beside the gate (diag/left-exit, 240 runs): the port and the profile
+// lock went within 2.1 seconds every time, and the process exited up to
+// 107 seconds after the second start, once not within 120. A process that
+// slow had no threads left (sample found none), a name ps showed in
+// parentheses, and children it had not reaped: it was the system ending
+// it. A fixed 10 seconds for that failed the gate.
 func TestAStartClosesTheBrowserAnEarlierRunLeft(t *testing.T) {
 	first := testManager(t)
 	ctx := ctxFor(t)
@@ -350,6 +366,10 @@ func TestAStartClosesTheBrowserAnEarlierRunLeft(t *testing.T) {
 	// first.Close, and its browser goes on running.
 	left := first.proc
 	t.Cleanup(left.kill) // whatever the outcome, no browser outlives the test
+	url, ok := readPortFile(filepath.Join(first.opts.DataDir, "DevToolsActivePort"))
+	if !ok {
+		t.Fatal("the earlier browser wrote no debugging port")
+	}
 	first.mu.Lock()
 	first.proc = nil
 	first.mu.Unlock()
@@ -359,10 +379,19 @@ func TestAStartClosesTheBrowserAnEarlierRunLeft(t *testing.T) {
 	if _, err := second.Tab(ctx, "c"); err != nil {
 		t.Fatalf("the second start failed: %v", err)
 	}
-	select {
-	case <-left.exited:
-	case <-time.After(10 * time.Second):
-		t.Error("the browser the earlier run left is still running")
+	// The start waits for the port to stop answering before it starts
+	// the new browser (closeStale), so it is gone by now; the loop is for
+	// a dial that is itself slow on a loaded machine.
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		c, err := cdp.DialTimeout(url, time.Second)
+		if err != nil {
+			break
+		}
+		c.Close()
+		if time.Now().After(deadline) {
+			t.Fatal("the browser the earlier run left still answers on its debugging port: it was not closed")
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

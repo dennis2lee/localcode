@@ -14,6 +14,21 @@ A question a stopped daemon left open is no longer shown again when the conversa
 * A model question a stopped daemon left open kept after the next turn in the conversation ended or asked a question of its own, in the TUI and the Web UI
 * Web UI: stopping a conversation's turn taking a background task's mirrored permission question off screen while the task still waited on it
 
+## v0.180.11
+
+A window draws no setting older than the one it shows: the daemon numbers each change of a daemon-wide setting.
+
+**Fixed**
+
+* The settings window and the delegation panel no longer losing a "not saved" warning to a late announcement of their own earlier change
+* An answer to a setting change that arrives after a later change made elsewhere no longer drawn over it
+* A delegation agent and patterns chosen in another window drawn in the delegation panel
+* Daemon-wide settings numbered: `seq` and `epoch` in `settings.changed`, in each setting route's answer and in `GET /api/settings`
+
+**Tests**
+
+* `TestAStartClosesTheBrowserAnEarlierRunLeft` checks that the second start works and that the earlier browser stops answering on its debugging port, not that its process exits within 10 seconds: on a loaded macOS runner the system took up to 107 seconds to end a browser that had already closed
+
 ## v0.180.10
 
 The permissions window's switches and forget buttons go one change at a time, each for the conversation it was made in.

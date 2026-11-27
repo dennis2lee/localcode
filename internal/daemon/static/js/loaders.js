@@ -1,5 +1,5 @@
 import { agentSelectEl, appVersionEl } from './dom.js';
-import { app, session } from './state.js';
+import { app, session, settingsCurrent } from './state.js';
 import * as apiClient from './api.js';
 import { appendError } from './transcript.js';
 import { askConfirm } from './prompt.js';
@@ -87,31 +87,38 @@ export async function loadSlashCommands() {
 export async function loadSettings() {
   try {
     const s = await apiClient.getSettings();
-    app.autoCompactEnabled = s.auto_compact_enabled;
-    app.showTPS = s.show_tps;
-    if (typeof s.show_thinking === 'boolean') app.showThinking = s.show_thinking;
-    if (typeof s.show_timestamps === 'boolean') app.showTimestamps = s.show_timestamps;
-    app.autoDelegate = !!s.auto_delegate;
-    app.autoDelegateAgent = s.auto_delegate_agent || '';
-    app.autoDelegateMatch = s.auto_delegate_match || [];
-    app.smartAgent = !!s.smart_agent;
-    app.browser = !!s.browser;
+    // The switches settings.changed carries, only from a read at least as
+    // new as what an announcement has already drawn: see settingsCurrent.
+    // The page opens the conversation's stream after this read today, so
+    // no announcement is drawn before it; the read is numbered so that
+    // holds whatever order the page starts in.
+    if (settingsCurrent(s)) {
+      app.autoCompactEnabled = s.auto_compact_enabled;
+      app.showTPS = s.show_tps;
+      if (typeof s.show_thinking === 'boolean') app.showThinking = s.show_thinking;
+      if (typeof s.show_timestamps === 'boolean') app.showTimestamps = s.show_timestamps;
+      app.autoDelegate = !!s.auto_delegate;
+      app.autoDelegateAgent = s.auto_delegate_agent || '';
+      app.autoDelegateMatch = s.auto_delegate_match || [];
+      app.smartAgent = !!s.smart_agent;
+      app.browser = !!s.browser;
+      app.ssh = !!s.ssh;
+      app.powershell = !!s.powershell;
+      app.orchestrate = !!s.orchestrate;
+      app.modelInvocable = !!s.model_invocable;
+      app.skipPermissions = !!s.skip_permissions;
+      app.keepGoing = s.keep_going !== false;
+      app.foldThinking = s.fold_thinking !== false;
+      if (typeof s.repeat_limit === 'number') app.repeatLimit = s.repeat_limit;
+      if (typeof s.auto_compact_percent === 'number') app.autoCompactPercent = s.auto_compact_percent;
+    }
     app.browserAvailable = s.browser_available !== false;
     app.browserImport = s.browser_import || null;
-    app.ssh = !!s.ssh;
     app.sshAvailable = s.ssh_available !== false;
-    app.powershell = !!s.powershell;
     app.powershellAvailable = s.powershell_available === true;
-    app.orchestrate = !!s.orchestrate;
-    app.modelInvocable = !!s.model_invocable;
     app.modelCommands = Array.isArray(s.model_commands) ? s.model_commands : [];
     app.orchestrateRoster = s.orchestrate_roster || [];
-    app.skipPermissions = !!s.skip_permissions;
-    app.keepGoing = s.keep_going !== false;
-    app.foldThinking = s.fold_thinking !== false;
     app.museProfiles = Array.isArray(s.muse_profiles) ? s.muse_profiles : [];
-    if (typeof s.repeat_limit === 'number') app.repeatLimit = s.repeat_limit;
-    if (typeof s.auto_compact_percent === 'number') app.autoCompactPercent = s.auto_compact_percent;
     app.permissionRules = s.permission_rules || {};
     app.canEditPermissions = !!s.can_edit_permissions;
   } catch (err) {
