@@ -173,6 +173,70 @@ func TestAWriteThatFailsLeavesWhatWasThereAndNoTempFile(t *testing.T) {
 	}
 }
 
+// A reorder writes only the sessions whose place changes.
+//
+// Every write is a flush to the disk, and SetOrder holds the store's lock
+// while it writes. Rewriting every visible session on each drag cost about
+// 4 ms a session on macOS, with every other session's events waiting.
+// Moving one card past its neighbour changes two places and writes two
+// files. A reorder that changes nothing writes none. The files are still
+// the record: a restart reads the order the store has.
+func TestAReorderWritesOnlyTheSessionsWhosePlaceChanges(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(s.Close)
+	ids := []string{"s1", "s2", "s3", "s4", "s5"}
+	for _, id := range ids {
+		if _, err := s.CreateSession(id, "", "general-purpose", true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetOrder(ids); err != nil {
+		t.Fatalf("baseline SetOrder: %v", err)
+	}
+
+	var wrote []string
+	s.writeMeta = func(d string, m Session) error {
+		wrote = append(wrote, m.ID)
+		return writeSessionMeta(d, m)
+	}
+	moved := []string{"s1", "s3", "s2", "s4", "s5"}
+	if err := s.SetOrder(moved); err != nil {
+		t.Fatalf("SetOrder: %v", err)
+	}
+	sort.Strings(wrote)
+	if want := []string{"s2", "s3"}; !reflect.DeepEqual(wrote, want) {
+		t.Errorf("moving s3 one place up wrote %v, want %v: the two sessions whose place changed", wrote, want)
+	}
+
+	wrote = nil
+	if err := s.SetOrder(moved); err != nil {
+		t.Fatalf("SetOrder again: %v", err)
+	}
+	if len(wrote) != 0 {
+		t.Errorf("a reorder that changes nothing wrote %v, want no file", wrote)
+	}
+
+	restored, warnings, err := LoadAllFromDisk(dir)
+	if err != nil {
+		t.Fatalf("LoadAllFromDisk: %v", err)
+	}
+	t.Cleanup(restored.Close)
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %v, want none", warnings)
+	}
+	var got []string
+	for _, sess := range restored.ListVisible() {
+		got = append(got, sess.ID)
+	}
+	if !reflect.DeepEqual(got, moved) {
+		t.Errorf("a restart reads the order %v, want %v", got, moved)
+	}
+}
+
 // A temporary file a stopped write left behind is not a session, and does
 // not stop the others from loading. One older than staleTempAge is
 // removed at the next load. A younger one is kept, because a daemon being

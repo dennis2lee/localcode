@@ -581,8 +581,10 @@ const (
 // path then holds the previous version, whole.
 //
 // The flush is the cost. It is F_FULLFSYNC on macOS, measured at about
-// 4 ms a file, and SetOrder writes one file per visible session under the
-// store's lock: 440 ms for 100 sessions, against 8 ms without it.
+// 4 ms a file. SetOrder writes one file per session whose place changes,
+// under the store's lock: of 100 sessions, 8 ms when one card moves one
+// place, and 410 ms when the last moves to the top and every place
+// changes.
 func writeFileAtomic(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), tempPrefix+"*"+tempSuffix)
 	if err != nil {
@@ -1345,6 +1347,12 @@ func (s *Store) SetOrder(ids []string) error {
 	// A file that will not go back either keeps the new place, in memory
 	// as on disk, and the error names it. Claiming the old place for it
 	// would last only until the next restart.
+	//
+	// A session already at its place is not written again. Its file holds
+	// that place: a write replaces the file whole or leaves it as it was,
+	// and memory follows the file whenever a write fails. Every write is a
+	// flush to the disk (see writeFileAtomic), so a drag past one
+	// neighbour writes two files, not one per visible session.
 	prev := make(map[string]int, len(at))
 	for id := range at {
 		prev[id] = s.sessions[id].meta.Order
@@ -1352,6 +1360,9 @@ func (s *Store) SetOrder(ids []string) error {
 	var written []string
 	for id, pos := range at {
 		st := s.sessions[id]
+		if st.meta.Order == pos {
+			continue
+		}
 		st.meta.Order = pos
 		if s.dir == "" {
 			continue
