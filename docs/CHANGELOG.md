@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.181.0
 
-A question a stopped daemon left open is no longer shown again when the conversation is opened or its client reconnects.
+The daemon refuses requests a web page could make, and a question a stopped daemon left open is no longer shown again when the conversation is opened or its client reconnects.
 
 **Fixed**
 
@@ -22,10 +22,21 @@ A question a stopped daemon left open is no longer shown again when the conversa
 * Web UI: a prompt Esc took out of the page's queue left drawn as sent when no turn was running
 * A prompt refused as busy after a switch to another conversation sent to that conversation, in the TUI and the Web UI
 * A prompt still queued when another conversation was opened dropped without a word, in the TUI and the Web UI
+* Requests a web page could make answered by the daemon: another site's form or fetch, a page on another port, a page on a name pointed at this machine; now `403` on every route and on the desktop window's folder picker
+* Another site's `<img>` of the browser frame stream, in a browser without Fetch Metadata, offering the model the browser tool
+* A crash while session metadata or the group list was written able to drop a conversation from the list, and a reorder that failed partway left half written on disk
+* The summarization request on a small window asking for 4096 tokens beside the system prompt, refused on every attempt
+* A failed automatic compaction sent again at the top of every turn, billed, with nothing in the transcript
+* A summary that came back empty counted nowhere in `/usage`, `/usage all`, the usage window or `localcode run`
+* The context measure, `/context` and the cut-off notice reading a count of the previous agent's system prompt and tools after a switch, or of the first model's after a fallback
+* Reasoning that is not sent back counted in the context measure, the gauge, the cut-off notice and the tokens-left line the model is given
+* The debate let-go test failing on a loaded Windows runner
 
 **Added**
 
 * `seq` in the `202` for a message: the log's last seq when the daemon took it
+* `measured_system`, `measured_tools` and `carried_output_tokens` on the `usage` event
+* `ReasoningTokens` from `completion_tokens_details` on OpenAI-compatible servers
 
 ## v0.180.11
 

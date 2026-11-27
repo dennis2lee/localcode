@@ -78,6 +78,7 @@ The full reference: every capability localcode ships, one line each, grouped by 
 | Hooks | Tool and lifecycle hooks with per-hook timeout and `fail_closed`. See [USAGE.md](USAGE.md#hooks). |
 | MCP | `stdio`, streamable `http`, and `sse` transports. `localcode mcp add/list/get/remove` without printing secrets. See [USAGE.md](USAGE.md#managing-mcp-servers-with-localcode-mcp). |
 | Egress | `network.egress` bounds localcode's own outbound connections when asked for. Shell and subprocess servers are out of scope. See [USAGE.md](USAGE.md#where-localcode-may-connect). |
+| Daemon API | Requests a web page could make are refused with `403`: another site's page, a page on another port, and a page on a name pointed at this machine. There is no auth token, so a program that can reach the address still gets the whole API. See [API.md](API.md#read-this-first-no-auth-no-stability). |
 | Debug log | `/debug-log` toggles writing every model request and response, byte for byte and binary included, to one file per prompt in the workspace. Credentials are redacted; nothing else is. Off at every start. |
 | Trace | JSON Lines events per turn, inherited by child agents. Written only with Smart Agent on. See [USAGE.md](USAGE.md#the-turn-log). |
 | Prompt inventory | `/context` reports the next request by source and trust class without a model call. See [USAGE.md](USAGE.md#context). |
