@@ -52,10 +52,11 @@ import (
 // Entries are compared by position, so removing one from the middle
 // re-renders everything after it: each entry has shifted a place and
 // mismatches the one it is now compared against, although none of its
-// text changed. Deliberately not detected. The only removal in the
-// package is resolvePendingUser dropping the echo of a prompt, and
-// appendPendingUser put that echo at the end, so what shifts is the
-// handful of entries that arrived while the daemon was answering. At
+// text changed. Deliberately not detected. The removals in the package
+// are resolvePendingUser and resolveOwnEcho dropping the echo of a
+// prompt, which appendPendingUser or appendSent put at the end, and
+// takeBackUnsent dropping a line the last stop rewrote, which is near the
+// end too. What shifts is the handful of entries that arrived after it. At
 // about 50us an entry that is microseconds, once per prompt, against
 // shift detection that would run on every event to find it. The output
 // is right either way; this is only about work.

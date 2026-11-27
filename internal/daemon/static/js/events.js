@@ -4,7 +4,7 @@ import {
   appendUser, appendTool, appendAsk, askReplyHint, askLeftHint, noteAskLine, forgetAskLine, askLineIds, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
   appendReview, appendThinking, endThinking, foldThinking, clearTranscript, showEarlierBanner,
-  abandonPendingUsers, takeBackUnsent, settleThinkingBlock, hasLiveThinking, landBeforeSeq,
+  abandonPendingUsers, takeBackUnsent, forgetUnsentLines, settleThinkingBlock, hasLiveThinking, landBeforeSeq,
 } from './transcript.js';
 import { findRefresh } from './find.js';
 import { renderStatusBar, renderTasks, renderTaskProgress, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
@@ -122,10 +122,9 @@ const handlers = {
     // it; this is that message finally reaching the model, so the
     // placeholder goes rather than sitting above a duplicate. Unconditional
     // because every prompt gets one now, not just the mid-turn ones.
-    // With no placeholder, the text can be a prompt a stop marked as never
-    // sent and the daemon started a turn for after all, and that line goes
-    // instead. Text neither was made for (another client's message, or a
-    // replayed one) changes nothing.
+    // With no placeholder, the text can be a prompt the last stop marked as
+    // never sent and the daemon started a turn for after all, and that line
+    // goes instead (see takeBackUnsent). Text with neither changes nothing.
     if (!resolvePendingUser(d.text)) takeBackUnsent(d.text);
     // A new turn's prompt: any reasoning block still open belongs to a
     // turn that ended without saying so, and the next reasoning must not
@@ -195,6 +194,8 @@ const handlers = {
   // cleared — safe to stop waiting and let the queue drain.
   'turn.done': () => {
     putAwayHeldAsks();
+    // A prompt that raced the last stop has had its message.user by now.
+    forgetUnsentLines();
     app.turnMoves++;
     session.runningTool = '';
     setWaiting(false);

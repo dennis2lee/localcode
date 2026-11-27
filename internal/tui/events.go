@@ -242,6 +242,9 @@ func (m *Model) applyEvent(ev events.Event) {
 		// cleared — safe to stop waiting and let the queue drain.
 		m.endTurn()
 		m.dropHeldAsk()
+		// A prompt that raced the last stop has had its message.user by
+		// now.
+		m.forgetUnsent()
 	case events.TypeToolStart:
 		// A line per call, as well as the busy indicator below the prompt
 		// box. The indicator alone says only what is running right now and

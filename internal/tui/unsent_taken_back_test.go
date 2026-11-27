@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
 
+	"localcode/internal/client"
 	"localcode/internal/events"
 )
 
@@ -184,5 +186,79 @@ func TestTheLineTakenBackIsFromTheStopThePromptRaced(t *testing.T) {
 	text := m.transcriptText()
 	if strings.Index(text, notSentNote) > strings.Index(text, "[cancelled]") {
 		t.Errorf("the line the first stop dropped was taken back, and the one from the stop the prompt raced is left:\n%s", text)
+	}
+}
+
+func TestALineIsTakenBackOnlyUntilTheNextTurnEnds(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+	m, _ = pressEnterWith(t, m, "yes")
+	m.applyEvent(events.Event{Seq: 20, Type: events.TypeTurnCancelled})
+	// Another client's turn, from start to end.
+	m.applyEvent(userMessage(21, "something else"))
+	m.applyEvent(events.Event{Seq: 22, Type: events.TypeTurnDone})
+	// And the same words from another client after it.
+	m.applyEvent(userMessage(23, "yes"))
+	if n := notSentLines(m); n != 1 {
+		t.Errorf("a message.user after the next turn ended took back a line the stop did drop (%d left):\n%s", n, m.transcriptText())
+	}
+}
+
+// The TUI's queue sends a prompt a busy 409 put in it again with no echo
+// of its own, and the queue drains only once a turn has ended.
+func TestABusyRequeuedPromptDoesNotTakeBackALineAnEarlierStopDropped(t *testing.T) {
+	busy := &client.StatusError{Status: http.StatusConflict, Message: "409: every session is being deleted; try again in a moment"}
+
+	m := newTestModel()
+	m.waiting = true
+	m, _ = pressEnterWith(t, m, "continue")
+	m.applyEvent(events.Event{Seq: 20, Type: events.TypeTurnCancelled})
+
+	// Later, the same words sent to the idle session, answered busy.
+	m, _ = pressEnterWith(t, m, "continue")
+	updated, _ := m.Update(turnDoneMsg{text: "continue", err: busy, startsTurn: true, echo: m.sends})
+	m = updated.(Model)
+	if len(m.queue) != 1 {
+		t.Fatalf("precondition: the busy send is queued: %q", m.queue)
+	}
+	m.applyEvent(events.Event{Seq: 21, Type: events.TypeTurnDone})
+	if cmd := m.dequeue(); cmd == nil {
+		t.Fatal("precondition: the queue sent the prompt again")
+	}
+	m.applyEvent(userMessage(22, "continue"))
+
+	if n := notSentLines(m); n != 1 {
+		t.Errorf("the line the stop dropped was taken back by a later send of the same words (%d left):\n%s", n, m.transcriptText())
+	}
+}
+
+func TestOfTheLinesOneStopRewroteTheOneSentNearestTheStopIsTakenBack(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+	m, _ = pressEnterWith(t, m, "again")
+	m.applyEvent(events.Event{Seq: 11, Type: events.TypeError, Data: map[string]any{"recovered": true, "error": "retrying the request"}})
+	m, _ = pressEnterWith(t, m, "again")
+	m.applyEvent(events.Event{Seq: 20, Type: events.TypeTurnCancelled})
+	m.applyEvent(userMessage(21, "again"))
+
+	if n := notSentLines(m); n != 1 {
+		t.Fatalf("want one line left saying not sent, got %d:\n%s", n, m.transcriptText())
+	}
+	text := m.transcriptText()
+	if strings.Index(text, notSentNote) > strings.Index(text, "retrying the request") {
+		t.Errorf("the line sent first was taken back, and the one sent nearest the stop is left:\n%s", text)
+	}
+}
+
+func TestAStopEndsTheWindowOfTheStopBeforeIt(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+	m, _ = pressEnterWith(t, m, "yes")
+	m.applyEvent(events.Event{Seq: 20, Type: events.TypeTurnCancelled})
+	m.applyEvent(userMessage(21, "something else"))
+	m.applyEvent(events.Event{Seq: 22, Type: events.TypeTurnCancelled})
+	m.applyEvent(userMessage(23, "yes"))
+	if n := notSentLines(m); n != 1 {
+		t.Errorf("a message.user after the next stop took back a line the first stop did drop (%d left):\n%s", n, m.transcriptText())
 	}
 }

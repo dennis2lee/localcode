@@ -131,3 +131,46 @@ test('the line taken back is the one from the stop the prompt raced, not one an 
   assert.ok(html.indexOf('not sent — the turn was stopped') < html.indexOf('[cancelled]'),
     'the line the first stop dropped was taken back, and the one from the stop the prompt raced is left');
 });
+
+test('a line is taken back only until the next turn ends', async () => {
+  const app = await load(accepted);
+  app.state.waiting = true;
+  await send(app, 'yes');
+  app.sse.emit({ seq: 20, type: 'turn.cancelled', data: {} });
+  // Another client's turn, from start to end.
+  app.sse.emit({ seq: 21, type: 'message.user', data: { text: 'something else' } });
+  app.sse.emit({ seq: 22, type: 'turn.done', data: {} });
+  // And the same words from another client after it.
+  app.sse.emit({ seq: 23, type: 'message.user', data: { text: 'yes' } });
+  await app.settle();
+  assert.equal(notSent(app), 1, 'a message.user after the next turn ended took back a line the stop did drop');
+});
+
+test('of the lines one stop rewrote, the one sent nearest the stop is taken back', async () => {
+  const app = await load(accepted);
+  app.state.waiting = true;
+  await send(app, 'again');
+  app.sse.emit({ seq: 11, type: 'error', data: { recovered: true, error: 'retrying the request' } });
+  await app.settle();
+  await send(app, 'again');
+  app.sse.emit({ seq: 20, type: 'turn.cancelled', data: {} });
+  app.sse.emit({ seq: 21, type: 'message.user', data: { text: 'again' } });
+  await app.settle();
+
+  assert.equal(notSent(app), 1);
+  const html = app.transcript();
+  assert.ok(html.indexOf('not sent — the turn was stopped') < html.indexOf('retrying the request'),
+    'the line sent first was taken back, and the one sent nearest the stop is left');
+});
+
+test('a stop ends the window of the stop before it, with nothing of its own to rewrite', async () => {
+  const app = await load(accepted);
+  app.state.waiting = true;
+  await send(app, 'yes');
+  app.sse.emit({ seq: 20, type: 'turn.cancelled', data: {} });
+  app.sse.emit({ seq: 21, type: 'message.user', data: { text: 'something else' } });
+  app.sse.emit({ seq: 22, type: 'turn.cancelled', data: {} });
+  app.sse.emit({ seq: 23, type: 'message.user', data: { text: 'yes' } });
+  await app.settle();
+  assert.equal(notSent(app), 1, 'a message.user after the next stop took back a line the first stop did drop');
+});

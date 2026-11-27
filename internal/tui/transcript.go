@@ -73,9 +73,10 @@ type transcriptEntry struct {
 	// send nothing took removes its own echo and no other. Zero for every
 	// other entry.
 	send int
-	// unsent is the text of an echo a stop rewrote as never sent (see
-	// abandonPendingUsers), so the model being handed it after all takes
-	// the line back. Empty for every other entry.
+	// unsent is the text of an echo the last turn end rewrote as never
+	// sent (see abandonPendingUsers), so the model being handed it after
+	// all takes the line back. Empty for every other entry, and again at
+	// the next turn end (forgetUnsent).
 	unsent string
 }
 
@@ -199,6 +200,8 @@ func (m *Model) removeEntry(i int) {
 // what it said. The line keeps the words and stops claiming they went
 // anywhere.
 func (m *Model) abandonPendingUsers() {
+	// This end closes the window on the lines the one before rewrote.
+	m.forgetUnsent()
 	changed := false
 	for i, e := range m.transcript {
 		if e.kind != entryPending && e.kind != entrySent {
@@ -228,20 +231,32 @@ func (m *Model) abandonPendingUsers() {
 // stopped turn's end is written. Its message.user then comes after that
 // end, and the line said "not sent" above the model's answer to it.
 //
-// The newest, because that prompt is the last one sent before the stop: a
-// line with the same words further up is from an earlier stop, which did
-// drop it.
+// Only a line the last turn end rewrote, and only until the next one: the
+// prompt that raced a stop starts the turn after it or is handed to that
+// turn, so its message.user comes before that turn's end. A line with the
+// same words from an earlier stop is one that stop did drop. Of the lines
+// one stop rewrote, the newest, the one sent nearest the stop.
 //
 // Only for a message.user with no echo of its own: an echo stands for a
 // send still waiting, which that event answers first. Matched by text, as
-// an echo is, so another client's message with the same words takes the
-// line back too.
+// an echo is, so another client's message with the same words, in that
+// window, takes the line back too.
 func (m *Model) takeBackUnsent(text string) {
 	for i := len(m.transcript) - 1; i >= 0; i-- {
 		if e := m.transcript[i]; e.unsent != "" && e.unsent == text {
 			m.removeEntry(i)
 			return
 		}
+	}
+}
+
+// forgetUnsent ends the window in which takeBackUnsent can take a line
+// back: at the next turn end, the lines stay as they are and stop being
+// taken back. Nothing on screen changes, so the transcript's revision
+// does not move.
+func (m *Model) forgetUnsent() {
+	for i := range m.transcript {
+		m.transcript[i].unsent = ""
 	}
 }
 

@@ -178,8 +178,9 @@ export function resolvePendingUser(text) {
   return true;
 }
 
-// unsentLines holds the lines abandonPendingUsers rewrote, by the text
-// they carry, for takeBackUnsent.
+// unsentLines holds the lines the last turn end rewrote in
+// abandonPendingUsers, by the text they carry, for takeBackUnsent. Until
+// the next turn end: see forgetUnsentLines.
 const unsentLines = new Map(); // text -> [element]
 
 // abandonPendingUsers answers a stopped turn: every prompt still showing
@@ -192,6 +193,8 @@ const unsentLines = new Map(); // text -> [element]
 // what it said. The line keeps the words and stops claiming they went
 // anywhere.
 export function abandonPendingUsers() {
+  // This end closes the window on the lines the one before rewrote.
+  forgetUnsentLines();
   for (const [text, list] of sentPlaceholders) {
     for (const parts of list) {
       // The separator announced a turn boundary that never happened.
@@ -214,20 +217,29 @@ export function abandonPendingUsers() {
 // comes after that end, and the line said "not sent" above the model's
 // answer to it.
 //
-// The newest, because that prompt is the last one sent before the stop:
-// a line with the same words further up is from an earlier stop, which
-// did drop it.
+// Only a line the last turn end rewrote, and only until the next one: the
+// prompt that raced a stop starts the turn after it or is handed to that
+// turn, so its message.user comes before that turn's end. A line with the
+// same words from an earlier stop is one that stop did drop. Of the lines
+// one stop rewrote, the newest, the one sent nearest the stop.
 //
 // Only for a message.user with no placeholder of its own: a placeholder
 // stands for a send still waiting, which that event answers first.
 // Matched by text, as a placeholder is, so another client's message with
-// the same words takes the line back too.
+// the same words, in that window, takes the line back too.
 export function takeBackUnsent(text) {
   const list = unsentLines.get(text);
   if (!list || list.length === 0) return;
   const div = list.pop();
   if (list.length === 0) unsentLines.delete(text);
   div.remove();
+}
+
+// forgetUnsentLines ends the window in which takeBackUnsent can take a
+// line back: at the next turn end, the lines stay as they are and stop
+// being taken back.
+export function forgetUnsentLines() {
+  unsentLines.clear();
 }
 
 // Moving between your own turns.
@@ -994,5 +1006,8 @@ export function clearTranscript() {
   // detached nodes.
   session.toolRows.clear();
   sentPlaceholders.clear();
+  // Its lines went with the innerHTML too. Taking one back would change
+  // nothing on screen, and the next turn end forgets them anyway; this
+  // lets go of the nodes.
   unsentLines.clear();
 }
