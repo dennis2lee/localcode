@@ -13,7 +13,7 @@ A question a stopped daemon left open is no longer shown again when the conversa
 * Web UI: an answer to a model question that failed to reach the daemon not putting the question back, so the next message went to the model as a prompt
 * A model question a stopped daemon left open kept after the next turn in the conversation ended or asked a question of its own, in the TUI and the Web UI
 * Web UI: stopping a conversation's turn taking a background task's mirrored permission question off screen while the task still waited on it
-* A question from a turn that began just as the turn before it ended taken off screen by that earlier turn's end: a turn's end is now in the log before the next turn begins
+* A question from a turn that began as the turn before it was ending taken off screen by that earlier turn's end: a model question in the TUI and the Web UI, a permission question in the Web UI
 
 ## v0.180.11
 

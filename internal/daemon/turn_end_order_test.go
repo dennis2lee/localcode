@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,11 @@ import (
 // began between the registration being cleared and the end being written
 // could ask first, and the end written after it took its live question
 // off screen. So begin waits while an end is being written.
+//
+// Two begins, so that both waiting for one end is covered too: they are
+// let go together, and only one of them may start a turn. A begin that
+// read the registration before waiting and did not read it again after
+// started two turns in one session.
 func TestABeginWaitsForTheTurnBeforeToWriteItsEnd(t *testing.T) {
 	ends := map[string]func(tr *turnTracker, write func()){
 		"finishOrTake": func(tr *turnTracker, write func()) {
@@ -47,30 +53,97 @@ func TestABeginWaitsForTheTurnBeforeToWriteItsEnd(t *testing.T) {
 					t.Fatal("begin")
 				}
 
-				began := make(chan bool, 1)
-				var beganWhileWriting bool
+				const n = 2
+				began := make(chan bool, n)
 				end(&tr, func() {
-					go func() { began <- begin(&tr, cancel) }()
-					// The begin either waits, which is right and is what
-					// the timer stands in for, or returns at once.
-					select {
-					case <-began:
-						beganWhileWriting = true
-					case <-time.After(100 * time.Millisecond):
+					for range n {
+						go func() { began <- begin(&tr, cancel) }()
+					}
+					// Each begin either returns, which is the bug, or comes
+					// to rest waiting on the end.
+					for deadline := time.Now().Add(10 * time.Second); waitingForAnEnd() < n; time.Sleep(time.Millisecond) {
+						select {
+						case <-began:
+							t.Fatalf("%s returned while the turn before was writing its end: the next turn's first event can come before that end in the log", beginName)
+						default:
+						}
+						if time.Now().After(deadline) {
+							t.Fatalf("%d of %d %s calls are waiting for the end after 10s", waitingForAnEnd(), n, beginName)
+						}
 					}
 				})
-				if beganWhileWriting {
-					t.Fatalf("%s returned while the turn before was writing its end: the next turn's first event can come before that end in the log", beginName)
-				}
-				select {
-				case ok := <-began:
-					if !ok {
-						t.Errorf("%s refused once the end was written, with nothing running", beginName)
+				won := 0
+				for range n {
+					select {
+					case ok := <-began:
+						if ok {
+							won++
+						}
+					case <-time.After(10 * time.Second):
+						t.Fatalf("%s still waiting after the end was written", beginName)
 					}
-				case <-time.After(10 * time.Second):
-					t.Fatalf("%s still waiting after the end was written", beginName)
+				}
+				if won != 1 {
+					t.Errorf("%d of %d %s calls that waited for one end started a turn, want 1", won, n, beginName)
 				}
 			})
+		}
+	}
+}
+
+// waitingForAnEnd counts the goroutines blocked in awaitEnd on an end
+// being written: a receive on the ending channel, read from the stacks.
+func waitingForAnEnd() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	waiting := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header, _, _ := strings.Cut(g, "\n")
+		if strings.Contains(header, "[chan receive") && strings.Contains(g, "(*turnTracker).awaitEnd(") {
+			waiting++
+		}
+	}
+	return waiting
+}
+
+// Nothing registers a turn between the registration being cleared and the
+// session being marked as ending. Repeated, because it is a race: four
+// begins spin against each end, and one that slipped in would show in
+// running() during the write. It never fails correct code.
+func TestNoTurnRegistersBeforeTheEndIsWritten(t *testing.T) {
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for i := 0; i < 3000; i++ {
+		tr := newTurnTracker()
+		if !tr.begin("s1", cancel) {
+			t.Fatal("begin")
+		}
+		var won atomic.Bool
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for !won.Load() {
+					if tr.begin("s1", cancel) {
+						won.Store(true)
+						return
+					}
+				}
+			}()
+		}
+		var during []string
+		tr.finishOrTake("s1", func() { during = tr.running() })
+		wg.Wait()
+		if len(during) > 0 {
+			t.Fatalf("attempt %d: a turn was registered (%v) while the end of the one before was being written", i, during)
 		}
 	}
 }
@@ -267,13 +340,14 @@ func nextTurnAfterEnd(t *testing.T, way string) {
 	}
 
 	endAt, secondAt := -1, -1
+	var endType events.Type
 	var order []string
 	for i, ev := range logged() {
 		text, _ := ev.Data["text"].(string)
 		switch ev.Type {
 		case events.TypeTurnDone, events.TypeTurnCancelled:
 			if endAt < 0 {
-				endAt = i
+				endAt, endType = i, ev.Type
 			}
 		case events.TypeUserMessage:
 			if text == "second" {
@@ -288,6 +362,15 @@ func nextTurnAfterEnd(t *testing.T, way string) {
 	if endAt < 0 || secondAt < 0 || secondAt < endAt {
 		t.Errorf("the next turn's message (log index %d) is not after the first turn's end (index %d): an end written after the next turn's question takes that live question off screen\nlog:\n  %s",
 			secondAt, endAt, strings.Join(order, "\n  "))
+	}
+	// Each way has its own end: a stopped turn's turn.cancelled drops the
+	// clients' prompt queue, and a failed one must not.
+	want := events.TypeTurnDone
+	if way == "cancelled" {
+		want = events.TypeTurnCancelled
+	}
+	if endType != want {
+		t.Errorf("the first turn ended with %s, want %s", endType, want)
 	}
 	// Let the next turn go, and finish, before the model server closes.
 	if ids := requests(); len(ids) > 0 {

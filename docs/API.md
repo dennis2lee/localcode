@@ -497,6 +497,6 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `delegated` | `{"agent", "prompt"}`; a sub-agent answered on its own model |
 | `effort.changed` | `{"model", "agent", "level", "source", "levels", "note"}` |
 | `model.changed` | `{"agent", "profile", "model", "provider", "source", "choices"}` |
-| `turn.done` | no payload; the turn boundary. Gate "waiting" state and queue drain on this, not on `message.part.end`. Written before the next turn in the session begins, so every event after it belongs to a later turn |
+| `turn.done` | no payload; the turn boundary. Gate "waiting" state and queue drain on this, not on `message.part.end`. Written before the next turn in the session begins, so every event of that turn comes after it |
 | `turn.cancelled` | no payload; stopped on purpose via `POST /api/sessions/{id}/cancel`. Written before the next turn begins, as `turn.done` is |
 | `daemon.replaced` | `{"version", "pid"}`; reconnect at once rather than a second later |
