@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -49,6 +50,18 @@ func TestWebUI(t *testing.T) {
 	args := append([]string{"--experimental-vm-modules", "--test"}, files...)
 	cmd := exec.Command(node, args...)
 	childproc.Hide(cmd)
+	// The gate runs this suite three times at once: its own js check, and
+	// this test in the race and plain lanes. ask_answer_orders walks 2076
+	// orders to its default depth of 4 on one core: 47s here, as much CPU
+	// as the rest of the suite, and the suite's wall time goes from 16s to
+	// 77s. Under that load on the macOS CI runner the plain lane passed its
+	// 10m bound with the walk still running. Here it walks to depth 3 (311
+	// orders, 5s); the js check keeps depth 4. A depth set by the caller is
+	// kept.
+	cmd.Env = os.Environ()
+	if os.Getenv("ASK_ORDERS_DEPTH") == "" {
+		cmd.Env = append(cmd.Env, "ASK_ORDERS_DEPTH=3")
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("the Web UI tests failed: %v\n%s", err, out)

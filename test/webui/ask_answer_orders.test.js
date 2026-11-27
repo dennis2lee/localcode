@@ -12,8 +12,10 @@
 //
 // It does not walk a turn declared lost, which costs a second of real
 // time per order; ask_answer_lost_turn, _lost_rearmed and _record hold
-// those. Depth 4 by default; ASK_ORDERS_DEPTH=5 with ASK_ORDERS_SHARDS=32
-// walks 5063 orders, and 5681 with ASK_ORDERS_Y=1.
+// those. Depth 4 by default (2076 orders, about 47s of one core);
+// TestWebUI in internal/daemon runs it to depth 3 (311 orders), because
+// the gate runs the suite three times at once. ASK_ORDERS_DEPTH=5 with
+// ASK_ORDERS_SHARDS=32 walks 5063 orders, and 5681 with ASK_ORDERS_Y=1.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
