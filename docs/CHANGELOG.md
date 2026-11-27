@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Tests**
+
+* `TestAStartClosesTheBrowserAnEarlierRunLeft` checks that the second start works and that the earlier browser stops answering on its debugging port, not that its process exits within 10 seconds: on a loaded macOS runner the system took up to 107 seconds to end a browser that had already closed
+
 ## v0.180.10
 
 The permissions window's switches and forget buttons go one change at a time, each for the conversation it was made in.
