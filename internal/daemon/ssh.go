@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,8 +109,11 @@ func (d *Daemon) termTerminal(p *termPanel, w http.ResponseWriter, r *http.Reque
 //     none;
 //   - Origin, when present, must name the host the request was sent to
 //     (the scheme is not compared, so a TLS proxy in front still works);
-//   - the host the request was sent to must be an address or localhost,
-//     or the name the daemon was started to listen on.
+//   - the host the request was sent to must be one ownHost accepts.
+//
+// RefuseOtherSites already applies the last three to every route; this
+// keeps them here as well, with the JSON rule, so these routes hold on
+// their own.
 func (d *Daemon) sshGuard(w http.ResponseWriter, r *http.Request) bool {
 	return d.sameSiteGuard(w, r, "the SSH panel")
 }
@@ -136,18 +137,10 @@ func (d *Daemon) sameSiteGuard(w http.ResponseWriter, r *http.Request, what stri
 	if s := r.Header.Get("Sec-Fetch-Site"); s != "" && s != "same-origin" && s != "none" {
 		return refuse("a request from another site")
 	}
-	if o := r.Header.Get("Origin"); o != "" {
-		u, err := url.Parse(o)
-		if err != nil || !strings.EqualFold(u.Host, r.Host) {
-			return refuse("a request from another origin")
-		}
+	if o := r.Header.Get("Origin"); o != "" && !sameOrigin(o, r) {
+		return refuse("a request from another origin")
 	}
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	host = strings.Trim(host, "[]")
-	if host != "" && net.ParseIP(host) == nil && !strings.EqualFold(host, "localhost") && !strings.EqualFold(host, d.ListenHost) {
+	if host := requestHost(r); !ownHost(host, d.ListenHost) {
 		return refuse("a request sent to " + host + ", a name this daemon was not started on")
 	}
 	return true

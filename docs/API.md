@@ -18,6 +18,21 @@ daemon over an SSH tunnel](USAGE.md#remote-daemon-over-an-ssh-tunnel).
 Bind loopback, or reach a remote daemon over an SSH tunnel. Never bind
 `0.0.0.0` on an untrusted network.
 
+Requests a web page could make are refused with `403` on every route
+(`RefuseOtherSites` in `internal/daemon/samesite.go`, in front of the
+daemon and of the desktop window's proxy). This stops pages in the
+person's everyday browser. It does not stop a program on the machine.
+
+| Refused | Why |
+|---|---|
+| A `Host` that is not an address, `localhost`, a name under `.localhost`, this machine's own name (with or without `.local`), or the `--listen` host | A page on a name pointed at this machine (DNS rebinding) |
+| `Sec-Fetch-Site` other than `same-origin` or `none` | A request another site's page made. One exception: a top-level `GET` of a Web UI page (not `/api/`) from a link |
+| An `Origin` that does not name the request's host, `null` included | A request from another origin, on any method |
+
+A client that is not a browser sends neither `Sec-Fetch-Site` nor
+`Origin`, so only the `Host` rule applies to it. To reach a daemon by a
+name the table does not list, start it with that name in `--listen`.
+
 There is no stated API stability. The surface has changed release to
 release (per-session workspaces in v0.39.0, per-model effort levels,
 schedule rows), and no version is negotiated: the only version signal is
@@ -43,8 +58,9 @@ client to the same release when both are yours.
     turn or task that was not running is still `200` with a false flag).
   * `400` the request is bad (missing field, unknown name, unparseable
     time, repeat options that do not fit). `403` the session is archived
-    and must be retrieved first, or the daemon refuses this operation
-    over the network. `404` unknown session, task, schedule, or pending
+    and must be retrieved first, the daemon refuses this operation
+    over the network, or the request is one a web page could have made
+    (see above). `404` unknown session, task, schedule, or pending
     prompt. `409` a turn (or delete-all, or the old daemon still draining
     a session after an update) holds the session; both shipped clients
     queue on it. `500` the operation failed mid-way. `501` shutdown is not

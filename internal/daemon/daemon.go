@@ -48,7 +48,8 @@ type Daemon struct {
 	// the PowerShell panel. Nil where there is none (anywhere but Windows).
 	PowerShell *sshterm.Manager
 	// ListenHost is the host name the daemon was started to listen on,
-	// which the SSH routes accept as well as an address and localhost.
+	// which every route accepts as well as an address and localhost
+	// (RefuseOtherSites).
 	ListenHost string
 	// updateConfirm is when "/update" last refused for open SSH
 	// connections: a second "/update" soon after goes ahead.
@@ -278,7 +279,7 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 }
 
 func (d *Daemon) Handler() http.Handler {
-	return refuseTheModelsBrowser(CanonicalWrites(d.ownershipGate(d.mux)))
+	return refuseTheModelsBrowser(RefuseOtherSites(func() string { return d.ListenHost }, CanonicalWrites(d.ownershipGate(d.mux))))
 }
 
 func (d *Daemon) routes(webFS fs.FS) {

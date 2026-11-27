@@ -151,7 +151,7 @@ func successorProxy(target string, installer http.Handler) http.Handler {
 	// In front of this mux, not only the daemon's: this one redirects a
 	// path with a dot segment before forwarding anything, and the client
 	// follows a redirect with the method it started with.
-	return daemon.CanonicalWrites(mux)
+	return daemon.RefuseOtherSites(nil, daemon.CanonicalWrites(mux))
 }
 
 // The two native dialogs behind variables, so a test can drive these

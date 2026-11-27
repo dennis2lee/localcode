@@ -243,6 +243,8 @@ localcode --server http://localhost:4096   # terminal
 
 > Binding `0.0.0.0` exposes an arbitrary code execution API, since the bash tool is part of it. There is no auth token yet. Always reach the daemon over loopback plus an SSH tunnel, and never bind it directly to an untrusted network.
 
+The daemon refuses requests that a web page in your browser could make: a page from another site or another port, and a page on a name pointed at this machine. It answers `403` with the reason. Names it answers to: an address, `localhost`, a name under `.localhost`, this machine's own name (with or without `.local`), and the host in `--listen`. To reach it by another name, start it with `--listen <name>:<port>`. The rules are in [docs/API.md](API.md#read-this-first-no-auth-no-stability).
+
 The full route list lives in [docs/API.md](API.md): method and path, inputs, answers, and errors for all 67 routes, plus the event stream.
 
 ## Part 2. Configuration
@@ -3875,6 +3877,6 @@ Development builds reporting `dev` are not offered updates.
 
 * Long sessions initially load recent events. Use **Load the whole conversation** for the full transcript.
 * If an MCP server dies, the next tool call tries once to bring it back. If that fails, later calls to that server keep failing until `/reset-mcp`; nothing retries on its own, and the health poller does not re-dial a server it has given up on. `/reset-mcp` reconnects every server, so it affects every conversation.
-* There is no auth token. Anyone who can reach the `--listen` address gets the entire API, shell execution included. Expose it only over loopback plus an SSH tunnel.
+* There is no auth token. Anyone who can reach the `--listen` address gets the entire API, shell execution included. Expose it only over loopback plus an SSH tunnel. Requests a web page could make are refused (see [Remote daemon over an SSH tunnel](#remote-daemon-over-an-ssh-tunnel)), but a program on the machine is not a web page.
 * On Windows, unless [`shell`](#naming-the-shell) names a program, shell execution resolves to `sh` on PATH, then Git for Windows' `bash.exe` at its usual install paths, then `cmd /c`. Under the `cmd` fallback, bash-only syntax does not work; the bash tool tells the model so in its description. Installing Git for Windows gives the full POSIX behavior.
 * There is no desktop window on Linux. It links a native webview through CGo, which on Linux means WebKitGTK and a build per distribution; the daemon, the TUI, and the Web UI in a browser all work there. The `.deb` and the Linux tarballs carry the `localcode` binary only.
