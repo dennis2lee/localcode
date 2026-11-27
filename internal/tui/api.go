@@ -62,12 +62,13 @@ func listenForEvent(ch <-chan events.Event, gen uint64) tea.Cmd {
 
 func (m Model) sendMessage(text string, startsTurn bool, echo int) tea.Cmd {
 	var receipt client.Receipt
+	session := m.sessionID
 	return callErr(func(ctx context.Context) error {
 		var err error
-		receipt, err = m.client.SendMessage(ctx, m.sessionID, text)
+		receipt, err = m.client.SendMessage(ctx, session, text)
 		return err
 	}, func(err error) tea.Msg {
-		return turnDoneMsg{text: text, err: err, startsTurn: startsTurn, echo: echo, receipt: receipt}
+		return turnDoneMsg{text: text, err: err, startsTurn: startsTurn, echo: echo, receipt: receipt, session: session}
 	})
 }
 

@@ -1,5 +1,5 @@
 import { inputEl, centerEl, sendBtn, commDotEl } from './dom.js';
-import { app, session, turnInFlight, tasksInFlight, historyLimit } from './state.js';
+import { app, session, turnInFlight, tasksInFlight, historyLimit, returnToDraft } from './state.js';
 import * as apiClient from './api.js';
 import { appendTool, appendError, appendPendingUser, dropPendingUser, noteReceipt, queueRefused, abandonQueued, resendQueued, leaveAskUnanswered, forgetAskLine } from './transcript.js';
 import { renderStatusBar } from './render.js';
@@ -253,10 +253,17 @@ export function dequeueNext(isRetry = false) {
   setWaiting(true);
   app.turnSends++;
   const parts = resendQueued(item.text);
-  apiClient.sendChatMessage(session.sessionID, item.text, item.images).then((reply) => {
+  const sid = session.sessionID;
+  apiClient.sendChatMessage(sid, item.text, item.images).then((reply) => {
     if (parts) noteReceipt(parts, reply);
   }, (err) => {
     if (apiClient.isBusy(err)) {
+      // Refused after the page moved to another conversation: back in its
+      // own box, not in the queue of the one shown.
+      if (session.sessionID !== sid) {
+        returnToDraft(sid, item.text);
+        return;
+      }
       // A stop came while this was on its way: it goes as the queue did.
       if (parts && !queueRefused(parts)) return;
       // Still busy — put it back and wait for the next turn.done.
@@ -726,8 +733,15 @@ export async function sendMessage() {
       // removed when that event lands.
       const parts = appendPendingUser(text, true);
       app.turnSends++;
-      apiClient.sendChatMessage(session.sessionID, text).then((reply) => noteReceipt(parts, reply), (err) => {
+      const sid = session.sessionID;
+      apiClient.sendChatMessage(sid, text).then((reply) => noteReceipt(parts, reply), (err) => {
         if (apiClient.isBusy(err)) {
+          // Refused after the page moved to another conversation: back in
+          // its own box, not in the queue of the one shown.
+          if (session.sessionID !== sid) {
+            returnToDraft(sid, text);
+            return;
+          }
           // The turn ended in the gap. Queue it for dequeueNext, which
           // fires on the turn.done that is already on its way. Unless that
           // end was a stop, which came first: it goes as the queue did.
@@ -772,11 +786,18 @@ export async function sendMessage() {
   // Enter that did not register.
   const parts = appendPendingUser(text, false, images);
   setWaiting(true);
+  const sid = session.sessionID;
   try {
     app.turnSends++;
-    noteReceipt(parts, await apiClient.sendChatMessage(session.sessionID, text, images));
+    noteReceipt(parts, await apiClient.sendChatMessage(sid, text, images));
   } catch (err) {
     if (apiClient.isBusy(err)) {
+      // Refused after the page moved to another conversation: back in its
+      // own box, not in the queue of the one shown.
+      if (session.sessionID !== sid) {
+        returnToDraft(sid, text);
+        return;
+      }
       // The daemon already has a turn running (a race window, or a turn
       // another client started). Queue material, not an error: the running
       // turn's turn.done will drain it. waiting stays true so further

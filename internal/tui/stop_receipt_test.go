@@ -336,4 +336,7 @@ func TestASendCarriesTheReceiptToItsEcho(t *testing.T) {
 	if want := (client.Receipt{Status: "injected", Seq: 7, HasSeq: true}); msg.err != nil || msg.receipt != want || msg.echo != 3 {
 		t.Errorf("got err %v, receipt %+v, echo %d; want the daemon's receipt %+v for echo 3", msg.err, msg.receipt, msg.echo, want)
 	}
+	if msg.session != "s1" {
+		t.Errorf("the answer names session %q, want the one the send went to, s1", msg.session)
+	}
 }

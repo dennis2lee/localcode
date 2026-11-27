@@ -32,6 +32,8 @@ type turnDoneMsg struct {
 	echo int
 	// receipt is the daemon's answer when err is nil.
 	receipt client.Receipt
+	// session is the conversation the send went to, "" when not known.
+	session string
 }
 
 // opErrMsg reports the outcome of a fire-and-forget daemon call whose

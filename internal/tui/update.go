@@ -354,6 +354,13 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if client.IsBusy(msg.err) {
+		// Refused after a switch to another conversation: back in its own
+		// box, not in the queue of the one shown, which would send it
+		// there.
+		if msg.session != "" && msg.session != m.sessionID {
+			m.returnToDraft(msg.session, msg.text)
+			return m, nil
+		}
 		// The daemon already has a turn running (typed during a race
 		// window, or another client's turn). That is queue material, not
 		// an error: put it back at the front and wait for the running
@@ -395,6 +402,19 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 		m.noteReceipt(msg.echo, msg.receipt)
 	}
 	return m, nil
+}
+
+// returnToDraft puts a prompt nobody took back in the box of the
+// conversation it was typed into, ahead of what that box holds: it was
+// typed first. Into the map New made, as openSession writes it.
+func (m *Model) returnToDraft(session, text string) {
+	if m.drafts == nil || session == "" || text == "" {
+		return
+	}
+	if held := m.drafts[session]; held != "" {
+		text += "\n" + held
+	}
+	m.drafts[session] = text
 }
 
 func (m Model) handleTaskOutputMsg(msg taskOutputMsg) (tea.Model, tea.Cmd) {

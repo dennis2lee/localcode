@@ -20,6 +20,7 @@ A question a stopped daemon left open is no longer shown again when the conversa
 * A stop that landed as a turn was ending dropping the prompts sent into it under `turn.done`, so no client marked them "not sent"
 * Web UI: a prompt refused as busy while a stop was on its way marked "not sent", and then sent from the page's queue anyway
 * Web UI: a prompt Esc took out of the page's queue left drawn as sent when no turn was running
+* A prompt refused as busy after a switch to another conversation sent to that conversation, in the TUI and the Web UI: it goes back into the box of the one it was typed into
 
 **Added**
 
