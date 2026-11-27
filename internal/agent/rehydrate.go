@@ -467,6 +467,14 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 			if model := dataString(ev.Data, "model"); model != "" {
 				addModelTotals(cum, model, callTokensOf(ev.Data))
 			}
+
+		case events.TypeError:
+			// A summarization billed and failed (failedCompaction): its
+			// error is the call's record. Not a change to the history,
+			// so the snapshot stands.
+			if model := dataString(ev.Data, "model"); model != "" {
+				addModelTotals(cum, model, callTokensOf(ev.Data))
+			}
 		}
 	}
 	if len(cum) == 0 {

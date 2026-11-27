@@ -166,7 +166,7 @@ func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, d
 	}
 
 	if err := l.compactHistory(ctx, sessionID, p, profile, env.SystemText(), carried, instructions, CompactManual); err != nil {
-		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": fmt.Sprintf("compaction failed: %v", err)})
+		l.failedCompaction(sessionID, map[string]any{"error": fmt.Sprintf("compaction failed: %v", err)}, err)
 		return nil
 	}
 

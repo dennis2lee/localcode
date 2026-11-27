@@ -107,9 +107,11 @@ func (l *Loop) usageOfSessions(ids []string, since time.Time) (totals map[string
 			case events.TypeUsage:
 				addModelTotals(totals, dataString(ev.Data, "model"), callTokensOf(ev.Data))
 				counted = true
-			case events.TypeCompacted:
+			case events.TypeCompacted, events.TypeError:
 				// The compaction call is billed too, when it reported
-				// usage. Cleared and rewound markers carry none.
+				// usage, and so is one whose summary came back empty, on
+				// its error (failedCompaction). Cleared and rewound
+				// markers carry none, nor does any other error.
 				if model := dataString(ev.Data, "model"); model != "" {
 					addModelTotals(totals, model, callTokensOf(ev.Data))
 					counted = true
@@ -137,11 +139,11 @@ type UsageFigures struct {
 
 // UsageOfEvent is what one logged model call reported, read the way
 // every total here reads it; the zero value for an event that is not a
-// usage or a model-carrying compacted event.
+// usage event or a model-carrying compacted or error event.
 func UsageOfEvent(ev events.Event) UsageFigures {
 	switch ev.Type {
 	case events.TypeUsage:
-	case events.TypeCompacted:
+	case events.TypeCompacted, events.TypeError:
 		if dataString(ev.Data, "model") == "" {
 			return UsageFigures{}
 		}

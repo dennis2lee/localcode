@@ -261,10 +261,11 @@ func TestTheCompactionsTraceCarriesItsCache(t *testing.T) {
 	}
 }
 
-// A summarizing call that came back empty leaves no compacted event, the
-// call's only record in the log. Counted live, it was spend in this
-// process's /usage that a restart and /usage all left out; it is left
-// out of all of them alike.
+// A summarizing call that came back empty leaves no compacted event.
+// Counted live, it was spend in this process's /usage that a restart and
+// /usage all left out. compactHistory alone counts it nowhere; its caller
+// counts it as it writes the failure, which is then the call's record
+// (TestAnEmptySummaryIsCountedWhereverUsageIsRead). Alike either way.
 func TestAnEmptySummaryIsCountedAlikeEverywhere(t *testing.T) {
 	p := replayProvider{events: cachedCall("")}
 	loop, store, profile := replayLoop(t, p, 200000)

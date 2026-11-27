@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 	"unicode/utf8"
 
@@ -159,7 +161,94 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 	if system := estimateTokens(systemPrompt, nil); float64(system) >= threshold && conversation <= (window-system-minOutputTokens)/2 {
 		return false
 	}
-	return l.compactHistory(ctx, sessionID, p, profile, systemPrompt, carried, "", CompactAutomatic) == nil
+	// Not again on the conversation it last failed on. A failure a retry
+	// does not change (a reasoning model whose summary comes back empty, a
+	// server refusing the request for something other than its length)
+	// otherwise sent a summarization of the whole history at the top of
+	// every turn once the conversation crossed the threshold, each billed
+	// and none of them in the transcript. It is tried again once the
+	// conversation has grown by a tenth of the window, or under another
+	// model or window; "/compact" is not held back.
+	key := compactKey(profile, window)
+	if f, ok := l.lastCompactFailure(sessionID); ok && f.key == key && conversation < f.size+window/compactRetryShare {
+		return false
+	}
+	err := l.compactHistory(ctx, sessionID, p, profile, systemPrompt, carried, "", CompactAutomatic)
+	if err == nil {
+		return true
+	}
+	// Esc during the summarization is the turn ending, not a failure.
+	if ctx.Err() != nil {
+		return false
+	}
+	l.noteCompactFailure(sessionID, compactFailure{size: conversation, key: key})
+	l.failedCompaction(sessionID, map[string]any{
+		"error":     fmt.Sprintf("automatic compaction failed: %v. The conversation is unchanged. It is tried again once the conversation has grown by about %d tokens, or now with /compact", err, window/compactRetryShare),
+		"recovered": true,
+	}, err)
+	return false
+}
+
+// compactRetryShare is the share of the window a conversation grows by,
+// after an automatic compaction failed on it, before one is tried again:
+// a tenth.
+const compactRetryShare = 10
+
+// compactFailure is an automatic compaction that failed: the size of the
+// conversation it failed on, as maybeAutoCompact weighs it, and the model
+// and window it was asked of.
+type compactFailure struct {
+	size int
+	key  string
+}
+
+func compactKey(profile config.Profile, window int) string {
+	return profile.Provider + "\x00" + profile.Model + "\x00" + strconv.Itoa(window)
+}
+
+func (l *Loop) lastCompactFailure(sessionID string) (compactFailure, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	f, ok := l.compactFailed[sessionID]
+	return f, ok
+}
+
+func (l *Loop) noteCompactFailure(sessionID string, f compactFailure) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.compactFailed == nil {
+		l.compactFailed = map[string]compactFailure{}
+	}
+	l.compactFailed[sessionID] = f
+}
+
+// emptySummary is what a summarization answered with no summary fails
+// with. The call was billed all the same, and its usage goes with the
+// record the caller writes of the failure (failedCompaction).
+type emptySummary struct {
+	model string
+	usage streamUsage
+}
+
+func (e *emptySummary) Error() string { return "model returned an empty summary" }
+
+// failedCompaction writes the error event a failed compaction leaves in
+// the transcript, data, and with it, when the call was billed (a summary
+// that came back empty), the call's model and usage, counted live as it
+// is written. The event is then the call's only record in the log, and
+// /usage after a restart, /usage all and the usage window read it as
+// they read a compacted event's.
+func (l *Loop) failedCompaction(sessionID string, data map[string]any, err error) {
+	var e *emptySummary
+	if errors.As(err, &e) && e.usage.hasUsage {
+		l.addCumulativeUsage(sessionID, e.model, e.usage)
+		data["model"] = e.model
+		data["input_tokens"] = e.usage.inputTokens
+		data["output_tokens"] = e.usage.outputTokens
+		data["cache_read_tokens"] = e.usage.cacheRead
+		data["cache_write_tokens"] = e.usage.cacheWrite
+	}
+	l.Store.Append(sessionID, events.TypeError, data)
 }
 
 // soonAfterASummary says the conversation is a compaction's summary and
@@ -422,7 +511,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		budget = shrinkBudget(budget, systemPrompt, kept)
 	}
 	if summary == "" {
-		return fmt.Errorf("model returned an empty summary")
+		return &emptySummary{model: profile.Model, usage: usage}
 	}
 	// The summarization call is billed like any other — fold it into
 	// /usage's totals even though it never appears in the transcript.
@@ -430,7 +519,8 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 	// below is the call's only record in the log, and a call counted
 	// live with no record read as spend in this process's /usage that a
 	// restart, /usage all and the usage window all left out. A summary
-	// that came back empty is left out of all four alike.
+	// that came back empty is counted where its failure is written
+	// (failedCompaction), for the same reason.
 	if usage.hasUsage {
 		l.addCumulativeUsage(sessionID, profile.Model, usage)
 	}

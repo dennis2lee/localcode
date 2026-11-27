@@ -418,6 +418,10 @@ type Loop struct {
 	asked           map[string]bool
 	cumulativeUsage map[string]map[string]modelTotals // sessionID -> model -> running totals, see /usage
 	turnRate        map[string]turnRate               // sessionID -> this turn's tokens/generation time
+
+	// compactFailed is the last automatic compaction that failed, per
+	// session, until the history is replaced. See maybeAutoCompact.
+	compactFailed map[string]compactFailure
 	// pendingCommand holds a command the Command tool asked for, until
 	// the turn that asked has finished. See command_run.go.
 	pendingCommand map[string]string
@@ -884,6 +888,9 @@ func (l *Loop) setHistory(sessionID string, msgs []provider.Message) {
 	// Deleted here rather than through a helper, which would take this
 	// same lock.
 	delete(l.usage, sessionID)
+	// A history replaced (compacted, cleared, rewound) is not the one an
+	// automatic compaction failed on.
+	delete(l.compactFailed, sessionID)
 }
 
 // ClaimSessionTree is claimSessionTree for a caller outside this package
@@ -921,4 +928,5 @@ func (l *Loop) ReleaseSessionMemory(sessionID string) {
 	delete(l.cumulativeUsage, sessionID)
 	delete(l.turnRate, sessionID)
 	delete(l.pendingDebate, sessionID)
+	delete(l.compactFailed, sessionID)
 }

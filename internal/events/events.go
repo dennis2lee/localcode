@@ -70,8 +70,12 @@ const (
 	// models' reasoning stays broadcast only. Never rebuilt into the
 	// history the model is sent.
 	TypeThinkingBlock Type = "thinking.block"
-	// TypeError is {"error","recovered"?,"history_replaced"?,"fallback"?}.
+	// TypeError is {"error","recovered"?,"history_replaced"?,"fallback"?,
+	// "model"?, "input_tokens"?, ...}.
 	// "recovered": true is a notice from a turn that carries on.
+	// "model" and the token counts of a usage event are on the error of a
+	// summarization that was billed and failed (its summary came back
+	// empty): the error is that call's record, and usage totals read it.
 	// "fallback" names the model the turn moved to, on the notice that
 	// reports the switch.
 	// "history_replaced": true marks the trim that dropped the oldest

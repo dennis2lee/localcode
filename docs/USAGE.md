@@ -2038,7 +2038,8 @@ The context gauge does not include all reserved output space. The following cont
 |---|---|
 | `max_tokens` is clamped | Every request asks for only what is left of the window, so the reply cap cannot be what pushes a request over. Never below 1024, so a nearly full window still gets an answer rather than a fragment, and never above the profile's own `max_tokens`. A reply that hits its cap is followed by a notice naming which limit cut it, the profile's `max_tokens` or the window, and prescribing only a change that would let the next reply run longer: raise `max_tokens` on the profile, `/compact`, both when neither works alone, or a larger `context_window` when the window cannot give more to any request. A notice that blames the window says where the window figure came from. A tool call in a reply that hits its cap is not run. It is answered with a result that says so, and a call whose arguments were cut off goes into the history with `{}` as its input. |
 | Tool output is capped | One tool result may take at most a quarter of the window. The start and the end are kept and the gap is described, so the model knows to read a file in ranges rather than believing it saw all of it. Without this, `read_file` on a large file or `bash` running `cat` could exceed the whole window inside a single message, which no summarizing or dropping can undo. |
-| The summary is bounded | A compaction keeps at most 5120 tokens of the summary the model wrote: the 4096 the request allowed, plus a quarter for the difference between the model's tokenizer and the daemon's estimate. A longer one is cut so that it and a note saying so fit in that length. The notice under a cut-off reply prices `/compact` against this bound, so what it promises is what the next request can do. |
+| The summary request fits the window | The summary may be at most 4096 tokens. It gets less where the system prompt, the instruction and the conversation leave less room: never below 1024, and a long conversation is trimmed rather than given the summary's room. Where the system prompt and the instruction leave no room for 1024 tokens of summary, nothing is sent and the compaction fails with that reason. |
+| The summary is bounded | A compaction keeps at most a quarter more of the summary than its request allowed (5120 tokens for a request that allowed 4096), for the difference between the model's tokenizer and the daemon's estimate. A longer one is cut so that it and a note saying so fit in that length. The notice under a cut-off reply prices `/compact` against 5120, the bound over every request, so what it promises is what the next request can do. |
 | A refused turn is summarized and retried | Not the end of the turn. The transcript says it happened, and the turn carries on. |
 | Still refused, it is trimmed | Whole messages go from the oldest end, and the remaining text is cut if dropping is not enough. Each attempt aims at two thirds of what the conversation *measures*, not of the window, so it converges on a size the server accepts. This matters most for Korean and Japanese, where the character-count estimate runs about 4x low and a request the server refuses can measure as comfortably fitting. |
 
@@ -2046,7 +2047,10 @@ The context gauge does not include all reserved output space. The following cont
 
 Set `context_window` on the profile if the model is one whose name gives no clue to its real limit. `/context` says whether the figure in use was set there, reported by the server, or guessed.
 
-If summarization fails for another reason, such as a network error, LocalCode uses the original history and continues.
+If summarization fails for another reason, such as a network error or a summary that comes back empty, LocalCode uses the original history and continues:
+
+* An automatic compaction that fails writes one notice with the reason in the transcript. It is not tried again on every message. It is tried again once the conversation has grown by a tenth of the window, after a switch to another model or window, or when the history is replaced. `/compact` is not held back.
+* A summary that came back empty was still billed. Its usage is recorded on the failure notice and counted by `/usage`, `/usage all`, the usage window and `localcode run --format json`, before and after a restart.
 
 | Setting | Default | Change it |
 |---|---|---|

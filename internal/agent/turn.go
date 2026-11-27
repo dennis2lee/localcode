@@ -462,10 +462,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 						l.runCompactHook(ctx, sessionID, "overflow")
 						continue
 					} else {
-						l.Store.Append(sessionID, events.TypeError, map[string]any{
+						l.failedCompaction(sessionID, map[string]any{
 							"error":     fmt.Sprintf("could not summarize to recover space (%v); trimming instead", cerr),
 							"recovered": true,
-						})
+						}, cerr)
 					}
 				}
 				// Second time, or the summary itself could not be made:
