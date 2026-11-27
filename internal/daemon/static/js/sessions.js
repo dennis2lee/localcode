@@ -4,7 +4,7 @@ import { renderSSHPanel } from './ssh.js';
 import { renderPowerShellPanel } from './powershell.js';
 import { showPanelsFor, forgetPanels } from './resize.js';
 import { readPref, readShared, writePref } from './prefs.js';
-import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft, sessionWorking, overlayActivity } from './state.js';
+import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft, returnToDraft, sessionWorking, overlayActivity } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, appendTool, clearTranscript } from './transcript.js';
 import { formatTime, shortenPath } from './format.js';
@@ -1238,6 +1238,12 @@ export function selectSession(id, agent, workspace) {
   // goes with it. Read before resetSession, which is where sessionID stops
   // naming that conversation.
   stashDraft(session.sessionID, inputEl.value);
+  // So do the prompts still in its queue, which resetSession empties:
+  // nothing sent them. Ahead of the box and in their order, since they
+  // were typed first.
+  for (const item of [...session.promptQueue].reverse()) {
+    returnToDraft(session.sessionID, typeof item === 'string' ? item : item.text);
+  }
   resetSession(id);
   // And the one being opened gets back whatever it was holding, which is
   // usually nothing. Set unconditionally: an empty draft has to clear the

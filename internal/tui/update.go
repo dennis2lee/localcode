@@ -406,7 +406,8 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 
 // returnToDraft puts a prompt nobody took back in the box of the
 // conversation it was typed into, ahead of what that box holds: it was
-// typed first. Into the map New made, as openSession writes it.
+// typed first. For a prompt still queued at a switch, and a send refused
+// after one. Into the map New made, as openSession writes it.
 func (m *Model) returnToDraft(session, text string) {
 	if m.drafts == nil || session == "" || text == "" {
 		return
@@ -576,6 +577,13 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 			cmds = append(cmds, m.scheduleLostTurnCheck())
 		}
 		return m, tea.Batch(cmds...)
+	}
+
+	// Prompts still queued were typed into the conversation being left
+	// and nothing sent them: back into its box, ahead of what openSession
+	// parked there and in their order, since they were typed first.
+	for i := len(m.queue) - 1; i >= 0; i-- {
+		m.returnToDraft(m.sessionID, m.queue[i])
 	}
 
 	// Everything below belonged to the conversation being left.

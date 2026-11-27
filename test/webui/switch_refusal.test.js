@@ -117,3 +117,40 @@ test('a refusal after going away and back is queued for the conversation it was 
   assert.deepEqual(sentTo(app, 'sess-1'), ['for the first conversation', 'for the first conversation']);
   assert.deepEqual(sentTo(app, 'sess-2'), []);
 });
+
+// A prompt already in the queue when the page moves on: the queue is
+// emptied with the conversation, and nothing would send it.
+test('a prompt still queued at a switch goes back to its own box', async () => {
+  const d = daemon();
+  const app = await load({ routes: d.routes });
+  d.busy();
+  await send(app, 'later');
+  assert.deepEqual(Array.from(app.state.promptQueue), ['later'], 'precondition: queued, retry armed');
+
+  app.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  await app.wait(400);
+  await app.settle();
+  assert.deepEqual(sentTo(app, 'sess-2'), []);
+  app.selectSession('sess-1', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  assert.equal(app.el('input').value, 'later', 'a queued prompt is gone after the switch, unsent and unsaid');
+});
+
+test('prompts still queued at a switch keep their order, ahead of the box', async () => {
+  const d = daemon();
+  const app = await load({ routes: d.routes });
+  app.state.waiting = true;
+  d.busy();
+  await send(app, 'first');
+  d.busy();
+  await send(app, 'second');
+  assert.deepEqual(Array.from(app.state.promptQueue), ['first', 'second'], 'precondition: both queued');
+  app.type('third');
+
+  app.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  app.selectSession('sess-1', 'general-purpose', '/tmp/workspace');
+  await app.settle();
+  assert.equal(app.el('input').value, 'first\nsecond\nthird');
+});

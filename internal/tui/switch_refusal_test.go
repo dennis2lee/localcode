@@ -87,3 +87,40 @@ func TestARefusalForTheShownConversationIsQueued(t *testing.T) {
 		t.Errorf("a queued prompt was also put back in the box: %q", got)
 	}
 }
+
+// Prompts already in the queue when the switch lands: the queue is
+// emptied with the conversation, and nothing would send them.
+func TestPromptsStillQueuedAtASwitchGoBackToTheirOwnBox(t *testing.T) {
+	m := newTestModel()
+	m.queue = []string{"first", "second"}
+	m.input.SetValue("third")
+	m = switchTo(t, m, "s2")
+
+	if len(m.queue) != 0 {
+		t.Errorf("s1's queue followed the switch into s2: %q", m.queue)
+	}
+	if got, want := m.drafts["s1"], "first\nsecond\nthird"; got != want {
+		t.Errorf("s1's box holds %q, want %q", got, want)
+	}
+}
+
+// A refusal while the switch is on its way is for the conversation still
+// shown, and is queued there; the switch then lands and takes the queue's
+// prompts back to their box.
+func TestAPromptRefusedWhileTheSwitchIsOnItsWayGoesBackToItsOwnBox(t *testing.T) {
+	m := newTestModel()
+	m, _ = pressEnterWith(t, m, "for the first conversation")
+	echo := m.sends
+	_ = m.openSession("s2")
+	updated, _ := m.Update(turnDoneMsg{text: "for the first conversation", err: errBusy, startsTurn: true, echo: echo, session: "s1"})
+	m = updated.(Model)
+	if len(m.queue) != 1 {
+		t.Fatalf("precondition: queued while the switch was on its way, got %q", m.queue)
+	}
+	updated, _ = m.Update(sessionSwitchedMsg{sessionID: "s2", agent: "general-purpose", events: make(chan events.Event), cancel: func() {}, gen: m.streamGen})
+	m = updated.(Model)
+
+	if got := m.drafts["s1"]; got != "for the first conversation" {
+		t.Errorf("s1's box holds %q, want the refused prompt", got)
+	}
+}

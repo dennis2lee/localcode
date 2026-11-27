@@ -1305,6 +1305,8 @@ The Web UI keeps up to 200 entries per session. The TUI keeps every entry until 
 
 Unsent drafts also belong to the conversation. Switching sessions in either client restores the selected conversation's draft.
 
+A prompt that was not sent goes back into the box of the conversation it was typed into when you switch away: one still queued at the switch, and one the daemon refused as busy after it. It is placed ahead of that conversation's draft and is not sent. Only its text is kept. Images attached to it are dropped.
+
 Messages sent during a turn appear immediately and are delivered at the next tool boundary. Multiple messages retain their order. If the turn ends before delivery, the message starts the next turn. See [Redirecting a turn](#redirecting-a-turn-while-it-runs).
 
 Slash commands are refused while a turn is running. Wait for completion or press Esc to cancel. TUI `exit` and `:q` remain available.

@@ -328,9 +328,10 @@ export function draftFor(id) {
 
 // returnToDraft puts a prompt nobody took back in the box of the
 // conversation it was typed into, ahead of what that box holds: it was
-// typed first. For a send refused after the page moved to another
-// conversation, whose queue it would otherwise have gone into and been
-// sent to. Text only: images attached to it are not kept.
+// typed first. For a prompt still queued when the page moves to another
+// conversation, and a send refused after it did, whose queue it would
+// otherwise have gone into and been sent to. Text only: images attached
+// to it are not kept.
 export function returnToDraft(id, text) {
   if (!id || !text) return;
   const held = draftFor(id);
