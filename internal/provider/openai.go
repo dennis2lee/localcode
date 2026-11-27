@@ -194,6 +194,12 @@ type oaStreamChunk struct {
 		PromptTokensDetails *struct {
 			CachedTokens int `json:"cached_tokens"`
 		} `json:"prompt_tokens_details,omitempty"`
+		// The part of completion_tokens spent reasoning, where the
+		// server says: OpenAI does, and vLLM and DeepSeek for their
+		// reasoning models.
+		CompletionTokensDetails *struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details,omitempty"`
 	} `json:"usage,omitempty"`
 }
 
@@ -212,6 +218,17 @@ func oaUsageEvent(prompt, completion int, details *struct {
 		cached = min(details.CachedTokens, prompt)
 	}
 	return StreamEvent{Type: EventUsage, InputTokens: prompt - cached, OutputTokens: completion, CacheReadTokens: cached}
+}
+
+// withReasoning adds to a usage event the part of its output the server
+// says was reasoning, held to the output it is part of.
+func withReasoning(ev StreamEvent, details *struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}) StreamEvent {
+	if details != nil && details.ReasoningTokens > 0 {
+		ev.ReasoningTokens = min(details.ReasoningTokens, ev.OutputTokens)
+	}
+	return ev
 }
 
 // toOpenAIMessages translates our block-based messages (plus system prompt)
@@ -608,7 +625,7 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			// as a context meter that never moves.
 			if chunk.Usage != nil {
 				select {
-				case out <- oaUsageEvent(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.PromptTokensDetails):
+				case out <- withReasoning(oaUsageEvent(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.PromptTokensDetails), chunk.Usage.CompletionTokensDetails):
 				case <-ctx.Done():
 					return
 				}

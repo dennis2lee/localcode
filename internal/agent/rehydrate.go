@@ -429,7 +429,12 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 				Measured:          dataInt(ev.Data, "measured"),
 				MeasuredImages:    dataInt(ev.Data, "measured_images"),
 				CachedInputTokens: dataInt(ev.Data, "cached_input_tokens"),
+				MeasuredSystem:    dataInt(ev.Data, "measured_system"),
+				MeasuredTools:     dataInt(ev.Data, "measured_tools"),
+				Carried:           dataInt(ev.Data, "carried_output_tokens"),
 			}
+			_, latest.Known = ev.Data["measured_system"]
+			_, latest.CarriedKnown = ev.Data["carried_output_tokens"]
 			addModelTotals(cum, dataString(ev.Data, "model"), callTokensOf(ev.Data))
 
 		case events.TypeCompacted, events.TypeCleared, events.TypeRewound, events.TypeDebateEnded:

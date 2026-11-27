@@ -31,7 +31,10 @@ type streamUsage struct {
 	// from one that is silently doing nothing.
 	cacheRead  int
 	cacheWrite int
-	elapsed    time.Duration
+	// reasoning is the part of outputTokens the server says was spent
+	// reasoning; zero where it does not say. See sessionUsage.Carried.
+	reasoning int
+	elapsed   time.Duration
 }
 
 // tpsTickInterval is how often a live tokens-per-second estimate goes out
@@ -212,6 +215,7 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			usage.outputTokens = ev.OutputTokens
 			usage.cacheRead = ev.CacheReadTokens
 			usage.cacheWrite = ev.CacheWriteTokens
+			usage.reasoning = ev.ReasoningTokens
 
 		case provider.EventError:
 			// The answer so far is closed as a message before the error

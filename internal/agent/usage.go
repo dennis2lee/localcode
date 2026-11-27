@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -32,6 +33,38 @@ type sessionUsage struct {
 	// from its cache and reported apart from InputTokens. See
 	// promptTokens.
 	CachedInputTokens int
+	// MeasuredSystem and MeasuredTools are what the count's fixed part was
+	// on this side's estimate: the system prompt (also in Measured) and
+	// the tool definitions advertised (in no estimate). Known says they
+	// were recorded; a log written before they were reads as not.
+	//
+	// A count describes the request it was taken over, and a switch of
+	// agent, Smart Agent turned off or MCP tools removed changes that
+	// request's fixed part without a model call. The count then still
+	// held the old system prompt and tools: under a 16,000-token prompt it
+	// read 52% of a 32,768 window when the next request carried 3%, and
+	// auto-compaction ran. rebaseUsage shifts the count by the difference
+	// before anything is decided from it.
+	MeasuredSystem int
+	MeasuredTools  int
+	Known          bool
+	// Carried is the part of OutputTokens the next request carries: the
+	// reply without the reasoning, which is not sent back (the OpenAI
+	// adapter drops it, the Anthropic one sends it only on the last
+	// assistant message of a tool round-trip). CarriedKnown says it was
+	// recorded; without it the whole of OutputTokens is taken, as it
+	// always was. See carriedOutput.
+	Carried      int
+	CarriedKnown bool
+}
+
+// carriedOutput is what of the last reply the next request carries.
+// OutputTokens stays the billed figure, for /usage and tokens per second.
+func (u sessionUsage) carriedOutput() int {
+	if u.CarriedKnown {
+		return u.Carried
+	}
+	return u.OutputTokens
 }
 
 // promptTokens is the whole prompt the provider read for this call: what
@@ -108,10 +141,92 @@ func (t modelTotals) cached() bool {
 // covered, reasoning left out, and how many image blocks were among them.
 // Reasoning is left out because a history rebuilt from the log has none:
 // see withoutReasoning.
-type measurement struct{ tokens, images int }
+// measurement is what this side made of the request a count describes
+// and the reply that came with it: the whole (system prompt, messages and
+// reply, reasoning left out) and its images; and, from measureCall, the
+// system prompt and the tool definitions on their own, and the reply's
+// text and its reasoning, with call saying those were taken.
+type measurement struct {
+	tokens, images  int
+	system, tools   int
+	reply, thinking int
+	call            bool
+}
 
+// measure measures system and msgs, the reply among them.
 func measure(system string, msgs []provider.Message) measurement {
 	return measurement{tokens: estimateTokens(system, withoutReasoning(msgs)), images: countImages(msgs)}
+}
+
+// measureCall measures one call: the request of system, msgs and tools,
+// and reply, the assistant blocks that answered it.
+func measureCall(system string, msgs []provider.Message, tools []provider.Tool, reply []provider.Block) measurement {
+	answered := append(append([]provider.Message(nil), msgs...), provider.Message{Role: provider.RoleAssistant, Content: reply})
+	m := measure(system, answered)
+	m.system = estimateTokens(system, nil)
+	m.tools = toolSpecTokens(tools)
+	m.call = true
+	last := withoutReasoning(answered[len(answered)-1:])
+	m.reply = estimateTokens("", last)
+	for _, b := range reply {
+		if b.Type == provider.BlockThinking {
+			m.thinking += len(b.Text) / charsPerToken
+		}
+	}
+	return m
+}
+
+// toolSpecTokens is the advertised tool definitions on the estimate's
+// ruler: their JSON at four characters a token.
+func toolSpecTokens(tools []provider.Tool) int {
+	if len(tools) == 0 {
+		return 0
+	}
+	b, err := json.Marshal(tools)
+	if err != nil {
+		return 0
+	}
+	return len(b) / charsPerToken
+}
+
+// carriedOf is the part of a reply's output the next request carries:
+// the output less its reasoning, as the server counted the reasoning
+// where it says, or as this side estimates the streamed reasoning where it
+// does not. Never under the stored reply's own estimate, which is what is
+// sent back, nor over the output.
+func carriedOf(usage streamUsage, m measurement) int {
+	reasoning := usage.reasoning
+	if reasoning == 0 {
+		reasoning = m.thinking
+	}
+	return min(usage.outputTokens, max(usage.outputTokens-reasoning, m.reply))
+}
+
+// rebaseUsage shifts sessionID's count to the fixed part of the request
+// about to be sent, system and tools: by the difference between that and
+// the fixed part the count was taken over, on the estimate's ruler. A
+// count whose fixed part was not recorded is left as it is, and one the
+// shift leaves at nothing is dropped, so the estimate decides.
+func (l *Loop) rebaseUsage(sessionID, system string, tools []provider.Tool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	u, ok := l.usage[sessionID]
+	if !ok || !u.Known {
+		return
+	}
+	sys, tl := estimateTokens(system, nil), toolSpecTokens(tools)
+	d := (sys - u.MeasuredSystem) + (tl - u.MeasuredTools)
+	if d == 0 {
+		return
+	}
+	u.InputTokens += d
+	u.Measured += sys - u.MeasuredSystem
+	u.MeasuredSystem, u.MeasuredTools = sys, tl
+	if u.promptTokens() <= 0 {
+		delete(l.usage, sessionID)
+		return
+	}
+	l.usage[sessionID] = u
 }
 
 // tokensOf is what a streamed call reported.
@@ -185,6 +300,13 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext int, measured mea
 		Measured:          measured.tokens,
 		MeasuredImages:    measured.images,
 		CachedInputTokens: usage.cacheRead + usage.cacheWrite,
+		MeasuredSystem:    measured.system,
+		MeasuredTools:     measured.tools,
+		Known:             measured.call,
+		CarriedKnown:      measured.call,
+	}
+	if measured.call {
+		u.Carried = carriedOf(usage, measured)
 	}
 
 	l.mu.Lock()
@@ -197,9 +319,9 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext int, measured mea
 
 	percent := 0.0
 	if maxContext > 0 {
-		percent = float64(u.promptTokens()+u.OutputTokens) / float64(maxContext) * 100
+		percent = float64(u.promptTokens()+u.carriedOutput()) / float64(maxContext) * 100
 	}
-	l.Store.Append(sessionID, events.TypeUsage, map[string]any{
+	data := map[string]any{
 		"input_tokens":  u.InputTokens,
 		"output_tokens": u.OutputTokens,
 		"max_context":   u.MaxContext,
@@ -230,7 +352,19 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext int, measured mea
 		"estimated": false,
 		"show_tps":  l.ShowTPS(),
 		"model":     model,
-	})
+	}
+	// The count's fixed part, and what of the reply the next request
+	// carries, so a restored session rebases and measures as a live one
+	// does. Only where they were taken: a restored count without them is
+	// left as a count from before they existed is. See sessionUsage.
+	if u.Known {
+		data["measured_system"] = u.MeasuredSystem
+		data["measured_tools"] = u.MeasuredTools
+	}
+	if u.CarriedKnown {
+		data["carried_output_tokens"] = u.Carried
+	}
+	l.Store.Append(sessionID, events.TypeUsage, data)
 }
 
 func (l *Loop) getUsage(sessionID string) (sessionUsage, bool) {

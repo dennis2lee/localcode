@@ -149,6 +149,11 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// before it, so the accumulator starts empty here.
 	l.startTurnRate(sessionID)
 
+	// The count was taken over the request before this one, and an agent
+	// switch, Smart Agent or the MCP tools may have changed its fixed part
+	// since. Before anything is decided from it.
+	l.rebaseUsage(sessionID, run.system, l.Tools.SpecsFor(ctx, allowedTools))
+
 	compactions := 0
 	if l.maybeAutoCompact(ctx, sessionID, run.client, run.profile, run.system, run.systemBlocks) {
 		compactions++
@@ -676,8 +681,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// and a Korean reply measured by characters came out at a
 			// third of what the provider had just counted.
 			l.recordUsage(sessionID, run.profile.Model, l.contextWindow(ctx, run.profile),
-				measure(run.system, append(append([]provider.Message(nil), messages...),
-					provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})), usage)
+				measureCall(run.system, messages, req.Tools, assistantBlocks), usage)
 		}
 
 		// Nothing is appended for a reply that produced nothing. A turn

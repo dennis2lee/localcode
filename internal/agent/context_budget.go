@@ -279,11 +279,11 @@ func (l *Loop) inputEstimate(sessionID, system string, msgs []provider.Message) 
 	case !ok || u.promptTokens() <= 0:
 		return now
 	case u.Measured <= 0:
-		return max(u.promptTokens()+u.OutputTokens, now)
+		return max(u.promptTokens()+u.carriedOutput(), now)
 	}
 	// What was appended since the count, on the ruler the measurement was
 	// taken with: reasoning left out of both. See measure.
-	return u.promptTokens() + u.OutputTokens + max(0, estimateTokens(system, withoutReasoning(msgs))-u.Measured)
+	return u.promptTokens() + u.carriedOutput() + max(0, estimateTokens(system, withoutReasoning(msgs))-u.Measured)
 }
 
 // withoutReasoning is msgs with the model's reasoning blocks left out.

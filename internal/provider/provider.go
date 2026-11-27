@@ -283,6 +283,11 @@ type StreamEvent struct {
 	// rather than folded into it.
 	CacheReadTokens  int // EventUsage
 	CacheWriteTokens int // EventUsage
+	// ReasoningTokens is the part of OutputTokens the model spent on
+	// reasoning, where the server says (completion_tokens_details on an
+	// OpenAI-compatible server). Zero where it does not, which is not the
+	// same as "no reasoning".
+	ReasoningTokens int // EventUsage
 
 	Err error // EventError
 }

@@ -334,13 +334,13 @@ func (l *Loop) uncountedImages(sessionID string, msgs []provider.Message) int {
 func (l *Loop) compactionMeasure(sessionID, system string, msgs []provider.Message) int {
 	u, ok := l.getUsage(sessionID)
 	if ok && u.promptTokens() > 0 && u.Measured <= 0 {
-		return u.promptTokens() + u.OutputTokens
+		return u.promptTokens() + u.carriedOutput()
 	}
 	now := estimateTokens(system, withoutReasoning(msgs)) - l.uncountedImages(sessionID, msgs)*imageTokenEstimate
 	if !ok || u.promptTokens() <= 0 {
 		return now
 	}
-	return u.promptTokens() + u.OutputTokens + max(0, now-u.Measured)
+	return u.promptTokens() + u.carriedOutput() + max(0, now-u.Measured)
 }
 
 // CompactTrigger names why a compaction ran. It is on the one lifecycle
