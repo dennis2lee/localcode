@@ -373,7 +373,7 @@ async function runIn(seq, open, globals) {
     settleY: (v) => open.y.pop()(v),
   };
   const problems = [];
-  const emitting = new Set(['written', 'restart', 'quietRestart', 'resume', 'elsewhere', 'cancel', 'whole', 'switch', 'newer', 'yElsewhere', 'writtenY']);
+  const emitting = new Set(['written', 'restart', 'quietRestart', 'resume', 'elsewhere', 'cancel', 'whole', 'switch', 'newer', 'turnRan', 'yElsewhere', 'writtenY']);
   for (const [at, name] of seq.entries()) {
     const r = await steps[name].run(c);
     if (r === 'skip') return { skipped: true, problems };

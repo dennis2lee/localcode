@@ -727,7 +727,12 @@ const handlers = {
     // the cancelled one comes up instead of being stranded with the
     // composer unlocked and no modal to answer it in. The resolved event
     // for the cancelled question then matches nothing and is ignored.
-    settlePermissionRequest(session.pendingPermissionID);
+    // Not a request mirrored from a background task (task_session): the
+    // task goes on after this turn and still waits on it, and the TUI keeps
+    // it on screen too.
+    if (!(session.pendingPermission && session.pendingPermission.task_session)) {
+      settlePermissionRequest(session.pendingPermissionID);
+    }
     setWaiting(false);
     if (!session.pendingPermissionID) setInputLocked(false);
     abandonRunningToolCalls('stopped');

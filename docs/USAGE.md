@@ -868,7 +868,7 @@ Ordinary tool prompts provide the following choices. Workspace-boundary prompts 
 
 The Web UI shows the same four as buttons: Deny, Allow for session, Always allow, Allow once.
 
-An answer given to a background task's mirrored question belongs to the task, not to the conversation you answered it in: "allow for session" and the directory answers leave your conversation ungranted, so it asks again for the same command. "Always allow" is the exception, since its config.json rule covers every session.
+An answer given to a background task's mirrored question belongs to the task, not to the conversation you answered it in: "allow for session" and the directory answers leave your conversation ungranted, so it asks again for the same command. "Always allow" is the exception, since its config.json rule covers every session. Stopping or finishing the conversation's turn leaves such a question on screen in both clients, since the task goes on and still waits on it.
 
 For `bash`, session and permanent grants generalize the first word. Approving `npm test` grants `npm *`. Two families are the exception and grant the exact command instead: interpreters and shells, and privilege or destructive commands. See [Fine grained permission rules](#fine-grained-permission-rules). File and MCP grants use the exact subject. A subject that contains `*` or `?` is stored as a literal rule, so it does not match other subjects. The prompt shows the resulting pattern.
 
