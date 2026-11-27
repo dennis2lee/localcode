@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.180.11
+
+A window draws no setting older than the one it shows: the daemon numbers each change of a daemon-wide setting.
 
 **Fixed**
 

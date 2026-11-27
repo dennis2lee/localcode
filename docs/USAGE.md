@@ -2302,6 +2302,7 @@ Limits:
 
 * A `/config` command typed at a prompt announces its switch to the conversation it was typed in without a number, and the page draws that as it arrives.
 * A slow answer keeps its warning when the switch was moved elsewhere and back to the value the answer reports.
+* Two updates in a row, the second starting while the daemon before the first is still finishing its turns, can leave the window drawing the settings of the middle daemon, which no longer runs, and not drawing the running one's. The window reloads by itself when its connection moves to the running daemon, and a reload puts it right.
 
 The Appearance tab is per person, not per daemon. The faces and the size apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
 
