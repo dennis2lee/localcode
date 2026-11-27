@@ -241,6 +241,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		// The daemon's real turn boundary, emitted after its busy flag is
 		// cleared — safe to stop waiting and let the queue drain.
 		m.endTurn()
+		m.dropHeldAsk()
 	case events.TypeToolStart:
 		// A line per call, as well as the busy indicator below the prompt
 		// box. The indicator alone says only what is running right now and
@@ -605,6 +606,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.appendTool("[localcode " + version + " took over this address; the next message goes to it]")
 	case events.TypeTurnCancelled:
 		m.endTurn()
+		m.dropHeldAsk()
 		// The queue went with the turn — turnTracker.cancel drops it — so
 		// anything still drawn as sent was never handed to anybody.
 		m.abandonPendingUsers()

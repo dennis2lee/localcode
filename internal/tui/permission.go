@@ -92,6 +92,16 @@ func (p pendingPermission) parts(typing bool) (string, string) {
 	return head, keys
 }
 
+// dropHeldAsk lets go of a model question still held when a turn ends.
+// The daemon resolves a question before the turn that asked it can end, so
+// one still held was asked by a daemon that has gone, and the next Enter
+// would be sent as its answer and refused. Not a permission request: one
+// mirrored from a background task outlives the turn of the conversation
+// it is shown in.
+func (m *Model) dropHeldAsk() {
+	m.asking = nil
+}
+
 // staleQuestion reports whether the daemon marked a replayed
 // permission.request or input.request as one it is not waiting on: a
 // question left open by a daemon that has since stopped, or copied into

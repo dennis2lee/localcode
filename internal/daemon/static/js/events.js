@@ -31,6 +31,16 @@ import { loadAgents } from './loaders.js';
 
 let eventSource = null;
 
+// putAwayHeldAsks is a turn's end telling the page that no model question
+// it still holds is waited on: the daemon resolves a question before the
+// turn that asked it can end, so one still held was asked by a daemon
+// that has gone. Only questions with a line: the whole-conversation reload
+// replays older turns' ends before the question an answer is on its way
+// to is drawn again, and that answer is not over.
+function putAwayHeldAsks() {
+  for (const id of askLineIds()) askNobodyWaiting(id);
+}
+
 // isOrchestrateStage reports whether a task id is an orchestration stage
 // progress report rather than a task. The daemon reports stage progress
 // on the task.status channel with task_id "orchestrate:<stage>", and
@@ -181,6 +191,7 @@ const handlers = {
   // The daemon's real turn boundary, emitted after its busy flag is
   // cleared — safe to stop waiting and let the queue drain.
   'turn.done': () => {
+    putAwayHeldAsks();
     app.turnMoves++;
     session.runningTool = '';
     setWaiting(false);
@@ -267,7 +278,7 @@ const handlers = {
       // A daemon asks one model question at a time in a session, so a live
       // one means every other this page holds is over: its turn ended, and
       // the stream that would have said so may have been away.
-      for (const id of new Set([...askLineIds(), ...session.answeringAsks.keys()])) {
+      for (const id of askLineIds()) {
         if (id !== d.id) askNobodyWaiting(id);
       }
       noteAskLine(d.id, el);
@@ -703,6 +714,7 @@ const handlers = {
     appendTool(`[delegated to ${d.agent || ''}]`);
   },
   'turn.cancelled': () => {
+    putAwayHeldAsks();
     app.turnMoves++;
     session.promptQueue = [];
     session.runningTool = '';

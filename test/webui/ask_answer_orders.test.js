@@ -4,6 +4,8 @@
 // for it, walked against a model of the daemon. Besides one question and
 // one answer: two answers to it on their way at once (the second typed
 // after the whole conversation armed the box again), a newer question,
+// a turn that asks nothing run by another client, an earlier answered
+// question in the whole-conversation replay,
 // later resumes that bring stale resolutions, the newer question resolved
 // from another window, and with ASK_ORDERS_Y=1 answers to the newer
 // question from here too.
@@ -49,8 +51,17 @@ function initialModel() {
   };
 }
 
+// An earlier question, answered, whose turn ended: the whole-conversation
+// reload replays it, unmarked, and its turn's end, before X is drawn again.
+const A = 'd0-i1';
+
 function replay(app, m, whole) {
-  if (whole) app.sse.emit({ seq: 1, type: 'message.user', data: { text: 'first' } });
+  if (whole) {
+    app.sse.emit({ seq: 1, type: 'message.user', data: { text: 'first' } });
+    app.sse.emit(ask(2, A, false));
+    app.sse.emit({ seq: 3, type: 'input.resolved', data: { id: A, answer: 'a' } });
+    app.sse.emit({ seq: 4, type: 'turn.done', data: {} });
+  }
   app.sse.emit({ seq: 400, type: 'message.user', data: { text: 'pick one' } });
   const xStale = !m.x.waiting && !m.x.logged;
   app.sse.emit(ask(401, X, xStale));
@@ -209,6 +220,21 @@ const steps = {
       c.app.sse.emit(ask(500, Y, false));
       await c.app.settle(12);
       c.m.y = { waiting: true, logged: null, toldStale: false, posts: [], answered: false, took: false };
+      // One question at a time: a newer one says nobody waits on X.
+      if (!c.m.x.logged) c.m.told.stale = true;
+    },
+  },
+  // Another client runs a turn on the daemon that came up, and it asks
+  // nothing. A turn ends only after the question it asked is resolved, so
+  // its end says nobody waits on X.
+  turnRan: {
+    pre: (m) => m.restarted && !m.y && !m.turnRan,
+    async run(c) {
+      c.app.sse.emit({ seq: 450, type: 'message.user', data: { text: 'other' } });
+      c.app.sse.emit({ seq: 451, type: 'turn.done', data: {} });
+      await c.app.settle(12);
+      c.m.turnRan = true;
+      if (!c.m.x.logged) c.m.told.stale = true;
     },
   },
   // ASK_ORDERS_Y=1: Y answered from here too, so an answer to each question
@@ -383,6 +409,7 @@ function simulate(name, m) {
     case 'whole': m.wholeOffered = false; break;
     case 'switch': m.wholeOffered = true; break;
     case 'newer': m.y = { waiting: true, logged: null, posts: [], answered: false, took: false }; break;
+    case 'turnRan': m.turnRan = true; break;
     case 'answerY': m.y.posts.push({}); m.y.answered = true; break;
     case 'okY': m.y.posts.pop(); m.y.waiting = false; m.y.took = true; break;
     case 'r404Y': case 'netY': m.y.posts.pop(); break;

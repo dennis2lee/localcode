@@ -11,6 +11,7 @@ A question a stopped daemon left open is no longer shown again when the conversa
 * TUI: a model question kept across a switch to another conversation, where the next Enter was sent as its answer and refused
 * A background task's permission question left unresolved in its conversation when the task's own log could not be written
 * Web UI: an answer to a model question that failed to reach the daemon not putting the question back, so the next message went to the model as a prompt
+* A model question a stopped daemon left open kept after the next turn in the conversation ended or asked a question of its own, in the TUI and the Web UI
 
 ## v0.180.10
 
