@@ -165,6 +165,7 @@ func TestThePanelDrivesThePage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/stream", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin") // as the panel's <img> sends it
 	stream, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
