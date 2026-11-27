@@ -33,8 +33,9 @@ let eventSource = null;
 
 // putAwayHeldAsks is a turn's end telling the page that no model question
 // it still holds is waited on: the daemon resolves a question before the
-// turn that asked it can end, so one still held was asked by a daemon
-// that has gone. Only questions with a line: the whole-conversation reload
+// turn that asked it can end, and writes that end before the next turn can
+// begin (turnTracker.ending), so one still held was asked by a daemon that
+// has gone. Only questions with a line: the whole-conversation reload
 // replays older turns' ends before the question an answer is on its way
 // to is drawn again, and that answer is not over.
 function putAwayHeldAsks() {
@@ -752,9 +753,10 @@ const handlers = {
     // the cancelled one comes up instead of being stranded with the
     // composer unlocked and no modal to answer it in. The resolved event
     // for the cancelled question then matches nothing and is ignored.
-    // Not a request mirrored from a background task (task_session): the
-    // task goes on after this turn and still waits on it, and the TUI keeps
-    // it on screen too.
+    // The daemon writes this end before the next turn can begin, so any
+    // other request on screen is this turn's own. Not a request mirrored
+    // from a background task (task_session): the task goes on after this
+    // turn and still waits on it, and the TUI keeps it on screen too.
     if (!(session.pendingPermission && session.pendingPermission.task_session)) {
       settlePermissionRequest(session.pendingPermissionID);
     }

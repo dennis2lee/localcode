@@ -93,8 +93,9 @@ func (p pendingPermission) parts(typing bool) (string, string) {
 }
 
 // dropHeldAsk lets go of a model question still held when a turn ends.
-// The daemon resolves a question before the turn that asked it can end, so
-// one still held was asked by a daemon that has gone, and the next Enter
+// The daemon resolves a question before the turn that asked it can end,
+// and writes that end before the next turn can begin, so one still held
+// was asked by a daemon that has gone, and the next Enter
 // would be sent as its answer and refused. Not a permission request: one
 // mirrored from a background task outlives the turn of the conversation
 // it is shown in.

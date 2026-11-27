@@ -363,12 +363,15 @@ const (
 	// seeing this event cannot hit 409. Clients gate their "waiting"
 	// state and prompt-queue drain on this, not on message.part.end —
 	// that one fires per model message, and a turn with tool calls has
-	// several.
+	// several. It is written before the next turn in the session can
+	// begin, so nothing of that turn comes before it in the log: a
+	// question still held when it arrives was not asked by a later turn.
 	TypeTurnDone Type = "turn.done"
 	// TypeTurnCancelled marks a turn stopped on purpose by the user
 	// (Esc in the TUI, POST /api/sessions/{id}/cancel), as opposed to
 	// TypeError which means something went wrong. Clients use it to stop
-	// showing a spinner without printing a scary message.
+	// showing a spinner without printing a scary message. Written before
+	// the next turn can begin, as TypeTurnDone is.
 	TypeTurnCancelled Type = "turn.cancelled"
 )
 

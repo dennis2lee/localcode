@@ -43,6 +43,20 @@ type turnTracker struct {
 	// question.
 	noInject map[string]bool
 
+	// ending names the sessions whose turn has given up its registration
+	// and is writing its end (turn.done or turn.cancelled) into the log.
+	// The channel is closed once the end is written. begin waits on it,
+	// so the next turn's first event comes after the end of the one
+	// before.
+	//
+	// Clients read a turn's end as the end of the turn that came before
+	// it in the log: they put away a question still held at that point,
+	// and the Web UI takes a stopped turn's permission request down. A
+	// turn that began in the gap between giving up the registration and
+	// writing the end could ask its own question first, and the end
+	// written after it took that live question off screen.
+	ending map[string]chan struct{}
+
 	// onChange is called when a session starts or stops being busy, so
 	// clients can show which conversations are working without polling.
 	// Set once at construction; nil in tests that only exercise the
@@ -55,14 +69,17 @@ func newTurnTracker() turnTracker {
 		cancels:  map[string]context.CancelFunc{},
 		pending:  map[string][]string{},
 		noInject: map[string]bool{},
+		ending:   map[string]chan struct{}{},
 	}
 }
 
 // begin registers a turn for id and reports true, or reports false (and
 // registers nothing) when one is already running — the caller turns that
-// into a 409.
+// into a 409. A turn that is writing its end is waited for, not refused:
+// the session is idle, and the wait lasts one log write.
 func (t *turnTracker) begin(id string, cancel context.CancelFunc) bool {
 	t.mu.Lock()
+	t.awaitEnd(id)
 	if _, running := t.cancels[id]; running {
 		t.mu.Unlock()
 		return false
@@ -85,6 +102,7 @@ func (t *turnTracker) begin(id string, cancel context.CancelFunc) bool {
 // the caller answers it properly instead.
 func (t *turnTracker) beginExclusive(id string, cancel context.CancelFunc) bool {
 	t.mu.Lock()
+	t.awaitEnd(id)
 	if _, held := t.cancels[id]; held {
 		t.mu.Unlock()
 		return false
@@ -112,13 +130,54 @@ func (t *turnTracker) changed(id string, busy bool) {
 // (cancellation, a failed request), where nothing is left to deliver the
 // queue to. The ordinary end of a turn goes through finishOrTake instead,
 // which does not throw the queue away.
-func (t *turnTracker) end(id string) {
+func (t *turnTracker) end(id string) { t.endWriting(id, nil) }
+
+// endWriting is end for a turn that records its end: write appends
+// turn.done or turn.cancelled, and nothing can begin in the session until
+// it has. See ending.
+func (t *turnTracker) endWriting(id string, write func()) {
 	t.mu.Lock()
 	delete(t.cancels, id)
 	delete(t.noInject, id)
 	delete(t.pending, id)
+	t.writeEnd(id, write)
+}
+
+// writeEnd finishes a turn whose registration has just been cleared. It
+// is entered with t.mu held and returns with it released. write, when
+// there is one, runs outside the lock (it is a log write, and the lock is
+// every session's), with id marked as ending so begin waits for it.
+//
+// Busy is announced false after the end is written. A client that sends
+// its next message on seeing the end, or on seeing the session idle,
+// reaches a begin that no longer waits.
+func (t *turnTracker) writeEnd(id string, write func()) {
+	if write != nil {
+		done := make(chan struct{})
+		t.ending[id] = done
+		t.mu.Unlock()
+		write()
+		t.mu.Lock()
+		delete(t.ending, id)
+		close(done)
+	}
 	t.mu.Unlock()
 	t.changed(id, false)
+}
+
+// awaitEnd returns once no turn of id is writing its end. It is entered
+// with t.mu held and returns with it held; the lock is released while it
+// waits.
+func (t *turnTracker) awaitEnd(id string) {
+	for {
+		done, writing := t.ending[id]
+		if !writing {
+			return
+		}
+		t.mu.Unlock()
+		<-done
+		t.mu.Lock()
+	}
 }
 
 // inject hands text to the turn currently running for id, to be picked up
@@ -175,7 +234,11 @@ func (t *turnTracker) hasPending(id string) bool {
 // there is not, and the registration is cleared here, under the same lock
 // inject checks. That is what closes the window where a message accepted
 // microseconds before a turn ended would never be answered by anyone.
-func (t *turnTracker) finishOrTake(id string) (string, bool) {
+//
+// With nothing queued, write records the turn's end before anything can
+// begin in the session (see ending). A message that inject turns away in
+// the meantime begins a turn of its own once write returns.
+func (t *turnTracker) finishOrTake(id string, write func()) (string, bool) {
 	t.mu.Lock()
 	if q := t.pending[id]; len(q) > 0 {
 		text := q[0]
@@ -190,8 +253,7 @@ func (t *turnTracker) finishOrTake(id string) (string, bool) {
 	delete(t.cancels, id)
 	delete(t.noInject, id)
 	delete(t.pending, id)
-	t.mu.Unlock()
-	t.changed(id, false)
+	t.writeEnd(id, write)
 	return "", false
 }
 
@@ -440,6 +502,15 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// writeEnd is the turn's last event, written by the tracker before it
+	// lets the next turn begin.
+	writeEnd := func(typ events.Type) func() {
+		return func() {
+			_, err := d.Loop.Store.Append(id, typ, map[string]any{})
+			logAppend(id, typ, err)
+		}
+	}
+
 	go func() {
 		text := req.Text
 		agent := sess.Agent
@@ -471,17 +542,13 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			// cancellation first.
 			if wasCancelled {
 				cancel()
-				d.turns.end(id)
-				_, err := d.Loop.Store.Append(id, events.TypeTurnCancelled, map[string]any{})
-				logAppend(id, events.TypeTurnCancelled, err)
+				d.turns.endWriting(id, writeEnd(events.TypeTurnCancelled))
 				return
 			}
 			if err != nil {
 				log.Printf("session %s: SendMessage: %v", id, err)
 				cancel()
-				d.turns.end(id)
-				_, err := d.Loop.Store.Append(id, events.TypeTurnDone, map[string]any{})
-				logAppend(id, events.TypeTurnDone, err)
+				d.turns.endWriting(id, writeEnd(events.TypeTurnDone))
 				return
 			}
 
@@ -496,15 +563,16 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			// that is what makes "nothing queued" and "no longer running"
 			// a single decision, with no window in between for a message
 			// to fall into.
-			next, more := d.turns.finishOrTake(id)
+			//
+			// The turn boundary clients act on is appended after the
+			// registration is cleared. Clients send their next message the
+			// moment they see it, so the other order is a race: event
+			// observed, still registered as busy, 409. finishOrTake holds
+			// off the next turn until it is written, so nothing of that
+			// turn comes before it in the log.
+			next, more := d.turns.finishOrTake(id, writeEnd(events.TypeTurnDone))
 			if !more {
 				cancel()
-				// The turn boundary clients act on, appended after the
-				// registration is cleared. Clients send their next message
-				// the moment they see it, so the other order is a race:
-				// event observed, still registered as busy, 409.
-				_, err := d.Loop.Store.Append(id, events.TypeTurnDone, map[string]any{})
-				logAppend(id, events.TypeTurnDone, err)
 				return
 			}
 			text = next

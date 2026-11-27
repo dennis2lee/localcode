@@ -81,7 +81,7 @@ func TestFinishOrTakeLeavesNoMessageStranded(t *testing.T) {
 		var delivered bool
 		go func() {
 			defer wg.Done()
-			_, more := tr.finishOrTake("s1")
+			_, more := tr.finishOrTake("s1", nil)
 			delivered = more
 		}()
 
@@ -106,7 +106,7 @@ func TestFinishOrTakeClearsTheRegistrationWhenNothingIsQueued(t *testing.T) {
 	defer cancel()
 	tr.begin("s1", cancel)
 
-	if _, more := tr.finishOrTake("s1"); more {
+	if _, more := tr.finishOrTake("s1", nil); more {
 		t.Fatal("finishOrTake reported more work with an empty queue")
 	}
 	if busy := tr.anyBusy([]string{"s1"}); len(busy) > 0 {
@@ -157,7 +157,7 @@ func TestBeginSucceedsOnceInjectHasReportedNoTurn(t *testing.T) {
 		t.Fatal("begin")
 	}
 	// The turn ends the ordinary way, with nothing queued.
-	if _, more := tr.finishOrTake("s1"); more {
+	if _, more := tr.finishOrTake("s1", nil); more {
 		t.Fatal("nothing was queued")
 	}
 
