@@ -1,7 +1,7 @@
 import { inputEl, centerEl, sendBtn, commDotEl } from './dom.js';
 import { app, session, turnInFlight, tasksInFlight, historyLimit } from './state.js';
 import * as apiClient from './api.js';
-import { appendTool, appendError, appendPendingUser, resolvePendingUser, dropPendingUser, noteReceipt, noteQueued, resendQueued, leaveAskUnanswered, forgetAskLine } from './transcript.js';
+import { appendTool, appendError, appendPendingUser, dropPendingUser, noteReceipt, queueRefused, abandonQueued, resendQueued, leaveAskUnanswered, forgetAskLine } from './transcript.js';
 import { renderStatusBar } from './render.js';
 import { isPlainPrompt, tryLocalCommand } from './commands.js';
 import { resetCompletion } from './complete.js';
@@ -215,8 +215,10 @@ export async function cancelTurn() {
   // start is a no-op.
   if (!turnInFlight() || !session.sessionID) return;
   // Drop the queue here rather than waiting for the event, so a second Esc
-  // press cannot race an already queued prompt out the door.
+  // press cannot race an already queued prompt out the door. Its lines
+  // say so now: with nothing running there is no stop event to.
   session.promptQueue = [];
+  abandonQueued();
   try {
     await apiClient.cancelSessionTurn(session.sessionID);
     // Either answer clears this client's spinner, for different reasons.
@@ -255,9 +257,10 @@ export function dequeueNext(isRetry = false) {
     if (parts) noteReceipt(parts, reply);
   }, (err) => {
     if (apiClient.isBusy(err)) {
+      // A stop came while this was on its way: it goes as the queue did.
+      if (parts && !queueRefused(parts)) return;
       // Still busy — put it back and wait for the next turn.done.
       session.promptQueue.unshift(next);
-      if (parts) noteQueued(parts);
       // Unless nothing is running, in which case that turn.done has
       // already fired and waiting for another is waiting forever. The
       // daemon returns this same 409 for "a turn ended between the two
@@ -269,8 +272,9 @@ export function dequeueNext(isRetry = false) {
     // The line drawn when Enter was pressed stood for it while it was
     // queued; nothing took it, so it goes with the error, as it does
     // when the first send fails.
+    // Its own line only. With none found, no line on screen stands for
+    // it, and one with the same words stands for another send.
     if (parts) dropPendingUser(parts);
-    else resolvePendingUser(item.text);
     setWaiting(false);
     appendError(err);
   });
@@ -725,9 +729,9 @@ export async function sendMessage() {
       apiClient.sendChatMessage(session.sessionID, text).then((reply) => noteReceipt(parts, reply), (err) => {
         if (apiClient.isBusy(err)) {
           // The turn ended in the gap. Queue it for dequeueNext, which
-          // fires on the turn.done that is already on its way.
-          session.promptQueue.push(text);
-          noteQueued(parts);
+          // fires on the turn.done that is already on its way. Unless that
+          // end was a stop, which came first: it goes as the queue did.
+          if (queueRefused(parts)) session.promptQueue.push(text);
           renderStatusBar();
           return;
         }
@@ -777,8 +781,9 @@ export async function sendMessage() {
       // another client started). Queue material, not an error: the running
       // turn's turn.done will drain it. waiting stays true so further
       // prompts queue too.
+      // Unless a stop came first: it goes as the queue did.
+      if (!queueRefused(parts)) return;
       session.promptQueue.unshift(images.length > 0 ? { text, images } : text);
-      noteQueued(parts);
       renderStatusBar();
       retryQueueSoon();
       return;

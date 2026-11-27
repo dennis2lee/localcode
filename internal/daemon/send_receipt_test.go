@@ -204,3 +204,58 @@ func TestAStopAsATurnEndsEndsItAsCancelled(t *testing.T) {
 		})
 	}
 }
+
+// The stop's cancel runs under the tracker's lock. finishTurn takes that
+// lock to clear the registration, so it sees either the stop, as a
+// cancelled context, or no stop at all: cancel then finds nothing running
+// and answers false.
+func TestAStopCancelsTheTurnUnderTheTrackersLock(t *testing.T) {
+	tr := newTurnTracker()
+	held := false
+	if !tr.begin("s1", func() {
+		held = !tr.mu.TryLock()
+		if !held {
+			tr.mu.Unlock()
+		}
+	}) {
+		t.Fatal("begin")
+	}
+	if !tr.cancel("s1") {
+		t.Fatal("precondition: the stop was honoured")
+	}
+	if !held {
+		t.Error("the turn's context was cancelled after the lock was released: a turn that ends in between writes turn.done for a stop that dropped its queue")
+	}
+}
+
+// The same, as a race: the end says a stop when one was honoured, and
+// only then. It never fails correct code.
+func TestAStopRacingATurnsEndIsWhatTheEndSays(t *testing.T) {
+	d := newTestDaemon(t, textModel(t).URL)
+	sess, err := d.Loop.Store.CreateSession("race", "", "general-purpose", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 300 {
+		turnCtx, stop := context.WithCancel(context.Background())
+		if !d.turns.begin(sess.ID, stop) {
+			t.Fatal("begin")
+		}
+		honoured := make(chan bool, 1)
+		go func() { honoured <- d.turns.cancel(sess.ID) }()
+		if _, more := d.finishTurn(sess.ID, turnCtx); more {
+			t.Fatal("nothing was queued")
+		}
+		stopped := <-honoured
+		stop()
+
+		evs, _ := d.Loop.Store.Events(sess.ID, 0)
+		last := evs[len(evs)-1]
+		if stopped && last.Type != events.TypeTurnCancelled {
+			t.Fatalf("round %d: the stop was honoured and the turn ended with %s", i, last.Type)
+		}
+		if !stopped && last.Type != events.TypeTurnDone {
+			t.Fatalf("round %d: no stop was honoured and the turn ended with %s", i, last.Type)
+		}
+	}
+}

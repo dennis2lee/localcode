@@ -18,8 +18,8 @@ A question a stopped daemon left open is no longer shown again when the conversa
 * A stop replayed after a reconnect marking prompts sent after it as "not sent", in the TUI and the Web UI
 * A prompt's "sent" line taken away by an earlier message with the same words, replayed after a reconnect once localcode had answered the send, in the TUI and the Web UI
 * A stop that landed as a turn was ending dropping the prompts sent into it under `turn.done`, so no client marked them "not sent"
-* Web UI: a failed send taking away the "sent" line of an earlier send with the same words
-* Web UI: a prompt refused as busy while a stop was on its way marked "not sent", although the page sent it again
+* Web UI: a prompt refused as busy while a stop was on its way marked "not sent", and then sent from the page's queue anyway
+* Web UI: a prompt Esc took out of the page's queue left drawn as sent when no turn was running
 
 **Added**
 

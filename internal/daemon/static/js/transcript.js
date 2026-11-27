@@ -231,6 +231,7 @@ export function abandonPendingUsers(stop = 0) {
 }
 
 function markNotSent(parts) {
+  parts.notSent = true;
   // The separator announced a turn boundary that never happened.
   if (parts.sep) parts.sep.remove();
   parts.div.className = 'msg-tool';
@@ -256,17 +257,42 @@ export function noteReceipt(parts, reply) {
   }
 }
 
-// noteQueued records that the send parts stands for was refused as busy
-// and is in this page's queue, which sends it again. The daemon does not
-// have it, so the next stop takes it as dropped, as it takes the queue. A
-// stop that came while the refusal was on its way does not decide it: it
-// cleared the queue before the prompt went into it, and resendQueued
-// forgets it when the prompt is sent again.
-export function noteQueued(parts) {
+// queueRefused answers a send refused as busy, which goes into this
+// page's queue to be sent again, and reports whether the caller is to
+// queue it. The daemon does not have it, so the next stop takes it as
+// dropped, as it takes the queue. Except one a stop held while the
+// refusal was on its way: it would have been in the queue that stop
+// cleared, so it goes the way the queue went, marked as never sent, and
+// is not queued. One already marked (a lost turn) is not queued either.
+export function queueRefused(parts) {
+  if (parts.notSent) return false;
   const list = sentPlaceholders.get(parts.text);
-  if (!list || !list.includes(parts)) return;
+  const i = list ? list.indexOf(parts) : -1;
+  if (i < 0) return true;
+  if (parts.heldBy > 0) {
+    list.splice(i, 1);
+    if (list.length === 0) sentPlaceholders.delete(parts.text);
+    markNotSent(parts);
+    return false;
+  }
   parts.took = 'queued';
   parts.at = 0;
+  return true;
+}
+
+// abandonQueued answers this page emptying its own queue (Esc): what was
+// in it was never sent. A stop's event, when one follows, finds these
+// lines already marked.
+export function abandonQueued() {
+  for (const [text, list] of sentPlaceholders) {
+    const kept = list.filter((parts) => {
+      if (parts.took !== 'queued') return true;
+      markNotSent(parts);
+      return false;
+    });
+    if (kept.length > 0) sentPlaceholders.set(text, kept);
+    else sentPlaceholders.delete(text);
+  }
 }
 
 // dropPendingUser removes the placeholder of a send that failed: its own,

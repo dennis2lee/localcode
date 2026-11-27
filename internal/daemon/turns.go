@@ -271,12 +271,16 @@ func (t *turnTracker) finishOrTake(id string, write func()) (string, bool) {
 // turn.cancelled event, so this only has to pull the trigger.
 func (t *turnTracker) cancel(id string) bool {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	c, running := t.cancels[id]
 	// Stopping the turn drops what was queued for it. Someone who hits
 	// stop wants the work to end, not for the messages they typed while
 	// waiting to be picked up and acted on afterwards.
 	delete(t.pending, id)
-	t.mu.Unlock()
+	// Under the lock, with the queue: a turn that ends after this sees its
+	// context cancelled and writes turn.cancelled (see finishTurn), and
+	// one that ended before it is not running here. Every func registered
+	// is a context's cancel, which neither blocks nor calls back in.
 	if running {
 		c()
 	}
@@ -602,8 +606,9 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 // A stop can land after the turn read its context and before this.
 // turnTracker.cancel then drops the queue and cancels the context, and the
 // end is turn.cancelled: a client takes only that to have dropped what it
-// sent into the turn. Read when the end is written, when the registration
-// is cleared and nothing else can cancel the context.
+// sent into the turn. Read when the end is written. cancel does both under
+// the lock finishOrTake takes to clear the registration, so a stop
+// honoured before that is seen here, and none is honoured after it.
 func (d *Daemon) finishTurn(id string, turnCtx context.Context) (string, bool) {
 	return d.turns.finishOrTake(id, func() {
 		typ := events.TypeTurnDone

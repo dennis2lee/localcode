@@ -10,7 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { load } = require('./harness');
+const { load, defaultRoutes } = require('./harness');
 
 const notSent = (app) => (app.transcript().match(/not sent — the turn was stopped/g) || []).length;
 const sentLines = (app) => (app.transcript().match(/the model will pick this up/g) || []).length;
@@ -397,9 +397,10 @@ test('a late answer leaves another placeholder of the same words alone', async (
   assert.deepEqual(app.userTurns(), ['again', 'again']);
 });
 
-// A busy refusal that comes after a stop puts the prompt in the queue the
-// stop already cleared, and the page sends it again.
-test('a prompt sent to an idle session and refused as busy after a stop is sent again, not marked', async () => {
+// A busy refusal that comes after a stop is for a prompt the daemon did
+// not take: it would have been in the queue the stop cleared, so it goes
+// the way the queue went, marked, and nothing sends it later.
+test('a prompt sent to an idle session and refused as busy after a stop is marked, not queued', async () => {
   const d = daemon();
   const app = await load({ routes: d.routes });
   const refuse = d.holdBusy();
@@ -408,21 +409,15 @@ test('a prompt sent to an idle session and refused as busy after a stop is sent 
   await app.settle();
   refuse();
   await app.settle();
-  assert.deepEqual(Array.from(app.state.promptQueue), ['look at this'], 'precondition: queued after the stop');
 
-  // The retry sends it again.
-  d.taken(20);
+  assert.equal(notSent(app), 1, 'a prompt the stop would have dropped with the queue is drawn as sent');
+  assert.deepEqual(Array.from(app.state.promptQueue), [], 'the prompt went into the queue the stop cleared');
   await app.wait(400);
   await app.settle();
-  assert.equal(app.callsTo('POST', /\/messages$/).length, 2, 'precondition: sent again');
-  app.sse.emit({ seq: 21, type: 'message.user', data: { text: 'look at this' } });
-  await app.settle();
-
-  assert.equal(notSent(app), 0, 'a prompt the page sent after the stop, and the model was handed, is marked as never sent');
-  assert.deepEqual(app.userTurns(), ['look at this']);
+  assert.equal(app.callsTo('POST', /\/messages$/).length, 1, 'a prompt marked as never sent was sent again');
 });
 
-test('a prompt sent mid-turn and refused as busy after a stop is sent again, not marked', async () => {
+test('a prompt sent mid-turn and refused as busy after a stop is marked, not queued', async () => {
   const d = daemon();
   const app = await load({ routes: d.routes });
   app.state.waiting = true;
@@ -432,18 +427,80 @@ test('a prompt sent mid-turn and refused as busy after a stop is sent again, not
   await app.settle();
   refuse();
   await app.settle();
-  assert.deepEqual(Array.from(app.state.promptQueue), ['and the docs'], 'precondition: queued after the stop');
 
-  // Another client's turn ends, and the queue sends it.
-  d.taken(30);
-  app.sse.emit({ seq: 21, type: 'message.user', data: { text: 'other client' } });
+  assert.equal(notSent(app), 1, 'a prompt the stop would have dropped with the queue is drawn as sent');
+  assert.deepEqual(Array.from(app.state.promptQueue), [], 'the prompt went into the queue the stop cleared');
+  // Another client's turn ends; the queue has nothing to send.
   app.sse.emit({ seq: 30, type: 'turn.done', data: {} });
   await app.settle();
-  app.sse.emit({ seq: 31, type: 'message.user', data: { text: 'and the docs' } });
+  assert.equal(app.callsTo('POST', /\/messages$/).length, 1, 'a prompt marked as never sent was sent again');
+});
+
+test('a queued prompt refused as busy again after a stop is marked, not queued', async () => {
+  const d = daemon();
+  const app = await load({ routes: d.routes });
+  d.busy();
+  await send(app, 'look at this');
+  assert.deepEqual(Array.from(app.state.promptQueue), ['look at this'], 'precondition: queued, retry armed');
+
+  const refuse = d.holdBusy();
+  await app.wait(400);
+  await app.settle();
+  assert.equal(app.callsTo('POST', /\/messages$/).length, 2, 'precondition: the retry went out');
+  app.sse.emit({ seq: 20, type: 'turn.cancelled', data: {} });
+  await app.settle();
+  refuse();
   await app.settle();
 
-  assert.equal(notSent(app), 0, 'a prompt the page sent after the stop, and the model was handed, is marked as never sent');
-  assert.deepEqual(app.userTurns(), ['other client', 'and the docs']);
+  assert.equal(notSent(app), 1, 'a prompt the stop would have dropped with the queue is drawn as sent');
+  assert.deepEqual(Array.from(app.state.promptQueue), [], 'the prompt went into the queue the stop cleared');
+});
+
+// Esc empties this page's queue, and with nothing running no stop event
+// follows to say what that dropped.
+test('a prompt Esc takes out of the queue is marked as never sent', async () => {
+  const app = await load({
+    routes: {
+      'POST /api/sessions/*/messages': { status: 409, body: { error: 'session s is already processing a message' } },
+      'POST /api/sessions/*/cancel': { cancelled: false },
+    },
+  });
+  app.state.waiting = true;
+  await send(app, 'later');
+  assert.deepEqual(Array.from(app.state.promptQueue), ['later'], 'precondition: queued');
+
+  await app.cancelTurn();
+  await app.settle();
+  assert.equal(notSent(app), 1, 'a prompt Esc removed from the queue is still drawn as sent');
+  assert.equal(sentLines(app), 0);
+});
+
+// A queue resend with no line of its own on screen (the transcript was
+// drawn again) removes nothing when it fails: a line with the same words
+// stands for another send.
+test('a failed resend with no line of its own leaves another send\'s line', async () => {
+  const d = daemon();
+  const app = await load({ routes: d.routes });
+  app.sse.emit({ seq: 50, type: 'message.user', data: { text: 'earlier' } });
+  await app.settle();
+  d.busy();
+  await send(app, 'again');
+  assert.deepEqual(Array.from(app.state.promptQueue), ['again'], 'precondition: queued');
+
+  app.el('transcript').querySelector('.earlier-btn').click();
+  await app.settle();
+  assert.deepEqual(Array.from(app.state.promptQueue), ['again'], 'precondition: the redraw left the queue');
+
+  d.taken(60);
+  await send(app, 'again');
+  d.failed();
+  await app.wait(400);
+  await app.settle();
+  assert.equal(app.callsTo('POST', /\/messages$/).length, 3, 'precondition: the retry went out and failed');
+
+  app.sse.emit({ seq: 61, type: 'turn.cancelled', data: {} });
+  await app.settle();
+  assert.equal(notSent(app), 1, 'the send the stop dropped lost its line to the failed resend');
 });
 
 // A failed send removes its own placeholder, not the oldest with its
@@ -496,4 +553,64 @@ test('a queued prompt that fails when sent again removes its own placeholder', a
   await app.settle();
   assert.equal(notSent(app), 1, 'the stop dropped the send the daemon took, and nothing says so');
   assert.equal(sentLines(app), 0);
+});
+
+// A lost turn marks every placeholder, one whose send is still on its way
+// too; a busy refusal for it then finds it marked, and it is not queued.
+test('a prompt a lost turn marked is not queued when its send is refused as busy', async () => {
+  const d = daemon();
+  const app = await load({ routes: { ...defaultRoutes(), ...d.routes, 'GET /api/sessions': () => [{ id: 'sess-1', title: 'one', busy: false }] } });
+  const refuse = d.holdBusy();
+  await send(app, 'first');
+  app.sse.fail();
+  await app.settle();
+  app.sse.reopen();
+  await app.settle();
+  for (let i = 0; i < 40 && !/did not finish/.test(app.el('transcript').textContent); i++) await app.wait(100);
+  assert.equal(notSent(app), 1, 'precondition: the lost turn marked the prompt');
+
+  refuse();
+  await app.settle();
+  assert.deepEqual(Array.from(app.state.promptQueue), [], 'a prompt marked as never sent went into the queue');
+  await app.wait(400);
+  await app.settle();
+  assert.equal(app.callsTo('POST', /\/messages$/).length, 1, 'a prompt marked as never sent was sent again');
+});
+
+// The transcript drawn again while a send is on its way takes its line
+// with it; a busy refusal then queues the prompt, as before there was a
+// line to go by.
+test('a send refused as busy after the transcript was drawn again is queued', async () => {
+  const d = daemon();
+  const app = await load({ routes: d.routes });
+  app.sse.emit({ seq: 50, type: 'message.user', data: { text: 'earlier' } });
+  await app.settle();
+  const refuse = d.holdBusy();
+  await send(app, 'look at this');
+  app.el('transcript').querySelector('.earlier-btn').click();
+  await app.settle();
+
+  refuse();
+  await app.settle();
+  assert.deepEqual(Array.from(app.state.promptQueue), ['look at this'], 'a refused prompt with no line on screen was dropped');
+});
+
+// Esc marks only what it took out of the queue: a send the daemon took is
+// still the daemon's to hand on.
+test('Esc leaves a prompt the daemon took drawn as sent', async () => {
+  const d = daemon();
+  const app = await load({ routes: { ...d.routes, 'POST /api/sessions/*/cancel': { cancelled: false } } });
+  app.state.waiting = true;
+  d.taken(10);
+  await send(app, 'taken');
+  d.busy();
+  await send(app, 'queued');
+
+  await app.cancelTurn();
+  await app.settle();
+  assert.equal(notSent(app), 1, 'want only the queued prompt marked');
+  app.sse.emit({ seq: 11, type: 'message.user', data: { text: 'taken' } });
+  await app.settle();
+  assert.equal(sentLines(app), 0);
+  assert.deepEqual(app.userTurns(), ['taken']);
 });
