@@ -513,14 +513,46 @@ export async function loadSessionPermissions(sessionID) {
 // there is no third visual state: "unset" and "set to what the default
 // happens to be" look the same and behave the same until the default
 // changes, and the source line under the panel says which one it is.
-async function setSessionSwitch(name, enabled) {
-  if (!session.sessionID) return;
-  try {
-    applySessionPermissions(await apiClient.setSessionPermission(session.sessionID, name, enabled));
-  } catch (err) {
-    switchFailures.set(name, `could not change ${name}: ${err.message}`);
-    drawPermissionNote();
-  }
+//
+// The four go one at a time, through one queue. Each was sent as it was
+// pressed, so two changes could be out at once and answer in either
+// order, and every answer is a snapshot of all four: the one that came
+// last was drawn, an older value over a newer one, and a failure from
+// before a later change was taken was said beside a box the daemon
+// agreed with. One queue rather than one per switch, because a snapshot
+// answering skip_all carries read_outside too. A forget goes in the same
+// queue, because its answer is the same snapshot: sent at once, it
+// reached the daemon ahead of a switch change still waiting behind
+// another, and its answer, older than that change's, could be drawn last.
+// Found by review.
+//
+// A change is for the conversation it was made in. Its answer is dropped
+// if another one is open by then, as loadSessionPermissions does: drawn,
+// a snapshot set the new conversation's boxes and pill to the old one's,
+// and a failure was said under the wrong conversation. Opening the old
+// one again reads its switches from the daemon.
+const switchChanges = serial();
+
+function setSessionSwitch(name, enabled) {
+  const sessionID = session.sessionID;
+  if (!sessionID) return undefined;
+  return switchChanges(async () => {
+    let answer;
+    try {
+      answer = await apiClient.setSessionPermission(sessionID, name, enabled);
+    } catch (err) {
+      if (sessionID !== session.sessionID) return;
+      switchFailures.set(name, `could not change ${name}: ${err.message}`);
+      drawPermissionNote();
+      return;
+    }
+    if (sessionID !== session.sessionID) return;
+    // Taken, and answered in order, so the daemon now has what this
+    // change asked for and what the box shows: a failure said about an
+    // earlier change of this switch no longer describes anything.
+    if (switchFailures.delete(name)) drawPermissionNote();
+    applySessionPermissions(answer);
+  });
 }
 
 // renderRememberedOutside lists the directories answered with "allow this
@@ -540,14 +572,28 @@ function renderRememberedOutside() {
     const clear = document.createElement('button');
     clear.textContent = 'forget';
     clear.title = `same as /${cls}-outside mem-clear`;
-    clear.addEventListener('click', async () => {
-      try {
-        applySessionPermissions(await apiClient.forgetOutside(session.sessionID, cls));
-      } catch { /* the list simply stays as it was */ }
-    });
+    clear.addEventListener('click', () => forgetOutside(cls));
     row.appendChild(clear);
     rememberedOutsideEl.appendChild(row);
   }
+}
+
+// forgetOutside takes back one class of remembered directories, in the
+// switches' queue and for the conversation it was pressed in. See
+// setSessionSwitch.
+function forgetOutside(cls) {
+  const sessionID = session.sessionID;
+  if (!sessionID) return undefined;
+  return switchChanges(async () => {
+    let answer;
+    try {
+      answer = await apiClient.forgetOutside(sessionID, cls);
+    } catch {
+      return; // the list simply stays as it was
+    }
+    if (sessionID !== session.sessionID) return;
+    applySessionPermissions(answer);
+  });
 }
 
 // refreshPermissionSettingsIfOpen re-reads the checkboxes from app state
