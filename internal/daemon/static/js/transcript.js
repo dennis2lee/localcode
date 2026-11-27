@@ -162,9 +162,11 @@ export function appendPendingUser(text, midTurn = false, images = []) {
   return div;
 }
 
+// resolvePendingUser removes the oldest placeholder for text, and reports
+// whether there was one.
 export function resolvePendingUser(text) {
   const list = sentPlaceholders.get(text);
-  if (!list || list.length === 0) return;
+  if (!list || list.length === 0) return false;
   // Oldest first: the same text can be sent twice, and each send owns one
   // placeholder.
   const parts = list.shift();
@@ -173,7 +175,12 @@ export function resolvePendingUser(text) {
   // the transcript grows a boundary with nothing after it.
   if (parts.sep) parts.sep.remove();
   parts.div.remove();
+  return true;
 }
+
+// unsentLines holds the lines abandonPendingUsers rewrote, by the text
+// they carry, for takeBackUnsent.
+const unsentLines = new Map(); // text -> [element]
 
 // abandonPendingUsers answers a stopped turn: every prompt still showing
 // as sent was in the queue the daemon has just dropped, and it was never
@@ -185,15 +192,42 @@ export function resolvePendingUser(text) {
 // what it said. The line keeps the words and stops claiming they went
 // anywhere.
 export function abandonPendingUsers() {
-  for (const list of sentPlaceholders.values()) {
+  for (const [text, list] of sentPlaceholders) {
     for (const parts of list) {
       // The separator announced a turn boundary that never happened.
       if (parts.sep) parts.sep.remove();
       parts.div.className = 'msg-tool';
       parts.div.textContent = `[not sent — the turn was stopped before the model saw this] ${parts.text}`;
+      const unsent = unsentLines.get(text) || [];
+      unsent.push(parts.div);
+      unsentLines.set(text, unsent);
     }
   }
   sentPlaceholders.clear();
+}
+
+// takeBackUnsent removes the newest line abandonPendingUsers rewrote for
+// text, when the model is handed that text after all: the message.user
+// event for it arrives. A prompt sent as the turn was stopping is still
+// drawn as sent when the stop arrives, and the daemon can start a turn
+// for it once the stopped turn's end is written. Its message.user then
+// comes after that end, and the line said "not sent" above the model's
+// answer to it.
+//
+// The newest, because that prompt is the last one sent before the stop:
+// a line with the same words further up is from an earlier stop, which
+// did drop it.
+//
+// Only for a message.user with no placeholder of its own: a placeholder
+// stands for a send still waiting, which that event answers first.
+// Matched by text, as a placeholder is, so another client's message with
+// the same words takes the line back too.
+export function takeBackUnsent(text) {
+  const list = unsentLines.get(text);
+  if (!list || list.length === 0) return;
+  const div = list.pop();
+  if (list.length === 0) unsentLines.delete(text);
+  div.remove();
 }
 
 // Moving between your own turns.
@@ -960,4 +994,5 @@ export function clearTranscript() {
   // detached nodes.
   session.toolRows.clear();
   sentPlaceholders.clear();
+  unsentLines.clear();
 }

@@ -73,6 +73,10 @@ type transcriptEntry struct {
 	// send nothing took removes its own echo and no other. Zero for every
 	// other entry.
 	send int
+	// unsent is the text of an echo a stop rewrote as never sent (see
+	// abandonPendingUsers), so the model being handed it after all takes
+	// the line back. Empty for every other entry.
+	unsent string
 }
 
 // appendEntry is the single mutation point for the transcript. Every write
@@ -98,7 +102,9 @@ func (m *Model) appendUser(rawText, displayText string) {
 	// A new prompt starts a new reply, whether or not the last one's end
 	// ever came.
 	m.streamOpen = false
-	m.resolvePendingUser(rawText)
+	if !m.resolvePendingUser(rawText) {
+		m.takeBackUnsent(rawText)
+	}
 	m.appendEntry(entryUser, displayText)
 }
 
@@ -207,10 +213,35 @@ func (m *Model) abandonPendingUsers() {
 			text = rest
 		}
 		m.transcript[i].text = "[not sent — the turn was stopped before the model saw this] " + text
+		m.transcript[i].unsent = text
 		changed = true
 	}
 	if changed {
 		m.transcriptRev++
+	}
+}
+
+// takeBackUnsent drops the newest line abandonPendingUsers rewrote for
+// text, when the model is handed that text after all: its message.user
+// arrives. A prompt sent as the turn was stopping is still drawn as sent
+// when the stop arrives, and the daemon can start a turn for it once the
+// stopped turn's end is written. Its message.user then comes after that
+// end, and the line said "not sent" above the model's answer to it.
+//
+// The newest, because that prompt is the last one sent before the stop: a
+// line with the same words further up is from an earlier stop, which did
+// drop it.
+//
+// Only for a message.user with no echo of its own: an echo stands for a
+// send still waiting, which that event answers first. Matched by text, as
+// an echo is, so another client's message with the same words takes the
+// line back too.
+func (m *Model) takeBackUnsent(text string) {
+	for i := len(m.transcript) - 1; i >= 0; i-- {
+		if e := m.transcript[i]; e.unsent != "" && e.unsent == text {
+			m.removeEntry(i)
+			return
+		}
 	}
 }
 

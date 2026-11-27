@@ -608,7 +608,10 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.endTurn()
 		m.dropHeldAsk()
 		// The queue went with the turn — turnTracker.cancel drops it — so
-		// anything still drawn as sent was never handed to anybody.
+		// anything still drawn as sent was never handed to anybody. Except
+		// a prompt that reached the daemon as the turn was ending, which
+		// can start the next turn: takeBackUnsent takes its line back when
+		// its message.user arrives.
 		m.abandonPendingUsers()
 		m.appendTool("[cancelled]")
 	case events.TypeError:
