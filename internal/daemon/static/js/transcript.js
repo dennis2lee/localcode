@@ -177,6 +177,9 @@ export function appendPendingUser(text, midTurn = false, images = []) {
 // the daemon took when the log had already reached seq is not that
 // message's: its own is written after it was taken. A backlog replayed on
 // a reconnect brings such a message, another client's with the same words.
+// A placeholder whose answer has not come yet cannot be told apart that
+// way, so of two sends of the same words waiting for their answers, a
+// message can resolve the one it is not.
 export function resolvePendingUser(text, seq = 0) {
   const list = sentPlaceholders.get(text);
   if (!list || list.length === 0) return;
@@ -239,29 +242,44 @@ function markNotSent(parts) {
 // was on its way is decided here: a send taken before that stop was in
 // the queue it dropped.
 export function noteReceipt(parts, reply) {
-  if (reply && typeof reply.seq === 'number') settleReceipt(parts, 'at', reply.seq);
-  else settleReceipt(parts, 'none', 0);
-}
-
-// noteQueued records that the send parts stands for was refused as busy
-// and is in this page's queue: the daemon does not have it, so a stop
-// takes it as dropped, as it takes the queue.
-export function noteQueued(parts) {
-  settleReceipt(parts, 'queued', 0);
-}
-
-function settleReceipt(parts, took, at) {
   const list = sentPlaceholders.get(parts.text);
   const i = list ? list.indexOf(parts) : -1;
   // Resolved or rewritten already: there is nothing left to decide.
   if (i < 0) return;
-  parts.took = took;
-  parts.at = at;
-  if (parts.heldBy > 0 && !(took === 'at' && at >= parts.heldBy)) {
+  const at = reply && typeof reply.seq === 'number' ? reply.seq : null;
+  parts.took = at === null ? 'none' : 'at';
+  parts.at = at ?? 0;
+  if (parts.heldBy > 0 && !(at !== null && at >= parts.heldBy)) {
     list.splice(i, 1);
     if (list.length === 0) sentPlaceholders.delete(parts.text);
     markNotSent(parts);
   }
+}
+
+// noteQueued records that the send parts stands for was refused as busy
+// and is in this page's queue, which sends it again. The daemon does not
+// have it, so the next stop takes it as dropped, as it takes the queue. A
+// stop that came while the refusal was on its way does not decide it: it
+// cleared the queue before the prompt went into it, and resendQueued
+// forgets it when the prompt is sent again.
+export function noteQueued(parts) {
+  const list = sentPlaceholders.get(parts.text);
+  if (!list || !list.includes(parts)) return;
+  parts.took = 'queued';
+  parts.at = 0;
+}
+
+// dropPendingUser removes the placeholder of a send that failed: its own,
+// not the oldest with its words, which can stand for a send the daemon
+// took.
+export function dropPendingUser(parts) {
+  const list = sentPlaceholders.get(parts.text);
+  const i = list ? list.indexOf(parts) : -1;
+  if (i < 0) return;
+  list.splice(i, 1);
+  if (list.length === 0) sentPlaceholders.delete(parts.text);
+  if (parts.sep) parts.sep.remove();
+  parts.div.remove();
 }
 
 // resendQueued finds the placeholder of a prompt this page's queue is

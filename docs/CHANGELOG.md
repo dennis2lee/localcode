@@ -16,7 +16,13 @@ A question a stopped daemon left open is no longer shown again when the conversa
 * A question from a turn that began as the turn before it was ending taken off screen by that earlier turn's end: a model question in the TUI and the Web UI, a permission question in the Web UI
 * A prompt sent as a turn was being stopped marked "not sent" when localcode started the next turn for it and the model answered it, in the TUI and the Web UI
 * A stop replayed after a reconnect marking prompts sent after it as "not sent", in the TUI and the Web UI
-* A prompt's "sent" line taken away by an earlier message with the same words replayed after a reconnect, in the TUI and the Web UI
+* A prompt's "sent" line taken away by an earlier message with the same words, replayed after a reconnect once localcode had answered the send, in the TUI and the Web UI
+* A stop that landed as a turn was ending dropping the prompts sent into it under `turn.done`, so no client marked them "not sent"
+* Web UI: a failed send taking away the "sent" line of an earlier send with the same words
+* Web UI: a prompt refused as busy while a stop was on its way marked "not sent", although the page sent it again
+
+**Added**
+
 * `seq` in the `202` for a message: the log's last seq when the daemon took it
 
 ## v0.180.11

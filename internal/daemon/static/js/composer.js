@@ -1,7 +1,7 @@
 import { inputEl, centerEl, sendBtn, commDotEl } from './dom.js';
 import { app, session, turnInFlight, tasksInFlight, historyLimit } from './state.js';
 import * as apiClient from './api.js';
-import { appendTool, appendError, appendPendingUser, resolvePendingUser, noteReceipt, noteQueued, resendQueued, leaveAskUnanswered, forgetAskLine } from './transcript.js';
+import { appendTool, appendError, appendPendingUser, resolvePendingUser, dropPendingUser, noteReceipt, noteQueued, resendQueued, leaveAskUnanswered, forgetAskLine } from './transcript.js';
 import { renderStatusBar } from './render.js';
 import { isPlainPrompt, tryLocalCommand } from './commands.js';
 import { resetCompletion } from './complete.js';
@@ -269,7 +269,8 @@ export function dequeueNext(isRetry = false) {
     // The line drawn when Enter was pressed stood for it while it was
     // queued; nothing took it, so it goes with the error, as it does
     // when the first send fails.
-    resolvePendingUser(item.text);
+    if (parts) dropPendingUser(parts);
+    else resolvePendingUser(item.text);
     setWaiting(false);
     appendError(err);
   });
@@ -732,7 +733,7 @@ export async function sendMessage() {
         }
         // Nothing took it, so the placeholder is a lie: remove it with the
         // error, rather than leaving "sent" above the reason it wasn't.
-        resolvePendingUser(text);
+        dropPendingUser(parts);
         appendError(err);
       });
     } else {
@@ -782,7 +783,7 @@ export async function sendMessage() {
       retryQueueSoon();
       return;
     }
-    resolvePendingUser(text);
+    dropPendingUser(parts);
     setWaiting(false);
     appendError(err);
   }

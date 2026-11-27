@@ -155,3 +155,52 @@ func TestAMessageThatWaitedForAStopIsTakenAfterIt(t *testing.T) {
 		t.Errorf("the message's own message.user is at seq %d, at or below the receipt's %d: a client takes it for an older message", userAt, got.r.Seq)
 	}
 }
+
+// A stop can land after the turn read its context and before it ends:
+// turnTracker.cancel drops the queue, and the end has to say a stop did.
+// finishTurn is the step the turn's goroutine takes there.
+func TestAStopAsATurnEndsEndsItAsCancelled(t *testing.T) {
+	for _, stopped := range []bool{true, false} {
+		t.Run(fmt.Sprintf("stopped=%v", stopped), func(t *testing.T) {
+			d := newTestDaemon(t, textModel(t).URL)
+			srv := httptest.NewServer(d.Handler())
+			defer srv.Close()
+			c := client.New(srv.URL)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			sess, err := c.CreateSession(ctx, "general-purpose")
+			if err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+
+			turnCtx, stop := context.WithCancel(context.Background())
+			defer stop()
+			if !d.turns.begin(sess.ID, stop) {
+				t.Fatal("begin")
+			}
+			var r client.Receipt
+			want := events.TypeTurnDone
+			if stopped {
+				want = events.TypeTurnCancelled
+				if r, err = c.SendMessage(ctx, sess.ID, "and also"); err != nil || r.Status != "injected" || !r.HasSeq {
+					t.Fatalf("precondition: injected with a seq, got %+v %v", r, err)
+				}
+				// The turn's last step is done and its context read clean
+				// when the stop lands.
+				if !d.turns.cancel(sess.ID) {
+					t.Fatal("precondition: the stop was honoured")
+				}
+			}
+			if _, more := d.finishTurn(sess.ID, turnCtx); more {
+				t.Fatal("the turn went on with a queued message")
+			}
+
+			evs, _ := d.Loop.Store.Events(sess.ID, 0)
+			last := evs[len(evs)-1]
+			if last.Type != want || last.Seq <= r.Seq {
+				t.Errorf("the turn ended with %s at seq %d, a message was taken at %d: want %s after it, or no client marks a dropped message as not sent",
+					last.Type, last.Seq, r.Seq, want)
+			}
+		})
+	}
+}

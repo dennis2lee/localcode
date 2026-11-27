@@ -45,3 +45,22 @@ func TestSendMessageReadsTheReceipt(t *testing.T) {
 		})
 	}
 }
+
+// A connection closed before any answer is a send nobody took, although
+// the transport reports it as an EOF, as an empty body is read.
+func TestSendMessageToADaemonThatNeverAnsweredFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL).SendMessage(context.Background(), "s1", "hello")
+	if err == nil {
+		t.Errorf("a send the daemon closed the connection on returned no error, receipt %+v", got)
+	}
+}

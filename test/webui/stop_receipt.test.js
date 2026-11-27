@@ -28,6 +28,16 @@ function daemon() {
     busy() {
       replies.push({ status: 409, body: { error: 'session s is already processing a message' } });
     },
+    failed() {
+      replies.push({ status: 500, body: { error: 'disk full' } });
+    },
+    // holdBusy makes the next send wait; the function it returns refuses
+    // it as busy.
+    holdBusy() {
+      let refuse;
+      replies.push(new Promise((resolve) => { refuse = resolve; }));
+      return () => refuse({ status: 409, body: { error: 'session s is already processing a message' } });
+    },
     // hold makes the next send wait; the function it returns answers it.
     hold() {
       let answer;
@@ -385,4 +395,105 @@ test('a late answer leaves another placeholder of the same words alone', async (
 
   assert.equal(sentLines(app), 0, 'the second send\'s placeholder was left drawn as sent above its own message');
   assert.deepEqual(app.userTurns(), ['again', 'again']);
+});
+
+// A busy refusal that comes after a stop puts the prompt in the queue the
+// stop already cleared, and the page sends it again.
+test('a prompt sent to an idle session and refused as busy after a stop is sent again, not marked', async () => {
+  const d = daemon();
+  const app = await load({ routes: d.routes });
+  const refuse = d.holdBusy();
+  await send(app, 'look at this');
+  app.sse.emit({ seq: 20, type: 'turn.cancelled', data: {} });
+  await app.settle();
+  refuse();
+  await app.settle();
+  assert.deepEqual(Array.from(app.state.promptQueue), ['look at this'], 'precondition: queued after the stop');
+
+  // The retry sends it again.
+  d.taken(20);
+  await app.wait(400);
+  await app.settle();
+  assert.equal(app.callsTo('POST', /\/messages$/).length, 2, 'precondition: sent again');
+  app.sse.emit({ seq: 21, type: 'message.user', data: { text: 'look at this' } });
+  await app.settle();
+
+  assert.equal(notSent(app), 0, 'a prompt the page sent after the stop, and the model was handed, is marked as never sent');
+  assert.deepEqual(app.userTurns(), ['look at this']);
+});
+
+test('a prompt sent mid-turn and refused as busy after a stop is sent again, not marked', async () => {
+  const d = daemon();
+  const app = await load({ routes: d.routes });
+  app.state.waiting = true;
+  const refuse = d.holdBusy();
+  await send(app, 'and the docs');
+  app.sse.emit({ seq: 20, type: 'turn.cancelled', data: {} });
+  await app.settle();
+  refuse();
+  await app.settle();
+  assert.deepEqual(Array.from(app.state.promptQueue), ['and the docs'], 'precondition: queued after the stop');
+
+  // Another client's turn ends, and the queue sends it.
+  d.taken(30);
+  app.sse.emit({ seq: 21, type: 'message.user', data: { text: 'other client' } });
+  app.sse.emit({ seq: 30, type: 'turn.done', data: {} });
+  await app.settle();
+  app.sse.emit({ seq: 31, type: 'message.user', data: { text: 'and the docs' } });
+  await app.settle();
+
+  assert.equal(notSent(app), 0, 'a prompt the page sent after the stop, and the model was handed, is marked as never sent');
+  assert.deepEqual(app.userTurns(), ['other client', 'and the docs']);
+});
+
+// A failed send removes its own placeholder, not the oldest with its
+// words, which stands for a send the daemon took.
+test('a failed send leaves the placeholder of a send of the same words the daemon took', async () => {
+  const d = daemon();
+  const app = await load({ routes: d.routes });
+  app.state.waiting = true;
+  d.taken(10);
+  await send(app, 'again');
+  d.failed();
+  await send(app, 'again');
+
+  app.sse.emit({ seq: 15, type: 'turn.cancelled', data: {} });
+  await app.settle();
+  assert.equal(notSent(app), 1, 'the stop dropped the send the daemon took, and nothing says so');
+  assert.equal(sentLines(app), 0, 'the failed send\'s placeholder is left saying the model will pick it up');
+});
+
+test('a failed send of a prompt sent to an idle session removes its own placeholder', async () => {
+  const d = daemon();
+  const app = await load({ routes: d.routes });
+  app.state.waiting = true;
+  d.taken(10);
+  await send(app, 'again');
+  app.state.waiting = false;
+  d.failed();
+  await send(app, 'again');
+
+  app.sse.emit({ seq: 15, type: 'turn.cancelled', data: {} });
+  await app.settle();
+  assert.equal(notSent(app), 1, 'the stop dropped the send the daemon took, and nothing says so');
+  assert.equal(sentLines(app), 0);
+});
+
+test('a queued prompt that fails when sent again removes its own placeholder', async () => {
+  const d = daemon();
+  const app = await load({ routes: d.routes });
+  app.state.waiting = true;
+  d.taken(10);
+  await send(app, 'again');
+  d.busy();
+  await send(app, 'again');
+  d.failed();
+  app.sse.emit({ seq: 11, type: 'turn.done', data: {} });
+  await app.settle();
+  assert.equal(app.callsTo('POST', /\/messages$/).length, 3, 'precondition: the queue sent it again');
+
+  app.sse.emit({ seq: 15, type: 'turn.cancelled', data: {} });
+  await app.settle();
+  assert.equal(notSent(app), 1, 'the stop dropped the send the daemon took, and nothing says so');
+  assert.equal(sentLines(app), 0);
 });

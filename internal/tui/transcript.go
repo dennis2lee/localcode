@@ -173,6 +173,9 @@ func (m *Model) appendPendingUser(text string) int {
 // daemon took when the log had already reached seq is not that message's:
 // its own is written after it was taken. A backlog replayed on a
 // reconnect brings such a message, another client's with the same words.
+// An echo whose answer has not come yet cannot be told apart that way, so
+// of two sends of the same words waiting for their answers, a message can
+// resolve the one it is not.
 func (m *Model) resolvePendingUser(text string, seq uint64) bool {
 	for i, e := range m.transcript {
 		switch {

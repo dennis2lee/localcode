@@ -69,10 +69,20 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 	}
 
 	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			if errors.Is(err, io.EOF) {
+				return errEmptyBody
+			}
+			return err
+		}
 	}
 	return nil
 }
+
+// errEmptyBody is a 2xx answer with nothing in it where a body was read.
+// Its own error, so a caller can tell it from a connection closed before
+// any answer, which comes back from the transport as an EOF too.
+var errEmptyBody = errors.New("empty response body")
 
 // StatusError is a non-2xx API response, keeping the HTTP status
 // inspectable so callers can branch on it (409 busy, say) without
@@ -492,7 +502,7 @@ func (c *Client) SendMessage(ctx context.Context, sessionID, text string) (Recei
 		Seq    *uint64 `json:"seq"`
 	}
 	// An empty body is a message taken with nothing said about it.
-	if err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/messages", map[string]string{"text": text}, &out); err != nil && !errors.Is(err, io.EOF) {
+	if err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/messages", map[string]string{"text": text}, &out); err != nil && !errors.Is(err, errEmptyBody) {
 		return Receipt{}, err
 	}
 	r := Receipt{Status: out.Status}

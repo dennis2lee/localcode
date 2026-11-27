@@ -584,7 +584,7 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			// observed, still registered as busy, 409. finishOrTake holds
 			// off the next turn until it is written, so nothing of that
 			// turn comes before it in the log.
-			next, more := d.turns.finishOrTake(id, writeEnd(events.TypeTurnDone))
+			next, more := d.finishTurn(id, turnCtx)
 			if !more {
 				cancel()
 				return
@@ -594,6 +594,25 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	writeJSON(w, http.StatusAccepted, sendReceipt("accepted", seq, seqErr))
+}
+
+// finishTurn ends id's turn after a step its stop did not catch, or takes
+// the next message queued for it (see finishOrTake).
+//
+// A stop can land after the turn read its context and before this.
+// turnTracker.cancel then drops the queue and cancels the context, and the
+// end is turn.cancelled: a client takes only that to have dropped what it
+// sent into the turn. Read when the end is written, when the registration
+// is cleared and nothing else can cancel the context.
+func (d *Daemon) finishTurn(id string, turnCtx context.Context) (string, bool) {
+	return d.turns.finishOrTake(id, func() {
+		typ := events.TypeTurnDone
+		if turnCtx.Err() != nil {
+			typ = events.TypeTurnCancelled
+		}
+		_, err := d.Loop.Store.Append(id, typ, map[string]any{})
+		logAppend(id, typ, err)
+	})
 }
 
 // sendReceipt is the 202 for a message the daemon took. seq is the log's
