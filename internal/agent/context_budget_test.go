@@ -478,17 +478,23 @@ func TestFitHistoryDoesNotOpenOnAnOrphanedToolResult(t *testing.T) {
 // "compaction failed: ... maximum context length is N tokens". Auto-
 // compaction failed the same way, without even saying so.
 func TestCompactWorksOnAHistoryThatNoLongerFits(t *testing.T) {
-	const limitChars = 4000
+	// A window small enough that fitHistory has to throw most of the
+	// conversation away to get under it.
+	const window = defaultMaxTokens + contextHeadroom + 250
 	var refusals, accepted int
 	var mu sync.Mutex
 
+	// Refuses what a server refuses: the request's input, here its
+	// messages at four characters a token, and the output it asks for,
+	// together over the window.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var raw map[string]any
 		json.NewDecoder(r.Body).Decode(&raw)
 		encoded, _ := json.Marshal(raw["messages"])
+		asked, _ := raw["max_tokens"].(float64)
 
 		mu.Lock()
-		tooBig := len(encoded) > limitChars
+		tooBig := len(encoded)/4+int(asked) > window
 		if tooBig {
 			refusals++
 		} else {
@@ -514,9 +520,7 @@ func TestCompactWorksOnAHistoryThatNoLongerFits(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 	t.Cleanup(store.Close)
-	// A window small enough that fitHistory has to throw most of the
-	// conversation away to get under it.
-	profile := config.Profile{Provider: "local", Model: "small-model", ContextWindow: defaultMaxTokens + contextHeadroom + 250}
+	profile := config.Profile{Provider: "local", Model: "small-model", ContextWindow: window}
 	cfg := &config.Config{
 		Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL}},
 		Profiles:       map[string]config.Profile{"small": profile},
@@ -534,7 +538,8 @@ func TestCompactWorksOnAHistoryThatNoLongerFits(t *testing.T) {
 	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	for i := range 20 {
+	// Three times the window: most of it has to go.
+	for i := range 60 {
 		loop.appendHistory(sid, provider.Message{
 			Role:    provider.RoleUser,
 			Content: []provider.Block{provider.TextBlock(fmt.Sprintf("%d %s", i, strings.Repeat("y", 400)))},
