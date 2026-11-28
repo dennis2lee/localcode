@@ -267,6 +267,8 @@ async function load(opts = {}) {
     streams: [],
     settle,
   };
+  // The page's timers a test holds, by delay (holdTimers).
+  const heldTimers = new Map();
 
   const fetchImpl = async (url, init = {}) => {
     const method = (init.method || 'GET').toUpperCase();
@@ -308,8 +310,19 @@ async function load(opts = {}) {
         harness.consoleErrors.push(args.map(String).join(' '));
       },
     },
-    setTimeout,
-    clearTimeout,
+    // A timer of a delay a test holds (holdTimers) is kept for the test
+    // to fire; every other timer is the real one.
+    setTimeout: (fn, ms, ...args) => {
+      const held = heldTimers.get(ms);
+      if (!held) return setTimeout(fn, ms, ...args);
+      const timer = new HeldTimer(() => fn(...args));
+      held.push(timer);
+      return timer;
+    },
+    clearTimeout: (timer) => {
+      if (timer instanceof HeldTimer) timer.cleared = true;
+      else clearTimeout(timer);
+    },
     // Unreferenced, so an interval a page leaves running (a reasoning
     // block's clock in a test that ends mid-thought) does not keep the
     // test process alive after its last test.
@@ -448,6 +461,31 @@ async function load(opts = {}) {
     // wait lets real time pass, for the handful of behaviours that are
     // about a deadline rather than about an event.
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    // holdTimers keeps every timer the page sets with a delay of exactly
+    // ms from running by itself, from this call on. The controller it
+    // returns counts the ones armed and fires them. It is for a test that
+    // looks at the page between a timer being set and its running: real
+    // time does not wait for settle(), and on a loaded machine a 300ms
+    // timer has run before 50 turns of the event loop are done.
+    holdTimers: (ms) => {
+      if (!heldTimers.has(ms)) heldTimers.set(ms, []);
+      const held = heldTimers.get(ms);
+      const armed = () => held.filter((t) => !t.cleared && !t.fired);
+      return {
+        get armed() { return armed().length; },
+        // fire runs the timers armed when it is called, in the order they
+        // were set, and returns how many ran. One a timer sets again is
+        // armed for the next fire.
+        fire() {
+          const due = armed();
+          for (const t of due) {
+            t.fired = true;
+            t.run();
+          }
+          return due.length;
+        },
+      };
+    },
     // callsTo lists the requests made to one endpoint pattern.
     callsTo: (method, pattern) =>
       harness.calls.filter(
@@ -532,4 +570,20 @@ function descText(id) {
   return m[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 }
 
-module.exports = { load, settle, defaultRoutes, descText };
+// HeldTimer stands for a timer a test holds, in place of the handle
+// setTimeout returns.
+class HeldTimer {
+  constructor(run) {
+    this.run = run;
+    this.cleared = false;
+    this.fired = false;
+  }
+}
+
+// QUEUE_RETRY_MS is the delay of the queue's one retry after a busy
+// refusal (retryQueueSoon in composer.js). A test holds it with
+// app.holdTimers(QUEUE_RETRY_MS) and fires it when it has looked at the
+// queue. queued_send_fail.test.js fails when the two differ.
+const QUEUE_RETRY_MS = 300;
+
+module.exports = { load, settle, defaultRoutes, descText, QUEUE_RETRY_MS };

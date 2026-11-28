@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { load } = require('./harness');
+const { load, QUEUE_RETRY_MS } = require('./harness');
 
 test('a held command is shown, not queued', async () => {
   const app = await load({
@@ -39,6 +39,8 @@ test('an ordinary busy refusal is still queued', async () => {
       }),
     },
   });
+  // Held, so the queue is not looked at while its retry is on the way.
+  app.holdTimers(QUEUE_RETRY_MS);
   app.type('hello');
   app.el('send').fire('click');
   await app.wait(0);

@@ -77,6 +77,12 @@ test('a turn ends on turn.done', async () => {
 - `app.settle()`: let pending promise chains finish
 - `app.wait(ms)`: let real time pass, for the few behaviours that are about
   a deadline rather than an event
+- `app.holdTimers(ms)`: keep the page's timers of exactly `ms` from running
+  by themselves. The returned controller has `armed` (how many are set)
+  and `fire()` (run them). Use it when a test looks at the page between a
+  timer being set and its running: on a loaded machine the timer runs
+  before `settle()` is done. `QUEUE_RETRY_MS` is the queue's retry after a
+  busy refusal, and the queue tests hold it.
 - `app.reloads`: how many times the page asked to be reloaded
 - `app.consoleErrors`: what the page logged with `console.error`
 - `app.storage` / `app.sessionStorage`: the page's stored values, as maps

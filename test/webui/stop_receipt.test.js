@@ -10,7 +10,22 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { load, defaultRoutes } = require('./harness');
+const { load: loadPage, defaultRoutes, QUEUE_RETRY_MS } = require('./harness');
+
+// load holds the queue's retry after a busy refusal (retryQueueSoon), so
+// a test looks at the queue before the retry runs and runs it with
+// pastTheRetry. Waiting real time for it raced a loaded machine: the
+// 300ms had passed before settle() was done.
+async function load(opts) {
+  const app = await loadPage(opts);
+  app.queueRetry = app.holdTimers(QUEUE_RETRY_MS);
+  return app;
+}
+
+async function pastTheRetry(app) {
+  app.queueRetry.fire();
+  await app.settle();
+}
 
 const notSent = (app) => (app.transcript().match(/not sent — the turn was stopped/g) || []).length;
 const sentLines = (app) => (app.transcript().match(/the model will pick this up/g) || []).length;
@@ -412,8 +427,7 @@ test('a prompt sent to an idle session and refused as busy after a stop is marke
 
   assert.equal(notSent(app), 1, 'a prompt the stop would have dropped with the queue is drawn as sent');
   assert.deepEqual(Array.from(app.state.promptQueue), [], 'the prompt went into the queue the stop cleared');
-  await app.wait(400);
-  await app.settle();
+  await pastTheRetry(app);
   assert.equal(app.callsTo('POST', /\/messages$/).length, 1, 'a prompt marked as never sent was sent again');
 });
 
@@ -444,8 +458,7 @@ test('a queued prompt refused as busy again after a stop is marked, not queued',
   assert.deepEqual(Array.from(app.state.promptQueue), ['look at this'], 'precondition: queued, retry armed');
 
   const refuse = d.holdBusy();
-  await app.wait(400);
-  await app.settle();
+  await pastTheRetry(app);
   assert.equal(app.callsTo('POST', /\/messages$/).length, 2, 'precondition: the retry went out');
   app.sse.emit({ seq: 20, type: 'turn.cancelled', data: {} });
   await app.settle();
@@ -494,8 +507,7 @@ test('a failed resend with no line of its own leaves another send\'s line', asyn
   d.taken(60);
   await send(app, 'again');
   d.failed();
-  await app.wait(400);
-  await app.settle();
+  await pastTheRetry(app);
   assert.equal(app.callsTo('POST', /\/messages$/).length, 3, 'precondition: the retry went out and failed');
 
   app.sse.emit({ seq: 61, type: 'turn.cancelled', data: {} });
@@ -572,8 +584,7 @@ test('a prompt a lost turn marked is not queued when its send is refused as busy
   refuse();
   await app.settle();
   assert.deepEqual(Array.from(app.state.promptQueue), [], 'a prompt marked as never sent went into the queue');
-  await app.wait(400);
-  await app.settle();
+  await pastTheRetry(app);
   assert.equal(app.callsTo('POST', /\/messages$/).length, 1, 'a prompt marked as never sent was sent again');
 });
 

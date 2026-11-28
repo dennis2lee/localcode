@@ -9,7 +9,22 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { load } = require('./harness');
+const { load: loadPage, QUEUE_RETRY_MS } = require('./harness');
+
+// load holds the queue's retry after a busy refusal (retryQueueSoon), so
+// a test looks at the queue before the retry runs and runs it with
+// pastTheRetry. Waiting real time for it raced a loaded machine: the
+// 300ms had passed before settle() was done.
+async function load(opts) {
+  const app = await loadPage(opts);
+  app.queueRetry = app.holdTimers(QUEUE_RETRY_MS);
+  return app;
+}
+
+async function pastTheRetry(app) {
+  app.queueRetry.fire();
+  await app.settle();
+}
 
 const BUSY = { status: 409, body: { error: 'session s is already processing a message' } };
 
@@ -42,8 +57,7 @@ async function refusedAfterTheSwitch(app, refuse) {
   refuse();
   await app.settle();
   // Past the queue's retry.
-  await app.wait(400);
-  await app.settle();
+  await pastTheRetry(app);
   assert.deepEqual(sentTo(app, 'sess-2'), [], 'a prompt typed into sess-1 was sent to sess-2');
   assert.deepEqual(Array.from(app.state.promptQueue), [], 'a prompt typed into sess-1 is in sess-2\'s queue');
   app.selectSession('sess-1', 'general-purpose', '/tmp/workspace');
@@ -78,8 +92,7 @@ test('a queued prompt refused again after a switch goes back to its own box', as
   await send(app, 'later');
   assert.deepEqual(Array.from(app.state.promptQueue), ['later'], 'precondition: queued, retry armed');
   const refuse = d.holdBusy();
-  await app.wait(400);
-  await app.settle();
+  await pastTheRetry(app);
   assert.deepEqual(sentTo(app, 'sess-1'), ['later', 'later'], 'precondition: the retry went out');
 
   await refusedAfterTheSwitch(app, refuse);
@@ -112,8 +125,7 @@ test('a refusal after going away and back is queued for the conversation it was 
   refuse();
   await app.settle();
   assert.deepEqual(Array.from(app.state.promptQueue), ['for the first conversation']);
-  await app.wait(400);
-  await app.settle();
+  await pastTheRetry(app);
   assert.deepEqual(sentTo(app, 'sess-1'), ['for the first conversation', 'for the first conversation']);
   assert.deepEqual(sentTo(app, 'sess-2'), []);
 });
@@ -129,8 +141,7 @@ test('a prompt still queued at a switch goes back to its own box', async () => {
 
   app.selectSession('sess-2', 'general-purpose', '/tmp/workspace');
   await app.settle();
-  await app.wait(400);
-  await app.settle();
+  await pastTheRetry(app);
   assert.deepEqual(sentTo(app, 'sess-2'), []);
   app.selectSession('sess-1', 'general-purpose', '/tmp/workspace');
   await app.settle();

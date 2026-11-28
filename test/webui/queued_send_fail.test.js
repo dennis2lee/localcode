@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { load } = require('./harness');
+const { load, QUEUE_RETRY_MS } = require('./harness');
 
 test('a queued prompt that then fails to send leaves no pending line', async () => {
   let calls = 0;
@@ -25,14 +25,17 @@ test('a queued prompt that then fails to send leaves no pending line', async () 
       },
     },
   });
+  const retry = app.holdTimers(QUEUE_RETRY_MS);
   app.type('check the logs');
   await app.el('send').click();
   await app.settle();
   assert.deepEqual(Array.from(app.state.promptQueue), ['check the logs'], 'the busy send was not queued');
   assert.ok(app.userTurns().includes('check the logs'), 'the queued prompt should still be on screen while it waits');
+  // The page retries a 409 once by itself (retryQueueSoon). None armed
+  // means the harness's QUEUE_RETRY_MS is not the page's delay.
+  assert.equal(retry.armed, 1, `no retry armed with a delay of ${QUEUE_RETRY_MS}ms`);
 
-  // The page retries a 409 once by itself (retryQueueSoon).
-  await app.wait(400);
+  retry.fire();
   await app.settle();
 
   assert.equal(calls, 2, 'the queue was not sent again');

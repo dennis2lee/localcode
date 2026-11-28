@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { load } = require('./harness');
+const { load, QUEUE_RETRY_MS } = require('./harness');
 
 test('the page connects its event stream to the selected session', async () => {
   const app = await load();
@@ -222,6 +222,8 @@ test('a 409 from the daemon queues the prompt instead of reporting an error', as
   const app = await load({
     routes: { 'POST /api/sessions/*/messages': { status: 409, body: { error: 'busy' } } },
   });
+  // Held, so the queue is not looked at while its retry is on the way.
+  app.holdTimers(QUEUE_RETRY_MS);
   app.type('hello');
   await app.el('send').click();
   await app.settle();
